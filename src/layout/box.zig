@@ -20,6 +20,7 @@ pub const BoxType = enum {
     block,
     inline_text,
     anonymous_block,
+    replaced,
 };
 
 pub const LineBox = struct {
@@ -47,6 +48,11 @@ pub const Box = struct {
     dom_node: ?DomNode = null,
     /// URL target if this box (or ancestor) is an <a> element.
     link_url: ?[]const u8 = null,
+    /// For replaced boxes (images): the image URL to load.
+    image_url: ?[]const u8 = null,
+    /// For replaced boxes: intrinsic width/height from attributes.
+    intrinsic_width: f32 = 0,
+    intrinsic_height: f32 = 0,
     /// For inline_text boxes: line-broken fragments
     lines: LineList = .empty,
 

@@ -15,6 +15,8 @@ const chrome = @import("ui/chrome.zig");
 const TextInput = @import("ui/input.zig").TextInput;
 const InputResult = @import("ui/input.zig").InputResult;
 const Box = @import("layout/box.zig").Box;
+const ImageCache = @import("paint/image.zig").ImageCache;
+const decodeImage = @import("paint/image.zig").decodeImage;
 
 const window_w = chrome.window_w;
 const window_h = chrome.window_h;
@@ -27,6 +29,23 @@ const font_cjk = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
 const font_fallback = "/usr/share/fonts/TTF/DejaVuSans.ttf";
 
 const dom_test = @import("test_dom_style.zig");
+
+const ErrBlitCtx = struct {
+    surface: *Surface,
+    colour: u32,
+};
+
+fn blitGlyphErr(ctx: ErrBlitCtx, glyph: GlyphBitmap) void {
+    ctx.surface.blitGlyph8(
+        glyph.x,
+        glyph.y,
+        @intCast(glyph.width),
+        @intCast(glyph.height),
+        glyph.buffer,
+        glyph.pitch,
+        ctx.colour,
+    );
+}
 
 fn findFont() [*:0]const u8 {
     const cjk_path: []const u8 = font_cjk[0..font_cjk.len];
@@ -70,13 +89,31 @@ const PageState = struct {
     styles: ?cascade_mod.CascadeResult = null,
     root_box: ?*Box = null,
     total_height: f32 = 0,
+    image_cache: ?ImageCache = null,
+    /// Error message to display when page load fails.
+    error_message: ?[]const u8 = null,
+    error_alloc: ?[]u8 = null,
 
     fn deinit(self: *PageState) void {
+        if (self.image_cache) |*ic| ic.deinit();
         if (self.styles) |*s| s.deinit();
         if (self.doc) |*d| d.deinit();
+        if (self.error_alloc) |ea| std.heap.c_allocator.free(ea);
         self.* = .{};
     }
 };
+
+/// Recursively collect image URLs from the box tree.
+fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged([]const u8), allocator: std.mem.Allocator) void {
+    if (box.box_type == .replaced) {
+        if (box.image_url) |url| {
+            urls.append(allocator, url) catch {};
+        }
+    }
+    for (box.children.items) |child| {
+        collectImageUrls(child, urls, allocator);
+    }
+}
 
 /// Navigate to a URL: fetch, parse, style, layout.
 /// Returns true on success, false on failure.
@@ -93,6 +130,10 @@ fn navigateTo(
     // Fetch
     var content = loader.loadPage(url_z) catch |err| {
         std.debug.print("Failed to load {s}: {}\n", .{ url_z, err });
+        // Store error message for display
+        const msg = std.fmt.allocPrint(allocator, "Failed to load: {s}\nError: {}", .{ url_z, err }) catch return false;
+        page.error_message = msg;
+        page.error_alloc = msg;
         return false;
     };
     defer content.deinit();
@@ -100,6 +141,9 @@ fn navigateTo(
     // Parse
     var doc = Document.parse(content.html) catch {
         std.debug.print("Failed to parse HTML\n", .{});
+        const msg = std.fmt.allocPrint(allocator, "Failed to parse HTML from: {s}", .{url_z}) catch return false;
+        page.error_message = msg;
+        page.error_alloc = msg;
         return false;
     };
 
@@ -137,6 +181,31 @@ fn navigateTo(
     block_layout.adjustXPositions(root_box, root_box.margin.left);
     block_layout.adjustYPositions(root_box, root_box.margin.top);
 
+    // Load images
+    var img_cache = ImageCache.init(allocator);
+    var img_urls: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer img_urls.deinit(allocator);
+    collectImageUrls(root_box, &img_urls, allocator);
+
+    for (img_urls.items) |img_url| {
+        // Resolve relative URL
+        const resolved = resolveUrl(allocator, url_z, img_url) catch continue;
+        defer allocator.free(resolved);
+
+        std.debug.print("Loading image: {s}\n", .{resolved});
+
+        var resp = loader.loadBytes(resolved) catch continue;
+        defer resp.deinit();
+
+        if (resp.status_code == 200 and resp.body.len > 0) {
+            const img = decodeImage(resp.body) catch continue;
+            img_cache.put(img_url, img) catch {
+                var mimg = img;
+                mimg.deinit();
+            };
+        }
+    }
+
     const total_h = painter_mod.contentHeight(root_box);
 
     page.* = .{
@@ -144,6 +213,7 @@ fn navigateTo(
         .styles = styles,
         .root_box = root_box,
         .total_height = total_h,
+        .image_cache = img_cache,
     };
 
     return true;
@@ -172,7 +242,7 @@ pub fn main() !void {
     if (run_test_dom) return dom_test.main();
     if (run_test_http) return testHttp(allocator);
 
-    std.debug.print("suzume v0.2.0 — browser mode\n", .{});
+    std.debug.print("suzume v0.3.0 — browser mode\n", .{});
 
     // Init HTTP client
     var http_client = HttpClient.init() catch |err| {
@@ -262,7 +332,7 @@ pub fn main() !void {
                     }
                 }
             } else {
-                status_text = "Failed to load page";
+                status_text = "Failed";
             }
         }
     }
@@ -282,6 +352,7 @@ pub fn main() !void {
             if (page.root_box) |root_box| {
                 // scroll_y is in layout coords; we offset by content_y for screen position
                 const adjusted_scroll = scroll_y - @as(f32, @floatFromInt(chrome.content_y));
+                const ic_ptr: ?*ImageCache = if (page.image_cache) |*ic| ic else null;
                 painter_mod.paint(
                     root_box,
                     &surface,
@@ -289,7 +360,24 @@ pub fn main() !void {
                     adjusted_scroll,
                     chrome.content_y,
                     chrome.content_y + chrome.content_height,
+                    ic_ptr,
                 );
+            } else if (page.error_message) |err_msg| {
+                // Display error message in the content area
+                const err_font_size: u32 = 14;
+                if (fonts.getRenderer(err_font_size)) |tr| {
+                    const m = tr.measure(err_msg);
+                    const err_x: i32 = 16;
+                    const err_y: i32 = chrome.content_y + 24 + m.ascent;
+                    tr.renderGlyphs(
+                        err_msg,
+                        err_x,
+                        err_y,
+                        ErrBlitCtx,
+                        .{ .surface = &surface, .colour = Surface.argbToColour(0xFFf38ba8) },
+                        blitGlyphErr,
+                    );
+                }
             }
 
             // Paint chrome on top
@@ -340,6 +428,25 @@ pub fn main() !void {
                         continue;
                     }
 
+                    // F5: reload
+                    if (key == nsfb_c.NSFB_KEY_F5) {
+                        if (current_url) |url| {
+                            const url_z = allocator.allocSentinel(u8, url.len, 0) catch continue;
+                            defer allocator.free(url_z);
+                            @memcpy(url_z, url);
+                            status_text = "Loading...";
+                            needs_repaint = true;
+                            if (navigateTo(allocator, &loader, url_z, &fonts, &page)) {
+                                status_text = "Done";
+                                scroll_y = 0;
+                            } else {
+                                status_text = "Failed";
+                            }
+                            needs_repaint = true;
+                        }
+                        continue;
+                    }
+
                     // Ctrl+R: reload
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_r) {
                         if (current_url) |url| {
@@ -352,7 +459,7 @@ pub fn main() !void {
                                 status_text = "Done";
                                 scroll_y = 0;
                             } else {
-                                status_text = "Failed to load page";
+                                status_text = "Failed";
                             }
                             needs_repaint = true;
                         }
@@ -380,7 +487,7 @@ pub fn main() !void {
                                     current_url = c;
                                 }
                             } else {
-                                status_text = "Failed to load page";
+                                status_text = "Failed";
                             }
                             needs_repaint = true;
                         }
@@ -408,7 +515,7 @@ pub fn main() !void {
                                     current_url = c;
                                 }
                             } else {
-                                status_text = "Failed to load page";
+                                status_text = "Failed";
                             }
                             needs_repaint = true;
                         }
@@ -493,7 +600,7 @@ pub fn main() !void {
                                             current_url = c;
                                         }
                                     } else {
-                                        status_text = "Failed to load page";
+                                        status_text = "Failed";
                                     }
                                 }
                                 needs_repaint = true;
@@ -532,7 +639,7 @@ pub fn main() !void {
                                     new_scroll = page.total_height - ch;
                                 }
                             } else if (key == nsfb_c.NSFB_KEY_ESCAPE) {
-                                running = false;
+                                // Do nothing in content view; Ctrl+Q to quit
                                 continue;
                             }
 
@@ -647,7 +754,7 @@ fn handleClick(
                     current_url.* = c;
                 }
             } else {
-                status_text.* = "Failed to load page";
+                status_text.* = "Failed";
             }
             needs_repaint.* = true;
         } else {

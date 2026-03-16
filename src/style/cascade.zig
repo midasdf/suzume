@@ -87,6 +87,17 @@ fn lengthToPx(length: css.css_fixed, unit: css.css_unit, default_font_size: f32)
     };
 }
 
+/// Convert border-width type + value to pixels.
+fn borderWidthValue(bw_type: u8, length: css.css_fixed, unit: css.css_unit, default_font_size: f32) f32 {
+    return switch (bw_type) {
+        css.CSS_BORDER_WIDTH_THIN => 1.0,
+        css.CSS_BORDER_WIDTH_MEDIUM => 3.0,
+        css.CSS_BORDER_WIDTH_THICK => 5.0,
+        css.CSS_BORDER_WIDTH_WIDTH => lengthToPx(length, unit, default_font_size),
+        else => 0.0,
+    };
+}
+
 /// Extract a ComputedStyle from a LibCSS css_computed_style.
 fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedStyle {
     var result = ComputedStyle{};
@@ -143,6 +154,40 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.padding_bottom = lengthToPx(p_len, p_unit, default_font_size);
     if (css.css_computed_padding_left(style, &p_len, &p_unit) == css.CSS_PADDING_SET)
         result.padding_left = lengthToPx(p_len, p_unit, default_font_size);
+
+    // Borders — only render if border-style is solid
+    var b_len: css.css_fixed = 0;
+    var b_unit: css.css_unit = css.CSS_UNIT_PX;
+    var b_color: css.css_color = 0;
+
+    if (css.css_computed_border_top_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+        const bw_type = css.css_computed_border_top_width(style, &b_len, &b_unit);
+        result.border_top_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
+        if (css.css_computed_border_top_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
+            result.border_top_color = b_color;
+        }
+    }
+    if (css.css_computed_border_right_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+        const bw_type = css.css_computed_border_right_width(style, &b_len, &b_unit);
+        result.border_right_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
+        if (css.css_computed_border_right_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
+            result.border_right_color = b_color;
+        }
+    }
+    if (css.css_computed_border_bottom_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+        const bw_type = css.css_computed_border_bottom_width(style, &b_len, &b_unit);
+        result.border_bottom_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
+        if (css.css_computed_border_bottom_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
+            result.border_bottom_color = b_color;
+        }
+    }
+    if (css.css_computed_border_left_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+        const bw_type = css.css_computed_border_left_width(style, &b_len, &b_unit);
+        result.border_left_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
+        if (css.css_computed_border_left_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
+            result.border_left_color = b_color;
+        }
+    }
 
     return result;
 }

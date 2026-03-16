@@ -52,6 +52,33 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
                 child_y += child.content.height;
                 prev_margin_bottom = child.margin.bottom;
             },
+            .replaced => {
+                // Replaced element (image): fixed intrinsic dimensions
+                const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
+                child_y += collapsed_margin;
+
+                child.content.x = box.content.x + child.margin.left + child.padding.left + child.border.left;
+                child.content.y = box.content.y + child_y + child.padding.top + child.border.top;
+
+                // Scale down if wider than container, preserving aspect ratio
+                var img_w = child.intrinsic_width;
+                var img_h = child.intrinsic_height;
+                const max_w = box.content.width - child.margin.left - child.margin.right -
+                    child.padding.left - child.padding.right -
+                    child.border.left - child.border.right;
+                if (img_w > max_w and max_w > 0 and img_w > 0) {
+                    const scale = max_w / img_w;
+                    img_w = max_w;
+                    img_h = img_h * scale;
+                }
+                child.content.width = img_w;
+                child.content.height = img_h;
+
+                child_y += child.padding.top + child.border.top +
+                    child.content.height +
+                    child.padding.bottom + child.border.bottom;
+                prev_margin_bottom = child.margin.bottom;
+            },
         }
     }
 
@@ -77,6 +104,9 @@ pub fn adjustXPositions(box: *Box, offset_x: f32) void {
                     line.x += offset_x;
                 }
             },
+            .replaced => {
+                child.content.x += offset_x;
+            },
         }
     }
 }
@@ -95,6 +125,9 @@ pub fn adjustYPositions(box: *Box, offset_y: f32) void {
                 for (child.lines.items) |*line| {
                     line.y += offset_y;
                 }
+            },
+            .replaced => {
+                child.content.y += offset_y;
             },
         }
     }

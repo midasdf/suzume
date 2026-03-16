@@ -71,6 +71,12 @@ fn buildChildren(
                     .bottom = style.padding_bottom,
                     .left = style.padding_left,
                 };
+                child_box.border = .{
+                    .top = style.border_top_width,
+                    .right = style.border_right_width,
+                    .bottom = style.border_bottom_width,
+                    .left = style.border_left_width,
+                };
 
                 // Check if this is an <a> element with href
                 var link_url = inherited_link;
@@ -82,11 +88,31 @@ fn buildChildren(
                             child_box.style.color = 0xFF89b4fa;
                         }
                     }
+
+                    // Handle <img> elements as replaced boxes
+                    if (std.mem.eql(u8, tag, "img")) {
+                        child_box.box_type = .replaced;
+                        child_box.image_url = child.getAttribute("src");
+
+                        // Read width/height attributes
+                        var img_w: f32 = 300; // default placeholder
+                        var img_h: f32 = 150;
+                        if (child.getAttribute("width")) |w_str| {
+                            img_w = parseFloatAttr(w_str);
+                        }
+                        if (child.getAttribute("height")) |h_str| {
+                            img_h = parseFloatAttr(h_str);
+                        }
+                        child_box.intrinsic_width = img_w;
+                        child_box.intrinsic_height = img_h;
+                    }
                 }
                 child_box.link_url = link_url;
 
-                // Recurse into children
-                try buildChildren(child_box, child, styles, allocator, link_url);
+                // Recurse into children (skip for replaced elements)
+                if (child_box.box_type != .replaced) {
+                    try buildChildren(child_box, child, styles, allocator, link_url);
+                }
 
                 try parent_box.children.append(allocator, child_box);
             },
@@ -115,4 +141,28 @@ fn buildChildren(
             else => {},
         }
     }
+}
+
+/// Parse a numeric attribute string (e.g. "300" or "150.5") to f32.
+fn parseFloatAttr(s: []const u8) f32 {
+    // Parse digits and optional decimal point
+    var result: f32 = 0;
+    var frac: f32 = 0;
+    var frac_div: f32 = 1;
+    var in_frac = false;
+    for (s) |ch| {
+        if (ch >= '0' and ch <= '9') {
+            if (in_frac) {
+                frac_div *= 10;
+                frac += @as(f32, @floatFromInt(ch - '0')) / frac_div;
+            } else {
+                result = result * 10 + @as(f32, @floatFromInt(ch - '0'));
+            }
+        } else if (ch == '.') {
+            in_frac = true;
+        } else {
+            break; // stop at non-numeric (e.g. "px")
+        }
+    }
+    return result + frac;
 }

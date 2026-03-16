@@ -13,6 +13,14 @@ pub const ComputedStyle = struct {
     padding_right: f32 = 0,
     padding_bottom: f32 = 0,
     padding_left: f32 = 0,
+    border_top_width: f32 = 0,
+    border_right_width: f32 = 0,
+    border_bottom_width: f32 = 0,
+    border_left_width: f32 = 0,
+    border_top_color: u32 = 0xFF000000,
+    border_right_color: u32 = 0xFF000000,
+    border_bottom_color: u32 = 0xFF000000,
+    border_left_color: u32 = 0xFF000000,
 
     pub const Display = enum {
         block,
