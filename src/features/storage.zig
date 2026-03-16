@@ -4,6 +4,10 @@ const c = @cImport({
     @cInclude("sqlite3.h");
 });
 
+// Use SQLITE_STATIC (null destructor) — caller ensures data outlives the statement.
+// SQLITE_STATIC can't be translated by Zig's cImport for cross-compilation targets.
+const SQLITE_STATIC: c.sqlite3_destructor_type = null;
+
 /// A single history entry.
 pub const HistoryEntry = struct {
     url: []const u8,
@@ -100,8 +104,8 @@ pub const Storage = struct {
         if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK) return;
         defer _ = c.sqlite3_finalize(stmt);
 
-        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), c.SQLITE_TRANSIENT);
-        _ = c.sqlite3_bind_text(stmt, 2, title.ptr, @intCast(title.len), c.SQLITE_TRANSIENT);
+        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), SQLITE_STATIC);
+        _ = c.sqlite3_bind_text(stmt, 2, title.ptr, @intCast(title.len), SQLITE_STATIC);
         _ = c.sqlite3_step(stmt);
     }
 
@@ -152,8 +156,8 @@ pub const Storage = struct {
         if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK) return;
         defer _ = c.sqlite3_finalize(stmt);
 
-        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), c.SQLITE_TRANSIENT);
-        _ = c.sqlite3_bind_text(stmt, 2, title.ptr, @intCast(title.len), c.SQLITE_TRANSIENT);
+        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), SQLITE_STATIC);
+        _ = c.sqlite3_bind_text(stmt, 2, title.ptr, @intCast(title.len), SQLITE_STATIC);
         _ = c.sqlite3_step(stmt);
     }
 
@@ -164,7 +168,7 @@ pub const Storage = struct {
         if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK) return;
         defer _ = c.sqlite3_finalize(stmt);
 
-        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), c.SQLITE_TRANSIENT);
+        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), SQLITE_STATIC);
         _ = c.sqlite3_step(stmt);
     }
 
@@ -175,7 +179,7 @@ pub const Storage = struct {
         if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK) return false;
         defer _ = c.sqlite3_finalize(stmt);
 
-        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), c.SQLITE_TRANSIENT);
+        _ = c.sqlite3_bind_text(stmt, 1, url.ptr, @intCast(url.len), SQLITE_STATIC);
         if (c.sqlite3_step(stmt) == c.SQLITE_ROW) {
             return c.sqlite3_column_int(stmt, 0) > 0;
         }
@@ -230,7 +234,7 @@ pub const Storage = struct {
         if (c.sqlite3_prepare_v2(self.db, sql, -1, &stmt, null) != c.SQLITE_OK) return;
         defer _ = c.sqlite3_finalize(stmt);
 
-        _ = c.sqlite3_bind_text(stmt, 1, json_data.ptr, @intCast(json_data.len), c.SQLITE_TRANSIENT);
+        _ = c.sqlite3_bind_text(stmt, 1, json_data.ptr, @intCast(json_data.len), SQLITE_STATIC);
         _ = c.sqlite3_step(stmt);
     }
 
