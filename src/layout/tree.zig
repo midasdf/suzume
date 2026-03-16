@@ -24,7 +24,7 @@ pub fn buildBoxTree(
     }
 
     // Build children
-    try buildChildren(root_box, body_node, styles, allocator, null);
+    try buildChildren(root_box, body_node, styles, allocator, null, 0);
 
     return root_box;
 }
@@ -35,8 +35,10 @@ fn buildChildren(
     styles: *const cascade_mod.CascadeResult,
     allocator: std.mem.Allocator,
     inherited_link: ?[]const u8,
+    list_counter_start: u32,
 ) !void {
     var child_opt = dom_node.firstChild();
+    var list_counter: u32 = list_counter_start;
     while (child_opt) |child| {
         defer child_opt = child.nextSibling();
 
@@ -54,8 +56,13 @@ fn buildChildren(
 
                 // Determine box type from display
                 child_box.box_type = switch (style.display) {
-                    .block, .list_item, .table, .flex, .grid => .block,
-                    else => .block, // treat everything as block for Phase 1
+                    .block, .list_item, .flex, .grid => .block,
+                    .table => .block,
+                    .table_row, .table_cell, .table_row_group,
+                    .table_header_group, .table_footer_group,
+                    .table_column, .table_column_group, .table_caption => .block,
+                    .inline_block, .inline_flex => .block,
+                    else => .block, // treat everything as block
                 };
 
                 // Apply margin/padding from style
@@ -106,37 +113,79 @@ fn buildChildren(
                         child_box.intrinsic_width = img_w;
                         child_box.intrinsic_height = img_h;
                     }
+
+                    // Handle <hr> as a special replaced element
+                    if (std.mem.eql(u8, tag, "hr")) {
+                        child_box.is_hr = true;
+                    }
+
+                    // Track list item counters
+                    if (style.display == .list_item) {
+                        list_counter += 1;
+                        child_box.list_index = list_counter;
+                    }
                 }
                 child_box.link_url = link_url;
 
                 // Recurse into children (skip for replaced elements)
                 if (child_box.box_type != .replaced) {
-                    try buildChildren(child_box, child, styles, allocator, link_url);
+                    // If this is an ordered/unordered list, start counter at 0
+                    const sub_counter: u32 = if (child.tagName()) |tag| blk: {
+                        if (std.mem.eql(u8, tag, "ol") or std.mem.eql(u8, tag, "ul")) {
+                            break :blk 0;
+                        }
+                        break :blk list_counter;
+                    } else list_counter;
+                    try buildChildren(child_box, child, styles, allocator, link_url, sub_counter);
                 }
 
                 try parent_box.children.append(allocator, child_box);
             },
             .text => {
                 const text = child.textContent() orelse continue;
-                // Skip whitespace-only text nodes
-                const trimmed = std.mem.trim(u8, text, " \t\n\r");
-                if (trimmed.len == 0) continue;
 
-                const text_box = try allocator.create(Box);
-                text_box.* = .{};
-                text_box.box_type = .inline_text;
-                text_box.text = trimmed;
-                text_box.parent = parent_box;
-                // Inherit style from parent
-                text_box.style = parent_box.style;
-                text_box.link_url = inherited_link;
+                // Handle white-space property
+                const is_pre = parent_box.style.white_space == .pre or
+                    parent_box.style.white_space == .pre_wrap;
 
-                // If inside a link, override color to link blue
-                if (inherited_link != null) {
-                    text_box.style.color = 0xFF89b4fa;
+                if (is_pre) {
+                    // In pre mode, preserve whitespace (but still skip completely empty)
+                    if (text.len == 0) continue;
+
+                    const text_box = try allocator.create(Box);
+                    text_box.* = .{};
+                    text_box.box_type = .inline_text;
+                    text_box.text = text;
+                    text_box.parent = parent_box;
+                    text_box.style = parent_box.style;
+                    text_box.link_url = inherited_link;
+
+                    if (inherited_link != null) {
+                        text_box.style.color = 0xFF89b4fa;
+                    }
+
+                    try parent_box.children.append(allocator, text_box);
+                } else {
+                    // Normal mode: skip whitespace-only text nodes
+                    const trimmed = std.mem.trim(u8, text, " \t\n\r");
+                    if (trimmed.len == 0) continue;
+
+                    const text_box = try allocator.create(Box);
+                    text_box.* = .{};
+                    text_box.box_type = .inline_text;
+                    text_box.text = trimmed;
+                    text_box.parent = parent_box;
+                    // Inherit style from parent
+                    text_box.style = parent_box.style;
+                    text_box.link_url = inherited_link;
+
+                    // If inside a link, override color to link blue
+                    if (inherited_link != null) {
+                        text_box.style.color = 0xFF89b4fa;
+                    }
+
+                    try parent_box.children.append(allocator, text_box);
                 }
-
-                try parent_box.children.append(allocator, text_box);
             },
             else => {},
         }

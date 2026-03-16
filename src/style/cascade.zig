@@ -87,6 +87,14 @@ fn lengthToPx(length: css.css_fixed, unit: css.css_unit, default_font_size: f32)
     };
 }
 
+/// Convert length to px, using containing_width for percentage resolution.
+fn lengthToPxPct(length: css.css_fixed, unit: css.css_unit, default_font_size: f32, containing_width: f32) f32 {
+    if (unit == css.CSS_UNIT_PCT) {
+        return fixedToF32(length) * containing_width / 100.0;
+    }
+    return lengthToPx(length, unit, default_font_size);
+}
+
 /// Convert border-width type + value to pixels.
 fn borderWidthValue(bw_type: u8, length: css.css_fixed, unit: css.css_unit, default_font_size: f32) f32 {
     return switch (bw_type) {
@@ -127,6 +135,14 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
 
     // Font weight
     result.font_weight = mapFontWeight(css.css_computed_font_weight(style));
+
+    // Font style
+    const font_style_val = css.css_computed_font_style(style);
+    result.font_style = switch (font_style_val) {
+        css.CSS_FONT_STYLE_ITALIC => .italic,
+        css.CSS_FONT_STYLE_OBLIQUE => .oblique,
+        else => .normal,
+    };
 
     // Display
     result.display = mapDisplay(css.css_computed_display(style, is_root));
@@ -189,6 +205,183 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         }
     }
 
+    // Text align
+    const ta_val = css.css_computed_text_align(style);
+    result.text_align = switch (ta_val) {
+        css.CSS_TEXT_ALIGN_RIGHT, css.CSS_TEXT_ALIGN_LIBCSS_RIGHT => .right,
+        css.CSS_TEXT_ALIGN_CENTER, css.CSS_TEXT_ALIGN_LIBCSS_CENTER => .center,
+        css.CSS_TEXT_ALIGN_JUSTIFY => .justify,
+        else => .left,
+    };
+
+    // Text decoration (bitmask)
+    const td_val = css.css_computed_text_decoration(style);
+    result.text_decoration = .{
+        .underline = (td_val & css.CSS_TEXT_DECORATION_UNDERLINE) != 0,
+        .line_through = (td_val & css.CSS_TEXT_DECORATION_LINE_THROUGH) != 0,
+        .overline = (td_val & css.CSS_TEXT_DECORATION_OVERLINE) != 0,
+    };
+
+    // White space
+    const ws_val = css.css_computed_white_space(style);
+    result.white_space = switch (ws_val) {
+        css.CSS_WHITE_SPACE_PRE => .pre,
+        css.CSS_WHITE_SPACE_NOWRAP => .nowrap,
+        css.CSS_WHITE_SPACE_PRE_WRAP => .pre_wrap,
+        css.CSS_WHITE_SPACE_PRE_LINE => .pre_line,
+        else => .normal,
+    };
+
+    // Width
+    var w_len: css.css_fixed = 0;
+    var w_unit: css.css_unit = css.CSS_UNIT_PX;
+    const w_type = css.css_computed_width(style, &w_len, &w_unit);
+    if (w_type == css.CSS_WIDTH_SET) {
+        result.width = if (w_unit == css.CSS_UNIT_PCT)
+            .{ .percent = fixedToF32(w_len) }
+        else
+            .{ .px = lengthToPx(w_len, w_unit, default_font_size) };
+    }
+
+    // Height
+    var h_len: css.css_fixed = 0;
+    var h_unit: css.css_unit = css.CSS_UNIT_PX;
+    const h_type = css.css_computed_height(style, &h_len, &h_unit);
+    if (h_type == css.CSS_HEIGHT_SET) {
+        result.height = if (h_unit == css.CSS_UNIT_PCT)
+            .{ .percent = fixedToF32(h_len) }
+        else
+            .{ .px = lengthToPx(h_len, h_unit, default_font_size) };
+    }
+
+    // Min/max width
+    var mw_len: css.css_fixed = 0;
+    var mw_unit: css.css_unit = css.CSS_UNIT_PX;
+    if (css.css_computed_min_width(style, &mw_len, &mw_unit) == css.CSS_MIN_WIDTH_SET) {
+        result.min_width = if (mw_unit == css.CSS_UNIT_PCT)
+            .{ .percent = fixedToF32(mw_len) }
+        else
+            .{ .px = lengthToPx(mw_len, mw_unit, default_font_size) };
+    }
+    if (css.css_computed_max_width(style, &mw_len, &mw_unit) == css.CSS_MAX_WIDTH_SET) {
+        result.max_width = if (mw_unit == css.CSS_UNIT_PCT)
+            .{ .percent = fixedToF32(mw_len) }
+        else
+            .{ .px = lengthToPx(mw_len, mw_unit, default_font_size) };
+    }
+
+    // Min/max height
+    var mh_len: css.css_fixed = 0;
+    var mh_unit: css.css_unit = css.CSS_UNIT_PX;
+    if (css.css_computed_min_height(style, &mh_len, &mh_unit) == css.CSS_MIN_HEIGHT_SET) {
+        result.min_height = if (mh_unit == css.CSS_UNIT_PCT)
+            .{ .percent = fixedToF32(mh_len) }
+        else
+            .{ .px = lengthToPx(mh_len, mh_unit, default_font_size) };
+    }
+    if (css.css_computed_max_height(style, &mh_len, &mh_unit) == css.CSS_MAX_HEIGHT_SET) {
+        result.max_height = if (mh_unit == css.CSS_UNIT_PCT)
+            .{ .percent = fixedToF32(mh_len) }
+        else
+            .{ .px = lengthToPx(mh_len, mh_unit, default_font_size) };
+    }
+
+    // Overflow
+    const ox_val = css.css_computed_overflow_x(style);
+    result.overflow_x = switch (ox_val) {
+        css.CSS_OVERFLOW_HIDDEN => .hidden,
+        css.CSS_OVERFLOW_SCROLL => .scroll,
+        css.CSS_OVERFLOW_AUTO => .auto_,
+        else => .visible,
+    };
+    const oy_val = css.css_computed_overflow_y(style);
+    result.overflow_y = switch (oy_val) {
+        css.CSS_OVERFLOW_HIDDEN => .hidden,
+        css.CSS_OVERFLOW_SCROLL => .scroll,
+        css.CSS_OVERFLOW_AUTO => .auto_,
+        else => .visible,
+    };
+
+    // Position
+    const pos_val = css.css_computed_position(style);
+    result.position = switch (pos_val) {
+        css.CSS_POSITION_RELATIVE => .relative,
+        css.CSS_POSITION_ABSOLUTE => .absolute,
+        css.CSS_POSITION_FIXED => .fixed,
+        css.CSS_POSITION_STICKY => .sticky,
+        else => .static_,
+    };
+
+    // List style type
+    const lst_val = css.css_computed_list_style_type(style);
+    result.list_style_type = switch (lst_val) {
+        css.CSS_LIST_STYLE_TYPE_DISC => .disc,
+        css.CSS_LIST_STYLE_TYPE_CIRCLE => .circle,
+        css.CSS_LIST_STYLE_TYPE_SQUARE => .square,
+        css.CSS_LIST_STYLE_TYPE_DECIMAL => .decimal,
+        css.CSS_LIST_STYLE_TYPE_NONE => .none,
+        else => .other,
+    };
+
+    // Flexbox properties
+    const fd_val = css.css_computed_flex_direction(style);
+    result.flex_direction = switch (fd_val) {
+        css.CSS_FLEX_DIRECTION_ROW_REVERSE => .row_reverse,
+        css.CSS_FLEX_DIRECTION_COLUMN => .column,
+        css.CSS_FLEX_DIRECTION_COLUMN_REVERSE => .column_reverse,
+        else => .row,
+    };
+
+    const fw_val = css.css_computed_flex_wrap(style);
+    result.flex_wrap = switch (fw_val) {
+        css.CSS_FLEX_WRAP_WRAP => .wrap,
+        css.CSS_FLEX_WRAP_WRAP_REVERSE => .wrap_reverse,
+        else => .nowrap,
+    };
+
+    const jc_val = css.css_computed_justify_content(style);
+    result.justify_content = switch (jc_val) {
+        css.CSS_JUSTIFY_CONTENT_FLEX_END => .flex_end,
+        css.CSS_JUSTIFY_CONTENT_CENTER => .center,
+        css.CSS_JUSTIFY_CONTENT_SPACE_BETWEEN => .space_between,
+        css.CSS_JUSTIFY_CONTENT_SPACE_AROUND => .space_around,
+        css.CSS_JUSTIFY_CONTENT_SPACE_EVENLY => .space_evenly,
+        else => .flex_start,
+    };
+
+    const ai_val = css.css_computed_align_items(style);
+    result.align_items = switch (ai_val) {
+        css.CSS_ALIGN_ITEMS_FLEX_START => .flex_start,
+        css.CSS_ALIGN_ITEMS_FLEX_END => .flex_end,
+        css.CSS_ALIGN_ITEMS_CENTER => .center,
+        css.CSS_ALIGN_ITEMS_BASELINE => .baseline,
+        else => .stretch,
+    };
+
+    var fg_val: css.css_fixed = 0;
+    if (css.css_computed_flex_grow(style, &fg_val) == css.CSS_FLEX_GROW_SET) {
+        result.flex_grow = fixedToF32(fg_val);
+    }
+
+    var fs_val: css.css_fixed = 0;
+    if (css.css_computed_flex_shrink(style, &fs_val) == css.CSS_FLEX_SHRINK_SET) {
+        result.flex_shrink = fixedToF32(fs_val);
+    }
+
+    var fb_len: css.css_fixed = 0;
+    var fb_unit: css.css_unit = css.CSS_UNIT_PX;
+    const fb_type = css.css_computed_flex_basis(style, &fb_len, &fb_unit);
+    if (fb_type == css.CSS_FLEX_BASIS_SET) {
+        result.flex_basis = .{ .px = lengthToPx(fb_len, fb_unit, default_font_size) };
+    }
+
+    // Gap (column-gap)
+    var gap_len: css.css_fixed = 0;
+    var gap_unit: css.css_unit = css.CSS_UNIT_PX;
+    if (css.css_computed_column_gap(style, &gap_len, &gap_unit) == css.CSS_COLUMN_GAP_SET) {
+        result.gap = lengthToPx(gap_len, gap_unit, default_font_size);
+    }
+
     return result;
 }
 
@@ -215,31 +408,37 @@ pub const CascadeResult = struct {
 };
 
 /// Minimal user-agent default stylesheet.
-/// Sets display:block for standard block-level elements and display:none
-/// for elements that should not render.
 const ua_stylesheet_text =
     \\html, body, div, section, article, aside, nav, main,
-    \\header, footer, h1, h2, h3, h4, h5, h6, p, blockquote, pre,
-    \\ul, ol, li, dl, dt, dd, figure, figcaption, form, fieldset,
-    \\table, hr, address, details, summary { display: block; }
+    \\header, footer, h1, h2, h3, h4, h5, h6, p, blockquote,
+    \\dl, dt, dd, figure, figcaption, form, fieldset,
+    \\hr, address, details, summary { display: block; }
     \\head, style, script, link, meta, title { display: none; }
-    \\table { display: table; }
+    \\table { display: table; border-collapse: separate; }
     \\tr { display: table-row; }
-    \\td, th { display: table-cell; }
+    \\td, th { display: table-cell; padding: 1px; }
+    \\th { font-weight: bold; text-align: center; }
     \\thead { display: table-header-group; }
     \\tbody { display: table-row-group; }
     \\tfoot { display: table-footer-group; }
     \\col { display: table-column; }
     \\colgroup { display: table-column-group; }
     \\caption { display: table-caption; }
+    \\ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
     \\li { display: list-item; }
-    \\h1 { font-size: 2em; font-weight: bold; }
-    \\h2 { font-size: 1.5em; font-weight: bold; }
-    \\h3 { font-size: 1.17em; font-weight: bold; }
-    \\h4 { font-weight: bold; }
-    \\h5 { font-size: 0.83em; font-weight: bold; }
-    \\h6 { font-size: 0.67em; font-weight: bold; }
+    \\h1 { font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
+    \\h2 { font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
+    \\h3 { font-size: 1.17em; font-weight: bold; margin-top: 1em; margin-bottom: 1em; }
+    \\h4 { font-weight: bold; margin-top: 1.33em; margin-bottom: 1.33em; }
+    \\h5 { font-size: 0.83em; font-weight: bold; margin-top: 1.67em; margin-bottom: 1.67em; }
+    \\h6 { font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
     \\b, strong { font-weight: bold; }
+    \\em, i { font-style: italic; }
+    \\a { color: #89b4fa; text-decoration: underline; }
+    \\pre, code { white-space: pre; }
+    \\hr { border-top: 1px solid #45475a; margin-top: 8px; margin-bottom: 8px; }
+    \\p { margin-top: 1em; margin-bottom: 1em; }
+    \\blockquote { margin-left: 40px; margin-right: 40px; margin-top: 1em; margin-bottom: 1em; }
 ;
 
 /// Walk the DOM tree recursively and collect <style> element text content.

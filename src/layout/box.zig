@@ -55,6 +55,10 @@ pub const Box = struct {
     intrinsic_height: f32 = 0,
     /// For inline_text boxes: line-broken fragments
     lines: LineList = .empty,
+    /// True if this box represents an <hr> element.
+    is_hr: bool = false,
+    /// For list items: the 1-based index within parent list.
+    list_index: u32 = 0,
 
     /// Returns the margin box (content + padding + border + margin).
     pub fn marginBox(self: *const Box) Rect {

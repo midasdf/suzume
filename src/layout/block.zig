@@ -3,10 +3,24 @@ const Box = @import("box.zig").Box;
 const BoxType = @import("box.zig").BoxType;
 const LineBox = @import("box.zig").LineBox;
 const FontCache = @import("../paint/painter.zig").FontCache;
+const flex = @import("flex.zig");
+const table = @import("table.zig");
 
 /// Lay out a block box and all its children within the given containing width.
 /// Sets content x, y, width, height for each box.
 pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
+    // Delegate to flex layout if display is flex
+    if (box.style.display == .flex or box.style.display == .inline_flex) {
+        flex.layoutFlex(box, containing_width, cursor_y, fonts);
+        return;
+    }
+
+    // Delegate to table layout if display is table
+    if (box.style.display == .table) {
+        table.layoutTable(box, containing_width, cursor_y, fonts);
+        return;
+    }
+
     // Content x starts after padding + border (left side).
     // Note: margins are handled by the parent's layout, not here.
     const content_x = box.padding.left + box.border.left;
@@ -17,7 +31,42 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
     const h_space = box.margin.left + box.margin.right +
         box.padding.left + box.padding.right +
         box.border.left + box.border.right;
-    box.content.width = @max(containing_width - h_space, 0);
+
+    // Apply explicit width if set
+    const auto_width = @max(containing_width - h_space, 0);
+    box.content.width = switch (box.style.width) {
+        .px => |w| @min(w, auto_width),
+        .percent => |pct| @min(pct * containing_width / 100.0, auto_width),
+        else => auto_width,
+    };
+
+    // Apply min/max width constraints
+    switch (box.style.min_width) {
+        .px => |mw| {
+            if (box.content.width < mw) box.content.width = mw;
+        },
+        .percent => |pct| {
+            const mw = pct * containing_width / 100.0;
+            if (box.content.width < mw) box.content.width = mw;
+        },
+        else => {},
+    }
+    switch (box.style.max_width) {
+        .px => |mw| {
+            if (box.content.width > mw) box.content.width = mw;
+        },
+        .percent => |pct| {
+            const mw = pct * containing_width / 100.0;
+            if (box.content.width > mw) box.content.width = mw;
+        },
+        else => {},
+    }
+
+    // Handle <hr> elements
+    if (box.is_hr) {
+        box.content.height = 0; // The border-top provides the visual line
+        return;
+    }
 
     // Layout children
     var child_y: f32 = 0;
@@ -87,6 +136,28 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 
     // Set this box's content height to contain all children
     box.content.height = child_y;
+
+    // Apply explicit height if set (percent heights need parent height, skip if unknown)
+    switch (box.style.height) {
+        .px => |h| {
+            box.content.height = h;
+        },
+        else => {},
+    }
+
+    // Apply min/max height constraints
+    switch (box.style.min_height) {
+        .px => |mh| {
+            if (box.content.height < mh) box.content.height = mh;
+        },
+        else => {},
+    }
+    switch (box.style.max_height) {
+        .px => |mh| {
+            if (box.content.height > mh) box.content.height = mh;
+        },
+        else => {},
+    }
 }
 
 /// Recursively adjust x positions of a box and all its descendants.
@@ -151,11 +222,21 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
     const line_height: f32 = @floatFromInt(full_metrics.height);
     const ascent: f32 = @floatFromInt(full_metrics.ascent);
 
-    // If the full text fits on one line, no need to break
+    // Handle white-space: pre — preserve all whitespace and newlines
+    const is_pre = box.style.white_space == .pre or box.style.white_space == .pre_wrap;
+    if (is_pre) {
+        layoutPreText(box, text, base_x, base_y, container_width, text_renderer, line_height, ascent, allocator);
+        return;
+    }
+
+    // Handle white-space: nowrap — no wrapping
+    const is_nowrap = box.style.white_space == .nowrap;
+
+    // If the full text fits on one line or nowrap, no need to break
     const text_width: f32 = @floatFromInt(full_metrics.width);
-    if (text_width <= container_width or container_width <= 0) {
+    if (text_width <= container_width or container_width <= 0 or is_nowrap) {
         box.lines.append(allocator, .{
-            .x = base_x,
+            .x = applyTextAlign(base_x, text_width, container_width, box.style.text_align),
             .y = base_y,
             .width = text_width,
             .height = line_height,
@@ -192,7 +273,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
                 const lm = text_renderer.measure(line_text);
                 const lw: f32 = @floatFromInt(lm.width);
                 box.lines.append(allocator, .{
-                    .x = base_x,
+                    .x = applyTextAlign(base_x, lw, container_width, box.style.text_align),
                     .y = base_y + total_height,
                     .width = lw,
                     .height = line_height,
@@ -218,7 +299,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
         const lm = text_renderer.measure(line_text);
         const lw: f32 = @floatFromInt(lm.width);
         box.lines.append(allocator, .{
-            .x = base_x,
+            .x = applyTextAlign(base_x, lw, container_width, box.style.text_align),
             .y = base_y + total_height,
             .width = lw,
             .height = line_height,
@@ -231,4 +312,56 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
 
     box.content.width = max_width;
     box.content.height = total_height;
+}
+
+/// Layout pre-formatted text, splitting on newlines.
+fn layoutPreText(box: *Box, text: []const u8, base_x: f32, base_y: f32, container_width: f32, text_renderer: anytype, line_height: f32, ascent: f32, allocator: std.mem.Allocator) void {
+    _ = container_width;
+    var total_height: f32 = 0;
+    var max_width: f32 = 0;
+    var start: usize = 0;
+
+    var i: usize = 0;
+    while (i <= text.len) : (i += 1) {
+        if (i == text.len or text[i] == '\n') {
+            const line_text = text[start..i];
+            if (line_text.len > 0) {
+                const lm = text_renderer.measure(line_text);
+                const lw: f32 = @floatFromInt(lm.width);
+                box.lines.append(allocator, .{
+                    .x = base_x,
+                    .y = base_y + total_height,
+                    .width = lw,
+                    .height = line_height,
+                    .text = line_text,
+                    .ascent = ascent,
+                }) catch {};
+                if (lw > max_width) max_width = lw;
+            } else {
+                // Empty line
+                box.lines.append(allocator, .{
+                    .x = base_x,
+                    .y = base_y + total_height,
+                    .width = 0,
+                    .height = line_height,
+                    .text = "",
+                    .ascent = ascent,
+                }) catch {};
+            }
+            total_height += line_height;
+            start = i + 1;
+        }
+    }
+
+    box.content.width = max_width;
+    box.content.height = total_height;
+}
+
+/// Apply text-align to compute line x position.
+fn applyTextAlign(base_x: f32, text_width: f32, container_width: f32, text_align: @import("../style/computed.zig").ComputedStyle.TextAlign) f32 {
+    return switch (text_align) {
+        .center => base_x + @max((container_width - text_width) / 2, 0),
+        .right => base_x + @max(container_width - text_width, 0),
+        else => base_x,
+    };
 }

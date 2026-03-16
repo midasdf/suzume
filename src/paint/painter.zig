@@ -134,6 +134,16 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             // Paint borders
             paintBorders(box, surface, scroll_y);
 
+            // Paint <hr> line
+            if (box.is_hr) {
+                paintHr(box, surface, scroll_y, clip_top, clip_bottom);
+            }
+
+            // Paint list item marker
+            if (box.style.display == .list_item and box.list_index > 0) {
+                paintListMarker(box, surface, fonts, scroll_y, clip_top, clip_bottom);
+            }
+
             // Paint children
             for (box.children.items) |child| {
                 paintBox(child, surface, fonts, scroll_y, clip_top, clip_bottom, image_cache);
@@ -209,8 +219,9 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     blitGlyphClipped,
                 );
 
-                // Draw underline for links
-                if (box.link_url != null) {
+                // Draw underline for links or text-decoration: underline
+                const draw_underline = box.link_url != null or box.style.text_decoration.underline;
+                if (draw_underline) {
                     const underline_y = draw_y + 2; // 2px below baseline
                     if (underline_y >= clip_top and underline_y < clip_bottom) {
                         surface.fillRect(
@@ -222,9 +233,90 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                         );
                     }
                 }
+
+                // Draw line-through
+                if (box.style.text_decoration.line_through) {
+                    const strike_y = draw_y - @divTrunc(@as(i32, @intFromFloat(line.ascent)), 3);
+                    if (strike_y >= clip_top and strike_y < clip_bottom) {
+                        surface.fillRect(
+                            draw_x,
+                            strike_y,
+                            @intFromFloat(@max(line.width, 0)),
+                            1,
+                            colour,
+                        );
+                    }
+                }
+
+                // Draw overline
+                if (box.style.text_decoration.overline) {
+                    const overline_y = draw_y - @as(i32, @intFromFloat(line.ascent));
+                    if (overline_y >= clip_top and overline_y < clip_bottom) {
+                        surface.fillRect(
+                            draw_x,
+                            overline_y,
+                            @intFromFloat(@max(line.width, 0)),
+                            1,
+                            colour,
+                        );
+                    }
+                }
             }
         },
     }
+}
+
+/// Paint an <hr> horizontal rule.
+fn paintHr(box: *const Box, surface: *Surface, scroll_y: f32, clip_top: i32, clip_bottom: i32) void {
+    const style = box.style;
+    const hr_color = Surface.argbToColour(if (style.border_top_color != 0xFF000000) style.border_top_color else 0xFF45475a);
+    const hr_thickness: i32 = if (style.border_top_width > 0) @intFromFloat(style.border_top_width) else 1;
+    const bbox = box.borderBox();
+    const hr_x: i32 = @intFromFloat(bbox.x);
+    const hr_y: i32 = @intFromFloat(bbox.y - scroll_y);
+    const hr_w: i32 = @intFromFloat(@max(bbox.width, 0));
+
+    if (hr_y >= clip_top and hr_y < clip_bottom) {
+        surface.fillRect(hr_x, hr_y, hr_w, hr_thickness, hr_color);
+    }
+}
+
+/// Paint a list item bullet or number marker.
+fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32) void {
+    const style = box.style;
+    const colour = Surface.argbToColour(style.color);
+    const size_px: u32 = @intFromFloat(style.font_size_px);
+    const tr = fonts.getRenderer(size_px) orelse return;
+
+    // Determine marker text
+    var marker_buf: [16]u8 = undefined;
+    const marker_text: []const u8 = switch (style.list_style_type) {
+        .disc => "\xe2\x80\xa2", // bullet: U+2022
+        .circle => "\xe2\x97\x8b", // white circle: U+25CB
+        .square => "\xe2\x96\xaa", // small black square: U+25AA
+        .decimal => blk: {
+            const written = std.fmt.bufPrint(&marker_buf, "{d}.", .{box.list_index}) catch break :blk "?.";
+            break :blk written;
+        },
+        .none => return,
+        .other => "\xe2\x80\xa2", // fallback to bullet
+    };
+
+    const m = tr.measure(marker_text);
+    // Position marker to the left of the content area
+    const marker_x: i32 = @as(i32, @intFromFloat(box.content.x)) - m.width - 4;
+    const marker_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent;
+
+    if (marker_y - m.ascent > clip_bottom or marker_y + m.height - m.ascent < clip_top) return;
+
+    tr.renderGlyphs(
+        marker_text,
+        marker_x,
+        marker_y,
+        BlitCtx,
+        .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+        blitGlyphClipped,
+    );
 }
 
 /// Blit an RGBA image scaled to a destination rectangle.
