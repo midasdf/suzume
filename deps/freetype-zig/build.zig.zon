@@ -1,0 +1,15 @@
+.{
+    .name = .freetype,
+    .version = "0.0.0",
+    .paths = .{
+        "include",
+        "src",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE.txt",
+        "README.md",
+        "update.sh",
+        "verify.sh",
+    },
+    .dependencies = .{},
+}

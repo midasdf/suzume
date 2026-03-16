@@ -1,0 +1,21 @@
+.{
+    .name = .harfbuzz,
+    .version = "0.0.0",
+    .paths = .{
+        "include",
+        "src",
+        "AUTHORS",
+        "build.zig",
+        "build.zig.zon",
+        "COPYING",
+        "README.md",
+        "THANKS",
+        "update.sh",
+        "verify.sh",
+    },
+    .dependencies = .{
+        .freetype = .{
+            .path = "../freetype-zig",
+        },
+    },
+}
