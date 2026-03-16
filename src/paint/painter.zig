@@ -8,9 +8,15 @@ const GlyphBitmap = @import("text.zig").GlyphBitmap;
 const BlitCtx = struct {
     surface: *Surface,
     colour: u32,
+    clip_top: i32,
+    clip_bottom: i32,
 };
 
-fn blitGlyph(ctx: BlitCtx, glyph: GlyphBitmap) void {
+fn blitGlyphClipped(ctx: BlitCtx, glyph: GlyphBitmap) void {
+    // Skip glyphs entirely outside clip region
+    const gy_bottom = glyph.y + @as(i32, @intCast(glyph.height));
+    if (gy_bottom <= ctx.clip_top or glyph.y >= ctx.clip_bottom) return;
+
     ctx.surface.blitGlyph8(
         glyph.x,
         glyph.y,
@@ -64,22 +70,28 @@ pub const FontCache = struct {
     }
 };
 
-/// Paint the box tree onto the surface.
-pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32) void {
-    paintBox(box, surface, fonts, scroll_y);
+/// Paint the box tree onto the surface within a clipped region.
+/// clip_top/clip_bottom are absolute screen Y coordinates for the visible area.
+pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32) void {
+    paintBox(box, surface, fonts, scroll_y, clip_top, clip_bottom);
 }
 
-fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32) void {
+fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32) void {
     switch (box.box_type) {
         .block, .anonymous_block => {
+            // Quick culling: skip boxes entirely outside viewport
+            const pbox = box.paddingBox();
+            const screen_y = @as(i32, @intFromFloat(pbox.y - scroll_y));
+            const screen_bottom = screen_y + @as(i32, @intFromFloat(@max(pbox.height, 0)));
+            if (screen_bottom < clip_top or screen_y > clip_bottom) return;
+
             // Paint background if not transparent
             const bg = box.style.background_color;
             const alpha = (bg >> 24) & 0xFF;
             if (alpha > 0) {
-                const pbox = box.paddingBox();
                 surface.fillRect(
                     @intFromFloat(pbox.x),
-                    @intFromFloat(pbox.y - scroll_y),
+                    screen_y,
                     @intFromFloat(@max(pbox.width, 0)),
                     @intFromFloat(@max(pbox.height, 0)),
                     Surface.argbToColour(bg),
@@ -88,7 +100,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
 
             // Paint children
             for (box.children.items) |child| {
-                paintBox(child, surface, fonts, scroll_y);
+                paintBox(child, surface, fonts, scroll_y, clip_top, clip_bottom);
             }
         },
         .inline_text => {
@@ -99,16 +111,66 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             for (box.lines.items) |line| {
                 const draw_y: i32 = @intFromFloat(line.y + line.ascent - scroll_y);
                 const draw_x: i32 = @intFromFloat(line.x);
+                const line_bottom = @as(i32, @intFromFloat(line.y + line.height - scroll_y));
+
+                // Skip lines entirely outside clip
+                if (line_bottom < clip_top or draw_y - @as(i32, @intFromFloat(line.ascent)) > clip_bottom) continue;
 
                 tr.renderGlyphs(
                     line.text,
                     draw_x,
                     draw_y,
                     BlitCtx,
-                    .{ .surface = surface, .colour = colour },
-                    blitGlyph,
+                    .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+                    blitGlyphClipped,
                 );
+
+                // Draw underline for links
+                if (box.link_url != null) {
+                    const underline_y = draw_y + 2; // 2px below baseline
+                    if (underline_y >= clip_top and underline_y < clip_bottom) {
+                        surface.fillRect(
+                            draw_x,
+                            underline_y,
+                            @intFromFloat(@max(line.width, 0)),
+                            1,
+                            colour,
+                        );
+                    }
+                }
             }
         },
     }
+}
+
+/// Compute the total content height of a box tree (for scroll limits).
+pub fn contentHeight(box: *const Box) f32 {
+    const mbox = box.marginBox();
+    return mbox.y + mbox.height;
+}
+
+/// Hit-test: find the link URL at a given point (in layout coordinates, i.e. before scroll).
+pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
+    switch (box.box_type) {
+        .block, .anonymous_block => {
+            // Check children in reverse order (later children are on top)
+            var i = box.children.items.len;
+            while (i > 0) {
+                i -= 1;
+                const result = hitTestLink(box.children.items[i], x, y);
+                if (result != null) return result;
+            }
+        },
+        .inline_text => {
+            // Check each line box
+            for (box.lines.items) |line| {
+                if (x >= line.x and x <= line.x + line.width and
+                    y >= line.y and y <= line.y + line.height)
+                {
+                    return box.link_url;
+                }
+            }
+        },
+    }
+    return null;
 }

@@ -45,6 +45,8 @@ pub const Box = struct {
     parent: ?*Box = null,
     text: ?[]const u8 = null,
     dom_node: ?DomNode = null,
+    /// URL target if this box (or ancestor) is an <a> element.
+    link_url: ?[]const u8 = null,
     /// For inline_text boxes: line-broken fragments
     lines: LineList = .empty,
 

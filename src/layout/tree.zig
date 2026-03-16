@@ -24,7 +24,7 @@ pub fn buildBoxTree(
     }
 
     // Build children
-    try buildChildren(root_box, body_node, styles, allocator);
+    try buildChildren(root_box, body_node, styles, allocator, null);
 
     return root_box;
 }
@@ -34,6 +34,7 @@ fn buildChildren(
     dom_node: DomNode,
     styles: *const cascade_mod.CascadeResult,
     allocator: std.mem.Allocator,
+    inherited_link: ?[]const u8,
 ) !void {
     var child_opt = dom_node.firstChild();
     while (child_opt) |child| {
@@ -71,8 +72,21 @@ fn buildChildren(
                     .left = style.padding_left,
                 };
 
+                // Check if this is an <a> element with href
+                var link_url = inherited_link;
+                if (child.tagName()) |tag| {
+                    if (std.mem.eql(u8, tag, "a")) {
+                        if (child.getAttribute("href")) |href| {
+                            link_url = href;
+                            // Override text color to link blue
+                            child_box.style.color = 0xFF89b4fa;
+                        }
+                    }
+                }
+                child_box.link_url = link_url;
+
                 // Recurse into children
-                try buildChildren(child_box, child, styles, allocator);
+                try buildChildren(child_box, child, styles, allocator, link_url);
 
                 try parent_box.children.append(allocator, child_box);
             },
@@ -89,6 +103,12 @@ fn buildChildren(
                 text_box.parent = parent_box;
                 // Inherit style from parent
                 text_box.style = parent_box.style;
+                text_box.link_url = inherited_link;
+
+                // If inside a link, override color to link blue
+                if (inherited_link != null) {
+                    text_box.style.color = 0xFF89b4fa;
+                }
 
                 try parent_box.children.append(allocator, text_box);
             },
