@@ -47,6 +47,13 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(libcss);
     exe.linkLibrary(libnsfb);
 
+    // LibNSFB surface registration shim (constructors don't work
+    // with Zig's linker on static archives, so we register manually)
+    exe.addCSourceFile(.{
+        .file = b.path("src/nsfb_surface_init.c"),
+        .flags = &.{"-fno-sanitize=undefined"},
+    });
+
     // Include paths for @cImport access
     // Lexbor headers (from the package)
     exe.addIncludePath(lexbor_dep.path("lib"));
@@ -79,6 +86,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xcb-icccm");
     exe.linkSystemLibrary("xcb-image");
     exe.linkSystemLibrary("xcb-keysyms");
+    exe.linkSystemLibrary("xcb-util");
 
     // C++ standard library (needed by HarfBuzz)
     exe.linkLibCpp();
