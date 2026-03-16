@@ -8,6 +8,7 @@ const box_tree = @import("layout/tree.zig");
 const block_layout = @import("layout/block.zig");
 const painter_mod = @import("paint/painter.zig");
 const nsfb_c = @import("bindings/nsfb.zig").c;
+const HttpClient = @import("net/http.zig").HttpClient;
 
 const window_w = 720;
 const window_h = 720;
@@ -38,6 +39,32 @@ fn fontPathSlice(path: [*:0]const u8) []const u8 {
     return path[0..len];
 }
 
+fn testHttp(allocator: std.mem.Allocator) !void {
+    std.debug.print("=== HTTP Client Test ===\n", .{});
+
+    var client = HttpClient.init() catch |err| {
+        std.debug.print("Failed to init HTTP client: {}\n", .{err});
+        return err;
+    };
+    defer client.deinit();
+
+    std.debug.print("Fetching http://example.com ...\n", .{});
+    var response = client.get(allocator, "http://example.com") catch |err| {
+        std.debug.print("Failed to fetch: {}\n", .{err});
+        return err;
+    };
+    defer response.deinit();
+
+    std.debug.print("Status: {d}\n", .{response.status_code});
+    std.debug.print("Content-Type: {s}\n", .{response.content_type});
+    std.debug.print("Body length: {d} bytes\n", .{response.body.len});
+
+    // Print first 200 chars of body
+    const preview_len = @min(response.body.len, 200);
+    std.debug.print("Body preview:\n{s}\n", .{response.body[0..preview_len]});
+    std.debug.print("=== Test complete ===\n", .{});
+}
+
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
@@ -49,6 +76,9 @@ pub fn main() !void {
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--test-dom")) {
             return dom_test.main();
+        }
+        if (std.mem.eql(u8, arg, "--test-http")) {
+            return testHttp(allocator);
         }
         // Treat as HTML file path
         html_path = arg;
@@ -169,4 +199,10 @@ pub const layout = struct {
 
 pub const paint = struct {
     pub const painter = @import("paint/painter.zig");
+    pub const image = @import("paint/image.zig");
+};
+
+pub const net = struct {
+    pub const http = @import("net/http.zig");
+    pub const loader = @import("net/loader.zig");
 };

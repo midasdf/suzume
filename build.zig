@@ -87,6 +87,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xcb-image");
     exe.linkSystemLibrary("xcb-keysyms");
     exe.linkSystemLibrary("xcb-util");
+    exe.linkSystemLibrary("curl");
 
     // C++ standard library (needed by HarfBuzz)
     exe.linkLibCpp();
