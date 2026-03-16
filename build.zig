@@ -81,6 +81,37 @@ pub fn build(b: *std.Build) void {
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
+    // ── QuickJS-ng ──────────────────────────────────────────────────
+    const quickjs_dir = "deps/quickjs-ng";
+    exe.addIncludePath(b.path(quickjs_dir));
+
+    const quickjs_c_flags: []const []const u8 = &.{
+        "-D_GNU_SOURCE",
+        "-DCONFIG_VERSION=\"0.12.1\"",
+        "-std=c11",
+        "-fno-sanitize=undefined",
+        "-Wno-implicit-function-declaration",
+        "-Wno-sign-compare",
+        "-Wno-unused-parameter",
+        "-Wno-unused-variable",
+        "-Wno-missing-field-initializers",
+        "-Wno-implicit-fallthrough",
+    };
+
+    const quickjs_sources: []const []const u8 = &.{
+        quickjs_dir ++ "/quickjs.c",
+        quickjs_dir ++ "/libregexp.c",
+        quickjs_dir ++ "/libunicode.c",
+        quickjs_dir ++ "/dtoa.c",
+    };
+
+    for (quickjs_sources) |src| {
+        exe.addCSourceFile(.{
+            .file = b.path(src),
+            .flags = quickjs_c_flags,
+        });
+    }
+
     // System libraries
     exe.linkSystemLibrary("xcb");
     exe.linkSystemLibrary("xcb-icccm");

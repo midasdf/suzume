@@ -266,6 +266,47 @@ pub fn contentHeight(box: *const Box) f32 {
     return mbox.y + mbox.height;
 }
 
+/// Hit-test: find the deepest DOM node at a given point (in layout coordinates).
+/// Returns the raw lxb_dom_node_t pointer if found.
+pub fn hitTestNode(box: *const Box, x: f32, y: f32) ?*anyopaque {
+    switch (box.box_type) {
+        .block, .anonymous_block => {
+            // Check children in reverse order (later children are on top)
+            var i = box.children.items.len;
+            while (i > 0) {
+                i -= 1;
+                const result = hitTestNode(box.children.items[i], x, y);
+                if (result != null) return result;
+            }
+            // Check self
+            const mbox = box.marginBox();
+            if (x >= mbox.x and x <= mbox.x + mbox.width and
+                y >= mbox.y and y <= mbox.y + mbox.height)
+            {
+                if (box.dom_node) |dn| return dn.rawPtr();
+            }
+        },
+        .inline_text => {
+            for (box.lines.items) |line| {
+                if (x >= line.x and x <= line.x + line.width and
+                    y >= line.y and y <= line.y + line.height)
+                {
+                    if (box.dom_node) |dn| return dn.rawPtr();
+                    return null;
+                }
+            }
+        },
+        .replaced => {
+            if (x >= box.content.x and x <= box.content.x + box.content.width and
+                y >= box.content.y and y <= box.content.y + box.content.height)
+            {
+                if (box.dom_node) |dn| return dn.rawPtr();
+            }
+        },
+    }
+    return null;
+}
+
 /// Hit-test: find the link URL at a given point (in layout coordinates, i.e. before scroll).
 pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
     switch (box.box_type) {
