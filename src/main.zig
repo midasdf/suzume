@@ -14,6 +14,14 @@ const resolveUrl = @import("net/loader.zig").resolveUrl;
 const chrome = @import("ui/chrome.zig");
 const TextInput = @import("ui/input.zig").TextInput;
 const InputResult = @import("ui/input.zig").InputResult;
+const TabManager = @import("ui/tabs.zig").TabManager;
+const Storage = @import("features/storage.zig").Storage;
+const Config = @import("features/config.zig").Config;
+const internal_pages = @import("features/internal_pages.zig");
+const search = @import("features/search.zig");
+const FindBar = search.FindBar;
+const adblock_mod = @import("features/adblock.zig");
+const userscript = @import("features/userscript.zig");
 const Box = @import("layout/box.zig").Box;
 const ImageCache = @import("paint/image.zig").ImageCache;
 const decodeImage = @import("paint/image.zig").decodeImage;
@@ -201,9 +209,74 @@ fn navigateTo(
     url_z: [:0]const u8,
     fonts: *painter_mod.FontCache,
     page: *PageState,
+    storage: ?*Storage,
 ) bool {
     // Clean up old page
     page.deinit();
+
+    // Check for internal suzume:// pages
+    if (internal_pages.isInternalUrl(url_z)) {
+        const html_owned = internal_pages.generatePage(allocator, url_z, storage) orelse {
+            const msg = std.fmt.allocPrint(allocator, "Failed to generate internal page: {s}", .{url_z}) catch return false;
+            page.error_message = msg;
+            page.error_alloc = msg;
+            return false;
+        };
+
+        // Parse the generated HTML
+        var doc = Document.parse(html_owned) catch {
+            allocator.free(html_owned);
+            return false;
+        };
+
+        const root_node = doc.root() orelse {
+            doc.deinit();
+            allocator.free(html_owned);
+            return false;
+        };
+        const body_node = doc.body() orelse {
+            doc.deinit();
+            allocator.free(html_owned);
+            return false;
+        };
+
+        var styles = cascade_mod.cascade(root_node, allocator) catch {
+            doc.deinit();
+            allocator.free(html_owned);
+            return false;
+        };
+
+        const root_box = box_tree.buildBoxTree(body_node, &styles, allocator) catch {
+            styles.deinit();
+            doc.deinit();
+            allocator.free(html_owned);
+            return false;
+        };
+
+        const body_style = styles.getStyle(body_node) orelse @import("style/computed.zig").ComputedStyle{};
+        const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
+        root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
+
+        const content_w: f32 = @floatFromInt(chrome.window_w);
+        const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
+        block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
+        block_layout.adjustXPositions(root_box, root_box.margin.left);
+        block_layout.adjustYPositions(root_box, root_box.margin.top);
+
+        const total_h = painter_mod.contentHeight(root_box);
+        page.* = .{
+            .doc = doc,
+            .styles = styles,
+            .root_box = root_box,
+            .total_height = total_h,
+            .image_cache = ImageCache.init(allocator),
+        };
+        allocator.free(html_owned);
+        return true;
+    }
+
+    // Check for downloadable content by doing a fetch and checking content type
+    // For now, just do the standard page load
 
     // Fetch
     var content = loader.loadPage(url_z) catch |err| {
@@ -296,6 +369,11 @@ fn navigateTo(
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page);
+
+    // Execute user scripts after page load
+    if (page.js_rt) |*js_rt| {
+        userscript.executeUserScripts(js_rt, allocator);
+    }
 
     return true;
 }
@@ -554,6 +632,107 @@ fn findNodeById(node: *lxb.lxb_dom_node_t, id: []const u8) ?*lxb.lxb_dom_node_t 
     return null;
 }
 
+/// Serialize open tabs to JSON for session persistence.
+/// Excludes private tabs.
+/// Append a JSON-escaped string to the list, handling control characters.
+fn appendJsonEscaped(json: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, str: []const u8) !void {
+    for (str) |ch| {
+        switch (ch) {
+            '"' => try json.appendSlice(allocator, "\\\""),
+            '\\' => try json.appendSlice(allocator, "\\\\"),
+            '\n' => try json.appendSlice(allocator, "\\n"),
+            '\r' => try json.appendSlice(allocator, "\\r"),
+            '\t' => try json.appendSlice(allocator, "\\t"),
+            else => {
+                if (ch < 0x20) {
+                    // Escape other control characters as \u00XX
+                    try json.appendSlice(allocator, "\\u00");
+                    const hex = "0123456789abcdef";
+                    try json.append(allocator, hex[(ch >> 4) & 0x0f]);
+                    try json.append(allocator, hex[ch & 0x0f]);
+                } else {
+                    try json.append(allocator, ch);
+                }
+            },
+        }
+    }
+}
+
+fn serializeSession(allocator: std.mem.Allocator, tab_mgr: *const TabManager) ?[]u8 {
+    var json: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer json.deinit(allocator);
+
+    json.appendSlice(allocator, "[") catch return null;
+    var first = true;
+    for (tab_mgr.tabs.items) |tab| {
+        if (tab.is_private) continue;
+        if (tab.url.len == 0) continue;
+
+        if (!first) {
+            json.appendSlice(allocator, ",") catch return null;
+        }
+        first = false;
+
+        json.appendSlice(allocator, "{\"url\":\"") catch return null;
+        // Escape the URL for JSON
+        appendJsonEscaped(&json, allocator, tab.url) catch return null;
+        json.appendSlice(allocator, "\",\"title\":\"") catch return null;
+        appendJsonEscaped(&json, allocator, tab.title) catch return null;
+        // Write scroll_y as integer
+        var scroll_buf: [32]u8 = undefined;
+        const scroll_str = std.fmt.bufPrint(&scroll_buf, "{d}", .{@as(i32, @intFromFloat(tab.scroll_y))}) catch "0";
+        json.appendSlice(allocator, "\",\"scroll_y\":") catch return null;
+        json.appendSlice(allocator, scroll_str) catch return null;
+        json.appendSlice(allocator, "}") catch return null;
+    }
+    json.appendSlice(allocator, "]") catch return null;
+
+    return json.toOwnedSlice(allocator) catch null;
+}
+
+/// Restore tabs from session JSON.
+fn restoreSession(
+    allocator: std.mem.Allocator,
+    json: []const u8,
+    tab_mgr: *TabManager,
+    page_states: *std.ArrayListUnmanaged(PageState),
+) void {
+    // Simple JSON array parser for [{"url":"...","title":"...","scroll_y":N}, ...]
+    // We just extract url fields using basic string scanning
+    var pos: usize = 0;
+    var tab_count: usize = 0;
+
+    while (pos < json.len) {
+        // Find next "url":"
+        const url_key = std.mem.indexOfPos(u8, json, pos, "\"url\":\"") orelse break;
+        const url_start = url_key + 7; // length of "url":"
+        const url_end = std.mem.indexOfPos(u8, json, url_start, "\"") orelse break;
+        const url = json[url_start..url_end];
+
+        if (url.len > 0) {
+            if (tab_count == 0 and tab_mgr.tabCount() == 1) {
+                // Replace the default first tab instead of creating a new one
+                tab_mgr.updateActiveUrl(url);
+                tab_mgr.updateActiveTitle(url);
+            } else {
+                _ = tab_mgr.newTab(url);
+                page_states.append(allocator, PageState{}) catch |err| {
+                    std.debug.print("[Error] Failed to append page state: {}\n", .{err});
+                };
+            }
+            tab_count += 1;
+        }
+
+        pos = url_end + 1;
+    }
+
+    if (tab_count > 0) {
+        // Switch to first tab
+        _ = tab_mgr.switchTo(0);
+        std.debug.print("[Session] Restored {d} tabs\n", .{tab_count});
+    }
+}
+
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
@@ -585,7 +764,18 @@ pub fn main() !void {
     if (run_test_js) return testJs();
     if (run_test_dom_js) return testDomJs();
 
-    std.debug.print("suzume v0.3.0 — browser mode\n", .{});
+    std.debug.print("suzume v0.4.0 — browser mode\n", .{});
+
+    // Init config
+    var config = Config.init(allocator);
+    defer config.deinit();
+
+    // Init storage
+    var storage_inst: ?Storage = Storage.init(allocator) catch |err| blk: {
+        std.debug.print("Warning: failed to init storage: {}\n", .{err});
+        break :blk null;
+    };
+    defer if (storage_inst) |*s| s.deinit();
 
     // Init HTTP client
     var http_client = HttpClient.init() catch |err| {
@@ -618,9 +808,26 @@ pub fn main() !void {
     // Status
     var status_text: []const u8 = "Ready";
 
-    // Page state
-    var page = PageState{};
-    defer page.deinit();
+    // Tab manager
+    const max_tabs_cfg = config.getInt("max_active_tabs") orelse 3;
+    var tab_mgr = TabManager.init(allocator, @intCast(@max(max_tabs_cfg, 1)));
+    defer tab_mgr.deinit();
+
+    // Page states: one per tab. Index corresponds to tab index.
+    var page_states: std.ArrayListUnmanaged(PageState) = .empty;
+    defer {
+        for (page_states.items) |*ps| ps.deinit();
+        page_states.deinit(allocator);
+    }
+
+    // Create initial tab
+    {
+        const homepage = config.get("homepage") orelse "about:blank";
+        _ = tab_mgr.newTab(if (initial_url) |u| u else homepage);
+        page_states.append(allocator, PageState{}) catch |err| {
+            std.debug.print("[Error] Failed to append initial page state: {}\n", .{err});
+        };
+    }
 
     // Scroll
     var scroll_y: f32 = 0;
@@ -646,6 +853,33 @@ pub fn main() !void {
     var mouse_x: i32 = 0;
     var mouse_y: i32 = 0;
 
+    // Find bar (Ctrl+F)
+    var find_bar = FindBar.init(allocator);
+    defer find_bar.deinit();
+
+    // Session persistence timer (save every ~30 seconds)
+    // We count event loop iterations; at 50ms poll timeout, ~600 iterations = 30s
+    var session_timer: u32 = 0;
+    const session_save_interval: u32 = 600;
+
+    // Apply adblock config to loader
+    if (config.get("adblock_enabled")) |val| {
+        loader.adblock_enabled = std.mem.eql(u8, val, "true");
+    }
+
+    // Restore session if no initial URL provided
+    if (initial_url == null) {
+        if (storage_inst) |*s| {
+            if (s.loadSession()) |session_json| {
+                defer allocator.free(session_json);
+                restoreSession(allocator, session_json, &tab_mgr, &page_states);
+            }
+        }
+    }
+
+    // Ensure user scripts directory exists
+    userscript.ensureScriptsDir(allocator);
+
     // If initial URL provided, navigate to it
     if (initial_url) |url| {
         url_input.setText(url);
@@ -658,24 +892,35 @@ pub fn main() !void {
             @memcpy(uz, url);
             status_text = "Loading...";
 
-            if (navigateTo(allocator, &loader, uz, &fonts, &page)) {
-                status_text = "Done";
-                scroll_y = 0;
-                // Store in history
-                const owned = allocator.alloc(u8, url.len) catch null;
-                if (owned) |o| {
-                    @memcpy(o, url);
-                    history.append(allocator, o) catch {};
-                    history_pos = history.items.len - 1;
-                    if (current_url) |old| allocator.free(old);
-                    const cu = allocator.alloc(u8, url.len) catch null;
-                    if (cu) |c| {
-                        @memcpy(c, url);
-                        current_url = c;
+            if (page_states.items.len > 0) {
+                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null)) {
+                    status_text = "Done";
+                    scroll_y = 0;
+                    tab_mgr.updateActiveUrl(url);
+                    tab_mgr.updateActiveTitle(url);
+                    // Store in history
+                    const owned = allocator.alloc(u8, url.len) catch null;
+                    if (owned) |o| {
+                        @memcpy(o, url);
+                        history.append(allocator, o) catch {};
+                        history_pos = history.items.len - 1;
+                        if (current_url) |old| allocator.free(old);
+                        const cu = allocator.alloc(u8, url.len) catch null;
+                        if (cu) |cc| {
+                            @memcpy(cc, url);
+                            current_url = cc;
+                        }
                     }
+                    // Record in storage (skip for private tabs)
+                    if (storage_inst) |*s| {
+                        const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
+                        if (!is_priv) {
+                            s.addHistory(url, url);
+                        }
+                    }
+                } else {
+                    status_text = "Failed";
                 }
-            } else {
-                status_text = "Failed";
             }
         }
     }
@@ -691,55 +936,84 @@ pub fn main() !void {
             // Clear content area
             chrome.clearContentArea(&surface);
 
-            // Paint page content
-            if (page.root_box) |root_box| {
-                // scroll_y is in layout coords; we offset by content_y for screen position
-                const adjusted_scroll = scroll_y - @as(f32, @floatFromInt(chrome.content_y));
-                const ic_ptr: ?*ImageCache = if (page.image_cache) |*ic| ic else null;
-                painter_mod.paint(
-                    root_box,
-                    &surface,
-                    &fonts,
-                    adjusted_scroll,
-                    chrome.content_y,
-                    chrome.content_y + chrome.content_height,
-                    ic_ptr,
-                );
-            } else if (page.error_message) |err_msg| {
-                // Display error message in the content area
-                const err_font_size: u32 = 14;
-                if (fonts.getRenderer(err_font_size)) |tr| {
-                    const m = tr.measure(err_msg);
-                    const err_x: i32 = 16;
-                    const err_y: i32 = chrome.content_y + 24 + m.ascent;
-                    tr.renderGlyphs(
-                        err_msg,
-                        err_x,
-                        err_y,
-                        ErrBlitCtx,
-                        .{ .surface = &surface, .colour = Surface.argbToColour(0xFFf38ba8) },
-                        blitGlyphErr,
+            // Paint page content (from active tab's page state)
+            const active_page: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                &page_states.items[tab_mgr.active_index]
+            else
+                null;
+
+            if (active_page) |page| {
+                if (page.root_box) |root_box| {
+                    // scroll_y is in layout coords; we offset by content_y for screen position
+                    const adjusted_scroll = scroll_y - @as(f32, @floatFromInt(chrome.content_y));
+                    const ic_ptr: ?*ImageCache = if (page.image_cache) |*ic| ic else null;
+                    painter_mod.paint(
+                        root_box,
+                        &surface,
+                        &fonts,
+                        adjusted_scroll,
+                        chrome.content_y,
+                        chrome.content_y + chrome.content_height,
+                        ic_ptr,
                     );
+                } else if (page.error_message) |err_msg| {
+                    // Display error message in the content area
+                    const err_font_size: u32 = 14;
+                    if (fonts.getRenderer(err_font_size)) |tr| {
+                        const m = tr.measure(err_msg);
+                        const err_x: i32 = 16;
+                        const err_y: i32 = chrome.content_y + 24 + m.ascent;
+                        tr.renderGlyphs(
+                            err_msg,
+                            err_x,
+                            err_y,
+                            ErrBlitCtx,
+                            .{ .surface = &surface, .colour = Surface.argbToColour(0xFFf38ba8) },
+                            blitGlyphErr,
+                        );
+                    }
                 }
             }
 
             // Paint chrome on top
             chrome.paintUrlBar(&surface, &fonts, &url_input);
+            chrome.paintTabBar(&surface, &fonts, &tab_mgr);
             chrome.paintStatusBar(&surface, &fonts, status_text);
+
+            // Paint find bar (above status bar, if visible)
+            search.paintFindBar(&surface, &fonts, &find_bar);
 
             surface.update();
             needs_repaint = false;
         }
 
         // Tick JS timers (setTimeout/setInterval) and check for DOM mutations
-        if (page.js_rt) |*js_rt| {
-            _ = web_api.tickTimers(js_rt.ctx);
-            js_rt.executePending();
-            if (dom_api.dom_dirty) {
-                dom_api.dom_dirty = false;
-                // DOM was mutated by JS — need to re-style, re-layout, repaint
-                // For now, just repaint (full re-layout on DOM mutation is Phase 5)
-                needs_repaint = true;
+        {
+            const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                &page_states.items[tab_mgr.active_index]
+            else
+                null;
+            if (active_pg) |pg| {
+                if (pg.js_rt) |*js_rt| {
+                    _ = web_api.tickTimers(js_rt.ctx);
+                    js_rt.executePending();
+                    if (dom_api.dom_dirty) {
+                        dom_api.dom_dirty = false;
+                        needs_repaint = true;
+                    }
+                }
+            }
+        }
+
+        // Session persistence: save periodically
+        session_timer += 1;
+        if (session_timer >= session_save_interval) {
+            session_timer = 0;
+            if (storage_inst) |*s| {
+                if (serializeSession(allocator, &tab_mgr)) |json| {
+                    defer allocator.free(json);
+                    s.saveSession(json);
+                }
             }
         }
 
@@ -783,6 +1057,109 @@ pub fn main() !void {
                         continue;
                     }
 
+                    // Ctrl+T: new tab
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_t) {
+                        // Save scroll position of current tab
+                        tab_mgr.saveScrollPosition(scroll_y);
+
+                        const homepage = config.get("homepage") orelse "about:blank";
+                        _ = tab_mgr.newTab(homepage);
+                        page_states.append(allocator, PageState{}) catch |err| {
+                            std.debug.print("[Error] Failed to append page state: {}\n", .{err});
+                        };
+
+                        // Reset state for new tab
+                        scroll_y = 0;
+                        url_input.setText("");
+                        url_input.focused = true;
+                        if (current_url) |old| allocator.free(old);
+                        current_url = null;
+                        status_text = "New Tab";
+                        needs_repaint = true;
+                        std.debug.print("[Tabs] New tab (total: {d})\n", .{tab_mgr.tabCount()});
+                        continue;
+                    }
+
+                    // Ctrl+W: close current tab
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_w) {
+                        if (tab_mgr.tabCount() <= 1) {
+                            // Last tab — quit
+                            running = false;
+                            continue;
+                        }
+                        const close_idx = tab_mgr.active_index;
+                        // Clean up page state
+                        if (close_idx < page_states.items.len) {
+                            page_states.items[close_idx].deinit();
+                            _ = page_states.orderedRemove(close_idx);
+                        }
+                        tab_mgr.closeTab(close_idx);
+
+                        // Restore state from new active tab
+                        if (tab_mgr.getActiveTab()) |tab| {
+                            scroll_y = tab.scroll_y;
+                            url_input.setText(tab.url);
+                            url_input.focused = false;
+                            if (current_url) |old| allocator.free(old);
+                            current_url = allocator.dupe(u8, tab.url) catch null;
+                        }
+                        status_text = "Tab closed";
+                        needs_repaint = true;
+                        std.debug.print("[Tabs] Closed tab, now {d} tabs\n", .{tab_mgr.tabCount()});
+                        continue;
+                    }
+
+                    // Ctrl+Tab: next tab
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and !shift_held) {
+                        tab_mgr.saveScrollPosition(scroll_y);
+                        if (tab_mgr.nextTab()) {
+                            if (tab_mgr.getActiveTab()) |tab| {
+                                scroll_y = tab.scroll_y;
+                                url_input.setText(tab.url);
+                                url_input.focused = false;
+                                if (current_url) |old| allocator.free(old);
+                                current_url = allocator.dupe(u8, tab.url) catch null;
+                            }
+                            needs_repaint = true;
+                        }
+                        continue;
+                    }
+
+                    // Ctrl+Shift+Tab: previous tab
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and shift_held) {
+                        tab_mgr.saveScrollPosition(scroll_y);
+                        if (tab_mgr.prevTab()) {
+                            if (tab_mgr.getActiveTab()) |tab| {
+                                scroll_y = tab.scroll_y;
+                                url_input.setText(tab.url);
+                                url_input.focused = false;
+                                if (current_url) |old| allocator.free(old);
+                                current_url = allocator.dupe(u8, tab.url) catch null;
+                            }
+                            needs_repaint = true;
+                        }
+                        continue;
+                    }
+
+                    // Ctrl+1 through Ctrl+9: switch to tab N
+                    if (ctrl_held and key >= nsfb_c.NSFB_KEY_1 and key <= nsfb_c.NSFB_KEY_9) {
+                        const tab_idx: usize = @intCast(key - nsfb_c.NSFB_KEY_1);
+                        if (tab_idx < tab_mgr.tabCount()) {
+                            tab_mgr.saveScrollPosition(scroll_y);
+                            if (tab_mgr.switchTo(tab_idx)) {
+                                if (tab_mgr.getActiveTab()) |tab| {
+                                    scroll_y = tab.scroll_y;
+                                    url_input.setText(tab.url);
+                                    url_input.focused = false;
+                                    if (current_url) |old| allocator.free(old);
+                                    current_url = allocator.dupe(u8, tab.url) catch null;
+                                }
+                                needs_repaint = true;
+                            }
+                        }
+                        continue;
+                    }
+
                     // F5: reload
                     if (key == nsfb_c.NSFB_KEY_F5) {
                         if (current_url) |url| {
@@ -791,7 +1168,8 @@ pub fn main() !void {
                             @memcpy(url_z, url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, &page)) {
+                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                             } else {
@@ -810,7 +1188,8 @@ pub fn main() !void {
                             @memcpy(url_z, url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, &page)) {
+                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                             } else {
@@ -818,6 +1197,76 @@ pub fn main() !void {
                             }
                             needs_repaint = true;
                         }
+                        continue;
+                    }
+
+                    // Ctrl+H: open history page
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_h) {
+                        url_input.setText("suzume://history");
+                        url_input.focused = false;
+                        status_text = "Loading...";
+                        needs_repaint = true;
+                        const hist_url = "suzume://history";
+                        const url_z = allocator.allocSentinel(u8, hist_url.len, 0) catch continue;
+                        defer allocator.free(url_z);
+                        @memcpy(url_z, hist_url);
+                        const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                            status_text = "Done";
+                            scroll_y = 0;
+                            tab_mgr.updateActiveUrl(hist_url);
+                            tab_mgr.updateActiveTitle("History");
+                        } else {
+                            status_text = "Failed";
+                        }
+                        needs_repaint = true;
+                        continue;
+                    }
+
+                    // Ctrl+D: toggle bookmark for current URL
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_d) {
+                        if (storage_inst) |*s| {
+                            if (current_url) |url| {
+                                if (s.isBookmarked(url)) {
+                                    s.removeBookmark(url);
+                                    status_text = "Bookmark removed";
+                                    std.debug.print("[Bookmarks] Removed: {s}\n", .{url});
+                                } else {
+                                    const title = if (tab_mgr.getActiveTab()) |t| t.title else url;
+                                    s.addBookmark(url, title);
+                                    status_text = "Bookmarked!";
+                                    std.debug.print("[Bookmarks] Added: {s}\n", .{url});
+                                }
+                                needs_repaint = true;
+                            }
+                        }
+                        continue;
+                    }
+
+                    // Ctrl+F: open find bar
+                    if (ctrl_held and key == nsfb_c.NSFB_KEY_f) {
+                        find_bar.open();
+                        url_input.focused = false;
+                        needs_repaint = true;
+                        continue;
+                    }
+
+                    // Ctrl+Shift+N: new private tab
+                    if (ctrl_held and shift_held and key == nsfb_c.NSFB_KEY_n) {
+                        tab_mgr.saveScrollPosition(scroll_y);
+                        const homepage = config.get("homepage") orelse "about:blank";
+                        _ = tab_mgr.newPrivateTab(homepage);
+                        page_states.append(allocator, PageState{}) catch |err| {
+                            std.debug.print("[Error] Failed to append page state: {}\n", .{err});
+                        };
+                        scroll_y = 0;
+                        url_input.setText("");
+                        url_input.focused = true;
+                        if (current_url) |old| allocator.free(old);
+                        current_url = null;
+                        status_text = "Private Tab";
+                        needs_repaint = true;
+                        std.debug.print("[Tabs] New private tab (total: {d})\n", .{tab_mgr.tabCount()});
                         continue;
                     }
 
@@ -832,7 +1281,8 @@ pub fn main() !void {
                             url_input.setText(url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, &page)) {
+                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 if (current_url) |old| allocator.free(old);
@@ -841,6 +1291,7 @@ pub fn main() !void {
                                     @memcpy(c, url);
                                     current_url = c;
                                 }
+                                tab_mgr.updateActiveUrl(url);
                             } else {
                                 status_text = "Failed";
                             }
@@ -860,7 +1311,8 @@ pub fn main() !void {
                             url_input.setText(url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, &page)) {
+                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 if (current_url) |old| allocator.free(old);
@@ -869,6 +1321,7 @@ pub fn main() !void {
                                     @memcpy(c, url);
                                     current_url = c;
                                 }
+                                tab_mgr.updateActiveUrl(url);
                             } else {
                                 status_text = "Failed";
                             }
@@ -879,24 +1332,99 @@ pub fn main() !void {
 
                     // Handle mouse events regardless of focus
                     if (key == nsfb_c.NSFB_KEY_MOUSE_1) {
-                        handleClick(
-                            allocator,
-                            mouse_x,
-                            mouse_y,
-                            &url_input,
-                            &scroll_y,
-                            &page,
-                            &fonts,
-                            &loader,
-                            &history,
-                            &history_pos,
-                            &current_url,
-                            &status_text,
-                            &needs_repaint,
-                        );
+                        // Check tab bar clicks first
+                        const tab_hit = chrome.hitTestTabBar(mouse_x, mouse_y, &tab_mgr);
+                        switch (tab_hit.action) {
+                            .new_tab => {
+                                tab_mgr.saveScrollPosition(scroll_y);
+                                const homepage = config.get("homepage") orelse "about:blank";
+                                _ = tab_mgr.newTab(homepage);
+                                page_states.append(allocator, PageState{}) catch |err| {
+                                    std.debug.print("[Error] Failed to append page state: {}\n", .{err});
+                                };
+                                scroll_y = 0;
+                                url_input.setText("");
+                                url_input.focused = true;
+                                if (current_url) |old| allocator.free(old);
+                                current_url = null;
+                                status_text = "New Tab";
+                                needs_repaint = true;
+                                continue;
+                            },
+                            .close_tab => {
+                                if (tab_mgr.tabCount() <= 1) {
+                                    running = false;
+                                    continue;
+                                }
+                                const ci = tab_hit.index;
+                                if (ci < page_states.items.len) {
+                                    page_states.items[ci].deinit();
+                                    _ = page_states.orderedRemove(ci);
+                                }
+                                tab_mgr.closeTab(ci);
+                                if (tab_mgr.getActiveTab()) |tab| {
+                                    scroll_y = tab.scroll_y;
+                                    url_input.setText(tab.url);
+                                    url_input.focused = false;
+                                    if (current_url) |old| allocator.free(old);
+                                    current_url = allocator.dupe(u8, tab.url) catch null;
+                                }
+                                needs_repaint = true;
+                                continue;
+                            },
+                            .switch_tab => {
+                                tab_mgr.saveScrollPosition(scroll_y);
+                                if (tab_mgr.switchTo(tab_hit.index)) {
+                                    if (tab_mgr.getActiveTab()) |tab| {
+                                        scroll_y = tab.scroll_y;
+                                        url_input.setText(tab.url);
+                                        url_input.focused = false;
+                                        if (current_url) |old| allocator.free(old);
+                                        current_url = allocator.dupe(u8, tab.url) catch null;
+                                    }
+                                    needs_repaint = true;
+                                }
+                                continue;
+                            },
+                            .none => {},
+                        }
+
+                        // Not a tab bar click — forward to regular click handler
+                        const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                            &page_states.items[tab_mgr.active_index]
+                        else
+                            null;
+                        if (active_pg) |page| {
+                            handleClick(
+                                allocator,
+                                mouse_x,
+                                mouse_y,
+                                &url_input,
+                                &scroll_y,
+                                page,
+                                &fonts,
+                                &loader,
+                                &history,
+                                &history_pos,
+                                &current_url,
+                                &status_text,
+                                &needs_repaint,
+                                if (storage_inst) |*s| s else null,
+                            );
+                            // Update tab with new URL
+                            if (current_url) |cu| {
+                                tab_mgr.updateActiveUrl(cu);
+                                tab_mgr.updateActiveTitle(cu);
+                            }
+                        }
                         continue;
                     }
                     if (key == nsfb_c.NSFB_KEY_MOUSE_4 or key == nsfb_c.NSFB_KEY_MOUSE_5) {
+                        const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                            &page_states.items[tab_mgr.active_index]
+                        else
+                            null;
+                        const total_h: f32 = if (active_pg) |pg| pg.total_height else 0;
                         const ch = @as(f32, @floatFromInt(chrome.content_height));
                         var new_scroll = scroll_y;
                         if (key == nsfb_c.NSFB_KEY_MOUSE_4) {
@@ -904,11 +1432,51 @@ pub fn main() !void {
                         } else {
                             new_scroll += 40;
                         }
-                        const max_scroll = @max(page.total_height - ch, 0);
+                        const max_scroll = @max(total_h - ch, 0);
                         new_scroll = @max(0, @min(new_scroll, max_scroll));
                         if (new_scroll != scroll_y) {
                             scroll_y = new_scroll;
                             needs_repaint = true;
+                        }
+                        continue;
+                    }
+
+                    // Find bar key handling (takes priority when visible)
+                    if (find_bar.visible) {
+                        const find_result = find_bar.handleKey(key, shift_held);
+                        switch (find_result) {
+                            .close => {
+                                find_bar.close();
+                                needs_repaint = true;
+                            },
+                            .search => {
+                                const active_pg_fb: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                                    &page_states.items[tab_mgr.active_index]
+                                else
+                                    null;
+                                if (active_pg_fb) |pg| {
+                                    find_bar.performSearch(pg.root_box);
+                                }
+                                needs_repaint = true;
+                            },
+                            .next_match => {
+                                find_bar.nextMatch();
+                                if (find_bar.currentMatchY()) |match_y| {
+                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.content_height)) / 2.0);
+                                }
+                                needs_repaint = true;
+                            },
+                            .prev_match => {
+                                find_bar.prevMatch();
+                                if (find_bar.currentMatchY()) |match_y| {
+                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.content_height)) / 2.0);
+                                }
+                                needs_repaint = true;
+                            },
+                            .consumed => {
+                                needs_repaint = true;
+                            },
+                            .ignored => {},
                         }
                         continue;
                     }
@@ -928,7 +1496,8 @@ pub fn main() !void {
                                     status_text = "Loading...";
                                     needs_repaint = true;
 
-                                    if (navigateTo(allocator, &loader, url_z, &fonts, &page)) {
+                                    const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
                                         status_text = "Done";
                                         scroll_y = 0;
                                         url_input.focused = false;
@@ -954,6 +1523,16 @@ pub fn main() !void {
                                             @memcpy(c, url_text);
                                             current_url = c;
                                         }
+                                        // Update tab
+                                        tab_mgr.updateActiveUrl(url_text);
+                                        tab_mgr.updateActiveTitle(url_text);
+                                        // Record in storage (skip for private tabs)
+                                        if (storage_inst) |*s| {
+                                            const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
+                                            if (!is_priv) {
+                                                s.addHistory(url_text, url_text);
+                                            }
+                                        }
                                     } else {
                                         status_text = "Failed";
                                     }
@@ -976,6 +1555,11 @@ pub fn main() !void {
                     } else {
                         // Content area: handle scroll keys
                         {
+                            const active_pg2: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                                &page_states.items[tab_mgr.active_index]
+                            else
+                                null;
+                            const total_h2: f32 = if (active_pg2) |pg| pg.total_height else 0;
                             const ch = @as(f32, @floatFromInt(chrome.content_height));
                             var new_scroll = scroll_y;
 
@@ -990,8 +1574,8 @@ pub fn main() !void {
                             } else if (key == nsfb_c.NSFB_KEY_HOME) {
                                 new_scroll = 0;
                             } else if (key == nsfb_c.NSFB_KEY_END) {
-                                if (page.total_height > ch) {
-                                    new_scroll = page.total_height - ch;
+                                if (total_h2 > ch) {
+                                    new_scroll = total_h2 - ch;
                                 }
                             } else if (key == nsfb_c.NSFB_KEY_ESCAPE) {
                                 // Do nothing in content view; Ctrl+Q to quit
@@ -999,7 +1583,7 @@ pub fn main() !void {
                             }
 
                             // Clamp
-                            const max_scroll = @max(page.total_height - ch, 0);
+                            const max_scroll = @max(total_h2 - ch, 0);
                             new_scroll = @max(0, @min(new_scroll, max_scroll));
                             if (new_scroll != scroll_y) {
                                 scroll_y = new_scroll;
@@ -1032,6 +1616,15 @@ pub fn main() !void {
         }
     }
 
+    // Save session on exit
+    if (storage_inst) |*s| {
+        if (serializeSession(allocator, &tab_mgr)) |json| {
+            defer allocator.free(json);
+            s.saveSession(json);
+            std.debug.print("[Session] Saved {d} bytes\n", .{json.len});
+        }
+    }
+
     std.debug.print("Bye!\n", .{});
 }
 
@@ -1049,6 +1642,7 @@ fn handleClick(
     current_url: *?[]u8,
     status_text: *[]const u8,
     needs_repaint: *bool,
+    storage: ?*Storage,
 ) void {
     // Click in URL bar?
     if (my < chrome.url_bar_height) {
@@ -1096,7 +1690,7 @@ fn handleClick(
             status_text.* = "Loading...";
             needs_repaint.* = true;
 
-            if (navigateTo(allocator, loader, resolved, fonts, page)) {
+            if (navigateTo(allocator, loader, resolved, fonts, page, storage)) {
                 status_text.* = "Done";
                 scroll_y.* = 0;
 
@@ -1166,6 +1760,16 @@ pub const net = struct {
 pub const ui = struct {
     pub const chrome_mod = @import("ui/chrome.zig");
     pub const input = @import("ui/input.zig");
+    pub const tabs = @import("ui/tabs.zig");
+};
+
+pub const features = struct {
+    pub const storage = @import("features/storage.zig");
+    pub const config_mod = @import("features/config.zig");
+    pub const internal_pgs = @import("features/internal_pages.zig");
+    pub const search_mod = @import("features/search.zig");
+    pub const adblock = @import("features/adblock.zig");
+    pub const userscripts = @import("features/userscript.zig");
 };
 
 pub const js = struct {

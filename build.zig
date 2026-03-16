@@ -119,6 +119,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xcb-keysyms");
     exe.linkSystemLibrary("xcb-util");
     exe.linkSystemLibrary("curl");
+    exe.linkSystemLibrary("sqlite3");
 
     // C++ standard library (needed by HarfBuzz)
     exe.linkLibCpp();

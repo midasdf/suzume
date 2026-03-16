@@ -3,6 +3,7 @@ const HttpClient = @import("http.zig").HttpClient;
 const Response = @import("http.zig").Response;
 const Document = @import("../dom/tree.zig").Document;
 const DomNode = @import("../dom/node.zig").DomNode;
+const adblock = @import("../features/adblock.zig");
 
 pub const PageContent = struct {
     html: []u8,
@@ -20,6 +21,8 @@ pub const PageContent = struct {
 pub const Loader = struct {
     client: *HttpClient,
     allocator: std.mem.Allocator,
+    adblock_enabled: bool = true,
+    download_status: ?[]const u8 = null,
 
     pub fn init(allocator: std.mem.Allocator, client: *HttpClient) Loader {
         return .{
@@ -71,6 +74,12 @@ pub const Loader = struct {
                     const resolved = try resolveUrl(self.allocator, url, href);
                     defer self.allocator.free(resolved);
 
+                    // Ad block check
+                    if (self.adblock_enabled and adblock.shouldBlock(resolved)) {
+                        std.debug.print("[AdBlock] Blocked: {s}\n", .{resolved});
+                        continue;
+                    }
+
                     // Fetch CSS
                     var css_resp = self.client.get(self.allocator, resolved) catch continue;
                     defer css_resp.deinit();
@@ -102,7 +111,103 @@ pub const Loader = struct {
 
     /// Fetch raw bytes (for images, etc.)
     pub fn loadBytes(self: *Loader, url: [:0]const u8) !Response {
+        // Ad block check
+        if (self.adblock_enabled and adblock.shouldBlock(url)) {
+            std.debug.print("[AdBlock] Blocked: {s}\n", .{url});
+            return error.AdBlocked;
+        }
         return try self.client.get(self.allocator, url);
+    }
+
+    /// Check if a response should be downloaded (non-renderable content type).
+    pub fn isDownloadable(content_type: []const u8) bool {
+        // Renderable types that the browser handles
+        if (std.mem.startsWith(u8, content_type, "text/html")) return false;
+        if (std.mem.startsWith(u8, content_type, "text/css")) return false;
+        if (std.mem.startsWith(u8, content_type, "image/")) return false;
+        if (std.mem.startsWith(u8, content_type, "text/plain")) return false;
+        // Everything else is a download
+        if (content_type.len == 0) return false; // unknown, try to render
+        return true;
+    }
+
+    /// Extract filename from a URL.
+    pub fn filenameFromUrl(url: []const u8) []const u8 {
+        // Find the last path component
+        const path_end = std.mem.indexOf(u8, url, "?") orelse url.len;
+        const path = url[0..path_end];
+        if (std.mem.lastIndexOf(u8, path, "/")) |idx| {
+            const name = path[idx + 1 ..];
+            if (name.len > 0) return name;
+        }
+        return "download";
+    }
+
+    /// Sanitize a filename by stripping path separators and ".." segments.
+    fn sanitizeFilename(filename: []const u8) []const u8 {
+        var name = filename;
+        // Strip everything up to and including the last path separator
+        if (std.mem.lastIndexOfAny(u8, name, "/\\")) |idx| {
+            name = name[idx + 1 ..];
+        }
+        // Reject ".." as a filename
+        if (std.mem.eql(u8, name, "..") or std.mem.eql(u8, name, ".")) {
+            return "download";
+        }
+        if (name.len == 0) return "download";
+        return name;
+    }
+
+    /// Save a download to ~/Downloads/, avoiding overwrites by appending (1), (2), etc.
+    pub fn saveDownload(allocator: std.mem.Allocator, filename: []const u8, body: []const u8) ![]const u8 {
+        const safe_name = sanitizeFilename(filename);
+
+        const home = std.posix.getenv("HOME") orelse "/tmp";
+        const downloads_dir = try std.fmt.allocPrint(allocator, "{s}/Downloads", .{home});
+        defer allocator.free(downloads_dir);
+
+        // Ensure directory exists
+        std.fs.cwd().makePath(downloads_dir) catch {};
+
+        // Split filename into base and extension for suffix insertion
+        const dot_idx = std.mem.lastIndexOf(u8, safe_name, ".");
+        const base = if (dot_idx) |d| safe_name[0..d] else safe_name;
+        const ext = if (dot_idx) |d| safe_name[d..] else "";
+
+        // Try the original name first, then append (1), (2), etc.
+        var suffix: u32 = 0;
+        while (suffix < 1000) {
+            const filepath = if (suffix == 0)
+                try std.fmt.allocPrint(allocator, "{s}/{s}", .{ downloads_dir, safe_name })
+            else
+                try std.fmt.allocPrint(allocator, "{s}/{s}({d}){s}", .{ downloads_dir, base, suffix, ext });
+            errdefer allocator.free(filepath);
+
+            // Check if file already exists
+            if (std.fs.cwd().access(filepath, .{})) |_| {
+                // File exists, try next suffix
+                allocator.free(filepath);
+                suffix += 1;
+                continue;
+            } else |_| {}
+
+            // File does not exist, create it
+            const file = try std.fs.cwd().createFile(filepath, .{ .exclusive = true });
+            defer file.close();
+            try file.writeAll(body);
+
+            return filepath;
+        }
+
+        // Fallback: all suffixes exhausted, overwrite original
+        const filepath = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ downloads_dir, safe_name });
+        errdefer allocator.free(filepath);
+
+        const file = try std.fs.cwd().createFile(filepath, .{});
+        defer file.close();
+        try file.writeAll(body);
+
+        return filepath;
     }
 };
 
