@@ -1,0 +1,12 @@
+[submodule "deps/libcss"]
+	path = deps/libcss
+	url = https://github.com/netsurf-browser/libcss.git
+[submodule "deps/libparserutils"]
+	path = deps/libparserutils
+	url = https://github.com/netsurf-browser/libparserutils.git
+[submodule "deps/libwapcaplet"]
+	path = deps/libwapcaplet
+	url = https://github.com/netsurf-browser/libwapcaplet.git
+[submodule "deps/libnsfb"]
+	path = deps/libnsfb
+	url = https://github.com/netsurf-browser/libnsfb.git
