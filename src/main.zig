@@ -33,7 +33,18 @@ fn blitGlyph(ctx: BlitCtx, glyph: GlyphBitmap) void {
     );
 }
 
+const dom_test = @import("test_dom_style.zig");
+
 pub fn main() !void {
+    // Check for --test-dom flag
+    var args = std.process.args();
+    _ = args.skip(); // skip program name
+    while (args.next()) |arg| {
+        if (std.mem.eql(u8, arg, "--test-dom")) {
+            return dom_test.main();
+        }
+    }
+
     std.debug.print("suzume v0.1.0 — opening window...\n", .{});
 
     // Init surface
@@ -118,3 +129,15 @@ pub fn main() !void {
 
     std.debug.print("Bye!\n", .{});
 }
+
+// Re-export DOM and style modules so they are reachable from the build
+pub const dom = struct {
+    pub const node = @import("dom/node.zig");
+    pub const tree = @import("dom/tree.zig");
+};
+
+pub const style = struct {
+    pub const computed = @import("style/computed.zig");
+    pub const select = @import("style/select.zig");
+    pub const cascade = @import("style/cascade.zig");
+};

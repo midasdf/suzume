@@ -115,4 +115,12 @@ pub fn build(b: *std.Build) void {
     const run_tests = b.addRunArtifact(unit_tests);
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
+
+    // ── DOM + Style integration test ────────────────────────────
+    // Run via: zig build run -- --test-dom
+    const run_test_dom = b.addRunArtifact(exe);
+    run_test_dom.step.dependOn(b.getInstallStep());
+    run_test_dom.addArg("--test-dom");
+    const test_dom_step = b.step("test-dom-style", "Run DOM + Style integration test");
+    test_dom_step.dependOn(&run_test_dom.step);
 }

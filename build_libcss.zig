@@ -1,7 +1,6 @@
 const std = @import("std");
 
-/// Build LibWapcaplet + LibParserUtils + LibCSS as static libraries.
-/// Returns the LibCSS static library compile step.
+/// Build LibWapcaplet + LibParserUtils + LibCSS as a single static library.
 pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     const common_cflags = &[_][]const u8{
         "-D_BSD_SOURCE",
@@ -73,10 +72,17 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
             .link_libc = true,
         }),
     });
+    const libcss_cflags = &[_][]const u8{
+        "-D_BSD_SOURCE",
+        "-D_DEFAULT_SOURCE",
+        "-D_ALIGNED=",
+        "-std=c99",
+        "-fno-sanitize=undefined",
+    };
     libcss.addCSourceFiles(.{
         .root = b.path("deps/libcss"),
         .files = &libcss_sources,
-        .flags = common_cflags,
+        .flags = libcss_cflags,
     });
     // LibCSS include paths
     libcss.addIncludePath(b.path("deps/libcss/include"));
@@ -84,6 +90,37 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
     // Dependencies' include paths
     libcss.addIncludePath(b.path("deps/libparserutils/include"));
     libcss.addIncludePath(b.path("deps/libwapcaplet/include"));
+
+    // Include wapcaplet and parserutils sources directly in libcss
+    // to avoid separate linking that forces object resolution
+    libcss.addCSourceFiles(.{
+        .root = b.path("deps/libwapcaplet"),
+        .files = &.{"src/libwapcaplet.c"},
+        .flags = common_cflags,
+    });
+    libcss.addCSourceFiles(.{
+        .root = b.path("deps/libparserutils"),
+        .files = &.{
+            "src/charset/aliases.c",
+            "src/charset/codec.c",
+            "src/charset/codecs/codec_8859.c",
+            "src/charset/codecs/codec_ascii.c",
+            "src/charset/codecs/codec_ext8.c",
+            "src/charset/codecs/codec_utf16.c",
+            "src/charset/codecs/codec_utf8.c",
+            "src/charset/encodings/utf16.c",
+            "src/charset/encodings/utf8.c",
+            "src/input/filter.c",
+            "src/input/inputstream.c",
+            "src/utils/buffer.c",
+            "src/utils/errors.c",
+            "src/utils/stack.c",
+            "src/utils/vector.c",
+        },
+        .flags = common_cflags,
+    });
+    libcss.addIncludePath(b.path("deps/libparserutils/src"));
+    libcss.addIncludePath(b.path("deps/libparserutils/src/charset"));
 
     return libcss;
 }
@@ -108,7 +145,7 @@ const libcss_sources = [_][]const u8{
     "src/parse/properties/column_rule.c",
     "src/parse/properties/columns.c",
     "src/parse/properties/content.c",
-    "src/parse/properties/css_property_parser_gen.c",
+    // Note: css_property_parser_gen.c is a code generator, not a library source
     "src/parse/properties/cue.c",
     "src/parse/properties/cursor.c",
     "src/parse/properties/elevation.c",
@@ -133,6 +170,8 @@ const libcss_sources = [_][]const u8{
     "src/parse/properties/text_decoration.c",
     "src/parse/properties/utils.c",
     "src/parse/properties/voice_family.c",
+    // Auto-generated property parsers (from css_property_parser_gen + sed fix)
+    "src/parse/properties/generated/align_content.c", "src/parse/properties/generated/align_items.c", "src/parse/properties/generated/align_self.c", "src/parse/properties/generated/background_attachment.c", "src/parse/properties/generated/background_color.c", "src/parse/properties/generated/background_image.c", "src/parse/properties/generated/background_repeat.c", "src/parse/properties/generated/border_bottom.c", "src/parse/properties/generated/border_bottom_color.c", "src/parse/properties/generated/border_bottom_style.c", "src/parse/properties/generated/border_bottom_width.c", "src/parse/properties/generated/border_collapse.c", "src/parse/properties/generated/border_side_color.c", "src/parse/properties/generated/border_side_style.c", "src/parse/properties/generated/border_side_width.c", "src/parse/properties/generated/border_left.c", "src/parse/properties/generated/border_left_color.c", "src/parse/properties/generated/border_left_style.c", "src/parse/properties/generated/border_left_width.c", "src/parse/properties/generated/border_right.c", "src/parse/properties/generated/border_right_color.c", "src/parse/properties/generated/border_right_style.c", "src/parse/properties/generated/border_right_width.c", "src/parse/properties/generated/border_top.c", "src/parse/properties/generated/border_top_color.c", "src/parse/properties/generated/border_top_style.c", "src/parse/properties/generated/border_top_width.c", "src/parse/properties/generated/bottom.c", "src/parse/properties/generated/box_sizing.c", "src/parse/properties/generated/break_after.c", "src/parse/properties/generated/break_before.c", "src/parse/properties/generated/break_inside.c", "src/parse/properties/generated/caption_side.c", "src/parse/properties/generated/clear.c", "src/parse/properties/generated/color.c", "src/parse/properties/generated/column_count.c", "src/parse/properties/generated/column_fill.c", "src/parse/properties/generated/column_gap.c", "src/parse/properties/generated/column_rule_color.c", "src/parse/properties/generated/column_rule_style.c", "src/parse/properties/generated/column_rule_width.c", "src/parse/properties/generated/column_span.c", "src/parse/properties/generated/column_width.c", "src/parse/properties/generated/counter_increment.c", "src/parse/properties/generated/counter_reset.c", "src/parse/properties/generated/cue_after.c", "src/parse/properties/generated/cue_before.c", "src/parse/properties/generated/direction.c", "src/parse/properties/generated/display.c", "src/parse/properties/generated/empty_cells.c", "src/parse/properties/generated/flex_basis.c", "src/parse/properties/generated/flex_direction.c", "src/parse/properties/generated/flex_grow.c", "src/parse/properties/generated/flex_shrink.c", "src/parse/properties/generated/flex_wrap.c", "src/parse/properties/generated/float.c", "src/parse/properties/generated/font_size.c", "src/parse/properties/generated/font_style.c", "src/parse/properties/generated/font_variant.c", "src/parse/properties/generated/height.c", "src/parse/properties/generated/justify_content.c", "src/parse/properties/generated/left.c", "src/parse/properties/generated/letter_spacing.c", "src/parse/properties/generated/line_height.c", "src/parse/properties/generated/list_style_image.c", "src/parse/properties/generated/list_style_position.c", "src/parse/properties/generated/margin_bottom.c", "src/parse/properties/generated/margin_side.c", "src/parse/properties/generated/margin_left.c", "src/parse/properties/generated/margin_right.c", "src/parse/properties/generated/margin_top.c", "src/parse/properties/generated/max_height.c", "src/parse/properties/generated/max_width.c", "src/parse/properties/generated/min_height.c", "src/parse/properties/generated/min_width.c", "src/parse/properties/generated/order.c", "src/parse/properties/generated/orphans.c", "src/parse/properties/generated/outline_color.c", "src/parse/properties/generated/outline_style.c", "src/parse/properties/generated/outline_width.c", "src/parse/properties/generated/overflow_x.c", "src/parse/properties/generated/overflow_y.c", "src/parse/properties/generated/padding_bottom.c", "src/parse/properties/generated/padding_side.c", "src/parse/properties/generated/padding_left.c", "src/parse/properties/generated/padding_right.c", "src/parse/properties/generated/padding_top.c", "src/parse/properties/generated/page_break_after.c", "src/parse/properties/generated/page_break_before.c", "src/parse/properties/generated/page_break_inside.c", "src/parse/properties/generated/pause_after.c", "src/parse/properties/generated/pause_before.c", "src/parse/properties/generated/pitch.c", "src/parse/properties/generated/pitch_range.c", "src/parse/properties/generated/position.c", "src/parse/properties/generated/richness.c", "src/parse/properties/generated/right.c", "src/parse/properties/generated/side.c", "src/parse/properties/generated/speak.c", "src/parse/properties/generated/speak_header.c", "src/parse/properties/generated/speak_numeral.c", "src/parse/properties/generated/speak_punctuation.c", "src/parse/properties/generated/speech_rate.c", "src/parse/properties/generated/stress.c", "src/parse/properties/generated/table_layout.c", "src/parse/properties/generated/text_align.c", "src/parse/properties/generated/text_indent.c", "src/parse/properties/generated/text_transform.c", "src/parse/properties/generated/top.c", "src/parse/properties/generated/unicode_bidi.c", "src/parse/properties/generated/vertical_align.c", "src/parse/properties/generated/visibility.c", "src/parse/properties/generated/volume.c", "src/parse/properties/generated/white_space.c", "src/parse/properties/generated/widows.c", "src/parse/properties/generated/width.c", "src/parse/properties/generated/word_spacing.c", "src/parse/properties/generated/writing_mode.c", "src/parse/properties/generated/z_index.c",
     "src/parse/propstrings.c",
     "src/select/arena.c",
     "src/select/calc.c",

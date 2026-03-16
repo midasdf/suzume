@@ -1,0 +1,38 @@
+/// Zig-friendly computed style struct extracted from LibCSS's css_computed_style.
+pub const ComputedStyle = struct {
+    color: u32 = 0xFF000000, // ARGB, black default
+    background_color: u32 = 0x00000000, // ARGB, transparent default
+    font_size_px: f32 = 16.0,
+    font_weight: u16 = 400,
+    display: Display = .block,
+    margin_top: f32 = 0,
+    margin_right: f32 = 0,
+    margin_bottom: f32 = 0,
+    margin_left: f32 = 0,
+    padding_top: f32 = 0,
+    padding_right: f32 = 0,
+    padding_bottom: f32 = 0,
+    padding_left: f32 = 0,
+
+    pub const Display = enum {
+        block,
+        inline_,
+        none,
+        flex,
+        table,
+        inline_block,
+        list_item,
+        inline_flex,
+        grid,
+        inline_grid,
+        table_row,
+        table_cell,
+        table_row_group,
+        table_header_group,
+        table_footer_group,
+        table_column,
+        table_column_group,
+        table_caption,
+        other,
+    };
+};
