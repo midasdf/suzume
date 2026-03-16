@@ -1,0 +1,25 @@
+.{
+    .name = .suzume,
+    .version = "0.1.0",
+    .fingerprint = 0xb675db0dc659eecf,
+    .minimum_zig_version = "0.15.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+    .dependencies = .{
+        .lexbor = .{
+            .url = "git+https://github.com/Wikidepia/lexbor-zig.git#2dffa329163a251e8f42401373bd7d68dd535b1d",
+            .hash = "lexbor-0.0.0-LRwEmpOkcAFKYibnnQVqK2wgsaSHy45VP_GUvxC0ioyp",
+        },
+        .freetype = .{
+            .url = "git+https://github.com/LaurenceGuws/freetype-zig015.git#052a300780531e6ea0ffeafeec28c88eb1bf903a",
+            .hash = "freetype-0.0.0-AAAAAH9JcwAvHKzJWBn5sVj335g2wMZnrfZ3qcFXBWPC",
+        },
+        .harfbuzz = .{
+            .url = "git+https://github.com/LaurenceGuws/harfbuzz-zig015.git#68406a28eea39df8c074a38fefc64c5aa23201b7",
+            .hash = "harfbuzz-0.0.0-AAAAAAdegQDrj2lmaK3ZGsmsHSjQRijAro8AGirCOv_1",
+        },
+    },
+}
