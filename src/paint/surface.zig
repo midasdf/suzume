@@ -5,6 +5,15 @@ const c = nsfb.c;
 /// Manual surface registration (constructor workaround)
 extern fn nsfb_surface_init_all() void;
 
+/// Cursor shape change (defined in x.c)
+extern fn nsfb_x_set_cursor_shape(fb: *c.nsfb_t, shape: c_int) void;
+
+pub const CursorShape = enum(c_int) {
+    arrow = 0,
+    pointer = 1, // hand cursor for links
+    text = 2, // I-beam for text inputs
+};
+
 pub const Surface = struct {
     fb: *c.nsfb_t,
     width: i32,
@@ -135,6 +144,11 @@ pub const Surface = struct {
             .y1 = self.height,
         };
         _ = c.nsfb_update(self.fb, &bbox);
+    }
+
+    /// Set the mouse cursor shape.
+    pub fn setCursor(self: *Surface, shape: CursorShape) void {
+        nsfb_x_set_cursor_shape(self.fb, @intFromEnum(shape));
     }
 
     /// Poll for input events.

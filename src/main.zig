@@ -1722,6 +1722,27 @@ pub fn main() !void {
                 nsfb_c.NSFB_EVENT_MOVE_ABSOLUTE => {
                     mouse_x = event.value.vector.x;
                     mouse_y = event.value.vector.y;
+
+                    // Update cursor shape based on what's under the mouse
+                    if (mouse_y >= chrome.content_y and mouse_y < surface.height - chrome.status_bar_height) {
+                        const layout_x = @as(f32, @floatFromInt(mouse_x)) + scroll_x;
+                        const layout_y = @as(f32, @floatFromInt(mouse_y - chrome.content_y)) + scroll_y;
+                        const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        if (pg) |p| {
+                            if (p.root_box) |root| {
+                                const link = painter_mod.hitTestLink(root, layout_x, layout_y);
+                                if (link != null) {
+                                    surface.setCursor(.pointer);
+                                } else {
+                                    surface.setCursor(.arrow);
+                                }
+                            }
+                        }
+                    } else if (mouse_y < chrome.url_bar_height) {
+                        surface.setCursor(.text);
+                    } else {
+                        surface.setCursor(.arrow);
+                    }
                 },
 
                 else => {},
