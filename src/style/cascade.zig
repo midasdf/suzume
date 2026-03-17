@@ -458,6 +458,13 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.line_height = .{ .number = fixedToF32(lh_len) };
     }
 
+    // Opacity
+    var opacity_val: css.css_fixed = 0;
+    if (css.css_computed_opacity(style, &opacity_val) == css.CSS_OPACITY_SET) {
+        const op = fixedToF32(opacity_val);
+        result.opacity = std.math.clamp(op, 0.0, 1.0);
+    }
+
     return result;
 }
 
@@ -566,6 +573,142 @@ fn extractPropertyValue(text: []const u8, prop_end: usize) ?[]const u8 {
 
     if (val_start >= i) return null;
     return std.mem.trim(u8, text[val_start..i], " \t");
+}
+
+/// A CSS rule entry for properties unsupported by LibCSS (e.g. border-radius, opacity from CSS text).
+const CssRadiusRule = struct {
+    selector: []const u8, // raw selector text (trimmed)
+    radius: f32, // border-radius value in px
+};
+
+/// Parse raw CSS text to extract border-radius rules.
+/// Returns a list of selector -> radius mappings.
+fn extractBorderRadiusRules(css_text: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(CssRadiusRule) {
+    var rules: std.ArrayListUnmanaged(CssRadiusRule) = .empty;
+    errdefer rules.deinit(allocator);
+
+    var pos: usize = 0;
+    while (pos < css_text.len) {
+        // Find the next '{' — everything before it is the selector
+        const brace_open = std.mem.indexOfScalarPos(u8, css_text, pos, '{') orelse break;
+
+        // Find matching '}'
+        const brace_close = std.mem.indexOfScalarPos(u8, css_text, brace_open + 1, '}') orelse break;
+
+        const selector_raw = std.mem.trim(u8, css_text[pos..brace_open], " \t\r\n");
+        const body = css_text[brace_open + 1 .. brace_close];
+
+        // Check if body contains border-radius
+        if (std.mem.indexOf(u8, body, "border-radius")) |br_idx| {
+            // Extract the value after "border-radius"
+            const prop_start = br_idx + "border-radius".len;
+            if (extractPropertyValue(body, prop_start)) |val| {
+                if (parseCssLength(val, 16.0)) |px| {
+                    // Store each comma-separated selector
+                    var sel_iter = std.mem.splitScalar(u8, selector_raw, ',');
+                    while (sel_iter.next()) |sel_part| {
+                        const trimmed_sel = std.mem.trim(u8, sel_part, " \t\r\n");
+                        if (trimmed_sel.len > 0) {
+                            try rules.append(allocator, .{
+                                .selector = trimmed_sel,
+                                .radius = px,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        pos = brace_close + 1;
+    }
+
+    return rules;
+}
+
+/// Check if a simple CSS selector matches a DOM element.
+/// Supports: tag, .class, #id, tag.class, tag#id
+fn selectorMatchesElement(selector: []const u8, node: DomNode) bool {
+    if (node.nodeType() != .element) return false;
+
+    var sel = selector;
+
+    // Skip leading '*' (universal selector)
+    if (sel.len > 0 and sel[0] == '*') {
+        sel = sel[1..];
+    }
+
+    // Reject complex selectors (containing spaces, >, +, ~, [, :, etc.)
+    for (sel) |ch| {
+        if (ch == ' ' or ch == '>' or ch == '+' or ch == '~' or ch == '[' or ch == ':') return false;
+    }
+
+    // Parse selector into tag, class, id components
+    var expected_tag: ?[]const u8 = null;
+    var expected_class: ?[]const u8 = null;
+    var expected_id: ?[]const u8 = null;
+
+    var i: usize = 0;
+    const orig_sel = sel;
+
+    // Tag name is the portion before any '.' or '#'
+    while (i < orig_sel.len and orig_sel[i] != '.' and orig_sel[i] != '#') : (i += 1) {}
+    if (i > 0) {
+        expected_tag = orig_sel[0..i];
+    }
+
+    // Parse remaining class/id parts
+    while (i < orig_sel.len) {
+        if (orig_sel[i] == '.') {
+            i += 1;
+            const start = i;
+            while (i < orig_sel.len and orig_sel[i] != '.' and orig_sel[i] != '#') : (i += 1) {}
+            if (i > start) {
+                expected_class = orig_sel[start..i];
+            }
+        } else if (orig_sel[i] == '#') {
+            i += 1;
+            const start = i;
+            while (i < orig_sel.len and orig_sel[i] != '.' and orig_sel[i] != '#') : (i += 1) {}
+            if (i > start) {
+                expected_id = orig_sel[start..i];
+            }
+        } else {
+            i += 1;
+        }
+    }
+
+    // Match tag
+    if (expected_tag) |tag| {
+        const node_tag = node.tagName() orelse return false;
+        if (!std.ascii.eqlIgnoreCase(tag, node_tag)) return false;
+    }
+
+    // Match class
+    if (expected_class) |cls| {
+        const node_class = node.getAttribute("class") orelse return false;
+        // Check if the class attribute contains the expected class
+        // (space-separated list)
+        var class_iter = std.mem.tokenizeAny(u8, node_class, " \t");
+        var found = false;
+        while (class_iter.next()) |c| {
+            if (std.mem.eql(u8, c, cls)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) return false;
+    }
+
+    // Match id
+    if (expected_id) |id| {
+        const node_id = node.getAttribute("id") orelse return false;
+        if (!std.mem.eql(u8, node_id, id)) return false;
+    }
+
+    // If no components were specified (e.g., empty selector), no match
+    if (expected_tag == null and expected_class == null and expected_id == null) return false;
+
+    return true;
 }
 
 /// Style map: maps node pointer (usize) -> ComputedStyle.
@@ -764,6 +907,7 @@ fn walkAndSelect(
     media: *const css.css_media,
     handler: *css.css_select_handler,
     styles: *StyleMap,
+    radius_rules: []const CssRadiusRule,
 ) !void {
     if (node.nodeType() == .element) {
         // Determine if this is the root element
@@ -794,6 +938,34 @@ fn walkAndSelect(
                         parseBorderRadius(style_attr, &style);
                     }
 
+                    // Apply border-radius from CSS rules (if not already set by inline style)
+                    if (style.border_radius_tl == 0 and style.border_radius_tr == 0 and
+                        style.border_radius_bl == 0 and style.border_radius_br == 0)
+                    {
+                        for (radius_rules) |rule| {
+                            if (selectorMatchesElement(rule.selector, node)) {
+                                style.border_radius_tl = rule.radius;
+                                style.border_radius_tr = rule.radius;
+                                style.border_radius_bl = rule.radius;
+                                style.border_radius_br = rule.radius;
+                                // Don't break — later rules should override earlier ones (CSS specificity)
+                            }
+                        }
+                    }
+
+                    // Parse opacity from inline style (fallback if LibCSS didn't handle it)
+                    if (style.opacity == 1.0) {
+                        if (node.getAttribute("style")) |style_attr| {
+                            if (std.mem.indexOf(u8, style_attr, "opacity")) |op_idx| {
+                                if (extractPropertyValue(style_attr, op_idx + "opacity".len)) |val| {
+                                    if (std.fmt.parseFloat(f32, std.mem.trim(u8, val, " \t"))) |op| {
+                                        style.opacity = std.math.clamp(op, 0.0, 1.0);
+                                    } else |_| {}
+                                }
+                            }
+                        }
+                    }
+
                     try styles.put(@intFromPtr(node.lxb_node), style);
                 }
             }
@@ -803,7 +975,7 @@ fn walkAndSelect(
     // Recurse into children
     var child = node.firstChild();
     while (child) |c| {
-        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles);
+        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, radius_rules);
         child = c.nextSibling();
     }
 }
@@ -861,8 +1033,12 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator) !CascadeResult {
     // 7. Set up handler
     var handler = select_handler.getHandler();
 
-    // 8. Walk DOM and select styles
-    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles);
+    // 8. Extract border-radius rules from CSS text (LibCSS doesn't support border-radius)
+    var radius_rules = try extractBorderRadiusRules(css_text, allocator);
+    defer radius_rules.deinit(allocator);
+
+    // 9. Walk DOM and select styles
+    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, radius_rules.items);
 
     return result;
 }

@@ -134,7 +134,8 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     const bg_y = screen_y;
                     const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
                     const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
-                    const bg_colour = Surface.argbToColour(bg);
+                    const raw_colour = Surface.argbToColour(bg);
+                    const bg_colour = Surface.applyOpacity(raw_colour, box.style.opacity);
 
                     // Use rounded rect if any border-radius is set
                     const avg_radius = (box.style.border_radius_tl +
@@ -144,7 +145,12 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     if (avg_radius > 0.5) {
                         surface.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, @intFromFloat(avg_radius), bg_colour);
                     } else {
-                        surface.fillRect(bg_x, bg_y, bg_w, bg_h, bg_colour);
+                        const effective_alpha = (bg_colour >> 24) & 0xFF;
+                        if (effective_alpha < 255) {
+                            surface.fillRectBlend(bg_x, bg_y, bg_w, bg_h, bg_colour);
+                        } else {
+                            surface.fillRect(bg_x, bg_y, bg_w, bg_h, bg_colour);
+                        }
                     }
                 }
 
@@ -226,13 +232,19 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const ibg = box.style.background_color;
             const ialpha = (ibg >> 24) & 0xFF;
             if (ialpha > 0) {
+                const ibg_colour = Surface.applyOpacity(Surface.argbToColour(ibg), box.style.opacity);
                 for (box.lines.items) |line| {
                     const lx: i32 = @as(i32, @intFromFloat(line.x)) - sx_i;
                     const ly: i32 = @intFromFloat(line.y - scroll_y);
                     const lw: i32 = @intFromFloat(@max(line.width, 0));
                     const lh: i32 = @intFromFloat(@max(line.height, 0));
                     if (ly + lh >= clip_top and ly <= clip_bottom) {
-                        surface.fillRect(lx, ly, lw, lh, Surface.argbToColour(ibg));
+                        const eff_alpha = (ibg_colour >> 24) & 0xFF;
+                        if (eff_alpha < 255) {
+                            surface.fillRectBlend(lx, ly, lw, lh, ibg_colour);
+                        } else {
+                            surface.fillRect(lx, ly, lw, lh, ibg_colour);
+                        }
                     }
                 }
             }

@@ -65,6 +65,55 @@ pub const Surface = struct {
         _ = c.nsfb_plot_rectangle_fill(self.fb, &bbox, colour);
     }
 
+    /// Fill a rectangle with alpha blending.
+    /// The colour is in libnsfb ABGR format with alpha in bits 24-31.
+    /// If alpha is 255, delegates to fillRect for speed. If 0, does nothing.
+    pub fn fillRectBlend(self: *Surface, x: i32, y: i32, w: i32, h: i32, colour: u32) void {
+        const alpha = @as(u8, @truncate((colour >> 24) & 0xFF));
+        if (alpha == 0) return;
+        if (alpha == 255) {
+            self.fillRect(x, y, w, h, colour);
+            return;
+        }
+
+        // Need manual alpha blending — get framebuffer pointer
+        const nsfb_c = @import("../bindings/nsfb.zig").c;
+        var raw_ptr: ?[*]u8 = null;
+        var fb_stride: c_int = 0;
+        if (nsfb_c.nsfb_get_buffer(self.fb, @ptrCast(&raw_ptr), &fb_stride) != 0) return;
+        const fb_ptr: [*]u8 = raw_ptr orelse return;
+        const stride: usize = @intCast(fb_stride);
+
+        // Clip to surface bounds
+        const x0 = @max(x, 0);
+        const y0 = @max(y, 0);
+        const x1 = @min(x + w, self.width);
+        const y1 = @min(y + h, self.height);
+        if (x0 >= x1 or y0 >= y1) return;
+
+        // Extract foreground color components from libnsfb colour format:
+        // colour = 0xAABBGGRR (R in low bits, B in high bits)
+        // Memory layout (XRGB8888, little-endian): byte[0]=B, byte[1]=G, byte[2]=R, byte[3]=X
+        const fg_b: u16 = @truncate((colour >> 16) & 0xFF);
+        const fg_g: u16 = @truncate((colour >> 8) & 0xFF);
+        const fg_r: u16 = @truncate(colour & 0xFF);
+        const a: u16 = alpha;
+        const inv_a: u16 = 255 - a;
+
+        var py: i32 = y0;
+        while (py < y1) : (py += 1) {
+            const row_offset: usize = @as(usize, @intCast(py)) * stride + @as(usize, @intCast(x0)) * 4;
+            var px: i32 = x0;
+            while (px < x1) : (px += 1) {
+                const idx = row_offset + @as(usize, @intCast(px - x0)) * 4;
+                fb_ptr[idx + 0] = @intCast((@as(u16, fb_ptr[idx + 0]) * inv_a + fg_b * a) / 255);
+                fb_ptr[idx + 1] = @intCast((@as(u16, fb_ptr[idx + 1]) * inv_a + fg_g * a) / 255);
+                fb_ptr[idx + 2] = @intCast((@as(u16, fb_ptr[idx + 2]) * inv_a + fg_r * a) / 255);
+                fb_ptr[idx + 3] = 0xFF;
+            }
+        }
+    }
+
     /// Blit an 8-bit grayscale glyph bitmap at (x, y) with the given foreground colour.
     /// Uses libnsfb's built-in glyph8 plotter which handles alpha blending.
     pub fn blitGlyph8(self: *Surface, x: i32, y: i32, w: i32, h: i32, pixels: [*]const u8, pitch: i32, colour: u32) void {
@@ -160,5 +209,15 @@ pub const Surface = struct {
         const g: u32 = (argb >> 8) & 0xFF;
         const b: u32 = argb & 0xFF;
         return (a << 24) | (b << 16) | (g << 8) | r;
+    }
+
+    /// Apply opacity (0.0-1.0) to a colour by multiplying its alpha channel.
+    /// colour is in libnsfb ABGR format (alpha in bits 24-31).
+    pub fn applyOpacity(colour: u32, opacity: f32) u32 {
+        if (opacity >= 1.0) return colour;
+        if (opacity <= 0.0) return colour & 0x00FFFFFF; // zero alpha
+        const a = @as(f32, @floatFromInt((colour >> 24) & 0xFF));
+        const new_a: u32 = @intFromFloat(a * opacity);
+        return (colour & 0x00FFFFFF) | (new_a << 24);
     }
 };

@@ -75,6 +75,9 @@ pub const ComputedStyle = struct {
     flex_basis: Dimension = .auto,
     gap: f32 = 0, // column-gap, used for both row and column in flex
 
+    // Opacity
+    opacity: f32 = 1.0,
+
     pub const Display = enum {
         block,
         inline_,
