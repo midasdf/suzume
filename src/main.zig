@@ -882,6 +882,7 @@ pub fn main() !void {
     // Focused form input state
     var focused_input_node: ?*lxb.lxb_dom_node_t = null; // DOM node of focused <input>
     var form_input = TextInput.init(allocator); // text buffer for focused input
+    var xim_composing: bool = false; // true when Mozc/XIM is in composition state
     defer form_input.deinit();
 
     // Modifier key state
@@ -1089,6 +1090,7 @@ pub fn main() !void {
         // Poll XIM for asynchronously committed text (Mozc confirmed input)
         if (surface.xim_initialized) {
             if (surface.pollXimCommitted()) |committed| {
+                xim_composing = false; // composition completed
                 if (find_bar.visible) {
                     find_bar.insertText(committed);
                 } else if (focused_input_node != null) {
@@ -1591,12 +1593,8 @@ pub fn main() !void {
                     // Skip control keys (backspace, enter, escape, arrows, etc.)
                     // so they work normally even when Mozc is active.
                     if (surface.xim_initialized and !ctrl_held and !alt_held) {
-                        // Only skip navigation/editing keys that should NEVER go to XIM.
-                        // Enter and Escape are NOT skipped because Mozc needs them
-                        // (Enter confirms composition, Escape cancels it).
-                        // When Mozc is not composing, XIM returns .none and they
-                        // fall through to normal handling (form submit, unfocus, etc.).
-                        const is_control_key = (key == nsfb_c.NSFB_KEY_BACKSPACE or
+                        // Keys that never go to XIM
+                        const is_nav_key = (key == nsfb_c.NSFB_KEY_BACKSPACE or
                             key == nsfb_c.NSFB_KEY_DELETE or
                             key == nsfb_c.NSFB_KEY_TAB or
                             key == nsfb_c.NSFB_KEY_LEFT or
@@ -1607,14 +1605,19 @@ pub fn main() !void {
                             key == nsfb_c.NSFB_KEY_END or
                             key == nsfb_c.NSFB_KEY_PAGEUP or
                             key == nsfb_c.NSFB_KEY_PAGEDOWN);
+                        // Enter/Escape: only send to XIM when composing (Mozc active)
+                        const is_confirm_key = (key == nsfb_c.NSFB_KEY_RETURN or
+                            key == nsfb_c.NSFB_KEY_ESCAPE);
+                        const is_control_key = is_nav_key or (is_confirm_key and !xim_composing);
                         const any_text_focused = find_bar.visible or focused_input_node != null or url_input.focused;
                         if (any_text_focused and !is_control_key) {
                             const xim_res = surface.processKeyXim(true);
                             switch (xim_res.result) {
                                 .text => {
-                                    // XIM produced text — but skip control characters
-                                    // (Enter→\r/\n, Escape→\x1b, etc. should be handled normally)
+                                    // XIM produced text — composition complete
+                                    xim_composing = false;
                                     if (xim_res.text) |composed| {
+                                        // Skip control characters (let normal handler deal with them)
                                         const is_control = composed.len > 0 and composed[0] < 0x20;
                                         if (!is_control) {
                                             if (find_bar.visible) {
@@ -1627,11 +1630,11 @@ pub fn main() !void {
                                             needs_repaint = true;
                                             continue;
                                         }
-                                        // Control char — fall through to normal handling
                                     }
                                 },
                                 .filtered => {
-                                    // Key consumed by IME (composing) — skip normal handler
+                                    // Key consumed by IME — now composing
+                                    xim_composing = true;
                                     continue;
                                 },
                                 .none => {
