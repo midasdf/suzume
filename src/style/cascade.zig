@@ -1406,12 +1406,7 @@ fn createSheet(css_text: []const u8, url: [*c]const u8) !*css.css_stylesheet {
     if (err != css.CSS_OK or sheet == null) return error.CssSheetCreateFailed;
 
     if (css_text.len > 0) {
-        // Filter out harmful "display:none" blanket rules (Google JS dependency)
-        const filtered = filterHarmfulCss(css_text, std.heap.c_allocator) catch css_text;
-        const text_to_use = if (filtered.ptr != css_text.ptr) filtered else css_text;
-        defer if (filtered.ptr != css_text.ptr) std.heap.c_allocator.free(filtered);
-
-        err = css.css_stylesheet_append_data(sheet.?, text_to_use.ptr, text_to_use.len);
+        err = css.css_stylesheet_append_data(sheet.?, css_text.ptr, css_text.len);
         if (err != css.CSS_OK and err != css.CSS_NEEDDATA) {
             _ = css.css_stylesheet_destroy(sheet.?);
             return error.CssSheetAppendFailed;
