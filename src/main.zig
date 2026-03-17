@@ -825,6 +825,15 @@ pub fn main() !void {
     };
     defer surface.deinit();
 
+    // Initialize XIM (X Input Method) for fcitx5/mozc Japanese input
+    if (surface.initXim()) {
+        std.debug.print("[XIM] Input method initialized\n", .{});
+        surface.ximFocusIn();
+    } else {
+        std.debug.print("[XIM] Input method not available (Japanese input disabled)\n", .{});
+    }
+    defer surface.deinitXim();
+
     // URL bar input
     var url_input = TextInput.init(allocator);
     defer url_input.deinit();
@@ -1561,6 +1570,30 @@ pub fn main() !void {
                             needs_repaint = true;
                         }
                         continue;
+                    }
+
+                    // XIM (Input Method) processing — try composing first
+                    // when any text input is focused
+                    if (surface.xim_initialized and !ctrl_held and !alt_held) {
+                        const any_text_focused = find_bar.visible or focused_input_node != null or url_input.focused;
+                        if (any_text_focused) {
+                            if (surface.processKeyXim(true)) |composed| {
+                                // XIM produced composed text (e.g., Japanese from Mozc)
+                                if (find_bar.visible) {
+                                    find_bar.insertText(composed);
+                                } else if (focused_input_node != null) {
+                                    form_input.insertText(composed);
+                                } else if (url_input.focused) {
+                                    url_input.insertText(composed);
+                                }
+                                needs_repaint = true;
+                                continue;
+                            }
+                            // XIM returned null — either filtered (composing) or
+                            // not handled. Check if the key was filtered by looking
+                            // at whether nsfb gave us UNKNOWN (XIM consumed it).
+                            // We let it fall through to normal handling.
+                        }
                     }
 
                     // Find bar key handling (takes priority when visible)

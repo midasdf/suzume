@@ -81,6 +81,12 @@ pub fn build(b: *std.Build) void {
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
+    // XIM (X Input Method) helper for fcitx5/mozc Japanese input
+    exe.addCSourceFile(.{
+        .file = b.path("src/xim_helper.c"),
+        .flags = &.{"-fno-sanitize=undefined"},
+    });
+
     // ── QuickJS-ng ──────────────────────────────────────────────────
     const quickjs_dir = "deps/quickjs-ng";
     exe.addIncludePath(b.path(quickjs_dir));
@@ -118,6 +124,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xcb-image");
     exe.linkSystemLibrary("xcb-keysyms");
     exe.linkSystemLibrary("xcb-util");
+    exe.linkSystemLibrary("X11");
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("sqlite3");
 

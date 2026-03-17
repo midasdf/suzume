@@ -8,6 +8,20 @@ extern fn nsfb_surface_init_all() void;
 /// Cursor shape change (defined in x.c)
 extern fn nsfb_x_set_cursor_shape(fb: *c.nsfb_t, shape: c_int) void;
 
+/// Get the X11 window ID from the xcb backend (defined in x.c)
+extern fn nsfb_x_get_window_id(fb: *c.nsfb_t) c_ulong;
+
+/// Raw X11 keycode/state from last key event (defined in x.c)
+extern var nsfb_x_last_keycode: c_uint;
+extern var nsfb_x_last_keystate: c_uint;
+
+/// XIM helper functions (defined in xim_helper.c)
+extern fn xim_init(window_id: c_ulong) c_int;
+extern fn xim_process_key(keycode: c_uint, state: c_uint, is_press: c_int, buf: [*]u8, buf_size: c_int) c_int;
+extern fn xim_focus_in() void;
+extern fn xim_focus_out() void;
+extern fn xim_cleanup() void;
+
 pub const CursorShape = enum(c_int) {
     arrow = 0,
     pointer = 1, // hand cursor for links
@@ -18,6 +32,7 @@ pub const Surface = struct {
     fb: *c.nsfb_t,
     width: i32,
     height: i32,
+    xim_initialized: bool = false,
 
     /// Create and initialize an X11 window surface.
     pub fn init(width: i32, height: i32) !Surface {
@@ -149,6 +164,61 @@ pub const Surface = struct {
     /// Set the mouse cursor shape.
     pub fn setCursor(self: *Surface, shape: CursorShape) void {
         nsfb_x_set_cursor_shape(self.fb, @intFromEnum(shape));
+    }
+
+    // ── XIM (X Input Method) support ──────────────────────────────
+
+    /// Initialize XIM for this surface's X11 window.
+    /// Call once after the surface is created. Returns true on success.
+    pub fn initXim(self: *Surface) bool {
+        const win_id = nsfb_x_get_window_id(self.fb);
+        if (win_id == 0) return false;
+        const result = xim_init(win_id);
+        self.xim_initialized = (result == 0);
+        return self.xim_initialized;
+    }
+
+    /// Process a key event through XIM. Uses the raw X11 keycode/state
+    /// stored by the last nsfb key event in x.c.
+    /// Returns composed UTF-8 text, or null if the event was filtered
+    /// (composing) or produced no text output.
+    pub fn processKeyXim(self: *Surface, is_press: bool) ?[]const u8 {
+        _ = self;
+        var buf: [128]u8 = undefined;
+        const len = xim_process_key(
+            nsfb_x_last_keycode,
+            nsfb_x_last_keystate,
+            if (is_press) 1 else 0,
+            &buf,
+            128,
+        );
+        if (len > 0) {
+            // Copy to a static buffer since the stack buf will be invalidated
+            const static = struct {
+                var storage: [128]u8 = undefined;
+            };
+            @memcpy(static.storage[0..@intCast(len)], buf[0..@intCast(len)]);
+            return static.storage[0..@intCast(len)];
+        }
+        return null;
+    }
+
+    /// Notify XIM that the window gained focus.
+    pub fn ximFocusIn(_: *Surface) void {
+        xim_focus_in();
+    }
+
+    /// Notify XIM that the window lost focus.
+    pub fn ximFocusOut(_: *Surface) void {
+        xim_focus_out();
+    }
+
+    /// Clean up XIM resources.
+    pub fn deinitXim(self: *Surface) void {
+        if (self.xim_initialized) {
+            xim_cleanup();
+            self.xim_initialized = false;
+        }
     }
 
     /// Poll for input events.

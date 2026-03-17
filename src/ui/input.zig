@@ -40,6 +40,23 @@ pub const TextInput = struct {
         self.cursor = text.len;
     }
 
+    /// Insert arbitrary UTF-8 text at the current cursor position.
+    /// Used by XIM to insert composed text (e.g., Japanese characters).
+    pub fn insertText(self: *TextInput, text: []const u8) void {
+        // Ensure capacity for the new text
+        self.buf.ensureUnusedCapacity(self.allocator, text.len) catch return;
+        // Shift existing content right to make room
+        const old_len = self.buf.items.len;
+        self.buf.items.len += text.len;
+        // Move bytes from cursor position to the right
+        if (self.cursor < old_len) {
+            std.mem.copyBackwards(u8, self.buf.items[self.cursor + text.len ..], self.buf.items[self.cursor..old_len]);
+        }
+        // Copy new text into the gap
+        @memcpy(self.buf.items[self.cursor .. self.cursor + text.len], text);
+        self.cursor += text.len;
+    }
+
     /// Handle a KEY_DOWN event. Returns what happened.
     pub fn handleKey(self: *TextInput, keycode: c_uint, shift_held: bool) InputResult {
         const key: u32 = @intCast(keycode);

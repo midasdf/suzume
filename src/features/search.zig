@@ -74,6 +74,19 @@ pub const FindBar = struct {
         self.current_match = 0;
     }
 
+    /// Insert arbitrary UTF-8 text at the current cursor position.
+    /// Used by XIM to insert composed text (e.g., Japanese characters).
+    pub fn insertText(self: *FindBar, text: []const u8) void {
+        self.search_buf.ensureUnusedCapacity(self.allocator, text.len) catch return;
+        const old_len = self.search_buf.items.len;
+        self.search_buf.items.len += text.len;
+        if (self.cursor < old_len) {
+            std.mem.copyBackwards(u8, self.search_buf.items[self.cursor + text.len ..], self.search_buf.items[self.cursor..old_len]);
+        }
+        @memcpy(self.search_buf.items[self.cursor .. self.cursor + text.len], text);
+        self.cursor += text.len;
+    }
+
     pub fn getSearchText(self: *const FindBar) []const u8 {
         return self.search_buf.items;
     }
