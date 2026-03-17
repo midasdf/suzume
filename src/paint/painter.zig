@@ -595,6 +595,12 @@ pub fn hitTestNode(box: *const Box, x: f32, y: f32) ?*anyopaque {
 pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
     switch (box.box_type) {
         .block, .anonymous_block, .inline_box => {
+            // Bounds check: skip if point is outside this box entirely
+            const mbox = box.marginBox();
+            if (x < mbox.x or x > mbox.x + mbox.width or
+                y < mbox.y or y > mbox.y + mbox.height)
+                return null;
+
             // Check children in reverse order (later children are on top)
             var i = box.children.items.len;
             while (i > 0) {
@@ -602,6 +608,8 @@ pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
                 const result = hitTestLink(box.children.items[i], x, y);
                 if (result != null) return result;
             }
+            // No child matched — return this box's own link_url (e.g. <a> as inline_box)
+            return box.link_url;
         },
         .inline_text => {
             // Check each line box

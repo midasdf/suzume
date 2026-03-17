@@ -1779,6 +1779,8 @@ fn handleClick(
         const layout_x: f32 = @as(f32, @floatFromInt(mx)) + scroll_x.*;
         const layout_y: f32 = @as(f32, @floatFromInt(my - chrome.content_y)) + scroll_y.*;
 
+        std.debug.print("[click] screen=({d},{d}) layout=({d:.0},{d:.0}) scroll=({d:.0},{d:.0}) content_y={d}\n", .{ mx, my, layout_x, layout_y, scroll_x.*, scroll_y.*, chrome.content_y });
+
         // Dispatch click event to JavaScript
         if (page.js_rt) |*js_rt| {
             if (painter_mod.hitTestNode(root_box, layout_x, layout_y)) |node_ptr| {
@@ -1794,7 +1796,11 @@ fn handleClick(
             }
         }
 
-        if (painter_mod.hitTestLink(root_box, layout_x, layout_y)) |link_href| {
+        const hit_link = painter_mod.hitTestLink(root_box, layout_x, layout_y);
+        const hit_node = painter_mod.hitTestNode(root_box, layout_x, layout_y);
+        std.debug.print("[click] hitLink={s} hitNode={}\n", .{ if (hit_link) |l| l else "(none)", hit_node != null });
+
+        if (hit_link) |link_href| {
             // Resolve URL
             const base = if (current_url.*) |u| u else "";
             const resolved = resolveUrl(allocator, base, link_href) catch return;
