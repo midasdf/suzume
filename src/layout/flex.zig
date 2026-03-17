@@ -100,7 +100,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         layoutFlexRowNowrap(box, is_reverse, gap, fonts, flex_child_count);
     } else {
         // === WRAP path ===
-        layoutFlexRowWrap(box, is_reverse, gap, fonts, flex_child_count);
+        layoutFlexRowWrap(box, is_reverse, gap, fonts);
     }
 }
 
@@ -306,12 +306,11 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
 }
 
 /// Wrap path for flex row layout. Splits children into multiple lines.
-fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache, flex_child_count: usize) void {
+fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void {
     const style = box.style;
     const container_width = box.content.width;
     const children = box.children.items;
     const is_wrap_reverse = style.flex_wrap == .wrap_reverse;
-    _ = flex_child_count;
 
     // Build a list of flex-participating child indices
     var flex_indices_buf: [256]usize = undefined;

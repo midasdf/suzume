@@ -954,10 +954,17 @@ fn isTrackingPixel(url: []const u8, intrinsic_w: f32, intrinsic_h: f32) bool {
     // URL keyword check only when dimensions are unknown (0x0) — avoids
     // false positives on URLs like "/pixel-art/logo.png"
     if (intrinsic_w == 0 and intrinsic_h == 0) {
+        // Case-insensitive check using stack buffer
+        var lower_buf: [512]u8 = undefined;
+        const check_len = @min(url.len, lower_buf.len);
+        for (url[0..check_len], 0..) |ch, idx| {
+            lower_buf[idx] = std.ascii.toLower(ch);
+        }
+        const lower_url = lower_buf[0..check_len];
         // Only match path-segment boundaries: "/pixel." "/beacon/" "/1x1" "/spacer."
         const tracking_patterns = [_][]const u8{ "/pixel.", "/beacon", "/1x1", "/spacer." };
         for (tracking_patterns) |pattern| {
-            if (std.mem.indexOf(u8, url, pattern) != null) {
+            if (std.mem.indexOf(u8, lower_url, pattern) != null) {
                 return true;
             }
         }
