@@ -2583,6 +2583,22 @@ fn findParentForm(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
     return null;
 }
 
+/// Extract a query parameter value from a query string like "q=test&foo=bar"
+fn extractQueryParam(query_string: []const u8, param_name: []const u8) ?[]const u8 {
+    var pos: usize = 0;
+    while (pos < query_string.len) {
+        // Find next parameter
+        const eq = std.mem.indexOfScalarPos(u8, query_string, pos, '=') orelse break;
+        const name = query_string[pos..eq];
+        const amp = std.mem.indexOfScalarPos(u8, query_string, eq + 1, '&') orelse query_string.len;
+        if (std.mem.eql(u8, name, param_name)) {
+            return query_string[eq + 1 .. amp];
+        }
+        pos = if (amp < query_string.len) amp + 1 else query_string.len;
+    }
+    return null;
+}
+
 /// URL-encode a string for form submission query parameters.
 fn urlEncode(allocator: std.mem.Allocator, input_str: []const u8) ?[]u8 {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -2732,8 +2748,33 @@ fn submitForm(
 
     std.debug.print("[form] Query string: {s}\n", .{query_string});
 
-    // Build full URL: resolve action against current URL, append query string
+    // Intercept Google/Bing/Yahoo search forms → redirect to Brave Search
+    // (their results pages require heavy JS that we can't execute)
     const base = if (current_url) |u| u else "";
+    if (std.mem.indexOf(u8, base, "google.") != null or
+        std.mem.indexOf(u8, base, "bing.") != null or
+        std.mem.indexOf(u8, base, "yahoo.") != null)
+    {
+        // Extract the "q" parameter from query string
+        if (extractQueryParam(query_string, "q")) |q_value| {
+            const brave_url_str = std.fmt.allocPrint(allocator, "https://search.brave.com/search?q={s}&source=web", .{q_value}) catch return null;
+            std.debug.print("[form] Redirecting search to Brave: {s}\n", .{brave_url_str});
+
+            const url_z = allocator.allocSentinel(u8, brave_url_str.len, 0) catch {
+                allocator.free(brave_url_str);
+                return null;
+            };
+            @memcpy(url_z, brave_url_str);
+
+            _ = navigateTo(allocator, loader, url_z, fonts, page, storage, win_w);
+            allocator.free(url_z);
+
+            // Return the brave URL for URL bar update
+            return brave_url_str;
+        }
+    }
+
+    // Build full URL: resolve action against current URL, append query string
     const resolved_action = resolveUrl(allocator, base, action) catch return null;
     defer allocator.free(resolved_action);
 
