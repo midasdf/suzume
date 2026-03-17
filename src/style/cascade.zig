@@ -1673,7 +1673,7 @@ fn walkAndSelect(
 
 /// Run the full style cascade on a parsed document.
 /// Extracts <style> elements, parses CSS, and selects styles for all elements.
-pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator) !CascadeResult {
+pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[]const u8) !CascadeResult {
     var result = CascadeResult{
         .styles = StyleMap.init(allocator),
         .sheet = null,
@@ -1686,8 +1686,31 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator) !CascadeResult {
     const ua_sheet = try createSheet(ua_stylesheet_text, "about:ua");
     result.ua_sheet = ua_sheet;
 
-    // 2. Collect CSS from <style> elements
-    const css_text = try collectStyleText(doc_root, allocator);
+    // 2. Collect CSS from <style> elements in the DOM
+    const dom_css = try collectStyleText(doc_root, allocator);
+    defer allocator.free(dom_css);
+
+    // 3. Combine external CSS (from <link> fetches) with DOM <style> content.
+    // External CSS goes first (matches typical <head> order: <link> before <style>).
+    // DOM <style> content appended after, so it naturally overrides per CSS cascade.
+    const combined_css = if (external_css) |ext| blk: {
+        const combined = try allocator.alloc(u8, ext.len + 1 + dom_css.len);
+        @memcpy(combined[0..ext.len], ext);
+        combined[ext.len] = '\n';
+        @memcpy(combined[ext.len + 1 ..], dom_css);
+        break :blk combined;
+    } else blk: {
+        break :blk try allocator.dupe(u8, dom_css);
+    };
+    defer allocator.free(combined_css);
+
+    // 4. Filter harmful CSS patterns — only when inline <style> contains
+    // blanket element-hiding rules (common in Google's pre-JS hidden state).
+    // Skip filter if no DOM <style> content (external CSS alone is unlikely harmful).
+    const css_text = if (dom_css.len > 0 and std.mem.indexOf(u8, dom_css, "display:none") != null)
+        try filterHarmfulCss(combined_css, allocator)
+    else
+        try allocator.dupe(u8, combined_css);
     defer allocator.free(css_text);
 
     // 3. Create author stylesheet

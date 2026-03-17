@@ -76,7 +76,7 @@ pub fn main() !void {
             return;
         };
 
-        var result = try cascade_mod.cascade(root_node, allocator);
+        var result = try cascade_mod.cascade(root_node, allocator, null);
         defer result.deinit();
 
         std.debug.print("Resolved {d} element styles\n", .{result.styles.count()});

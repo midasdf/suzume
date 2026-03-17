@@ -191,10 +191,20 @@ fn initPageJs(doc: *Document, page: *PageState) void {
 }
 
 /// Recursively collect image URLs from the box tree.
-fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged([]const u8), allocator: std.mem.Allocator) void {
+const ImageUrlEntry = struct {
+    url: []const u8,
+    intrinsic_width: f32,
+    intrinsic_height: f32,
+};
+
+fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry), allocator: std.mem.Allocator) void {
     if (box.box_type == .replaced) {
         if (box.image_url) |url| {
-            urls.append(allocator, url) catch {};
+            urls.append(allocator, .{
+                .url = url,
+                .intrinsic_width = box.intrinsic_width,
+                .intrinsic_height = box.intrinsic_height,
+            }) catch {};
         }
     }
     for (box.children.items) |child| {
@@ -281,7 +291,7 @@ fn navigateTo(
             return false;
         };
 
-        var styles = cascade_mod.cascade(root_node, allocator) catch {
+        var styles = cascade_mod.cascade(root_node, allocator, null) catch {
             doc.deinit();
             allocator.free(html_owned);
             return false;
@@ -350,8 +360,9 @@ fn navigateTo(
         return false;
     };
 
-    // Style
-    var styles = cascade_mod.cascade(root_node, allocator) catch {
+    // Style (pass external CSS from loader — includes <link> stylesheets)
+    const ext_css: ?[]const u8 = if (content.css.len > 0) content.css else null;
+    var styles = cascade_mod.cascade(root_node, allocator, ext_css) catch {
         doc.deinit();
         return false;
     };
@@ -376,18 +387,26 @@ fn navigateTo(
     block_layout.adjustYPositions(root_box, root_box.margin.top);
 
     // Load images (with limits for performance)
-    const max_images: usize = 10;
-    const max_image_bytes: usize = 500 * 1024; // 500KB per image
+    const max_images: usize = 30;
+    const max_image_bytes: usize = 2 * 1024 * 1024; // 2MB per image
     var img_cache = ImageCache.init(allocator);
-    var img_urls: std.ArrayListUnmanaged([]const u8) = .empty;
+    var img_urls: std.ArrayListUnmanaged(ImageUrlEntry) = .empty;
     defer img_urls.deinit(allocator);
     collectImageUrls(root_box, &img_urls, allocator);
 
     var images_loaded: usize = 0;
-    for (img_urls.items) |img_url| {
+    for (img_urls.items) |entry| {
+        const img_url = entry.url;
+
         if (images_loaded >= max_images) {
             std.debug.print("[Images] Limit reached ({d}/{d}), skipping remaining\n", .{ images_loaded, img_urls.items.len });
             break;
+        }
+
+        // Skip tracking pixels and tiny images
+        if (isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
+            std.debug.print("[Images] Skipping tracking pixel: {s}\n", .{img_url});
+            continue;
         }
 
         // Skip SVG images (stb_image can't decode them)
@@ -425,6 +444,17 @@ fn navigateTo(
             }
 
             const img = decodeImage(resp.body) catch continue;
+
+            // Guard against decoded image OOM: reject if decoded pixels exceed 4MP (16MB RGBA)
+            const max_decoded_pixels: u64 = 4 * 1024 * 1024; // 4 megapixels
+            const pixel_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+            if (pixel_count > max_decoded_pixels) {
+                std.debug.print("[Images] Skipping large decoded image ({d}x{d} = {d}MP): {s}\n", .{ img.width, img.height, pixel_count / (1024 * 1024), resolved });
+                var mimg = img;
+                mimg.deinit();
+                continue;
+            }
+
             img_cache.put(img_url, img) catch {
                 var mimg = img;
                 mimg.deinit();
@@ -913,6 +943,36 @@ fn processUrlInput(allocator: std.mem.Allocator, input: []const u8) ![:0]const u
 }
 
 /// Check if a URL points to an SVG image (by file extension).
+/// Check if a URL is likely a tracking pixel or beacon image.
+fn isTrackingPixel(url: []const u8, intrinsic_w: f32, intrinsic_h: f32) bool {
+    // Skip if HTML attributes indicate tiny dimensions (1x1, 2x1, etc.)
+    const is_tiny = intrinsic_w > 0 and intrinsic_h > 0 and intrinsic_w <= 2 and intrinsic_h <= 2;
+    if (is_tiny) {
+        return true;
+    }
+
+    // URL keyword check only when dimensions are unknown (0x0) — avoids
+    // false positives on URLs like "/pixel-art/logo.png"
+    if (intrinsic_w == 0 and intrinsic_h == 0) {
+        // Case-insensitive check using stack buffer
+        var lower_buf: [512]u8 = undefined;
+        const check_len = @min(url.len, lower_buf.len);
+        for (url[0..check_len], 0..) |ch, idx| {
+            lower_buf[idx] = std.ascii.toLower(ch);
+        }
+        const lower_url = lower_buf[0..check_len];
+        // Only match path-segment boundaries: "/pixel." "/beacon/" "/1x1" "/spacer."
+        const tracking_patterns = [_][]const u8{ "/pixel.", "/beacon", "/1x1", "/spacer." };
+        for (tracking_patterns) |pattern| {
+            if (std.mem.indexOf(u8, lower_url, pattern) != null) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
 fn isSvgUrl(url: []const u8) bool {
     // Strip query string and fragment
     const path_end = std.mem.indexOf(u8, url, "?") orelse std.mem.indexOf(u8, url, "#") orelse url.len;
