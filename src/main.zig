@@ -1591,10 +1591,13 @@ pub fn main() !void {
                     // Skip control keys (backspace, enter, escape, arrows, etc.)
                     // so they work normally even when Mozc is active.
                     if (surface.xim_initialized and !ctrl_held and !alt_held) {
+                        // Only skip navigation/editing keys that should NEVER go to XIM.
+                        // Enter and Escape are NOT skipped because Mozc needs them
+                        // (Enter confirms composition, Escape cancels it).
+                        // When Mozc is not composing, XIM returns .none and they
+                        // fall through to normal handling (form submit, unfocus, etc.).
                         const is_control_key = (key == nsfb_c.NSFB_KEY_BACKSPACE or
                             key == nsfb_c.NSFB_KEY_DELETE or
-                            key == nsfb_c.NSFB_KEY_RETURN or
-                            key == nsfb_c.NSFB_KEY_ESCAPE or
                             key == nsfb_c.NSFB_KEY_TAB or
                             key == nsfb_c.NSFB_KEY_LEFT or
                             key == nsfb_c.NSFB_KEY_RIGHT or
