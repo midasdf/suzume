@@ -510,6 +510,8 @@ fn layoutFloat(child: *Box, parent: *Box, child_y: *f32, float_left_bottom: *f32
 /// Multiple inline children flow horizontally, wrapping to next line when needed.
 fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
     const container_width = box.content.width;
+    // Skip layout for containers too narrow (flex-shrink can crush to near-zero)
+    if (container_width < 2) return;
     const base_x = box.content.x;
     const base_y = box.content.y;
     const allocator = fonts.allocator;
@@ -867,6 +869,8 @@ pub fn adjustYPositions(box: *Box, offset_y: f32) void {
 fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, fonts: *FontCache) void {
     const text = box.text orelse return;
     if (text.len == 0) return;
+    // Skip text layout in containers too narrow to display anything meaningful
+    if (container_width < 2) return;
 
     box.lines = .empty;
     box.content.x = base_x;

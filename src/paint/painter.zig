@@ -73,11 +73,38 @@ pub const FontCache = struct {
     }
 };
 
+/// Clip rectangle for overflow clipping.
+const ClipRect = struct {
+    top: i32,
+    bottom: i32,
+    left: i32,
+    right: i32,
+
+    fn intersect(self: ClipRect, other: ClipRect) ClipRect {
+        return .{
+            .top = @max(self.top, other.top),
+            .bottom = @min(self.bottom, other.bottom),
+            .left = @max(self.left, other.left),
+            .right = @min(self.right, other.right),
+        };
+    }
+
+    fn isEmpty(self: ClipRect) bool {
+        return self.top >= self.bottom or self.left >= self.right;
+    }
+};
+
 /// Paint the box tree onto the surface within a clipped region.
 /// clip_top/clip_bottom are absolute screen Y coordinates for the visible area.
 /// scroll_x is the horizontal scroll offset (content pixels to skip from the left).
 pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
-    paintBox(box, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom, image_cache);
+    const clip = ClipRect{
+        .top = clip_top,
+        .bottom = clip_bottom,
+        .left = -9999,
+        .right = 99999,
+    };
+    paintBox(box, surface, fonts, scroll_y, scroll_x, clip, image_cache);
 }
 
 /// Paint borders around a box.
@@ -173,19 +200,26 @@ fn paintBoxShadow(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f
     }
 }
 
-fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
+fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip: ClipRect, image_cache: ?*ImageCache) void {
+    if (clip.isEmpty()) return;
+
     // Skip painting for visibility: hidden (but still recurse for children
     // which may have visibility: visible)
     const is_visible = box.style.visibility == .visible;
 
+    const clip_top = clip.top;
+    const clip_bottom = clip.bottom;
     const sx_i: i32 = @intFromFloat(scroll_x);
     switch (box.box_type) {
         .block, .anonymous_block, .inline_box => {
             // Quick culling: skip boxes entirely outside viewport
             const pbox = box.paddingBox();
             const screen_y = @as(i32, @intFromFloat(pbox.y - scroll_y));
+            const screen_x = @as(i32, @intFromFloat(pbox.x - scroll_x));
             const screen_bottom = screen_y + @as(i32, @intFromFloat(@max(pbox.height, 0)));
-            if (screen_bottom < clip_top or screen_y > clip_bottom) return;
+            const screen_right = screen_x + @as(i32, @intFromFloat(@max(pbox.width, 0)));
+            if (screen_bottom < clip.top or screen_y > clip.bottom) return;
+            if (screen_right < clip.left or screen_x > clip.right) return;
 
             if (is_visible) {
                 // Paint box-shadow behind the element
@@ -265,9 +299,23 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                 }
             }
 
-            // Paint children (always recurse — children may override visibility)
+            // Paint children with overflow clipping
+            var child_clip = clip;
+            const has_overflow_clip_x = box.style.overflow_x == .hidden or box.style.overflow_x == .scroll or box.style.overflow_x == .auto_;
+            const has_overflow_clip_y = box.style.overflow_y == .hidden or box.style.overflow_y == .scroll or box.style.overflow_y == .auto_;
+            const has_overflow_clip = has_overflow_clip_x or has_overflow_clip_y;
+            if (has_overflow_clip) {
+                // Restrict child clip to this box's padding box
+                const box_clip = ClipRect{
+                    .top = screen_y,
+                    .bottom = screen_bottom,
+                    .left = screen_x,
+                    .right = screen_right,
+                };
+                child_clip = clip.intersect(box_clip);
+            }
             for (box.children.items) |child| {
-                paintBox(child, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom, image_cache);
+                paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
             }
         },
         .replaced => {
@@ -354,8 +402,10 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                 const draw_x: i32 = @as(i32, @intFromFloat(line.x)) - sx_i;
                 const line_bottom = @as(i32, @intFromFloat(line.y + line.height - scroll_y));
 
-                // Skip lines entirely outside clip
+                // Skip lines entirely outside clip (vertical and horizontal)
                 if (line_bottom < clip_top or draw_y - @as(i32, @intFromFloat(line.ascent)) > clip_bottom) continue;
+                const line_right = draw_x + @as(i32, @intFromFloat(@max(line.width, 0)));
+                if (line_right < clip.left or draw_x > clip.right) continue;
 
                 // Paint text-shadow first (rendered behind the text)
                 if (has_text_shadow) {
