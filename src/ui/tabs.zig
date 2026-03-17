@@ -5,6 +5,7 @@ pub const Tab = struct {
     url: []u8, // owned
     title: []u8, // owned
     scroll_y: f32,
+    scroll_x: f32 = 0,
     active: bool, // has live DOM/layout/JS
     is_private: bool = false, // private browsing mode — no history, no session save
 
@@ -193,9 +194,10 @@ pub const TabManager = struct {
     }
 
     /// Save the current scroll position to the active tab.
-    pub fn saveScrollPosition(self: *TabManager, scroll_y: f32) void {
+    pub fn saveScrollPosition(self: *TabManager, scroll_y: f32, scroll_x: f32) void {
         if (self.tabs.items.len == 0) return;
         self.tabs.items[self.active_index].scroll_y = scroll_y;
+        self.tabs.items[self.active_index].scroll_x = scroll_x;
     }
 
     /// Get tab count.

@@ -12,6 +12,7 @@ const BlitCtx = struct {
     colour: u32,
     clip_top: i32,
     clip_bottom: i32,
+    offset_x: i32 = 0,
 };
 
 fn blitGlyphClipped(ctx: BlitCtx, glyph: GlyphBitmap) void {
@@ -20,7 +21,7 @@ fn blitGlyphClipped(ctx: BlitCtx, glyph: GlyphBitmap) void {
     if (gy_bottom <= ctx.clip_top or glyph.y >= ctx.clip_bottom) return;
 
     ctx.surface.blitGlyph8(
-        glyph.x,
+        glyph.x + ctx.offset_x,
         glyph.y,
         @intCast(glyph.width),
         @intCast(glyph.height),
@@ -74,15 +75,16 @@ pub const FontCache = struct {
 
 /// Paint the box tree onto the surface within a clipped region.
 /// clip_top/clip_bottom are absolute screen Y coordinates for the visible area.
-pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
-    paintBox(box, surface, fonts, scroll_y, clip_top, clip_bottom, image_cache);
+/// scroll_x is the horizontal scroll offset (content pixels to skip from the left).
+pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
+    paintBox(box, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom, image_cache);
 }
 
 /// Paint borders around a box.
-fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32) void {
+fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32) void {
     const style = box.style;
     const bbox = box.borderBox();
-    const sx: i32 = @intFromFloat(bbox.x);
+    const sx: i32 = @intFromFloat(bbox.x - scroll_x);
     const sy: i32 = @intFromFloat(bbox.y - scroll_y);
     const sw: i32 = @intFromFloat(@max(bbox.width, 0));
     const sh: i32 = @intFromFloat(@max(bbox.height, 0));
@@ -109,7 +111,8 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32) void {
     }
 }
 
-fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
+fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
+    const sx_i: i32 = @intFromFloat(scroll_x);
     switch (box.box_type) {
         .block, .anonymous_block, .inline_box => {
             // Quick culling: skip boxes entirely outside viewport
@@ -123,7 +126,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const alpha = (bg >> 24) & 0xFF;
             if (alpha > 0) {
                 surface.fillRect(
-                    @intFromFloat(pbox.x),
+                    @as(i32, @intFromFloat(pbox.x)) - sx_i,
                     screen_y,
                     @intFromFloat(@max(pbox.width, 0)),
                     @intFromFloat(@max(pbox.height, 0)),
@@ -132,21 +135,21 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             }
 
             // Paint borders
-            paintBorders(box, surface, scroll_y);
+            paintBorders(box, surface, scroll_y, scroll_x);
 
             // Paint <hr> line
             if (box.is_hr) {
-                paintHr(box, surface, scroll_y, clip_top, clip_bottom);
+                paintHr(box, surface, scroll_y, scroll_x, clip_top, clip_bottom);
             }
 
             // Paint list item marker
             if (box.style.display == .list_item and box.list_index > 0) {
-                paintListMarker(box, surface, fonts, scroll_y, clip_top, clip_bottom);
+                paintListMarker(box, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom);
             }
 
             // Paint children
             for (box.children.items) |child| {
-                paintBox(child, surface, fonts, scroll_y, clip_top, clip_bottom, image_cache);
+                paintBox(child, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom, image_cache);
             }
         },
         .replaced => {
@@ -155,7 +158,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const screen_bottom = screen_y + @as(i32, @intFromFloat(@max(box.content.height, 0)));
             if (screen_bottom < clip_top or screen_y > clip_bottom) return;
 
-            const dst_x: i32 = @intFromFloat(box.content.x);
+            const dst_x: i32 = @as(i32, @intFromFloat(box.content.x)) - sx_i;
             const dst_w: u32 = @intFromFloat(@max(box.content.width, 0));
             const dst_h: u32 = @intFromFloat(@max(box.content.height, 0));
 
@@ -189,13 +192,13 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     text_x,
                     text_y,
                     BlitCtx,
-                    .{ .surface = surface, .colour = Surface.argbToColour(0xFF6c7086), .clip_top = clip_top, .clip_bottom = clip_bottom },
+                    .{ .surface = surface, .colour = Surface.argbToColour(0xFF6c7086), .clip_top = clip_top, .clip_bottom = clip_bottom, .offset_x = 0 },
                     blitGlyphClipped,
                 );
             }
 
             // Paint borders
-            paintBorders(box, surface, scroll_y);
+            paintBorders(box, surface, scroll_y, scroll_x);
         },
         .inline_text => {
             const colour = Surface.argbToColour(box.style.color);
@@ -207,7 +210,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const ialpha = (ibg >> 24) & 0xFF;
             if (ialpha > 0) {
                 for (box.lines.items) |line| {
-                    const lx: i32 = @intFromFloat(line.x);
+                    const lx: i32 = @as(i32, @intFromFloat(line.x)) - sx_i;
                     const ly: i32 = @intFromFloat(line.y - scroll_y);
                     const lw: i32 = @intFromFloat(@max(line.width, 0));
                     const lh: i32 = @intFromFloat(@max(line.height, 0));
@@ -219,7 +222,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
 
             for (box.lines.items) |line| {
                 const draw_y: i32 = @intFromFloat(line.y + line.ascent - scroll_y);
-                const draw_x: i32 = @intFromFloat(line.x);
+                const draw_x: i32 = @as(i32, @intFromFloat(line.x)) - sx_i;
                 const line_bottom = @as(i32, @intFromFloat(line.y + line.height - scroll_y));
 
                 // Skip lines entirely outside clip
@@ -230,7 +233,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     draw_x,
                     draw_y,
                     BlitCtx,
-                    .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
+                    .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom, .offset_x = 0 },
                     blitGlyphClipped,
                 );
 
@@ -282,12 +285,12 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
 }
 
 /// Paint an <hr> horizontal rule.
-fn paintHr(box: *const Box, surface: *Surface, scroll_y: f32, clip_top: i32, clip_bottom: i32) void {
+fn paintHr(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32) void {
     const style = box.style;
     const hr_color = Surface.argbToColour(if (style.border_top_color != 0xFF000000) style.border_top_color else 0xFF45475a);
     const hr_thickness: i32 = if (style.border_top_width > 0) @intFromFloat(style.border_top_width) else 1;
     const bbox = box.borderBox();
-    const hr_x: i32 = @intFromFloat(bbox.x);
+    const hr_x: i32 = @as(i32, @intFromFloat(bbox.x)) - @as(i32, @intFromFloat(scroll_x));
     const hr_y: i32 = @intFromFloat(bbox.y - scroll_y);
     const hr_w: i32 = @intFromFloat(@max(bbox.width, 0));
 
@@ -297,7 +300,7 @@ fn paintHr(box: *const Box, surface: *Surface, scroll_y: f32, clip_top: i32, cli
 }
 
 /// Paint a list item bullet or number marker.
-fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32) void {
+fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32) void {
     const style = box.style;
     const colour = Surface.argbToColour(style.color);
     const size_px: u32 = @intFromFloat(style.font_size_px);
@@ -319,7 +322,7 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
 
     const m = tr.measure(marker_text);
     // Position marker to the left of the content area
-    const marker_x: i32 = @as(i32, @intFromFloat(box.content.x)) - m.width - 4;
+    const marker_x: i32 = @as(i32, @intFromFloat(box.content.x)) - @as(i32, @intFromFloat(scroll_x)) - m.width - 4;
     const marker_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent;
 
     if (marker_y - m.ascent > clip_bottom or marker_y + m.height - m.ascent < clip_top) return;
@@ -371,6 +374,36 @@ fn blitImageScaled(surface: *Surface, dst_x: i32, dst_y: i32, dst_w: u32, dst_h:
 pub fn contentHeight(box: *const Box) f32 {
     const mbox = box.marginBox();
     return mbox.y + mbox.height;
+}
+
+/// Compute the total content width of a box tree (for horizontal scroll limits).
+pub fn contentWidth(box: *const Box) f32 {
+    var max_w: f32 = 0;
+    contentWidthRecurse(box, &max_w);
+    return max_w;
+}
+
+fn contentWidthRecurse(box: *const Box, max_w: *f32) void {
+    switch (box.box_type) {
+        .block, .anonymous_block, .inline_box => {
+            const mbox = box.marginBox();
+            const right = mbox.x + mbox.width;
+            if (right > max_w.*) max_w.* = right;
+            for (box.children.items) |child| {
+                contentWidthRecurse(child, max_w);
+            }
+        },
+        .inline_text => {
+            for (box.lines.items) |line| {
+                const right = line.x + line.width;
+                if (right > max_w.*) max_w.* = right;
+            }
+        },
+        .replaced => {
+            const right = box.content.x + box.content.width;
+            if (right > max_w.*) max_w.* = right;
+        },
+    }
 }
 
 /// Hit-test: find the deepest DOM node at a given point (in layout coordinates).

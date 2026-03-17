@@ -103,6 +103,7 @@ const PageState = struct {
     styles: ?cascade_mod.CascadeResult = null,
     root_box: ?*Box = null,
     total_height: f32 = 0,
+    total_width: f32 = 0,
     image_cache: ?ImageCache = null,
     js_rt: ?JsRuntime = null,
     /// Error message to display when page load fails.
@@ -265,11 +266,13 @@ fn navigateTo(
         block_layout.adjustYPositions(root_box, root_box.margin.top);
 
         const total_h = painter_mod.contentHeight(root_box);
+        const total_w = painter_mod.contentWidth(root_box);
         page.* = .{
             .doc = doc,
             .styles = styles,
             .root_box = root_box,
             .total_height = total_h,
+            .total_width = total_w,
             .image_cache = ImageCache.init(allocator),
         };
         allocator.free(html_owned);
@@ -359,12 +362,14 @@ fn navigateTo(
     }
 
     const total_h = painter_mod.contentHeight(root_box);
+    const total_w = painter_mod.contentWidth(root_box);
 
     page.* = .{
         .doc = doc,
         .styles = styles,
         .root_box = root_box,
         .total_height = total_h,
+        .total_width = total_w,
         .image_cache = img_cache,
     };
 
@@ -684,6 +689,11 @@ fn serializeSession(allocator: std.mem.Allocator, tab_mgr: *const TabManager) ?[
         const scroll_str = std.fmt.bufPrint(&scroll_buf, "{d}", .{@as(i32, @intFromFloat(tab.scroll_y))}) catch "0";
         json.appendSlice(allocator, "\",\"scroll_y\":") catch return null;
         json.appendSlice(allocator, scroll_str) catch return null;
+        // Write scroll_x as integer
+        var scroll_x_buf: [32]u8 = undefined;
+        const scroll_x_str = std.fmt.bufPrint(&scroll_x_buf, "{d}", .{@as(i32, @intFromFloat(tab.scroll_x))}) catch "0";
+        json.appendSlice(allocator, ",\"scroll_x\":") catch return null;
+        json.appendSlice(allocator, scroll_x_str) catch return null;
         json.appendSlice(allocator, "}") catch return null;
     }
     json.appendSlice(allocator, "]") catch return null;
@@ -846,6 +856,7 @@ pub fn main() !void {
 
     // Scroll
     var scroll_y: f32 = 0;
+    var scroll_x: f32 = 0;
 
     // History
     var history: std.ArrayListUnmanaged([]u8) = .empty;
@@ -903,6 +914,7 @@ pub fn main() !void {
                             if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
+                                scroll_x = 0;
                                 if (current_url) |old| allocator.free(old);
                                 current_url = allocator.dupe(u8, tab.url) catch null;
                             } else {
@@ -934,6 +946,7 @@ pub fn main() !void {
                 if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null, surface.width)) {
                     status_text = "Done";
                     scroll_y = 0;
+                    scroll_x = 0;
                     tab_mgr.updateActiveUrl(url);
                     tab_mgr.updateActiveTitle(url);
                     // Store in history
@@ -990,6 +1003,7 @@ pub fn main() !void {
                         &surface,
                         &fonts,
                         adjusted_scroll,
+                        scroll_x,
                         chrome.content_y,
                         chrome.content_y + chrome.contentHeight(surface.height),
                         ic_ptr,
@@ -1105,7 +1119,7 @@ pub fn main() !void {
                     // Ctrl+T: new tab
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_t) {
                         // Save scroll position of current tab
-                        tab_mgr.saveScrollPosition(scroll_y);
+                        tab_mgr.saveScrollPosition(scroll_y, scroll_x);
 
                         const homepage = config.get("homepage") orelse "about:blank";
                         _ = tab_mgr.newTab(homepage);
@@ -1115,6 +1129,7 @@ pub fn main() !void {
 
                         // Reset state for new tab
                         scroll_y = 0;
+                        scroll_x = 0;
                         url_input.setText("");
                         url_input.focused = true;
                         if (current_url) |old| allocator.free(old);
@@ -1143,6 +1158,7 @@ pub fn main() !void {
                         // Restore state from new active tab
                         if (tab_mgr.getActiveTab()) |tab| {
                             scroll_y = tab.scroll_y;
+                            scroll_x = tab.scroll_x;
                             url_input.setText(tab.url);
                             url_input.focused = false;
                             if (current_url) |old| allocator.free(old);
@@ -1156,10 +1172,11 @@ pub fn main() !void {
 
                     // Ctrl+Tab: next tab
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and !shift_held) {
-                        tab_mgr.saveScrollPosition(scroll_y);
+                        tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         if (tab_mgr.nextTab()) {
                             if (tab_mgr.getActiveTab()) |tab| {
                                 scroll_y = tab.scroll_y;
+                                scroll_x = tab.scroll_x;
                                 url_input.setText(tab.url);
                                 url_input.focused = false;
                                 if (current_url) |old| allocator.free(old);
@@ -1172,10 +1189,11 @@ pub fn main() !void {
 
                     // Ctrl+Shift+Tab: previous tab
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and shift_held) {
-                        tab_mgr.saveScrollPosition(scroll_y);
+                        tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         if (tab_mgr.prevTab()) {
                             if (tab_mgr.getActiveTab()) |tab| {
                                 scroll_y = tab.scroll_y;
+                                scroll_x = tab.scroll_x;
                                 url_input.setText(tab.url);
                                 url_input.focused = false;
                                 if (current_url) |old| allocator.free(old);
@@ -1190,10 +1208,11 @@ pub fn main() !void {
                     if (ctrl_held and key >= nsfb_c.NSFB_KEY_1 and key <= nsfb_c.NSFB_KEY_9) {
                         const tab_idx: usize = @intCast(key - nsfb_c.NSFB_KEY_1);
                         if (tab_idx < tab_mgr.tabCount()) {
-                            tab_mgr.saveScrollPosition(scroll_y);
+                            tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                             if (tab_mgr.switchTo(tab_idx)) {
                                 if (tab_mgr.getActiveTab()) |tab| {
                                     scroll_y = tab.scroll_y;
+                                    scroll_x = tab.scroll_x;
                                     url_input.setText(tab.url);
                                     url_input.focused = false;
                                     if (current_url) |old| allocator.free(old);
@@ -1217,6 +1236,7 @@ pub fn main() !void {
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
+                                scroll_x = 0;
                             } else {
                                 status_text = "Failed";
                             }
@@ -1237,6 +1257,7 @@ pub fn main() !void {
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
+                                scroll_x = 0;
                             } else {
                                 status_text = "Failed";
                             }
@@ -1259,6 +1280,7 @@ pub fn main() !void {
                         if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                             status_text = "Done";
                             scroll_y = 0;
+                            scroll_x = 0;
                             tab_mgr.updateActiveUrl(hist_url);
                             tab_mgr.updateActiveTitle("History");
                         } else {
@@ -1298,13 +1320,14 @@ pub fn main() !void {
 
                     // Ctrl+Shift+N: new private tab
                     if (ctrl_held and shift_held and key == nsfb_c.NSFB_KEY_n) {
-                        tab_mgr.saveScrollPosition(scroll_y);
+                        tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         const homepage = config.get("homepage") orelse "about:blank";
                         _ = tab_mgr.newPrivateTab(homepage);
                         page_states.append(allocator, PageState{}) catch |err| {
                             std.debug.print("[Error] Failed to append page state: {}\n", .{err});
                         };
                         scroll_y = 0;
+                        scroll_x = 0;
                         url_input.setText("");
                         url_input.focused = true;
                         if (current_url) |old| allocator.free(old);
@@ -1330,6 +1353,7 @@ pub fn main() !void {
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
+                                scroll_x = 0;
                                 if (current_url) |old| allocator.free(old);
                                 const cu = allocator.alloc(u8, url.len) catch null;
                                 if (cu) |c| {
@@ -1360,6 +1384,7 @@ pub fn main() !void {
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
+                                scroll_x = 0;
                                 if (current_url) |old| allocator.free(old);
                                 const cu = allocator.alloc(u8, url.len) catch null;
                                 if (cu) |c| {
@@ -1381,13 +1406,14 @@ pub fn main() !void {
                         const tab_hit = chrome.hitTestTabBar(mouse_x, mouse_y, &tab_mgr, surface.width);
                         switch (tab_hit.action) {
                             .new_tab => {
-                                tab_mgr.saveScrollPosition(scroll_y);
+                                tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                                 const homepage = config.get("homepage") orelse "about:blank";
                                 _ = tab_mgr.newTab(homepage);
                                 page_states.append(allocator, PageState{}) catch |err| {
                                     std.debug.print("[Error] Failed to append page state: {}\n", .{err});
                                 };
                                 scroll_y = 0;
+                                scroll_x = 0;
                                 url_input.setText("");
                                 url_input.focused = true;
                                 if (current_url) |old| allocator.free(old);
@@ -1409,6 +1435,7 @@ pub fn main() !void {
                                 tab_mgr.closeTab(ci);
                                 if (tab_mgr.getActiveTab()) |tab| {
                                     scroll_y = tab.scroll_y;
+                                    scroll_x = tab.scroll_x;
                                     url_input.setText(tab.url);
                                     url_input.focused = false;
                                     if (current_url) |old| allocator.free(old);
@@ -1418,10 +1445,11 @@ pub fn main() !void {
                                 continue;
                             },
                             .switch_tab => {
-                                tab_mgr.saveScrollPosition(scroll_y);
+                                tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                                 if (tab_mgr.switchTo(tab_hit.index)) {
                                     if (tab_mgr.getActiveTab()) |tab| {
                                         scroll_y = tab.scroll_y;
+                                        scroll_x = tab.scroll_x;
                                         url_input.setText(tab.url);
                                         url_input.focused = false;
                                         if (current_url) |old| allocator.free(old);
@@ -1439,6 +1467,7 @@ pub fn main() !void {
                                                     if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                                         status_text = "Done";
                                                         scroll_y = 0;
+                                                        scroll_x = 0;
                                                     } else {
                                                         status_text = "Failed";
                                                     }
@@ -1465,6 +1494,7 @@ pub fn main() !void {
                                 mouse_y,
                                 &url_input,
                                 &scroll_y,
+                                &scroll_x,
                                 page,
                                 &fonts,
                                 &loader,
@@ -1566,6 +1596,7 @@ pub fn main() !void {
                                     if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                         status_text = "Done";
                                         scroll_y = 0;
+                                        scroll_x = 0;
                                         url_input.focused = false;
 
                                         // Truncate forward history if we navigated from middle
@@ -1626,19 +1657,27 @@ pub fn main() !void {
                             else
                                 null;
                             const total_h2: f32 = if (active_pg2) |pg| pg.total_height else 0;
+                            const total_w2: f32 = if (active_pg2) |pg| pg.total_width else 0;
                             const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
+                            const cw = @as(f32, @floatFromInt(surface.width));
                             var new_scroll = scroll_y;
+                            var new_scroll_x = scroll_x;
 
                             if (key == nsfb_c.NSFB_KEY_UP) {
                                 new_scroll -= 40;
                             } else if (key == nsfb_c.NSFB_KEY_DOWN) {
                                 new_scroll += 40;
+                            } else if (key == nsfb_c.NSFB_KEY_LEFT) {
+                                new_scroll_x -= 40;
+                            } else if (key == nsfb_c.NSFB_KEY_RIGHT) {
+                                new_scroll_x += 40;
                             } else if (key == nsfb_c.NSFB_KEY_PAGEUP) {
                                 new_scroll -= ch;
                             } else if (key == nsfb_c.NSFB_KEY_PAGEDOWN) {
                                 new_scroll += ch;
                             } else if (key == nsfb_c.NSFB_KEY_HOME) {
                                 new_scroll = 0;
+                                new_scroll_x = 0;
                             } else if (key == nsfb_c.NSFB_KEY_END) {
                                 if (total_h2 > ch) {
                                     new_scroll = total_h2 - ch;
@@ -1648,11 +1687,19 @@ pub fn main() !void {
                                 continue;
                             }
 
-                            // Clamp
+                            // Clamp vertical
                             const max_scroll = @max(total_h2 - ch, 0);
                             new_scroll = @max(0, @min(new_scroll, max_scroll));
                             if (new_scroll != scroll_y) {
                                 scroll_y = new_scroll;
+                                needs_repaint = true;
+                            }
+
+                            // Clamp horizontal (only scroll if content wider than viewport)
+                            const max_scroll_x = @max(total_w2 - cw, 0);
+                            new_scroll_x = @max(0, @min(new_scroll_x, max_scroll_x));
+                            if (new_scroll_x != scroll_x) {
+                                scroll_x = new_scroll_x;
                                 needs_repaint = true;
                             }
                         }
@@ -1700,6 +1747,7 @@ fn handleClick(
     my: i32,
     url_input: *TextInput,
     scroll_y: *f32,
+    scroll_x: *f32,
     page: *PageState,
     fonts: *painter_mod.FontCache,
     loader: *Loader,
@@ -1728,7 +1776,7 @@ fn handleClick(
     // Hit test for links and JS events
     if (page.root_box) |root_box| {
         // Convert screen coords to layout coords
-        const layout_x: f32 = @floatFromInt(mx);
+        const layout_x: f32 = @as(f32, @floatFromInt(mx)) + scroll_x.*;
         const layout_y: f32 = @as(f32, @floatFromInt(my - chrome.content_y)) + scroll_y.*;
 
         // Dispatch click event to JavaScript
@@ -1761,6 +1809,7 @@ fn handleClick(
             if (navigateTo(allocator, loader, resolved, fonts, page, storage, win_w)) {
                 status_text.* = "Done";
                 scroll_y.* = 0;
+                scroll_x.* = 0;
 
                 // Truncate forward history
                 if (history_pos.* + 1 < history.items.len) {
