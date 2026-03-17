@@ -211,16 +211,28 @@ fn buildChildren(
                         {
                             child_box.box_type = .inline_box;
                             child_box.style.display = .inline_block;
+                            // Compute submit/button/reset flag early for default styling
+                            const is_button = std.mem.eql(u8, input_type, "submit") or
+                                std.mem.eql(u8, input_type, "button") or
+                                std.mem.eql(u8, input_type, "reset");
+
                             // Add default styling for form inputs
                             if (child_box.style.background_color == 0x00000000) {
-                                child_box.style.background_color = 0xFF313244; // surface0
+                                child_box.style.background_color = if (is_button) 0xFFecedee else 0xFF313244;
                             }
-                            // Default padding for inputs
+                            // Default padding for inputs (buttons get more padding)
                             if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
-                                child_box.padding.top = 2;
-                                child_box.padding.bottom = 2;
-                                child_box.padding.left = 4;
-                                child_box.padding.right = 4;
+                                if (is_button) {
+                                    child_box.padding.top = 6;
+                                    child_box.padding.bottom = 6;
+                                    child_box.padding.left = 16;
+                                    child_box.padding.right = 16;
+                                } else {
+                                    child_box.padding.top = 2;
+                                    child_box.padding.bottom = 2;
+                                    child_box.padding.left = 4;
+                                    child_box.padding.right = 4;
+                                }
                             }
                             // Default border for inputs
                             if (child_box.border.top == 0 and child_box.border.bottom == 0) {
@@ -228,25 +240,32 @@ fn buildChildren(
                                 child_box.border.bottom = 1;
                                 child_box.border.left = 1;
                                 child_box.border.right = 1;
-                                child_box.style.border_top_color = 0xFF585b70;
-                                child_box.style.border_bottom_color = 0xFF585b70;
-                                child_box.style.border_left_color = 0xFF585b70;
-                                child_box.style.border_right_color = 0xFF585b70;
+                                if (is_button) {
+                                    child_box.style.border_top_color = 0xFFc0c0c0;
+                                    child_box.style.border_bottom_color = 0xFF808080;
+                                    child_box.style.border_left_color = 0xFFc0c0c0;
+                                    child_box.style.border_right_color = 0xFF808080;
+                                } else {
+                                    child_box.style.border_top_color = 0xFF585b70;
+                                    child_box.style.border_bottom_color = 0xFF585b70;
+                                    child_box.style.border_left_color = 0xFF585b70;
+                                    child_box.style.border_right_color = 0xFF585b70;
+                                }
+                            }
+                            // Default text color for buttons (dark text on light background)
+                            if (is_button and child_box.style.color == 0xFFcdd6f4) {
+                                child_box.style.color = 0xFF1f1f1f;
                             }
 
                             // Compute width from size attribute or type
-                            const is_submit = std.mem.eql(u8, input_type, "submit") or
-                                std.mem.eql(u8, input_type, "button") or
-                                std.mem.eql(u8, input_type, "reset");
-
                             if (child_box.style.width == .auto) {
-                                if (is_submit) {
+                                if (is_button) {
                                     // Submit/button: sized to text content + padding
                                     const btn_text = child.getAttribute("value") orelse
                                         (if (std.mem.eql(u8, input_type, "reset")) "Reset" else "Submit");
                                     const char_width: f32 = child_box.style.font_size_px * 0.6;
                                     const text_w = char_width * @as(f32, @floatFromInt(btn_text.len));
-                                    child_box.style.width = .{ .px = text_w + 16 }; // 8px padding each side
+                                    child_box.style.width = .{ .px = text_w }; // content width = text width; padding is separate
                                 } else {
                                     // Text/password/etc: width from size attr (default 20 chars)
                                     const size_attr = child.getAttribute("size");
