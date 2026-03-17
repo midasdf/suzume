@@ -870,6 +870,11 @@ pub fn main() !void {
     var current_url: ?[]u8 = null;
     defer if (current_url) |u| allocator.free(u);
 
+    // Focused form input state
+    var focused_input_node: ?*lxb.lxb_dom_node_t = null; // DOM node of focused <input>
+    var form_input = TextInput.init(allocator); // text buffer for focused input
+    defer form_input.deinit();
+
     // Modifier key state
     var shift_held = false;
     var ctrl_held = false;
@@ -1008,6 +1013,21 @@ pub fn main() !void {
                         chrome.content_y + chrome.contentHeight(surface.height),
                         ic_ptr,
                     );
+
+                    // Paint focused form input overlay
+                    if (focused_input_node != null) {
+                        paintFocusedInput(
+                            root_box,
+                            &surface,
+                            &fonts,
+                            focused_input_node.?,
+                            &form_input,
+                            adjusted_scroll,
+                            scroll_x,
+                            chrome.content_y,
+                            chrome.content_y + chrome.contentHeight(surface.height),
+                        );
+                    }
                 } else if (page.error_message) |err_msg| {
                     // Display error message in the content area
                     const err_font_size: u32 = 14;
@@ -1226,6 +1246,7 @@ pub fn main() !void {
 
                     // F5: reload
                     if (key == nsfb_c.NSFB_KEY_F5) {
+                        focused_input_node = null;
                         if (current_url) |url| {
                             const url_z = allocator.allocSentinel(u8, url.len, 0) catch continue;
                             defer allocator.free(url_z);
@@ -1247,6 +1268,7 @@ pub fn main() !void {
 
                     // Ctrl+R: reload
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_r) {
+                        focused_input_node = null;
                         if (current_url) |url| {
                             const url_z = allocator.allocSentinel(u8, url.len, 0) catch continue;
                             defer allocator.free(url_z);
@@ -1340,6 +1362,7 @@ pub fn main() !void {
 
                     // Alt+Left: back
                     if (alt_held and key == nsfb_c.NSFB_KEY_LEFT) {
+                        focused_input_node = null;
                         if (history_pos > 0) {
                             history_pos -= 1;
                             const url = history.items[history_pos];
@@ -1371,6 +1394,7 @@ pub fn main() !void {
 
                     // Alt+Right: forward
                     if (alt_held and key == nsfb_c.NSFB_KEY_RIGHT) {
+                        focused_input_node = null;
                         if (history_pos + 1 < history.items.len) {
                             history_pos += 1;
                             const url = history.items[history_pos];
@@ -1506,6 +1530,8 @@ pub fn main() !void {
                                 if (storage_inst) |*s| s else null,
                                 surface.width,
                                 surface.height,
+                                &focused_input_node,
+                                &form_input,
                             );
                             // Update tab with new URL
                             if (current_url) |cu| {
@@ -1577,11 +1603,80 @@ pub fn main() !void {
                         continue;
                     }
 
+                    // Handle focused form input
+                    if (focused_input_node != null) {
+                        if (key == nsfb_c.NSFB_KEY_TAB) {
+                            // Tab: unfocus form input (TODO: focus next input)
+                            focused_input_node = null;
+                            needs_repaint = true;
+                            continue;
+                        }
+                        const form_result = form_input.handleKey(key, shift_held);
+                        switch (form_result) {
+                            .submit => {
+                                // Enter pressed: submit the form
+                                const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                                const fi_node = focused_input_node.?;
+                                const fi_form = findParentForm(fi_node) orelse continue;
+                                if (submitForm(allocator, fi_form, fi_node, &form_input, current_url, &loader, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) |nav_url| {
+                                    defer allocator.free(nav_url);
+                                    url_input.setText(nav_url);
+                                    url_input.focused = false;
+                                    focused_input_node = null;
+                                    status_text = "Loading...";
+                                    needs_repaint = true;
+
+                                    // Truncate forward history
+                                    if (history_pos + 1 < history.items.len) {
+                                        for (history.items[history_pos + 1 ..]) |item| {
+                                            allocator.free(item);
+                                        }
+                                        history.shrinkRetainingCapacity(history_pos + 1);
+                                    }
+                                    // Add to history
+                                    const owned = allocator.alloc(u8, nav_url.len) catch null;
+                                    if (owned) |o| {
+                                        @memcpy(o, nav_url);
+                                        history.append(allocator, o) catch {};
+                                        history_pos = history.items.len - 1;
+                                    }
+                                    if (current_url) |old| allocator.free(old);
+                                    current_url = allocator.dupe(u8, nav_url) catch null;
+                                    tab_mgr.updateActiveUrl(nav_url);
+                                    tab_mgr.updateActiveTitle(nav_url);
+                                    if (storage_inst) |*s| {
+                                        const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
+                                        if (!is_priv) s.addHistory(nav_url, nav_url);
+                                    }
+                                    scroll_y = 0;
+                                    scroll_x = 0;
+                                    status_text = "Done";
+                                } else {
+                                    // submitForm returned null (no form found or error)
+                                    // Just unfocus
+                                    focused_input_node = null;
+                                }
+                                needs_repaint = true;
+                            },
+                            .cancel => {
+                                focused_input_node = null;
+                                needs_repaint = true;
+                            },
+                            .consumed => {
+                                needs_repaint = true;
+                            },
+                            .ignored => {},
+                        }
+                        continue;
+                    }
+
                     if (url_input.focused) {
                         // Route to text input
                         const result = url_input.handleKey(key, shift_held);
                         switch (result) {
                             .submit => {
+                                // Clear form focus before navigation
+                                focused_input_node = null;
                                 // Navigate to URL
                                 const url_text = url_input.getText();
                                 if (url_text.len > 0) {
@@ -1734,7 +1829,34 @@ pub fn main() !void {
                                 if (link != null) {
                                     surface.setCursor(.pointer);
                                 } else {
-                                    surface.setCursor(.arrow);
+                                    // Check for form elements
+                                    const hit = painter_mod.hitTestNode(root, layout_x, layout_y);
+                                    var cursor_set = false;
+                                    if (hit) |node_ptr| {
+                                        const fnode = findFormElement(@ptrCast(@alignCast(node_ptr)));
+                                        if (fnode) |fn_node| {
+                                            const fdn = DomNode{ .lxb_node = fn_node };
+                                            const ftag = fdn.tagName() orelse "";
+                                            if (std.mem.eql(u8, ftag, "input")) {
+                                                const itype = fdn.getAttribute("type") orelse "text";
+                                                if (std.mem.eql(u8, itype, "submit") or
+                                                    std.mem.eql(u8, itype, "button") or
+                                                    std.mem.eql(u8, itype, "reset"))
+                                                {
+                                                    surface.setCursor(.pointer);
+                                                } else {
+                                                    surface.setCursor(.text);
+                                                }
+                                                cursor_set = true;
+                                            } else if (std.mem.eql(u8, ftag, "button")) {
+                                                surface.setCursor(.pointer);
+                                                cursor_set = true;
+                                            }
+                                        }
+                                    }
+                                    if (!cursor_set) {
+                                        surface.setCursor(.arrow);
+                                    }
                                 }
                             }
                         }
@@ -1762,6 +1884,113 @@ pub fn main() !void {
     std.debug.print("Bye!\n", .{});
 }
 
+/// Find the layout Box that corresponds to a given DOM node pointer.
+fn findBoxForNode(box: *const Box, target_node: *lxb.lxb_dom_node_t) ?*const Box {
+    if (box.dom_node) |dn| {
+        if (dn.lxb_node == target_node) return box;
+    }
+    for (box.children.items) |child| {
+        if (findBoxForNode(child, target_node)) |found| return found;
+    }
+    return null;
+}
+
+/// Paint the focused form input: highlight border + render typed text with cursor.
+fn paintFocusedInput(
+    root_box: *const Box,
+    surface: *Surface,
+    fonts: *painter_mod.FontCache,
+    focused_node: *lxb.lxb_dom_node_t,
+    form_input_ptr: *TextInput,
+    scroll_y: f32,
+    scroll_x: f32,
+    clip_top: i32,
+    clip_bottom: i32,
+) void {
+    const input_box = findBoxForNode(root_box, focused_node) orelse return;
+    const pbox = input_box.paddingBox();
+    const sx: i32 = @as(i32, @intFromFloat(pbox.x)) - @as(i32, @intFromFloat(scroll_x));
+    const sy: i32 = @intFromFloat(pbox.y - scroll_y);
+    const sw: i32 = @intFromFloat(@max(pbox.width, 0));
+    const sh: i32 = @intFromFloat(@max(pbox.height, 0));
+
+    // Skip if outside clip region
+    if (sy + sh < clip_top or sy > clip_bottom) return;
+
+    // Draw focus border (blue highlight #89b4fa)
+    const focus_color = Surface.argbToColour(0xFF89b4fa);
+    // Top
+    surface.fillRect(sx - 1, sy - 1, sw + 2, 2, focus_color);
+    // Bottom
+    surface.fillRect(sx - 1, sy + sh - 1, sw + 2, 2, focus_color);
+    // Left
+    surface.fillRect(sx - 1, sy - 1, 2, sh + 2, focus_color);
+    // Right
+    surface.fillRect(sx + sw - 1, sy - 1, 2, sh + 2, focus_color);
+
+    // Paint input background to clear old text
+    const bg_color = Surface.argbToColour(input_box.style.background_color);
+    const content_x: i32 = @intFromFloat(input_box.content.x - scroll_x);
+    const content_y: i32 = @intFromFloat(input_box.content.y - scroll_y);
+    const content_w: i32 = @intFromFloat(@max(input_box.content.width, 0));
+    const content_h: i32 = @intFromFloat(@max(input_box.content.height, 0));
+    surface.fillRect(content_x, content_y, content_w, content_h, bg_color);
+
+    // Render typed text
+    const size_px: u32 = @intFromFloat(input_box.style.font_size_px);
+    const tr = fonts.getRenderer(size_px) orelse return;
+    const text = form_input_ptr.getText();
+    const text_color = Surface.argbToColour(0xFFcdd6f4); // catppuccin text
+    const m = tr.measure(if (text.len > 0) text else " ");
+    const text_y = content_y + @divTrunc(content_h - m.height, 2) + m.ascent;
+
+    const BlitCtx = struct {
+        surface: *Surface,
+        colour: u32,
+        clip_top: i32,
+        clip_bottom: i32,
+        offset_x: i32,
+    };
+    const blit_fn = struct {
+        fn f(ctx: BlitCtx, glyph: GlyphBitmap) void {
+            const gy_bottom = glyph.y + @as(i32, @intCast(glyph.height));
+            if (gy_bottom <= ctx.clip_top or glyph.y >= ctx.clip_bottom) return;
+            ctx.surface.blitGlyph8(
+                glyph.x + ctx.offset_x,
+                glyph.y,
+                @intCast(glyph.width),
+                @intCast(glyph.height),
+                glyph.buffer,
+                glyph.pitch,
+                ctx.colour,
+            );
+        }
+    }.f;
+
+    if (text.len > 0) {
+        tr.renderGlyphs(
+            text,
+            content_x,
+            text_y,
+            BlitCtx,
+            .{ .surface = surface, .colour = text_color, .clip_top = clip_top, .clip_bottom = clip_bottom, .offset_x = 0 },
+            blit_fn,
+        );
+    }
+
+    // Draw cursor
+    const cursor_text = if (form_input_ptr.cursor > 0 and form_input_ptr.cursor <= text.len)
+        text[0..form_input_ptr.cursor]
+    else if (form_input_ptr.cursor == 0)
+        ""
+    else
+        text;
+    const cursor_m = if (cursor_text.len > 0) tr.measure(cursor_text) else tr.measure("");
+    const cursor_x = content_x + cursor_m.width;
+    const cursor_color = Surface.argbToColour(0xFFcdd6f4);
+    surface.fillRect(cursor_x, content_y + 2, 1, content_h - 4, cursor_color);
+}
+
 fn handleClick(
     allocator: std.mem.Allocator,
     mx: i32,
@@ -1780,10 +2009,13 @@ fn handleClick(
     storage: ?*Storage,
     win_w: i32,
     win_h: i32,
+    focused_input_node: *?*lxb.lxb_dom_node_t,
+    form_input: *TextInput,
 ) void {
     // Click in URL bar?
     if (my < chrome.url_bar_height) {
         url_input.focused = true;
+        focused_input_node.* = null; // unfocus form input
         needs_repaint.* = true;
         return;
     }
@@ -1820,6 +2052,114 @@ fn handleClick(
         const hit_link = painter_mod.hitTestLink(root_box, layout_x, layout_y);
         const hit_node = painter_mod.hitTestNode(root_box, layout_x, layout_y);
         std.debug.print("[click] hitLink={s} hitNode={}\n", .{ if (hit_link) |l| l else "(none)", hit_node != null });
+
+        // Check for form element clicks before link navigation
+        if (hit_node) |node_ptr| {
+            const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
+            const dom_node = DomNode{ .lxb_node = node };
+            const tag_name = dom_node.tagName();
+
+            // Walk up to find the actual form element (click might hit text child)
+            const form_node = findFormElement(node);
+
+            if (form_node) |fnode| {
+                const fdom = DomNode{ .lxb_node = fnode };
+                const ftag = fdom.tagName() orelse "";
+
+                if (std.mem.eql(u8, ftag, "input")) {
+                    const input_type = fdom.getAttribute("type") orelse "text";
+                    const is_text_input = std.mem.eql(u8, input_type, "text") or
+                        std.mem.eql(u8, input_type, "search") or
+                        std.mem.eql(u8, input_type, "password") or
+                        std.mem.eql(u8, input_type, "email") or
+                        std.mem.eql(u8, input_type, "url") or
+                        std.mem.eql(u8, input_type, "tel") or
+                        std.mem.eql(u8, input_type, "number");
+                    const is_button_input = std.mem.eql(u8, input_type, "submit") or
+                        std.mem.eql(u8, input_type, "button") or
+                        std.mem.eql(u8, input_type, "reset");
+
+                    if (is_text_input) {
+                        // Focus this input
+                        focused_input_node.* = fnode;
+                        const current_value = fdom.getAttribute("value") orelse "";
+                        form_input.setText(current_value);
+                        std.debug.print("[form] Focused input type={s} value=\"{s}\"\n", .{ input_type, current_value });
+                        needs_repaint.* = true;
+                        return;
+                    } else if (is_button_input) {
+                        // Submit button clicked — submit the form
+                        std.debug.print("[form] Submit button clicked\n", .{});
+                        const btn_form = findParentForm(fnode) orelse return;
+                        if (submitForm(allocator, btn_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w)) |nav_url| {
+                            defer allocator.free(nav_url);
+                            url_input.setText(nav_url);
+                            url_input.focused = false;
+                            focused_input_node.* = null;
+                            status_text.* = "Done";
+                            scroll_y.* = 0;
+                            scroll_x.* = 0;
+
+                            // Truncate forward history
+                            if (history_pos.* + 1 < history.items.len) {
+                                for (history.items[history_pos.* + 1 ..]) |item| {
+                                    allocator.free(item);
+                                }
+                                history.shrinkRetainingCapacity(history_pos.* + 1);
+                            }
+                            const owned = allocator.alloc(u8, nav_url.len) catch return;
+                            @memcpy(owned, nav_url);
+                            history.append(allocator, owned) catch {
+                                allocator.free(owned);
+                                return;
+                            };
+                            history_pos.* = history.items.len - 1;
+                            if (current_url.*) |old| allocator.free(old);
+                            current_url.* = allocator.dupe(u8, nav_url) catch null;
+                        }
+                        needs_repaint.* = true;
+                        return;
+                    }
+                } else if (std.mem.eql(u8, ftag, "button")) {
+                    // <button> click — submit the form
+                    std.debug.print("[form] <button> clicked\n", .{});
+                    const button_form = findParentForm(fnode) orelse return;
+                    if (submitForm(allocator, button_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w)) |nav_url| {
+                        defer allocator.free(nav_url);
+                        url_input.setText(nav_url);
+                        url_input.focused = false;
+                        focused_input_node.* = null;
+                        status_text.* = "Done";
+                        scroll_y.* = 0;
+                        scroll_x.* = 0;
+
+                        if (history_pos.* + 1 < history.items.len) {
+                            for (history.items[history_pos.* + 1 ..]) |item| {
+                                allocator.free(item);
+                            }
+                            history.shrinkRetainingCapacity(history_pos.* + 1);
+                        }
+                        const owned = allocator.alloc(u8, nav_url.len) catch return;
+                        @memcpy(owned, nav_url);
+                        history.append(allocator, owned) catch {
+                            allocator.free(owned);
+                            return;
+                        };
+                        history_pos.* = history.items.len - 1;
+                        if (current_url.*) |old| allocator.free(old);
+                        current_url.* = allocator.dupe(u8, nav_url) catch null;
+                    }
+                    needs_repaint.* = true;
+                    return;
+                }
+            }
+
+            // If clicked on something that's not a form element, unfocus
+            _ = tag_name; // suppress unused
+            focused_input_node.* = null;
+        } else {
+            focused_input_node.* = null;
+        }
 
         if (hit_link) |link_href| {
             // Resolve URL
@@ -1870,6 +2210,226 @@ fn handleClick(
         }
     } else {
         needs_repaint.* = true;
+    }
+}
+
+/// Walk up the DOM tree to find a form-relevant element (input, button, textarea, select).
+/// This handles clicks on text children inside form elements.
+fn findFormElement(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    var current: ?*lxb.lxb_dom_node_t = node;
+    var depth: u32 = 0;
+    while (current) |n| : (depth += 1) {
+        if (depth > 10) break; // safety limit
+        if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const dn = DomNode{ .lxb_node = n };
+            if (dn.tagName()) |tag| {
+                if (std.mem.eql(u8, tag, "input") or
+                    std.mem.eql(u8, tag, "button") or
+                    std.mem.eql(u8, tag, "textarea") or
+                    std.mem.eql(u8, tag, "select"))
+                {
+                    return n;
+                }
+            }
+        }
+        current = n.parent;
+    }
+    return null;
+}
+
+/// Find the parent <form> element of a given DOM node.
+fn findParentForm(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    var current: ?*lxb.lxb_dom_node_t = node.parent;
+    var depth: u32 = 0;
+    while (current) |n| : (depth += 1) {
+        if (depth > 50) break;
+        if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const dn = DomNode{ .lxb_node = n };
+            if (dn.tagName()) |tag| {
+                if (std.mem.eql(u8, tag, "form")) return n;
+            }
+        }
+        current = n.parent;
+    }
+    return null;
+}
+
+/// URL-encode a string for form submission query parameters.
+fn urlEncode(allocator: std.mem.Allocator, input_str: []const u8) ?[]u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    for (input_str) |ch| {
+        if (ch == ' ') {
+            buf.append(allocator, '+') catch {
+                buf.deinit(allocator);
+                return null;
+            };
+        } else if ((ch >= 'A' and ch <= 'Z') or (ch >= 'a' and ch <= 'z') or
+            (ch >= '0' and ch <= '9') or ch == '-' or ch == '_' or ch == '.' or ch == '~')
+        {
+            buf.append(allocator, ch) catch {
+                buf.deinit(allocator);
+                return null;
+            };
+        } else {
+            buf.append(allocator, '%') catch {
+                buf.deinit(allocator);
+                return null;
+            };
+            const hex = "0123456789ABCDEF";
+            buf.append(allocator, hex[ch >> 4]) catch {
+                buf.deinit(allocator);
+                return null;
+            };
+            buf.append(allocator, hex[ch & 0x0F]) catch {
+                buf.deinit(allocator);
+                return null;
+            };
+        }
+    }
+    return buf.toOwnedSlice(allocator) catch null;
+}
+
+/// Collect all form input name=value pairs by walking descendants of a form element.
+fn collectFormData(allocator: std.mem.Allocator, form_node: *lxb.lxb_dom_node_t, focused_node: ?*lxb.lxb_dom_node_t, form_text: *TextInput) ?[]u8 {
+    var pairs: std.ArrayListUnmanaged(u8) = .empty;
+    var first = true;
+    collectFormDataRecurse(allocator, form_node, focused_node, form_text, &pairs, &first);
+    return pairs.toOwnedSlice(allocator) catch {
+        pairs.deinit(allocator);
+        return null;
+    };
+}
+
+fn collectFormDataRecurse(
+    allocator: std.mem.Allocator,
+    node: *lxb.lxb_dom_node_t,
+    focused_node: ?*lxb.lxb_dom_node_t,
+    form_text: *TextInput,
+    pairs: *std.ArrayListUnmanaged(u8),
+    first: *bool,
+) void {
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const dn = DomNode{ .lxb_node = node };
+        if (dn.tagName()) |tag| {
+            if (std.mem.eql(u8, tag, "input")) {
+                const input_type = dn.getAttribute("type") orelse "text";
+                // Skip submit/button/hidden/reset for data collection
+                // Actually include hidden inputs, skip submit/button/reset
+                if (!std.mem.eql(u8, input_type, "submit") and
+                    !std.mem.eql(u8, input_type, "button") and
+                    !std.mem.eql(u8, input_type, "reset") and
+                    !std.mem.eql(u8, input_type, "image"))
+                {
+                    if (dn.getAttribute("name")) |name| {
+                        // Get value: use form_text if this is the focused node, else DOM attribute
+                        const value = if (focused_node != null and node == focused_node.?)
+                            form_text.getText()
+                        else
+                            (dn.getAttribute("value") orelse "");
+
+                        const enc_name = urlEncode(allocator, name) orelse return;
+                        defer allocator.free(enc_name);
+                        const enc_value = urlEncode(allocator, value) orelse return;
+                        defer allocator.free(enc_value);
+
+                        if (!first.*) {
+                            pairs.append(allocator, '&') catch return;
+                        }
+                        pairs.appendSlice(allocator, enc_name) catch return;
+                        pairs.append(allocator, '=') catch return;
+                        pairs.appendSlice(allocator, enc_value) catch return;
+                        first.* = false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Recurse into children
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        collectFormDataRecurse(allocator, ch, focused_node, form_text, pairs, first);
+        child = ch.next;
+    }
+}
+
+/// Submit a form: find parent <form>, collect data, build URL, navigate.
+/// Returns the navigation URL (caller must free) or null on failure.
+fn submitForm(
+    allocator: std.mem.Allocator,
+    form_node: *lxb.lxb_dom_node_t,
+    focused_node: ?*lxb.lxb_dom_node_t,
+    form_text: *TextInput,
+    current_url: ?[]u8,
+    loader: *Loader,
+    fonts: *painter_mod.FontCache,
+    page: *PageState,
+    storage: ?*Storage,
+    win_w: i32,
+) ?[]u8 {
+    const form_dn = DomNode{ .lxb_node = form_node };
+
+    // Get action URL (default to current page)
+    const action = form_dn.getAttribute("action") orelse "";
+    const method = form_dn.getAttribute("method") orelse "get";
+    _ = method; // We only support GET for now
+
+    std.debug.print("[form] Submitting form action=\"{s}\"\n", .{action});
+
+    // Collect form data
+    const query_string = collectFormData(allocator, form_node, focused_node, form_text) orelse return null;
+    defer allocator.free(query_string);
+
+    std.debug.print("[form] Query string: {s}\n", .{query_string});
+
+    // Build full URL: resolve action against current URL, append query string
+    const base = if (current_url) |u| u else "";
+    const resolved_action = resolveUrl(allocator, base, action) catch return null;
+    defer allocator.free(resolved_action);
+
+    // Build final URL with query string
+    var final_url_buf: std.ArrayListUnmanaged(u8) = .empty;
+    final_url_buf.appendSlice(allocator, resolved_action) catch return null;
+
+    if (query_string.len > 0) {
+        // Check if action already has a '?'
+        if (std.mem.indexOf(u8, resolved_action, "?") != null) {
+            final_url_buf.append(allocator, '&') catch {
+                final_url_buf.deinit(allocator);
+                return null;
+            };
+        } else {
+            final_url_buf.append(allocator, '?') catch {
+                final_url_buf.deinit(allocator);
+                return null;
+            };
+        }
+        final_url_buf.appendSlice(allocator, query_string) catch {
+            final_url_buf.deinit(allocator);
+            return null;
+        };
+    }
+
+    const final_url = final_url_buf.toOwnedSlice(allocator) catch {
+        final_url_buf.deinit(allocator);
+        return null;
+    };
+    // We need a sentinel-terminated copy for navigation
+    const url_z = allocator.allocSentinel(u8, final_url.len, 0) catch {
+        allocator.free(final_url);
+        return null;
+    };
+    @memcpy(url_z, final_url);
+
+    std.debug.print("[form] Navigating to: {s}\n", .{final_url});
+
+    if (navigateTo(allocator, loader, url_z, fonts, page, storage, win_w)) {
+        allocator.free(url_z);
+        return final_url;
+    } else {
+        allocator.free(url_z);
+        allocator.free(final_url);
+        return null;
     }
 }
 
