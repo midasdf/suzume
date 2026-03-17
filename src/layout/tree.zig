@@ -201,10 +201,14 @@ fn buildChildren(
                         child_box.is_hr = true;
                     }
 
-                    // Handle <input> elements — show value/placeholder as inline text
+                    // Handle <input> elements — skip hidden, show value/placeholder for others
                     if (std.mem.eql(u8, tag, "input")) {
                         const input_type = child.getAttribute("type") orelse "text";
-                        if (!std.mem.eql(u8, input_type, "hidden")) {
+                        if (std.mem.eql(u8, input_type, "hidden")) {
+                            // Skip hidden inputs entirely
+                            continue;
+                        }
+                        {
                             child_box.box_type = .block;
                             // Add default styling for form inputs
                             if (child_box.style.background_color == 0x00000000) {
