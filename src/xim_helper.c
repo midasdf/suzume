@@ -103,24 +103,40 @@ int xim_process_key(unsigned int key_code, unsigned int state, int is_press,
     xev.state = state;
     /* serial, time, root, subwindow, x, y etc. left as 0 — XIM doesn't need them */
 
-    /* Check if XIM wants to filter this event (e.g., composing state) */
-    if (XFilterEvent((XEvent *)&xev, xim_window)) {
-        return 0; /* Filtered by IME — event consumed for composition */
+    /* Send the synthetic event to Xlib's queue so fcitx5 XIM can process it.
+     * This is needed because xcb and Xlib have separate event queues. */
+    XPutBackEvent(xim_display, (XEvent *)&xev);
+
+    /* Process all pending Xlib events, filtering through XIM */
+    int result_len = 0;
+    while (XPending(xim_display) > 0) {
+        XEvent ev;
+        XNextEvent(xim_display, &ev);
+
+        /* Let XIM filter the event (composition, candidate window, etc.) */
+        if (XFilterEvent(&ev, None)) {
+            continue; /* Filtered by IME */
+        }
+
+        /* Only process KeyPress for text lookup */
+        if (ev.type != KeyPress) continue;
+
+        /* Look up the composed string */
+        KeySym keysym;
+        Status status;
+        int len = Xutf8LookupString(xic, (XKeyPressedEvent *)&ev,
+                                     buf + result_len, buf_size - result_len - 1,
+                                     &keysym, &status);
+
+        if (status == XLookupChars || status == XLookupBoth) {
+            result_len += len;
+        }
     }
 
-    if (!is_press) return 0;
-
-    /* Look up the composed string */
-    KeySym keysym;
-    Status status;
-    int len = Xutf8LookupString(xic, &xev, buf, buf_size - 1, &keysym, &status);
-
-    if (status == XLookupChars || status == XLookupBoth) {
-        buf[len] = '\0';
-        return len;
+    if (result_len > 0) {
+        buf[result_len] = '\0';
     }
-
-    return 0;
+    return result_len;
 }
 
 /* Notify XIM that our window gained focus */
