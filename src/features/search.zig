@@ -277,13 +277,13 @@ fn toLower(ch: u8) u8 {
 pub fn paintFindBar(surface: *Surface, fonts: *FontCache, find_bar: *const FindBar) void {
     if (!find_bar.visible) return;
 
-    const y = chrome.window_h - chrome.status_bar_height - find_bar_height;
+    const y = surface.height - chrome.status_bar_height - find_bar_height;
 
     // Background
-    surface.fillRect(0, y, chrome.window_w, find_bar_height, Surface.argbToColour(find_bar_bg));
+    surface.fillRect(0, y, surface.width, find_bar_height, Surface.argbToColour(find_bar_bg));
 
     // Top border
-    surface.fillRect(0, y, chrome.window_w, 1, Surface.argbToColour(find_bar_border));
+    surface.fillRect(0, y, surface.width, 1, Surface.argbToColour(find_bar_border));
 
     const font_size: u32 = 12;
     const tr = fonts.getRenderer(font_size) orelse return;
@@ -342,7 +342,7 @@ pub fn paintFindBar(surface: *Surface, fonts: *FontCache, find_bar: *const FindB
         const info_m = tr.measure(info);
         tr.renderGlyphs(
             info,
-            chrome.window_w - info_m.width - 12,
+            surface.width - info_m.width - 12,
             text_y,
             BlitCtx,
             .{ .surface = surface, .colour = Surface.argbToColour(find_bar_info) },

@@ -26,8 +26,8 @@ const Box = @import("layout/box.zig").Box;
 const ImageCache = @import("paint/image.zig").ImageCache;
 const decodeImage = @import("paint/image.zig").decodeImage;
 
-const window_w = chrome.window_w;
-const window_h = chrome.window_h;
+const default_window_w = chrome.default_window_w;
+const default_window_h = chrome.default_window_h;
 
 // Default background colour (Catppuccin Mocha base)
 const default_bg = 0xFF1e1e2e;
@@ -210,6 +210,7 @@ fn navigateTo(
     fonts: *painter_mod.FontCache,
     page: *PageState,
     storage: ?*Storage,
+    layout_width: i32,
 ) bool {
     // Clean up old page
     page.deinit();
@@ -257,7 +258,7 @@ fn navigateTo(
         const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
         root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
 
-        const content_w: f32 = @floatFromInt(chrome.window_w);
+        const content_w: f32 = @floatFromInt(layout_width);
         const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
         block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
         block_layout.adjustXPositions(root_box, root_box.margin.left);
@@ -326,7 +327,7 @@ fn navigateTo(
     root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
 
     // Layout
-    const content_w: f32 = @floatFromInt(chrome.window_w);
+    const content_w: f32 = @floatFromInt(layout_width);
     const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
     block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
     block_layout.adjustXPositions(root_box, root_box.margin.left);
@@ -794,7 +795,7 @@ pub fn main() !void {
     defer fonts.deinit();
 
     // Surface
-    var surface = Surface.init(window_w, window_h) catch |err| {
+    var surface = Surface.init(default_window_w, default_window_h) catch |err| {
         std.debug.print("Failed to create surface: {}\n", .{err});
         return err;
     };
@@ -893,7 +894,7 @@ pub fn main() !void {
             status_text = "Loading...";
 
             if (page_states.items.len > 0) {
-                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null)) {
+                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null, surface.width)) {
                     status_text = "Done";
                     scroll_y = 0;
                     tab_mgr.updateActiveUrl(url);
@@ -953,7 +954,7 @@ pub fn main() !void {
                         &fonts,
                         adjusted_scroll,
                         chrome.content_y,
-                        chrome.content_y + chrome.content_height,
+                        chrome.content_y + chrome.contentHeight(surface.height),
                         ic_ptr,
                     );
                 } else if (page.error_message) |err_msg| {
@@ -1023,6 +1024,13 @@ pub fn main() !void {
                     if (event.value.controlcode == nsfb_c.NSFB_CONTROL_QUIT) {
                         running = false;
                     }
+                },
+
+                nsfb_c.NSFB_EVENT_RESIZE => {
+                    // Window was resized (e.g. by i3 tiling WM)
+                    surface.refreshGeometry();
+                    std.debug.print("[Resize] New size: {d}x{d}\n", .{ surface.width, surface.height });
+                    needs_repaint = true;
                 },
 
                 nsfb_c.NSFB_EVENT_KEY_DOWN => {
@@ -1169,7 +1177,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                             } else {
@@ -1189,7 +1197,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                             } else {
@@ -1211,7 +1219,7 @@ pub fn main() !void {
                         defer allocator.free(url_z);
                         @memcpy(url_z, hist_url);
                         const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                             status_text = "Done";
                             scroll_y = 0;
                             tab_mgr.updateActiveUrl(hist_url);
@@ -1282,7 +1290,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 if (current_url) |old| allocator.free(old);
@@ -1312,7 +1320,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 if (current_url) |old| allocator.free(old);
@@ -1333,7 +1341,7 @@ pub fn main() !void {
                     // Handle mouse events regardless of focus
                     if (key == nsfb_c.NSFB_KEY_MOUSE_1) {
                         // Check tab bar clicks first
-                        const tab_hit = chrome.hitTestTabBar(mouse_x, mouse_y, &tab_mgr);
+                        const tab_hit = chrome.hitTestTabBar(mouse_x, mouse_y, &tab_mgr, surface.width);
                         switch (tab_hit.action) {
                             .new_tab => {
                                 tab_mgr.saveScrollPosition(scroll_y);
@@ -1410,6 +1418,8 @@ pub fn main() !void {
                                 &status_text,
                                 &needs_repaint,
                                 if (storage_inst) |*s| s else null,
+                                surface.width,
+                                surface.height,
                             );
                             // Update tab with new URL
                             if (current_url) |cu| {
@@ -1425,7 +1435,7 @@ pub fn main() !void {
                         else
                             null;
                         const total_h: f32 = if (active_pg) |pg| pg.total_height else 0;
-                        const ch = @as(f32, @floatFromInt(chrome.content_height));
+                        const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
                         var new_scroll = scroll_y;
                         if (key == nsfb_c.NSFB_KEY_MOUSE_4) {
                             new_scroll -= 40;
@@ -1462,14 +1472,14 @@ pub fn main() !void {
                             .next_match => {
                                 find_bar.nextMatch();
                                 if (find_bar.currentMatchY()) |match_y| {
-                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.content_height)) / 2.0);
+                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.contentHeight(surface.height))) / 2.0);
                                 }
                                 needs_repaint = true;
                             },
                             .prev_match => {
                                 find_bar.prevMatch();
                                 if (find_bar.currentMatchY()) |match_y| {
-                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.content_height)) / 2.0);
+                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.contentHeight(surface.height))) / 2.0);
                                 }
                                 needs_repaint = true;
                             },
@@ -1497,7 +1507,7 @@ pub fn main() !void {
                                     needs_repaint = true;
 
                                     const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null)) {
+                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
                                         status_text = "Done";
                                         scroll_y = 0;
                                         url_input.focused = false;
@@ -1560,7 +1570,7 @@ pub fn main() !void {
                             else
                                 null;
                             const total_h2: f32 = if (active_pg2) |pg| pg.total_height else 0;
-                            const ch = @as(f32, @floatFromInt(chrome.content_height));
+                            const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
                             var new_scroll = scroll_y;
 
                             if (key == nsfb_c.NSFB_KEY_UP) {
@@ -1643,6 +1653,8 @@ fn handleClick(
     status_text: *[]const u8,
     needs_repaint: *bool,
     storage: ?*Storage,
+    win_w: i32,
+    win_h: i32,
 ) void {
     // Click in URL bar?
     if (my < chrome.url_bar_height) {
@@ -1652,7 +1664,7 @@ fn handleClick(
     }
 
     // Click in status bar? (ignore)
-    if (my >= chrome.window_h - chrome.status_bar_height) return;
+    if (my >= win_h - chrome.status_bar_height) return;
 
     // Click in content area — unfocus URL bar
     url_input.focused = false;
@@ -1690,7 +1702,7 @@ fn handleClick(
             status_text.* = "Loading...";
             needs_repaint.* = true;
 
-            if (navigateTo(allocator, loader, resolved, fonts, page, storage)) {
+            if (navigateTo(allocator, loader, resolved, fonts, page, storage, win_w)) {
                 status_text.* = "Done";
                 scroll_y.* = 0;
 

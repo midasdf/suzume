@@ -39,6 +39,16 @@ pub const Surface = struct {
         };
     }
 
+    /// Query the actual framebuffer geometry from libnsfb.
+    /// Call this after a resize event to update width/height.
+    pub fn refreshGeometry(self: *Surface) void {
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.nsfb_get_geometry(self.fb, &w, &h, null);
+        self.width = @intCast(w);
+        self.height = @intCast(h);
+    }
+
     pub fn deinit(self: *Surface) void {
         _ = c.nsfb_free(self.fb);
     }

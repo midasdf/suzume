@@ -6,14 +6,20 @@ const GlyphBitmap = @import("../paint/text.zig").GlyphBitmap;
 const TextInput = @import("input.zig").TextInput;
 const TabManager = @import("tabs.zig").TabManager;
 
-// Layout constants
+// Layout constants (fixed chrome heights)
 pub const url_bar_height: i32 = 36;
 pub const tab_bar_height: i32 = 28;
 pub const status_bar_height: i32 = 24;
-pub const window_w: i32 = 720;
-pub const window_h: i32 = 720;
 pub const content_y: i32 = url_bar_height + tab_bar_height;
-pub const content_height: i32 = window_h - url_bar_height - tab_bar_height - status_bar_height;
+
+/// Default initial window size (used at Surface.init time).
+pub const default_window_w: i32 = 720;
+pub const default_window_h: i32 = 720;
+
+/// Compute the content area height from the actual window height.
+pub fn contentHeight(window_h: i32) i32 {
+    return window_h - url_bar_height - tab_bar_height - status_bar_height;
+}
 
 // Tab bar layout
 const tab_max_width: i32 = 160;
@@ -62,10 +68,10 @@ fn blitGlyph(ctx: BlitCtx, glyph: GlyphBitmap) void {
 /// Paint the URL bar at the top of the window.
 pub fn paintUrlBar(surface: *Surface, fonts: *FontCache, input: *const TextInput) void {
     // Background
-    surface.fillRect(0, 0, window_w, url_bar_height, Surface.argbToColour(url_bar_bg));
+    surface.fillRect(0, 0, surface.width, url_bar_height, Surface.argbToColour(url_bar_bg));
 
     // Border bottom
-    surface.fillRect(0, url_bar_height - 1, window_w, 1, Surface.argbToColour(url_bar_border));
+    surface.fillRect(0, url_bar_height - 1, surface.width, 1, Surface.argbToColour(url_bar_border));
 
     // Text
     const text = input.getText();
@@ -106,16 +112,16 @@ pub fn paintTabBar(surface: *Surface, fonts: *FontCache, tab_mgr: *const TabMana
     const y = url_bar_height;
 
     // Background
-    surface.fillRect(0, y, window_w, tab_bar_height, Surface.argbToColour(tab_bar_bg));
+    surface.fillRect(0, y, surface.width, tab_bar_height, Surface.argbToColour(tab_bar_bg));
 
     // Border bottom
-    surface.fillRect(0, y + tab_bar_height - 1, window_w, 1, Surface.argbToColour(tab_border_color));
+    surface.fillRect(0, y + tab_bar_height - 1, surface.width, 1, Surface.argbToColour(tab_border_color));
 
     const tab_count = tab_mgr.tabCount();
     if (tab_count == 0) return;
 
     // Calculate tab width
-    const available_w = window_w - new_tab_btn_width;
+    const available_w = surface.width - new_tab_btn_width;
     var tab_w: i32 = @divTrunc(available_w, @as(i32, @intCast(tab_count)));
     tab_w = @min(tab_w, tab_max_width);
     tab_w = @max(tab_w, tab_min_width);
@@ -183,7 +189,7 @@ pub fn paintTabBar(surface: *Surface, fonts: *FontCache, tab_mgr: *const TabMana
 
     // New tab (+) button
     const plus_x = @as(i32, @intCast(tab_count)) * tab_w;
-    if (plus_x < window_w) {
+    if (plus_x < surface.width) {
         const plus_text = "+";
         const m = tr.measure(plus_text);
         const text_y_pos = y + @divTrunc(tab_bar_height - 1 - m.height, 2) + m.ascent;
@@ -212,14 +218,14 @@ pub const TabClickInfo = struct {
 };
 
 /// Test if a click at (mx, my) hits the tab bar and what action to take.
-pub fn hitTestTabBar(mx: i32, my: i32, tab_mgr: *const TabManager) TabClickInfo {
+pub fn hitTestTabBar(mx: i32, my: i32, tab_mgr: *const TabManager, win_w: i32) TabClickInfo {
     const y = url_bar_height;
     if (my < y or my >= y + tab_bar_height) return .{ .action = .none, .index = 0 };
 
     const tab_count = tab_mgr.tabCount();
     if (tab_count == 0) return .{ .action = .none, .index = 0 };
 
-    const available_w = window_w - new_tab_btn_width;
+    const available_w = win_w - new_tab_btn_width;
     var tab_w: i32 = @divTrunc(available_w, @as(i32, @intCast(tab_count)));
     tab_w = @min(tab_w, tab_max_width);
     tab_w = @max(tab_w, tab_min_width);
@@ -248,9 +254,9 @@ pub fn hitTestTabBar(mx: i32, my: i32, tab_mgr: *const TabManager) TabClickInfo 
 
 /// Paint the status bar at the bottom of the window.
 pub fn paintStatusBar(surface: *Surface, fonts: *FontCache, status: []const u8) void {
-    const y = window_h - status_bar_height;
+    const y = surface.height - status_bar_height;
     // Background
-    surface.fillRect(0, y, window_w, status_bar_height, Surface.argbToColour(status_bar_bg));
+    surface.fillRect(0, y, surface.width, status_bar_height, Surface.argbToColour(status_bar_bg));
 
     if (status.len > 0) {
         const font_size: u32 = 12;
@@ -271,5 +277,5 @@ pub fn paintStatusBar(surface: *Surface, fonts: *FontCache, status: []const u8) 
 
 /// Clear the content area with the default background.
 pub fn clearContentArea(surface: *Surface) void {
-    surface.fillRect(0, content_y, window_w, content_height, Surface.argbToColour(content_bg));
+    surface.fillRect(0, content_y, surface.width, contentHeight(surface.height), Surface.argbToColour(content_bg));
 }
