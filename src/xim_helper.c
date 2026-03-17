@@ -149,6 +149,41 @@ void xim_focus_out(void) {
     if (xic) XUnsetICFocus(xic);
 }
 
+/* Poll for committed text from XIM (called from main event loop).
+ * Mozc commits text asynchronously — we need to check periodically.
+ * Returns UTF-8 string length, or 0 if nothing available. */
+int xim_poll_committed(char *buf, int buf_size) {
+    if (!xim_display || !xic) return 0;
+
+    int result_len = 0;
+
+    /* Process any pending Xlib events (Mozc commit events arrive here) */
+    while (XPending(xim_display) > 0) {
+        XEvent ev;
+        XNextEvent(xim_display, &ev);
+
+        if (XFilterEvent(&ev, None)) {
+            continue; /* Still composing */
+        }
+
+        if (ev.type == KeyPress) {
+            KeySym keysym;
+            Status status;
+            int len = Xutf8LookupString(xic, (XKeyPressedEvent *)&ev,
+                                         buf + result_len, buf_size - result_len - 1,
+                                         &keysym, &status);
+            if ((status == XLookupChars || status == XLookupBoth) && len > 0) {
+                result_len += len;
+            }
+        }
+    }
+
+    if (result_len > 0) {
+        buf[result_len] = '\0';
+    }
+    return result_len;
+}
+
 /* Clean up XIM resources */
 void xim_cleanup(void) {
     if (xic) { XDestroyIC(xic); xic = NULL; }

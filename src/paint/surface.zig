@@ -18,6 +18,7 @@ extern var nsfb_x_last_keystate: c_uint;
 /// XIM helper functions (defined in xim_helper.c)
 extern fn xim_init(window_id: c_ulong) c_int;
 extern fn xim_process_key(keycode: c_uint, state: c_uint, is_press: c_int, buf: [*]u8, buf_size: c_int) c_int;
+extern fn xim_poll_committed(buf: [*]u8, buf_size: c_int) c_int;
 extern fn xim_focus_in() void;
 extern fn xim_focus_out() void;
 extern fn xim_cleanup() void;
@@ -200,6 +201,17 @@ pub const Surface = struct {
             @memcpy(static.storage[0..@intCast(len)], buf[0..@intCast(len)]);
             return static.storage[0..@intCast(len)];
         }
+        return null;
+    }
+
+    /// Poll for committed text from XIM (e.g., Mozc confirmed input).
+    /// Call this in the main event loop to receive asynchronous commits.
+    pub fn pollXimCommitted(_: *Surface) ?[]const u8 {
+        const S = struct {
+            var storage: [128]u8 = undefined;
+        };
+        const len = xim_poll_committed(&S.storage, 128);
+        if (len > 0) return S.storage[0..@as(usize, @intCast(len))];
         return null;
     }
 

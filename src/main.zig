@@ -1086,6 +1086,20 @@ pub fn main() !void {
             }
         }
 
+        // Poll XIM for asynchronously committed text (Mozc confirmed input)
+        if (surface.xim_initialized) {
+            if (surface.pollXimCommitted()) |committed| {
+                if (find_bar.visible) {
+                    find_bar.insertText(committed);
+                } else if (focused_input_node != null) {
+                    form_input.insertText(committed);
+                } else if (url_input.focused) {
+                    url_input.insertText(committed);
+                }
+                needs_repaint = true;
+            }
+        }
+
         // Session persistence: save periodically
         session_timer += 1;
         if (session_timer >= session_save_interval) {
@@ -1573,10 +1587,25 @@ pub fn main() !void {
                     }
 
                     // XIM (Input Method) processing — try composing first
-                    // when any text input is focused
+                    // when any text input is focused.
+                    // Skip control keys (backspace, enter, escape, arrows, etc.)
+                    // so they work normally even when Mozc is active.
                     if (surface.xim_initialized and !ctrl_held and !alt_held) {
+                        const is_control_key = (key == nsfb_c.NSFB_KEY_BACKSPACE or
+                            key == nsfb_c.NSFB_KEY_DELETE or
+                            key == nsfb_c.NSFB_KEY_RETURN or
+                            key == nsfb_c.NSFB_KEY_ESCAPE or
+                            key == nsfb_c.NSFB_KEY_TAB or
+                            key == nsfb_c.NSFB_KEY_LEFT or
+                            key == nsfb_c.NSFB_KEY_RIGHT or
+                            key == nsfb_c.NSFB_KEY_UP or
+                            key == nsfb_c.NSFB_KEY_DOWN or
+                            key == nsfb_c.NSFB_KEY_HOME or
+                            key == nsfb_c.NSFB_KEY_END or
+                            key == nsfb_c.NSFB_KEY_PAGEUP or
+                            key == nsfb_c.NSFB_KEY_PAGEDOWN);
                         const any_text_focused = find_bar.visible or focused_input_node != null or url_input.focused;
-                        if (any_text_focused) {
+                        if (any_text_focused and !is_control_key) {
                             if (surface.processKeyXim(true)) |composed| {
                                 // XIM produced composed text (e.g., Japanese from Mozc)
                                 if (find_bar.visible) {
@@ -1589,10 +1618,6 @@ pub fn main() !void {
                                 needs_repaint = true;
                                 continue;
                             }
-                            // XIM returned null — either filtered (composing) or
-                            // not handled. Check if the key was filtered by looking
-                            // at whether nsfb gave us UNKNOWN (XIM consumed it).
-                            // We let it fall through to normal handling.
                         }
                     }
 
