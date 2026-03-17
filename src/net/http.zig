@@ -66,9 +66,8 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
-        // Mobile Chrome UA — gets simpler, lighter HTML from Google and major sites.
-        // Mobile-optimized pages work better on our 720x720 screen with limited CSS engine.
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36");
+        // Honest UA — suzume is its own browser, not pretending to be Chrome.
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "suzume/1.0 (Linux; aarch64)");
 
         const rc = c.curl_easy_perform(self.handle);
         if (rc != c.CURLE_OK) {
