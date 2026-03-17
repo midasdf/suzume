@@ -362,6 +362,11 @@ fn buildChildren(
                         }
                     }
 
+                    // Handle <option> inside <select> — hide (only selected value shown on select)
+                    if (std.mem.eql(u8, tag, "option") or std.mem.eql(u8, tag, "optgroup")) {
+                        continue; // Skip — select shows only its value
+                    }
+
                     // Handle <select> elements — inline-block with default width
                     if (std.mem.eql(u8, tag, "select")) {
                         child_box.box_type = .inline_box;
@@ -440,7 +445,8 @@ fn buildChildren(
                     (if (child.tagName()) |tag|
                     (std.mem.eql(u8, tag, "input") or
                         std.mem.eql(u8, tag, "br") or
-                        std.mem.eql(u8, tag, "hr"))
+                        std.mem.eql(u8, tag, "hr") or
+                        std.mem.eql(u8, tag, "select"))
                 else
                     false);
                 if (!skip_recurse) {
