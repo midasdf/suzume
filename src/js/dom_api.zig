@@ -2208,6 +2208,227 @@ fn windowGetInnerHeight(
     return qjs.JS_NewInt32(c, 600); // Default; could be made configurable
 }
 
+// ── innerText (getter/setter) ───────────────────────────────────────
+
+fn elementGetInnerText(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // Simplified: return same as textContent (full CSS-aware version is too complex)
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    var len: usize = 0;
+    const ptr = lxb_dom_node_text_content(node, &len);
+    if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, ptr.?, len);
+}
+
+fn elementSetInnerText(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // Same as textContent setter: replace all children with a text node
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+    _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── Element navigation properties ───────────────────────────────────
+
+fn elementGetFirstElementChild(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return wrapNode(c, ch);
+        child = ch.next;
+    }
+    return quickjs.JS_NULL();
+}
+
+fn elementGetLastElementChild(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    var child: ?*lxb.lxb_dom_node_t = lxb_dom_node_last_child_noi(node);
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return wrapNode(c, ch);
+        child = lxb_dom_node_prev_noi(ch);
+    }
+    return quickjs.JS_NULL();
+}
+
+fn elementGetNextElementSibling(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    var sib: ?*lxb.lxb_dom_node_t = node.next;
+    while (sib) |s| {
+        if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return wrapNode(c, s);
+        sib = s.next;
+    }
+    return quickjs.JS_NULL();
+}
+
+fn elementGetPreviousElementSibling(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    var sib: ?*lxb.lxb_dom_node_t = lxb_dom_node_prev_noi(node);
+    while (sib) |s| {
+        if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return wrapNode(c, s);
+        sib = lxb_dom_node_prev_noi(s);
+    }
+    return quickjs.JS_NULL();
+}
+
+fn elementGetChildElementCount(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return qjs.JS_NewInt32(c, 0);
+    var count: i32 = 0;
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) count += 1;
+        child = ch.next;
+    }
+    return qjs.JS_NewInt32(c, count);
+}
+
+// ── getComputedStyle() ──────────────────────────────────────────────
+
+fn computedStyleGetPropertyValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return qjs.JS_NewStringLen(c, "", 0);
+    const args = argv orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    const prop_s = jsStringToSlice(c, args[0]) orelse return qjs.JS_NewStringLen(c, "", 0);
+    defer qjs.JS_FreeCString(c, prop_s.ptr);
+
+    var style_len: usize = 0;
+    const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
+    if (style_ptr == null or style_len == 0) return qjs.JS_NewStringLen(c, "", 0);
+
+    if (getStyleProperty(style_ptr.?[0..style_len], prop_s.ptr[0..prop_s.len])) |val| {
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+    return qjs.JS_NewStringLen(c, "", 0);
+}
+
+fn windowGetComputedStyle(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    // Verify the argument is a valid element
+    _ = getElement(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+
+    // Build a CSSStyleDeclaration-like object backed by the element's inline style
+    const obj = qjs.JS_NewObject(c);
+    if (quickjs.JS_IsException(obj)) return obj;
+
+    // Store element reference
+    _ = qjs.JS_SetPropertyStr(c, obj, "__element", qjs.JS_DupValue(c, args[0]));
+
+    // getPropertyValue method
+    _ = qjs.JS_SetPropertyStr(c, obj, "getPropertyValue", qjs.JS_NewCFunction(c, &computedStyleGetPropertyValue, "getPropertyValue", 1));
+
+    // Set up Proxy to allow reading common properties directly (e.g., cs.display)
+    const global = qjs.JS_GetGlobalObject(c);
+    _ = qjs.JS_SetPropertyStr(c, global, "__csTarget", obj);
+
+    const proxy_code =
+        \\(function() {
+        \\  var t = globalThis.__csTarget;
+        \\  delete globalThis.__csTarget;
+        \\  return new Proxy(t, {
+        \\    get: function(o,p) {
+        \\      if (p in o) return o[p];
+        \\      var map = {
+        \\        backgroundColor:"background-color",fontSize:"font-size",
+        \\        fontWeight:"font-weight",fontFamily:"font-family",
+        \\        textAlign:"text-align",textDecoration:"text-decoration",
+        \\        zIndex:"z-index",pointerEvents:"pointer-events"
+        \\      };
+        \\      var css = map[p] || p;
+        \\      return o.getPropertyValue(css);
+        \\    }
+        \\  });
+        \\})()
+    ;
+
+    const result = qjs.JS_Eval(c, proxy_code, proxy_code.len, "<computedStyle>", qjs.JS_EVAL_TYPE_GLOBAL);
+    qjs.JS_FreeValue(c, global);
+
+    if (quickjs.JS_IsException(result)) {
+        const exc = qjs.JS_GetException(c);
+        qjs.JS_FreeValue(c, exc);
+        return qjs.JS_DupValue(c, obj);
+    }
+    return result;
+}
+
+// ── document.createDocumentFragment() ───────────────────────────────
+
+fn documentCreateDocumentFragment(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // Simplified: create a div element (fragments are complex to implement properly)
+    const c = ctx orelse return quickjs.JS_NULL();
+    const doc = g_document orelse return quickjs.JS_NULL();
+    const elem = lxb_dom_document_create_element(doc, "div", 3, null) orelse return quickjs.JS_NULL();
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    return wrapNode(c, node);
+}
+
 // ── Registration ────────────────────────────────────────────────────
 
 /// Register DOM API classes and the `document` global.
@@ -2278,6 +2499,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, textContentAtom, qjs.JS_NewCFunction(ctx, &elementGetTextContent, "get textContent", 0), qjs.JS_NewCFunction(ctx, &elementSetTextContent, "set textContent", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, textContentAtom);
 
+    const innerTextAtom = qjs.JS_NewAtom(ctx, "innerText");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, innerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get innerText", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerText, "set innerText", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, innerTextAtom);
+
     const parentNodeAtom = qjs.JS_NewAtom(ctx, "parentNode");
     _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, parentNodeAtom, qjs.JS_NewCFunction(ctx, &elementGetParentNode, "get parentNode", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, parentNodeAtom);
@@ -2305,6 +2530,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const childNodesAtom = qjs.JS_NewAtom(ctx, "childNodes");
     _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, childNodesAtom, qjs.JS_NewCFunction(ctx, &elementGetChildNodes, "get childNodes", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, childNodesAtom);
+
+    const firstElementChildAtom = qjs.JS_NewAtom(ctx, "firstElementChild");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, firstElementChildAtom, qjs.JS_NewCFunction(ctx, &elementGetFirstElementChild, "get firstElementChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, firstElementChildAtom);
+
+    const lastElementChildAtom = qjs.JS_NewAtom(ctx, "lastElementChild");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, lastElementChildAtom, qjs.JS_NewCFunction(ctx, &elementGetLastElementChild, "get lastElementChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, lastElementChildAtom);
+
+    const nextElementSiblingAtom = qjs.JS_NewAtom(ctx, "nextElementSibling");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, nextElementSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetNextElementSibling, "get nextElementSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, nextElementSiblingAtom);
+
+    const previousElementSiblingAtom = qjs.JS_NewAtom(ctx, "previousElementSibling");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, previousElementSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetPreviousElementSibling, "get previousElementSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, previousElementSiblingAtom);
+
+    const childElementCountAtom = qjs.JS_NewAtom(ctx, "childElementCount");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, childElementCountAtom, qjs.JS_NewCFunction(ctx, &elementGetChildElementCount, "get childElementCount", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, childElementCountAtom);
 
     const classListAtom = qjs.JS_NewAtom(ctx, "classList");
     _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &elementGetClassList, "get classList", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
@@ -2399,6 +2644,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelectorAll", qjs.JS_NewCFunction(ctx, &documentQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &documentCreateDocumentFragment, "createDocumentFragment", 0));
 
     // document.body (getter)
     const bodyAtom = qjs.JS_NewAtom(ctx, "body");
@@ -2431,6 +2677,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // window.location
     _ = qjs.JS_SetPropertyStr(ctx, global, "location", createLocationObject(ctx));
+
+    // window.getComputedStyle
+    _ = qjs.JS_SetPropertyStr(ctx, global, "getComputedStyle", qjs.JS_NewCFunction(ctx, &windowGetComputedStyle, "getComputedStyle", 1));
 
     // window.scrollTo / window.scrollBy
     _ = qjs.JS_SetPropertyStr(ctx, global, "scrollTo", qjs.JS_NewCFunction(ctx, &windowScrollTo, "scrollTo", 2));

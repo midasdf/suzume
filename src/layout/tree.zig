@@ -128,7 +128,7 @@ fn buildChildren(
 
                 // Determine box type from display
                 child_box.box_type = switch (style.display) {
-                    .block, .list_item, .flex, .grid => .block,
+                    .block, .list_item, .flex, .grid, .inline_grid => .block,
                     .table => .block,
                     .table_row, .table_cell, .table_row_group,
                     .table_header_group, .table_footer_group,

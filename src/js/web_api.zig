@@ -319,6 +319,240 @@ fn jsPerformanceNow(
     return qjs.JS_NewFloat64(c, elapsed);
 }
 
+// ── atob() / btoa() ─────────────────────────────────────────────────
+
+const b64_encode_table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+const b64_decode_table = blk: {
+    var table: [256]u8 = .{0xFF} ** 256;
+    for (b64_encode_table, 0..) |ch, i| {
+        table[ch] = @intCast(i);
+    }
+    table['='] = 0;
+    break :blk table;
+};
+
+fn jsBtoa(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+
+    var len: usize = 0;
+    const str = qjs.JS_ToCStringLen(c, &len, args[0]);
+    if (str == null) return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, str);
+
+    const input: [*]const u8 = @ptrCast(str.?);
+
+    // Calculate output size: ceil(len/3) * 4
+    const out_len = ((len + 2) / 3) * 4;
+    const buf = std.heap.c_allocator.alloc(u8, out_len) catch return quickjs.JS_UNDEFINED();
+    defer std.heap.c_allocator.free(buf);
+
+    var i: usize = 0;
+    var o: usize = 0;
+    while (i < len) {
+        const b0: u32 = input[i];
+        const b1: u32 = if (i + 1 < len) input[i + 1] else 0;
+        const b2: u32 = if (i + 2 < len) input[i + 2] else 0;
+        const triple = (b0 << 16) | (b1 << 8) | b2;
+
+        buf[o] = b64_encode_table[@intCast((triple >> 18) & 0x3F)];
+        buf[o + 1] = b64_encode_table[@intCast((triple >> 12) & 0x3F)];
+        buf[o + 2] = if (i + 1 < len) b64_encode_table[@intCast((triple >> 6) & 0x3F)] else '=';
+        buf[o + 3] = if (i + 2 < len) b64_encode_table[@intCast(triple & 0x3F)] else '=';
+
+        i += 3;
+        o += 4;
+    }
+
+    return qjs.JS_NewStringLen(c, buf.ptr, out_len);
+}
+
+fn jsAtob(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+
+    var len: usize = 0;
+    const str = qjs.JS_ToCStringLen(c, &len, args[0]);
+    if (str == null) return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, str);
+
+    const input: [*]const u8 = @ptrCast(str.?);
+
+    // Strip whitespace and count valid chars
+    var clean: [8192]u8 = undefined;
+    var clean_len: usize = 0;
+    for (0..len) |idx| {
+        const ch = input[idx];
+        if (ch == ' ' or ch == '\n' or ch == '\r' or ch == '\t') continue;
+        if (clean_len >= clean.len) return quickjs.JS_UNDEFINED();
+        clean[clean_len] = ch;
+        clean_len += 1;
+    }
+
+    if (clean_len == 0) return qjs.JS_NewStringLen(c, "", 0);
+
+    // Calculate output size
+    var pad: usize = 0;
+    if (clean_len > 0 and clean[clean_len - 1] == '=') pad += 1;
+    if (clean_len > 1 and clean[clean_len - 2] == '=') pad += 1;
+    const out_len = (clean_len / 4) * 3 - pad;
+
+    const buf = std.heap.c_allocator.alloc(u8, out_len) catch return quickjs.JS_UNDEFINED();
+    defer std.heap.c_allocator.free(buf);
+
+    var i: usize = 0;
+    var o: usize = 0;
+    while (i + 3 < clean_len) {
+        const a: u32 = b64_decode_table[clean[i]];
+        const b: u32 = b64_decode_table[clean[i + 1]];
+        const cc: u32 = b64_decode_table[clean[i + 2]];
+        const d: u32 = b64_decode_table[clean[i + 3]];
+
+        if (a == 0xFF or b == 0xFF or cc == 0xFF or d == 0xFF) return quickjs.JS_UNDEFINED();
+
+        const triple = (a << 18) | (b << 12) | (cc << 6) | d;
+
+        if (o < out_len) {
+            buf[o] = @intCast((triple >> 16) & 0xFF);
+            o += 1;
+        }
+        if (o < out_len) {
+            buf[o] = @intCast((triple >> 8) & 0xFF);
+            o += 1;
+        }
+        if (o < out_len) {
+            buf[o] = @intCast(triple & 0xFF);
+            o += 1;
+        }
+        i += 4;
+    }
+
+    return qjs.JS_NewStringLen(c, buf.ptr, out_len);
+}
+
+// ── URL class, queueMicrotask, structuredClone (JS-based) ───────────
+
+const url_class_js =
+    \\globalThis.URL = function URL(url, base) {
+    \\  if (!(this instanceof URL)) throw new TypeError("Constructor URL requires 'new'");
+    \\  if (base !== undefined) {
+    \\    // Resolve relative URL against base
+    \\    var b = new URL(base);
+    \\    if (url.indexOf("://") !== -1) {
+    \\      // url is absolute, ignore base
+    \\    } else if (url.charAt(0) === "/") {
+    \\      url = b.origin + url;
+    \\    } else {
+    \\      var path = b.pathname;
+    \\      var lastSlash = path.lastIndexOf("/");
+    \\      url = b.origin + path.substring(0, lastSlash + 1) + url;
+    \\    }
+    \\  }
+    \\  this.href = url;
+    \\  // Parse protocol
+    \\  var protoEnd = url.indexOf("://");
+    \\  if (protoEnd === -1) throw new TypeError("Invalid URL: " + url);
+    \\  this.protocol = url.substring(0, protoEnd + 1);
+    \\  var rest = url.substring(protoEnd + 3);
+    \\  // Parse hash
+    \\  var hashIdx = rest.indexOf("#");
+    \\  if (hashIdx !== -1) {
+    \\    this.hash = rest.substring(hashIdx);
+    \\    rest = rest.substring(0, hashIdx);
+    \\  } else {
+    \\    this.hash = "";
+    \\  }
+    \\  // Parse search
+    \\  var searchIdx = rest.indexOf("?");
+    \\  if (searchIdx !== -1) {
+    \\    this.search = rest.substring(searchIdx);
+    \\    rest = rest.substring(0, searchIdx);
+    \\  } else {
+    \\    this.search = "";
+    \\  }
+    \\  // Parse host and pathname
+    \\  var pathIdx = rest.indexOf("/");
+    \\  if (pathIdx !== -1) {
+    \\    this.host = rest.substring(0, pathIdx);
+    \\    this.pathname = rest.substring(pathIdx);
+    \\  } else {
+    \\    this.host = rest;
+    \\    this.pathname = "/";
+    \\  }
+    \\  // Parse port from host
+    \\  var colonIdx = this.host.indexOf(":");
+    \\  if (colonIdx !== -1) {
+    \\    this.hostname = this.host.substring(0, colonIdx);
+    \\    this.port = this.host.substring(colonIdx + 1);
+    \\  } else {
+    \\    this.hostname = this.host;
+    \\    this.port = "";
+    \\  }
+    \\  this.origin = this.protocol + "//" + this.host;
+    \\  // searchParams
+    \\  var sp = {};
+    \\  var _search = this.search;
+    \\  if (_search.length > 1) {
+    \\    var pairs = _search.substring(1).split("&");
+    \\    for (var i = 0; i < pairs.length; i++) {
+    \\      var eq = pairs[i].indexOf("=");
+    \\      if (eq !== -1) {
+    \\        var key = decodeURIComponent(pairs[i].substring(0, eq));
+    \\        var val = decodeURIComponent(pairs[i].substring(eq + 1));
+    \\        sp[key] = val;
+    \\      } else {
+    \\        sp[decodeURIComponent(pairs[i])] = "";
+    \\      }
+    \\    }
+    \\  }
+    \\  this.searchParams = {
+    \\    _data: sp,
+    \\    get: function(name) { return this._data.hasOwnProperty(name) ? this._data[name] : null; },
+    \\    has: function(name) { return this._data.hasOwnProperty(name); },
+    \\    toString: function() {
+    \\      var parts = [];
+    \\      for (var k in this._data) {
+    \\        if (this._data.hasOwnProperty(k)) parts.push(encodeURIComponent(k) + "=" + encodeURIComponent(this._data[k]));
+    \\      }
+    \\      return parts.join("&");
+    \\    }
+    \\  };
+    \\};
+    \\URL.prototype.toString = function() { return this.href; };
+;
+
+const utility_apis_js =
+    \\globalThis.queueMicrotask = function(cb) { cb(); };
+    \\globalThis.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
+;
+
+fn evalInitScript(ctx: *qjs.JSContext, code: [*:0]const u8, len: usize) void {
+    const result = qjs.JS_Eval(ctx, code, len, "<web_api_init>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(result)) {
+        const exc = qjs.JS_GetException(ctx);
+        const exc_str = qjs.JS_ToCString(ctx, exc);
+        if (exc_str) |s| {
+            std.debug.print("[web_api] init script error: {s}\n", .{s});
+            qjs.JS_FreeCString(ctx, s);
+        }
+        qjs.JS_FreeValue(ctx, exc);
+    }
+    qjs.JS_FreeValue(ctx, result);
+}
+
 // ── Registration ────────────────────────────────────────────────────
 
 pub fn registerWebApis(js_rt: anytype) void {
@@ -350,4 +584,14 @@ pub fn registerWebApis(js_rt: anytype) void {
     const perf_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "now", qjs.JS_NewCFunction(ctx, &jsPerformanceNow, "now", 0));
     _ = qjs.JS_SetPropertyStr(ctx, global, "performance", perf_obj);
+
+    // -- atob() / btoa() --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "btoa", qjs.JS_NewCFunction(ctx, &jsBtoa, "btoa", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "atob", qjs.JS_NewCFunction(ctx, &jsAtob, "atob", 1));
+
+    // -- URL class (JS-based) --
+    evalInitScript(ctx, url_class_js, url_class_js.len);
+
+    // -- queueMicrotask, structuredClone (JS-based) --
+    evalInitScript(ctx, utility_apis_js, utility_apis_js.len);
 }

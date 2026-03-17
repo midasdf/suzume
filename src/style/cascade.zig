@@ -1673,7 +1673,7 @@ fn walkAndSelect(
 
 /// Run the full style cascade on a parsed document.
 /// Extracts <style> elements, parses CSS, and selects styles for all elements.
-pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[]const u8) !CascadeResult {
+pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[]const u8, viewport_width: u32) !CascadeResult {
     var result = CascadeResult{
         .styles = StyleMap.init(allocator),
         .sheet = null,
@@ -1735,7 +1735,7 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
     media.type = css.CSS_MEDIA_SCREEN;
 
     var unit_ctx = std.mem.zeroes(css.css_unit_ctx);
-    unit_ctx.viewport_width = intToFixed(720);
+    unit_ctx.viewport_width = intToFixed(@intCast(viewport_width));
     unit_ctx.viewport_height = intToFixed(720);
     unit_ctx.font_size_default = intToFixed(16);
     unit_ctx.font_size_minimum = intToFixed(6);

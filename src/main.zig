@@ -106,7 +106,7 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     const body_node = doc.body() orelse return;
 
     // Re-cascade styles from the current DOM (includes any <style> tags JS may have added)
-    var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css) catch return;
+    var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css, @intCast(layout_width)) catch return;
 
     // Build new box tree
     const new_root_box = box_tree.buildBoxTree(body_node, &new_styles, allocator) catch {
@@ -336,7 +336,7 @@ fn navigateTo(
             return false;
         };
 
-        var styles = cascade_mod.cascade(root_node, allocator, null) catch {
+        var styles = cascade_mod.cascade(root_node, allocator, null, @intCast(layout_width)) catch {
             doc.deinit();
             allocator.free(html_owned);
             return false;
@@ -407,7 +407,7 @@ fn navigateTo(
 
     // Style (pass external CSS from loader — includes <link> stylesheets)
     const ext_css: ?[]const u8 = if (content.css.len > 0) content.css else null;
-    var styles = cascade_mod.cascade(root_node, allocator, ext_css) catch {
+    var styles = cascade_mod.cascade(root_node, allocator, ext_css, @intCast(layout_width)) catch {
         doc.deinit();
         return false;
     };
