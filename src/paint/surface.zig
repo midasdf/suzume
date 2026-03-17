@@ -148,57 +148,127 @@ pub const Surface = struct {
         return null;
     }
 
-    /// Fill a rounded rectangle. Uses circle-test for corners.
-    /// All four corners use the same radius (pass the average or max of individual radii).
-    pub fn fillRoundedRect(self: *Surface, x: i32, y: i32, w: i32, h: i32, r_raw: i32, colour: u32) void {
-        if (r_raw <= 0 or w <= 0 or h <= 0) {
+    /// Fill a rounded rectangle with per-corner radii, using scanline fills.
+    /// Uses the midpoint circle algorithm (same as libnsfb's circlefill) to compute
+    /// horizontal spans for each corner, avoiding per-pixel plotPoint calls.
+    /// r_tl, r_tr, r_bl, r_br are the radii for each corner.
+    pub fn fillRoundedRectPerCorner(self: *Surface, x: i32, y: i32, w: i32, h: i32, r_tl: i32, r_tr: i32, r_bl: i32, r_br: i32, colour: u32) void {
+        if (w <= 0 or h <= 0) return;
+
+        const half_w = @divTrunc(w, 2);
+        const half_h = @divTrunc(h, 2);
+        const max_r = @min(half_w, half_h);
+
+        // Clamp each radius
+        const tl = @min(@max(r_tl, 0), max_r);
+        const tr = @min(@max(r_tr, 0), max_r);
+        const bl = @min(@max(r_bl, 0), max_r);
+        const br = @min(@max(r_br, 0), max_r);
+
+        // If all radii are zero, just fill a plain rect
+        if (tl == 0 and tr == 0 and bl == 0 and br == 0) {
             self.fillRect(x, y, w, h, colour);
             return;
         }
 
-        // Clamp radius to half of smallest dimension
-        const max_r = @min(@divTrunc(w, 2), @divTrunc(h, 2));
-        const r: i32 = @min(r_raw, max_r);
-        if (r <= 0) {
-            self.fillRect(x, y, w, h, colour);
-            return;
-        }
+        // Precompute corner span offsets using the midpoint circle algorithm.
+        // For radius r, span_offsets[dy] = the x-extent at row dy from the corner.
+        // This is equivalent to libnsfb's circle_midpoint with circlefill callback,
+        // but we store spans instead of drawing them immediately.
+        // Stack-allocate span table for each corner. Each entry is the
+        // horizontal extent of the circle at that row from the corner center.
+        var tl_spans: [128]i32 = undefined;
+        var tr_spans: [128]i32 = undefined;
+        var bl_spans: [128]i32 = undefined;
+        var br_spans: [128]i32 = undefined;
 
-        // Center column (full height)
-        self.fillRect(x + r, y, w - 2 * r, h, colour);
-        // Left strip (between corners)
-        self.fillRect(x, y + r, r, h - 2 * r, colour);
-        // Right strip (between corners)
-        self.fillRect(x + w - r, y + r, r, h - 2 * r, colour);
+        if (tl > 0) computeCornerSpans(tl_spans[0..@intCast(tl)], tl);
+        if (tr > 0) computeCornerSpans(tr_spans[0..@intCast(tr)], tr);
+        if (bl > 0) computeCornerSpans(bl_spans[0..@intCast(bl)], bl);
+        if (br > 0) computeCornerSpans(br_spans[0..@intCast(br)], br);
 
-        // Draw four corners using circle test
-        // For each pixel in the r x r corner box, check if it falls within the rounded area
-        const r_sq = @as(i64, r) * @as(i64, r);
+        // Draw the rectangle row by row using scanline fills.
+        // For each row, compute left_inset and right_inset from corners,
+        // then fill a single horizontal span.
+        var row: i32 = 0;
+        while (row < h) : (row += 1) {
+            var left_inset: i32 = 0;
+            var right_inset: i32 = 0;
 
-        var dy: i32 = 0;
-        while (dy < r) : (dy += 1) {
-            var dx: i32 = 0;
-            while (dx < r) : (dx += 1) {
-                // Distance from corner center (r-1, r-1 relative to corner box)
-                const cx: i64 = @as(i64, r - 1 - dx);
-                const cy: i64 = @as(i64, r - 1 - dy);
-                if (cx * cx + cy * cy <= r_sq) {
-                    // Top-left corner
-                    self.plotPoint(x + dx, y + dy, colour);
-                    // Top-right corner
-                    self.plotPoint(x + w - 1 - dx, y + dy, colour);
-                    // Bottom-left corner
-                    self.plotPoint(x + dx, y + h - 1 - dy, colour);
-                    // Bottom-right corner
-                    self.plotPoint(x + w - 1 - dx, y + h - 1 - dy, colour);
-                }
+            // Top-left corner affects rows 0..tl-1
+            if (row < tl) {
+                left_inset = @max(left_inset, tl - 1 - tl_spans[@intCast(tl - 1 - row)]);
+            }
+            // Top-right corner affects rows 0..tr-1
+            if (row < tr) {
+                right_inset = @max(right_inset, tr - 1 - tr_spans[@intCast(tr - 1 - row)]);
+            }
+            // Bottom-left corner affects rows (h-bl)..h-1
+            if (row >= h - bl) {
+                const corner_row = row - (h - bl);
+                left_inset = @max(left_inset, bl - 1 - bl_spans[@intCast(corner_row)]);
+            }
+            // Bottom-right corner affects rows (h-br)..h-1
+            if (row >= h - br) {
+                const corner_row = row - (h - br);
+                right_inset = @max(right_inset, br - 1 - br_spans[@intCast(corner_row)]);
+            }
+
+            const span_x = x + left_inset;
+            const span_w = w - left_inset - right_inset;
+            if (span_w > 0) {
+                self.fillRect(span_x, y + row, span_w, 1, colour);
             }
         }
     }
 
-    /// Plot a single pixel using libnsfb's point plotter.
-    fn plotPoint(self: *Surface, x: i32, y: i32, colour: u32) void {
-        _ = c.nsfb_plot_point(self.fb, x, y, colour);
+    /// Compute corner span widths using the midpoint circle algorithm.
+    /// For a quarter-circle of given radius, spans[i] = max x-extent at row i
+    /// where i=0 is the row closest to the flat edge and i=r-1 is the outermost row.
+    /// This mirrors libnsfb's circle_midpoint algorithm.
+    fn computeCornerSpans(spans: []i32, r: i32) void {
+        // Initialize all spans to 0
+        for (spans) |*s| s.* = 0;
+
+        // Midpoint circle algorithm (same as libnsfb generic.c circle_midpoint)
+        var cx: i32 = 0;
+        var cy: i32 = r;
+        var p: i32 = 1 - r;
+
+        // Record symmetric spans
+        setCornerSpan(spans, r, cx, cy);
+        setCornerSpan(spans, r, cy, cx);
+
+        while (cx < cy) {
+            cx += 1;
+            if (p < 0) {
+                p += 2 * cx + 1;
+            } else {
+                cy -= 1;
+                p += 2 * (cx - cy) + 1;
+            }
+            setCornerSpan(spans, r, cx, cy);
+            setCornerSpan(spans, r, cy, cx);
+        }
+    }
+
+    /// Helper: record that at vertical offset `cy` from center, the circle extends `cx` pixels.
+    /// spans are indexed from 0 (flat edge, closest to center) to r-1 (outermost).
+    fn setCornerSpan(spans: []i32, r: i32, cx: i32, cy: i32) void {
+        // cy is distance from center; row index from flat edge = r - 1 - cy (inverted)
+        // But we want: row 0 = closest to the flat edge (near center), row r-1 = outermost
+        // In circle coords: cy=0 is center row, cy=r is edge row
+        // Our mapping: span_index = cy (0=center/flat, r-1=edge/outermost)
+        // span value = cx (how far the circle extends at this row)
+        if (cy >= 0 and cy < r) {
+            const idx: usize = @intCast(cy);
+            if (cx > spans[idx]) spans[idx] = cx;
+        }
+    }
+
+    /// Fill a rounded rectangle with uniform radius (convenience wrapper).
+    pub fn fillRoundedRect(self: *Surface, x: i32, y: i32, w: i32, h: i32, r_raw: i32, colour: u32) void {
+        self.fillRoundedRectPerCorner(x, y, w, h, r_raw, r_raw, r_raw, r_raw, colour);
     }
 
     /// Convert 0xAARRGGBB (standard hex) to libnsfb ABGR colour format.

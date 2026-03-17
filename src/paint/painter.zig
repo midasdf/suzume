@@ -137,13 +137,23 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     const raw_colour = Surface.argbToColour(bg);
                     const bg_colour = Surface.applyOpacity(raw_colour, box.style.opacity);
 
-                    // Use rounded rect if any border-radius is set
-                    const avg_radius = (box.style.border_radius_tl +
-                        box.style.border_radius_tr +
-                        box.style.border_radius_bl +
-                        box.style.border_radius_br) / 4.0;
-                    if (avg_radius > 0.5) {
-                        surface.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, @intFromFloat(avg_radius), bg_colour);
+                    // Use rounded rect if any border-radius is set (per-corner)
+                    const has_radius = box.style.border_radius_tl > 0.5 or
+                        box.style.border_radius_tr > 0.5 or
+                        box.style.border_radius_bl > 0.5 or
+                        box.style.border_radius_br > 0.5;
+                    if (has_radius) {
+                        surface.fillRoundedRectPerCorner(
+                            bg_x,
+                            bg_y,
+                            bg_w,
+                            bg_h,
+                            @intFromFloat(box.style.border_radius_tl),
+                            @intFromFloat(box.style.border_radius_tr),
+                            @intFromFloat(box.style.border_radius_bl),
+                            @intFromFloat(box.style.border_radius_br),
+                            bg_colour,
+                        );
                     } else {
                         const effective_alpha = (bg_colour >> 24) & 0xFF;
                         if (effective_alpha < 255) {
