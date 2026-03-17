@@ -103,25 +103,28 @@ int xim_process_key(unsigned int key_code, unsigned int state, int is_press,
     xev.state = state;
     /* serial, time, root, subwindow, x, y etc. left as 0 — XIM doesn't need them */
 
-    /* Send the synthetic event to Xlib's queue so fcitx5 XIM can process it.
-     * This is needed because xcb and Xlib have separate event queues. */
+    /* Send the synthetic event to Xlib's queue so fcitx5 XIM can process it. */
     XPutBackEvent(xim_display, (XEvent *)&xev);
 
-    /* Process all pending Xlib events, filtering through XIM */
+    /* Process all pending Xlib events, filtering through XIM.
+     * Return values:
+     *   > 0: composed text length
+     *   0: not filtered, no text (pass to normal handler)
+     *  -1: filtered by IME (composing; do NOT pass to normal handler) */
     int result_len = 0;
+    int was_filtered = 0;
+
     while (XPending(xim_display) > 0) {
         XEvent ev;
         XNextEvent(xim_display, &ev);
 
-        /* Let XIM filter the event (composition, candidate window, etc.) */
         if (XFilterEvent(&ev, None)) {
-            continue; /* Filtered by IME */
+            was_filtered = 1;
+            continue; /* Consumed by IME for composition */
         }
 
-        /* Only process KeyPress for text lookup */
         if (ev.type != KeyPress) continue;
 
-        /* Look up the composed string */
         KeySym keysym;
         Status status;
         int len = Xutf8LookupString(xic, (XKeyPressedEvent *)&ev,
@@ -135,8 +138,13 @@ int xim_process_key(unsigned int key_code, unsigned int state, int is_press,
 
     if (result_len > 0) {
         buf[result_len] = '\0';
+        return result_len;
     }
-    return result_len;
+
+    /* Key was filtered by IME (composing) — caller must NOT process normally */
+    if (was_filtered) return -1;
+
+    return 0; /* Not filtered, no text — let normal handler process */
 }
 
 /* Notify XIM that our window gained focus */

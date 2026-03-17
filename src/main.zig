@@ -1606,17 +1606,29 @@ pub fn main() !void {
                             key == nsfb_c.NSFB_KEY_PAGEDOWN);
                         const any_text_focused = find_bar.visible or focused_input_node != null or url_input.focused;
                         if (any_text_focused and !is_control_key) {
-                            if (surface.processKeyXim(true)) |composed| {
-                                // XIM produced composed text (e.g., Japanese from Mozc)
-                                if (find_bar.visible) {
-                                    find_bar.insertText(composed);
-                                } else if (focused_input_node != null) {
-                                    form_input.insertText(composed);
-                                } else if (url_input.focused) {
-                                    url_input.insertText(composed);
-                                }
-                                needs_repaint = true;
-                                continue;
+                            const xim_res = surface.processKeyXim(true);
+                            switch (xim_res.result) {
+                                .text => {
+                                    // XIM produced composed text (e.g., Japanese from Mozc)
+                                    if (xim_res.text) |composed| {
+                                        if (find_bar.visible) {
+                                            find_bar.insertText(composed);
+                                        } else if (focused_input_node != null) {
+                                            form_input.insertText(composed);
+                                        } else if (url_input.focused) {
+                                            url_input.insertText(composed);
+                                        }
+                                        needs_repaint = true;
+                                    }
+                                    continue;
+                                },
+                                .filtered => {
+                                    // Key consumed by IME (composing) — skip normal handler
+                                    continue;
+                                },
+                                .none => {
+                                    // Not handled by XIM — fall through to normal handler
+                                },
                             }
                         }
                     }

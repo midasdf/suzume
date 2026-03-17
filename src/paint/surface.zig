@@ -179,12 +179,17 @@ pub const Surface = struct {
         return self.xim_initialized;
     }
 
-    /// Process a key event through XIM. Uses the raw X11 keycode/state
-    /// stored by the last nsfb key event in x.c.
-    /// Returns composed UTF-8 text, or null if the event was filtered
-    /// (composing) or produced no text output.
-    pub fn processKeyXim(self: *Surface, is_press: bool) ?[]const u8 {
+    pub const XimResult = enum { text, filtered, none };
+
+    /// Process a key event through XIM. Returns:
+    /// - .text + slice: composed text (insert it)
+    /// - .filtered: key consumed by IME (skip normal handler)
+    /// - .none: not handled by XIM (pass to normal handler)
+    pub fn processKeyXim(self: *Surface, is_press: bool) struct { result: XimResult, text: ?[]const u8 } {
         _ = self;
+        const S = struct {
+            var storage: [128]u8 = undefined;
+        };
         var buf: [128]u8 = undefined;
         const len = xim_process_key(
             nsfb_x_last_keycode,
@@ -194,14 +199,14 @@ pub const Surface = struct {
             128,
         );
         if (len > 0) {
-            // Copy to a static buffer since the stack buf will be invalidated
-            const static = struct {
-                var storage: [128]u8 = undefined;
-            };
-            @memcpy(static.storage[0..@intCast(len)], buf[0..@intCast(len)]);
-            return static.storage[0..@intCast(len)];
+            const ulen: usize = @intCast(len);
+            @memcpy(S.storage[0..ulen], buf[0..ulen]);
+            return .{ .result = .text, .text = S.storage[0..ulen] };
         }
-        return null;
+        if (len < 0) {
+            return .{ .result = .filtered, .text = null }; // consumed by IME
+        }
+        return .{ .result = .none, .text = null }; // not handled
     }
 
     /// Poll for committed text from XIM (e.g., Mozc confirmed input).
