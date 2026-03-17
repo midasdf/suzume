@@ -1781,6 +1781,7 @@ pub fn main() !void {
                                                 find_bar.insertText(composed);
                                             } else if (focused_input_node != null) {
                                                 form_input.insertText(composed);
+                                                std.debug.print("[input] XIM text into form: \"{s}\" total=\"{s}\"\n", .{ composed, form_input.getText() });
                                             } else if (url_input.focused) {
                                                 url_input.insertText(composed);
                                             }
@@ -2148,7 +2149,10 @@ fn paintFocusedInput(
     clip_top: i32,
     clip_bottom: i32,
 ) void {
-    const input_box = findBoxForNode(root_box, focused_node) orelse return;
+    const input_box = findBoxForNode(root_box, focused_node) orelse {
+        std.debug.print("[paint] Cannot find box for focused textarea node\n", .{});
+        return;
+    };
     const pbox = input_box.paddingBox();
     const sx: i32 = @as(i32, @intFromFloat(pbox.x)) - @as(i32, @intFromFloat(scroll_x));
     const sy: i32 = @intFromFloat(pbox.y - scroll_y);
@@ -2544,6 +2548,12 @@ fn findFormElementInChildren(node: *lxb.lxb_dom_node_t, depth: u32) ?*lxb.lxb_do
 fn isTextFormElement(node: *lxb.lxb_dom_node_t) bool {
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
     const dn = DomNode{ .lxb_node = node };
+    // Skip elements with style="display:none" (like Google's hidden textarea.csi)
+    if (dn.getAttribute("style")) |inline_style| {
+        if (std.mem.indexOf(u8, inline_style, "display:none") != null or
+            std.mem.indexOf(u8, inline_style, "display: none") != null)
+            return false;
+    }
     const tag = dn.tagName() orelse return false;
     if (std.mem.eql(u8, tag, "textarea")) return true;
     if (std.mem.eql(u8, tag, "input")) {
