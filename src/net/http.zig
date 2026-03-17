@@ -61,8 +61,8 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, @as(c_long, 30));
-        // Lynx UA gets simple HTML from Google (no display:none JS dependency)
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "Lynx/2.8.9rel.1 libwww-FM/2.14");
+        // Chrome-like UA to avoid "update your browser" blocks
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 
         const rc = c.curl_easy_perform(self.handle);
         if (rc != c.CURLE_OK) {

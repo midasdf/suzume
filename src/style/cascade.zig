@@ -1335,6 +1335,45 @@ fn walkForStyles(node: DomNode, buf: *std.ArrayListUnmanaged(u8), allocator: std
     }
 }
 
+/// Filter out CSS rules that hide all content (e.g., "table,div,span,p{display:none}")
+/// These are used by JS-heavy sites as a pre-JS state; since our JS support is limited,
+/// we strip them so content remains visible.
+fn filterHarmfulCss(input: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    var pos: usize = 0;
+    while (pos < input.len) {
+        const brace_open = std.mem.indexOfScalarPos(u8, input, pos, '{') orelse {
+            try result.appendSlice(allocator, input[pos..]);
+            break;
+        };
+        const brace_close = std.mem.indexOfScalarPos(u8, input, brace_open + 1, '}') orelse {
+            try result.appendSlice(allocator, input[pos..]);
+            break;
+        };
+
+        const body = input[brace_open + 1 .. brace_close];
+        const trimmed_body = std.mem.trim(u8, body, " \t\r\n");
+
+        // Check if this rule ONLY sets display:none (harmful blanket hiding)
+        const is_harmful = std.mem.indexOf(u8, trimmed_body, "display") != null and
+            std.mem.indexOf(u8, trimmed_body, "none") != null and
+            trimmed_body.len < 30; // short rule = likely just "display:none"
+
+        if (is_harmful) {
+            // Skip this rule entirely
+            pos = brace_close + 1;
+        } else {
+            // Keep this rule
+            try result.appendSlice(allocator, input[pos .. brace_close + 1]);
+            pos = brace_close + 1;
+        }
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
 /// Create a LibCSS stylesheet from a CSS text string.
 fn createSheet(css_text: []const u8, url: [*c]const u8) !*css.css_stylesheet {
     var params = std.mem.zeroes(css.css_stylesheet_params);
@@ -1359,7 +1398,12 @@ fn createSheet(css_text: []const u8, url: [*c]const u8) !*css.css_stylesheet {
     if (err != css.CSS_OK or sheet == null) return error.CssSheetCreateFailed;
 
     if (css_text.len > 0) {
-        err = css.css_stylesheet_append_data(sheet.?, css_text.ptr, css_text.len);
+        // Filter out harmful "display:none" blanket rules (Google JS dependency)
+        const filtered = filterHarmfulCss(css_text, std.heap.c_allocator) catch css_text;
+        const text_to_use = if (filtered.ptr != css_text.ptr) filtered else css_text;
+        defer if (filtered.ptr != css_text.ptr) std.heap.c_allocator.free(filtered);
+
+        err = css.css_stylesheet_append_data(sheet.?, text_to_use.ptr, text_to_use.len);
         if (err != css.CSS_OK and err != css.CSS_NEEDDATA) {
             _ = css.css_stylesheet_destroy(sheet.?);
             return error.CssSheetAppendFailed;
