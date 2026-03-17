@@ -21,6 +21,7 @@ pub const BoxType = enum {
     inline_text,
     anonymous_block,
     replaced,
+    inline_box,
 };
 
 pub const LineBox = struct {

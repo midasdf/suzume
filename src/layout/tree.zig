@@ -26,7 +26,79 @@ pub fn buildBoxTree(
     // Build children
     try buildChildren(root_box, body_node, styles, allocator, null, 0);
 
+    // Wrap mixed inline/block children in anonymous blocks
+    try wrapInlineChildren(root_box, allocator);
+
     return root_box;
+}
+
+/// Determine if a display value is inline-level.
+fn isInlineDisplay(display: ComputedStyle.Display) bool {
+    return display == .inline_ or display == .inline_block or display == .inline_flex;
+}
+
+/// Check if a box is inline-level (inline_text, inline_box, or replaced with inline display).
+fn isInlineLevelBox(box: *const Box) bool {
+    return box.box_type == .inline_text or box.box_type == .inline_box or
+        (box.box_type == .replaced and isInlineDisplay(box.style.display));
+}
+
+/// After building children, wrap consecutive inline children of a block
+/// parent into anonymous block boxes so the block layout sees only block children.
+fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
+    // First, recursively process children
+    for (parent.children.items) |child| {
+        if (child.box_type == .block or child.box_type == .anonymous_block or child.box_type == .inline_box) {
+            try wrapInlineChildren(child, allocator);
+        }
+    }
+
+    // Only wrap if this is a block-level container
+    if (parent.box_type != .block and parent.box_type != .anonymous_block) return;
+
+    // Check if we have a mix of inline and block children
+    var has_inline = false;
+    var has_block = false;
+    for (parent.children.items) |child| {
+        if (isInlineLevelBox(child)) {
+            has_inline = true;
+        } else {
+            has_block = true;
+        }
+    }
+
+    // If all inline or all block, no wrapping needed
+    // If all inline, the parent will use inline formatting context
+    if (!has_inline or !has_block) return;
+
+    // Mixed: wrap consecutive inline runs in anonymous blocks
+    var new_children: @TypeOf(parent.children) = .empty;
+    var current_anon: ?*Box = null;
+
+    for (parent.children.items) |child| {
+        if (isInlineLevelBox(child)) {
+            // Add to current anonymous block (create if needed)
+            if (current_anon == null) {
+                const anon = try allocator.create(Box);
+                anon.* = .{};
+                anon.box_type = .anonymous_block;
+                anon.style = parent.style;
+                anon.style.background_color = 0x00000000; // transparent
+                anon.parent = parent;
+                current_anon = anon;
+                try new_children.append(allocator, anon);
+            }
+            child.parent = current_anon.?;
+            try current_anon.?.children.append(allocator, child);
+        } else {
+            // Block child: flush current anon and add directly
+            current_anon = null;
+            try new_children.append(allocator, child);
+        }
+    }
+
+    parent.children.deinit(allocator); // free old list buffer (children are moved to new_children)
+    parent.children = new_children;
 }
 
 fn buildChildren(
@@ -61,8 +133,9 @@ fn buildChildren(
                     .table_row, .table_cell, .table_row_group,
                     .table_header_group, .table_footer_group,
                     .table_column, .table_column_group, .table_caption => .block,
-                    .inline_block, .inline_flex => .block,
-                    else => .block, // treat everything as block
+                    .inline_block, .inline_flex => .inline_box,
+                    .inline_ => .inline_box,
+                    else => .block,
                 };
 
                 // Apply margin/padding from style
@@ -231,14 +304,22 @@ fn buildChildren(
 
                     try parent_box.children.append(allocator, text_box);
                 } else {
-                    // Normal mode: skip whitespace-only text nodes
+                    // Normal mode: collapse whitespace
+                    // 1. Skip whitespace-only text nodes
                     const trimmed = std.mem.trim(u8, text, " \t\n\r");
                     if (trimmed.len == 0) continue;
+
+                    // 2. Collapse internal whitespace: replace runs of
+                    //    whitespace (spaces, tabs, newlines) with single space
+                    const collapsed = collapseWhitespace(text, allocator) catch |err| {
+                        std.debug.print("[layout] collapseWhitespace failed: {}\n", .{err});
+                        continue;
+                    };
 
                     const text_box = try allocator.create(Box);
                     text_box.* = .{};
                     text_box.box_type = .inline_text;
-                    text_box.text = trimmed;
+                    text_box.text = collapsed;
                     text_box.parent = parent_box;
                     // Inherit style from parent
                     text_box.style = parent_box.style;
@@ -255,6 +336,32 @@ fn buildChildren(
             else => {},
         }
     }
+}
+
+/// Collapse whitespace in text: replace runs of whitespace with single space,
+/// and trim leading/trailing whitespace.
+fn collapseWhitespace(text: []const u8, allocator: std.mem.Allocator) ![]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    var in_ws = true; // start true to trim leading whitespace
+    for (text) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
+            if (!in_ws) {
+                try buf.append(allocator, ' ');
+                in_ws = true;
+            }
+        } else {
+            try buf.append(allocator, ch);
+            in_ws = false;
+        }
+    }
+
+    // Trim trailing space
+    if (buf.items.len > 0 and buf.items[buf.items.len - 1] == ' ') {
+        buf.items.len -= 1;
+    }
+    return buf.toOwnedSlice(allocator);
 }
 
 /// Parse a numeric attribute string (e.g. "300" or "150.5") to f32.

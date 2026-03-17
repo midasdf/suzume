@@ -46,6 +46,15 @@ pub const ComputedStyle = struct {
     // List
     list_style_type: ListStyleType = .disc,
 
+    // Float / clear / box-sizing
+    float_: Float = .none,
+    clear: Clear = .none,
+    box_sizing: BoxSizing = .content_box,
+
+    // Margin auto flags (for centering)
+    margin_left_auto: bool = false,
+    margin_right_auto: bool = false,
+
     // Flexbox properties
     flex_direction: FlexDirection = .row,
     flex_wrap: FlexWrap = .nowrap,
@@ -157,6 +166,24 @@ pub const ComputedStyle = struct {
         flex_end,
         center,
         baseline,
+    };
+
+    pub const Float = enum {
+        none,
+        left,
+        right,
+    };
+
+    pub const Clear = enum {
+        none,
+        left,
+        right,
+        both,
+    };
+
+    pub const BoxSizing = enum {
+        content_box,
+        border_box,
     };
 
     pub const Dimension = union(enum) {

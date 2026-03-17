@@ -111,7 +111,7 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32) void {
 
 fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
     switch (box.box_type) {
-        .block, .anonymous_block => {
+        .block, .anonymous_block, .inline_box => {
             // Quick culling: skip boxes entirely outside viewport
             const pbox = box.paddingBox();
             const screen_y = @as(i32, @intFromFloat(pbox.y - scroll_y));
@@ -201,6 +201,21 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const colour = Surface.argbToColour(box.style.color);
             const size_px: u32 = @intFromFloat(box.style.font_size_px);
             const tr = fonts.getRenderer(size_px) orelse return;
+
+            // Paint background on inline text if set
+            const ibg = box.style.background_color;
+            const ialpha = (ibg >> 24) & 0xFF;
+            if (ialpha > 0) {
+                for (box.lines.items) |line| {
+                    const lx: i32 = @intFromFloat(line.x);
+                    const ly: i32 = @intFromFloat(line.y - scroll_y);
+                    const lw: i32 = @intFromFloat(@max(line.width, 0));
+                    const lh: i32 = @intFromFloat(@max(line.height, 0));
+                    if (ly + lh >= clip_top and ly <= clip_bottom) {
+                        surface.fillRect(lx, ly, lw, lh, Surface.argbToColour(ibg));
+                    }
+                }
+            }
 
             for (box.lines.items) |line| {
                 const draw_y: i32 = @intFromFloat(line.y + line.ascent - scroll_y);
@@ -362,7 +377,7 @@ pub fn contentHeight(box: *const Box) f32 {
 /// Returns the raw lxb_dom_node_t pointer if found.
 pub fn hitTestNode(box: *const Box, x: f32, y: f32) ?*anyopaque {
     switch (box.box_type) {
-        .block, .anonymous_block => {
+        .block, .anonymous_block, .inline_box => {
             // Check children in reverse order (later children are on top)
             var i = box.children.items.len;
             while (i > 0) {
@@ -402,7 +417,7 @@ pub fn hitTestNode(box: *const Box, x: f32, y: f32) ?*anyopaque {
 /// Hit-test: find the link URL at a given point (in layout coordinates, i.e. before scroll).
 pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
     switch (box.box_type) {
-        .block, .anonymous_block => {
+        .block, .anonymous_block, .inline_box => {
             // Check children in reverse order (later children are on top)
             var i = box.children.items.len;
             while (i > 0) {

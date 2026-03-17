@@ -147,17 +147,28 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
     // Display
     result.display = mapDisplay(css.css_computed_display(style, is_root));
 
-    // Margins
+    // Margins (with auto detection)
     var m_len: css.css_fixed = 0;
     var m_unit: css.css_unit = css.CSS_UNIT_PX;
-    if (css.css_computed_margin_top(style, &m_len, &m_unit) == css.CSS_MARGIN_SET)
+    const mt_type = css.css_computed_margin_top(style, &m_len, &m_unit);
+    if (mt_type == css.CSS_MARGIN_SET)
         result.margin_top = lengthToPx(m_len, m_unit, default_font_size);
-    if (css.css_computed_margin_right(style, &m_len, &m_unit) == css.CSS_MARGIN_SET)
-        result.margin_right = lengthToPx(m_len, m_unit, default_font_size);
-    if (css.css_computed_margin_bottom(style, &m_len, &m_unit) == css.CSS_MARGIN_SET)
+
+    const mr_type = css.css_computed_margin_right(style, &m_len, &m_unit);
+    if (mr_type == css.CSS_MARGIN_SET)
+        result.margin_right = lengthToPx(m_len, m_unit, default_font_size)
+    else if (mr_type == css.CSS_MARGIN_AUTO)
+        result.margin_right_auto = true;
+
+    const mb_type = css.css_computed_margin_bottom(style, &m_len, &m_unit);
+    if (mb_type == css.CSS_MARGIN_SET)
         result.margin_bottom = lengthToPx(m_len, m_unit, default_font_size);
-    if (css.css_computed_margin_left(style, &m_len, &m_unit) == css.CSS_MARGIN_SET)
-        result.margin_left = lengthToPx(m_len, m_unit, default_font_size);
+
+    const ml_type = css.css_computed_margin_left(style, &m_len, &m_unit);
+    if (ml_type == css.CSS_MARGIN_SET)
+        result.margin_left = lengthToPx(m_len, m_unit, default_font_size)
+    else if (ml_type == css.CSS_MARGIN_AUTO)
+        result.margin_left_auto = true;
 
     // Paddings
     var p_len: css.css_fixed = 0;
@@ -381,6 +392,30 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
     if (css.css_computed_column_gap(style, &gap_len, &gap_unit) == css.CSS_COLUMN_GAP_SET) {
         result.gap = lengthToPx(gap_len, gap_unit, default_font_size);
     }
+
+    // Float
+    const float_val = css.css_computed_float(style);
+    result.float_ = switch (float_val) {
+        css.CSS_FLOAT_LEFT => .left,
+        css.CSS_FLOAT_RIGHT => .right,
+        else => .none,
+    };
+
+    // Clear
+    const clear_val = css.css_computed_clear(style);
+    result.clear = switch (clear_val) {
+        css.CSS_CLEAR_LEFT => .left,
+        css.CSS_CLEAR_RIGHT => .right,
+        css.CSS_CLEAR_BOTH => .both,
+        else => .none,
+    };
+
+    // Box sizing
+    const bs_val = css.css_computed_box_sizing(style);
+    result.box_sizing = switch (bs_val) {
+        css.CSS_BOX_SIZING_BORDER_BOX => .border_box,
+        else => .content_box,
+    };
 
     return result;
 }
