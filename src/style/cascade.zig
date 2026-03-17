@@ -575,16 +575,193 @@ fn extractPropertyValue(text: []const u8, prop_end: usize) ?[]const u8 {
     return std.mem.trim(u8, text[val_start..i], " \t");
 }
 
-/// A CSS rule entry for properties unsupported by LibCSS (e.g. border-radius, opacity from CSS text).
-const CssRadiusRule = struct {
+/// A CSS rule entry for properties unsupported/unreliable in LibCSS
+/// (e.g. border-radius, background-color from shorthand, color, height).
+const CssPropertyRule = struct {
     selector: []const u8, // raw selector text (trimmed)
-    radius: f32, // border-radius value in px
+    border_radius: ?f32 = null,
+    background_color: ?u32 = null, // ARGB
+    color: ?u32 = null, // ARGB
+    height: ?f32 = null, // px
 };
 
-/// Parse raw CSS text to extract border-radius rules.
-/// Returns a list of selector -> radius mappings.
-fn extractBorderRadiusRules(css_text: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(CssRadiusRule) {
-    var rules: std.ArrayListUnmanaged(CssRadiusRule) = .empty;
+/// Parse a CSS color value from text.
+/// Supports: #RGB, #RRGGBB, #RRGGBBAA, rgb(), rgba(), and common named colors.
+fn parseCssColor(value: []const u8) ?u32 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    if (trimmed[0] == '#') {
+        return parseHexColor(trimmed);
+    }
+
+    if (std.mem.startsWith(u8, trimmed, "rgba(")) {
+        return parseRgbaFunc(trimmed);
+    }
+    if (std.mem.startsWith(u8, trimmed, "rgb(")) {
+        return parseRgbFunc(trimmed);
+    }
+
+    // Named colors (case-insensitive)
+    return namedColor(trimmed);
+}
+
+fn parseHexColor(hex: []const u8) ?u32 {
+    // hex starts with '#'
+    const digits = hex[1..];
+    if (digits.len == 3) {
+        // #RGB -> #RRGGBB
+        const r = hexDigit(digits[0]) orelse return null;
+        const g = hexDigit(digits[1]) orelse return null;
+        const b = hexDigit(digits[2]) orelse return null;
+        return 0xFF000000 | (@as(u32, r) * 17 << 16) | (@as(u32, g) * 17 << 8) | (@as(u32, b) * 17);
+    } else if (digits.len == 4) {
+        // #RGBA -> #RRGGBBAA
+        const r = hexDigit(digits[0]) orelse return null;
+        const g = hexDigit(digits[1]) orelse return null;
+        const b = hexDigit(digits[2]) orelse return null;
+        const a = hexDigit(digits[3]) orelse return null;
+        return (@as(u32, a) * 17 << 24) | (@as(u32, r) * 17 << 16) | (@as(u32, g) * 17 << 8) | (@as(u32, b) * 17);
+    } else if (digits.len == 6) {
+        // #RRGGBB
+        const r = parseHexByte(digits[0..2]) orelse return null;
+        const g = parseHexByte(digits[2..4]) orelse return null;
+        const b = parseHexByte(digits[4..6]) orelse return null;
+        return 0xFF000000 | (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+    } else if (digits.len == 8) {
+        // #RRGGBBAA
+        const r = parseHexByte(digits[0..2]) orelse return null;
+        const g = parseHexByte(digits[2..4]) orelse return null;
+        const b = parseHexByte(digits[4..6]) orelse return null;
+        const a = parseHexByte(digits[6..8]) orelse return null;
+        return (@as(u32, a) << 24) | (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+    }
+    return null;
+}
+
+fn hexDigit(c: u8) ?u8 {
+    if (c >= '0' and c <= '9') return c - '0';
+    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+    return null;
+}
+
+fn parseHexByte(s: *const [2]u8) ?u8 {
+    const hi = hexDigit(s[0]) orelse return null;
+    const lo = hexDigit(s[1]) orelse return null;
+    return hi * 16 + lo;
+}
+
+fn parseRgbFunc(text: []const u8) ?u32 {
+    // rgb(R, G, B) or rgb(R G B)
+    const start = std.mem.indexOf(u8, text, "(") orelse return null;
+    const end = std.mem.indexOf(u8, text, ")") orelse return null;
+    if (start >= end) return null;
+    const inner = text[start + 1 .. end];
+    var nums: [3]u8 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 3) break;
+        const val = std.fmt.parseFloat(f32, tok) catch return null;
+        nums[count] = @intFromFloat(std.math.clamp(val, 0, 255));
+        count += 1;
+    }
+    if (count < 3) return null;
+    return 0xFF000000 | (@as(u32, nums[0]) << 16) | (@as(u32, nums[1]) << 8) | @as(u32, nums[2]);
+}
+
+fn parseRgbaFunc(text: []const u8) ?u32 {
+    // rgba(R, G, B, A)
+    const start = std.mem.indexOf(u8, text, "(") orelse return null;
+    const end = std.mem.indexOf(u8, text, ")") orelse return null;
+    if (start >= end) return null;
+    const inner = text[start + 1 .. end];
+    var nums: [4]f32 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        nums[count] = std.fmt.parseFloat(f32, tok) catch return null;
+        count += 1;
+    }
+    if (count < 4) return null;
+    const r: u8 = @intFromFloat(std.math.clamp(nums[0], 0, 255));
+    const g: u8 = @intFromFloat(std.math.clamp(nums[1], 0, 255));
+    const b: u8 = @intFromFloat(std.math.clamp(nums[2], 0, 255));
+    // Alpha: 0.0-1.0 range
+    const a: u8 = @intFromFloat(std.math.clamp(nums[3] * 255.0, 0, 255));
+    return (@as(u32, a) << 24) | (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
+}
+
+fn namedColor(name: []const u8) ?u32 {
+    const table = .{
+        .{ "transparent", 0x00000000 },
+        .{ "white", 0xFFFFFFFF },
+        .{ "black", 0xFF000000 },
+        .{ "red", 0xFFFF0000 },
+        .{ "green", 0xFF008000 },
+        .{ "blue", 0xFF0000FF },
+        .{ "yellow", 0xFFFFFF00 },
+        .{ "orange", 0xFFFFA500 },
+        .{ "purple", 0xFF800080 },
+        .{ "gray", 0xFF808080 },
+        .{ "grey", 0xFF808080 },
+        .{ "silver", 0xFFC0C0C0 },
+        .{ "navy", 0xFF000080 },
+        .{ "teal", 0xFF008080 },
+        .{ "aqua", 0xFF00FFFF },
+        .{ "cyan", 0xFF00FFFF },
+        .{ "lime", 0xFF00FF00 },
+        .{ "maroon", 0xFF800000 },
+        .{ "olive", 0xFF808000 },
+        .{ "fuchsia", 0xFFFF00FF },
+        .{ "magenta", 0xFFFF00FF },
+        .{ "coral", 0xFFFF7F50 },
+        .{ "tomato", 0xFFFF6347 },
+        .{ "gold", 0xFFFFD700 },
+        .{ "pink", 0xFFFFC0CB },
+        .{ "lightgray", 0xFFD3D3D3 },
+        .{ "lightgrey", 0xFFD3D3D3 },
+        .{ "darkgray", 0xFFA9A9A9 },
+        .{ "darkgrey", 0xFFA9A9A9 },
+        .{ "whitesmoke", 0xFFF5F5F5 },
+        .{ "inherit", null },
+        .{ "initial", null },
+    };
+    inline for (table) |entry| {
+        if (std.ascii.eqlIgnoreCase(name, entry[0])) return entry[1];
+    }
+    return null;
+}
+
+/// Extract the first color value from a CSS `background` shorthand.
+/// Returns the color if found, null if the value is only url()/position/repeat.
+fn extractBgShorthandColor(value: []const u8) ?u32 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+
+    // If it starts with a color indicator, try parsing the first token
+    if (trimmed.len == 0) return null;
+
+    // Try the whole value as a color first (e.g., "background: #ecedee")
+    if (parseCssColor(trimmed)) |c| return c;
+
+    // Try parsing the first token (before space) as a color
+    // e.g., "red url(...) repeat-x" -> try "red"
+    var iter = std.mem.tokenizeScalar(u8, trimmed, ' ');
+    if (iter.next()) |first_token| {
+        // Skip if first token is url(...)
+        if (std.mem.startsWith(u8, first_token, "url(")) return null;
+        if (std.mem.eql(u8, first_token, "none")) return null;
+        return parseCssColor(first_token);
+    }
+    return null;
+}
+
+/// Parse raw CSS text to extract property rules for properties LibCSS doesn't handle well.
+/// Returns a list of selector -> property mappings.
+fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(CssPropertyRule) {
+    var rules: std.ArrayListUnmanaged(CssPropertyRule) = .empty;
     errdefer rules.deinit(allocator);
 
     var pos: usize = 0;
@@ -598,23 +775,96 @@ fn extractBorderRadiusRules(css_text: []const u8, allocator: std.mem.Allocator) 
         const selector_raw = std.mem.trim(u8, css_text[pos..brace_open], " \t\r\n");
         const body = css_text[brace_open + 1 .. brace_close];
 
-        // Check if body contains border-radius
+        // Extract all properties of interest from this rule body
+        var rule = CssPropertyRule{ .selector = undefined };
+        var has_any = false;
+
+        // border-radius
         if (std.mem.indexOf(u8, body, "border-radius")) |br_idx| {
-            // Extract the value after "border-radius"
             const prop_start = br_idx + "border-radius".len;
             if (extractPropertyValue(body, prop_start)) |val| {
                 if (parseCssLength(val, 16.0)) |px| {
-                    // Store each comma-separated selector
-                    var sel_iter = std.mem.splitScalar(u8, selector_raw, ',');
-                    while (sel_iter.next()) |sel_part| {
-                        const trimmed_sel = std.mem.trim(u8, sel_part, " \t\r\n");
-                        if (trimmed_sel.len > 0) {
-                            try rules.append(allocator, .{
-                                .selector = trimmed_sel,
-                                .radius = px,
-                            });
+                    rule.border_radius = px;
+                    has_any = true;
+                }
+            }
+        }
+
+        // background-color (explicit property)
+        if (std.mem.indexOf(u8, body, "background-color")) |bc_idx| {
+            const prop_start = bc_idx + "background-color".len;
+            if (extractPropertyValue(body, prop_start)) |val| {
+                if (parseCssColor(val)) |c| {
+                    rule.background_color = c;
+                    has_any = true;
+                }
+            }
+        }
+
+        // background shorthand — extract color if present (only if background-color wasn't already found)
+        if (rule.background_color == null) {
+            if (std.mem.indexOf(u8, body, "background")) |bg_idx| {
+                // Make sure this isn't "background-color" or "background-image" etc.
+                const after_pos = bg_idx + "background".len;
+                const is_shorthand = after_pos >= body.len or
+                    body[after_pos] == ':' or body[after_pos] == ' ' or body[after_pos] == '\t';
+                if (is_shorthand) {
+                    if (extractPropertyValue(body, after_pos)) |val| {
+                        if (extractBgShorthandColor(val)) |c| {
+                            rule.background_color = c;
+                            has_any = true;
                         }
                     }
+                }
+            }
+        }
+
+        // color (foreground)
+        // Be careful not to match "background-color" or "border-color" etc.
+        {
+            var search_pos: usize = 0;
+            while (search_pos < body.len) {
+                const ci = std.mem.indexOfPos(u8, body, search_pos, "color") orelse break;
+                // Ensure "color" is not preceded by '-' (which would make it part of another property)
+                const is_standalone = (ci == 0 or (body[ci - 1] != '-' and body[ci - 1] != '_'));
+                if (is_standalone) {
+                    const prop_start = ci + "color".len;
+                    if (extractPropertyValue(body, prop_start)) |val| {
+                        if (parseCssColor(val)) |c| {
+                            rule.color = c;
+                            has_any = true;
+                        }
+                    }
+                    break;
+                }
+                search_pos = ci + 1;
+            }
+        }
+
+        // height
+        if (std.mem.indexOf(u8, body, "height")) |h_idx| {
+            // Ensure it's not "min-height" or "max-height" or "line-height"
+            const is_plain_height = (h_idx == 0 or (body[h_idx - 1] != '-' and body[h_idx - 1] != '_'));
+            if (is_plain_height) {
+                const prop_start = h_idx + "height".len;
+                if (extractPropertyValue(body, prop_start)) |val| {
+                    if (parseCssLength(val, 16.0)) |px| {
+                        rule.height = px;
+                        has_any = true;
+                    }
+                }
+            }
+        }
+
+        if (has_any) {
+            // Store each comma-separated selector
+            var sel_iter = std.mem.splitScalar(u8, selector_raw, ',');
+            while (sel_iter.next()) |sel_part| {
+                const trimmed_sel = std.mem.trim(u8, sel_part, " \t\r\n");
+                if (trimmed_sel.len > 0) {
+                    var r = rule;
+                    r.selector = trimmed_sel;
+                    try rules.append(allocator, r);
                 }
             }
         }
@@ -907,7 +1157,7 @@ fn walkAndSelect(
     media: *const css.css_media,
     handler: *css.css_select_handler,
     styles: *StyleMap,
-    radius_rules: []const CssRadiusRule,
+    property_rules: []const CssPropertyRule,
 ) !void {
     if (node.nodeType() == .element) {
         // Determine if this is the root element
@@ -938,29 +1188,113 @@ fn walkAndSelect(
                         parseBorderRadius(style_attr, &style);
                     }
 
-                    // Apply border-radius from CSS rules (if not already set by inline style)
-                    if (style.border_radius_tl == 0 and style.border_radius_tr == 0 and
-                        style.border_radius_bl == 0 and style.border_radius_br == 0)
-                    {
-                        for (radius_rules) |rule| {
-                            if (selectorMatchesElement(rule.selector, node)) {
-                                style.border_radius_tl = rule.radius;
-                                style.border_radius_tr = rule.radius;
-                                style.border_radius_bl = rule.radius;
-                                style.border_radius_br = rule.radius;
-                                // Don't break — later rules should override earlier ones (CSS specificity)
+                    // Apply properties from CSS rules as fallback
+                    // (for properties LibCSS doesn't handle well)
+                    for (property_rules) |rule| {
+                        if (selectorMatchesElement(rule.selector, node)) {
+                            // border-radius (if not already set by inline style)
+                            if (rule.border_radius) |radius| {
+                                if (style.border_radius_tl == 0 and style.border_radius_tr == 0 and
+                                    style.border_radius_bl == 0 and style.border_radius_br == 0)
+                                {
+                                    style.border_radius_tl = radius;
+                                    style.border_radius_tr = radius;
+                                    style.border_radius_bl = radius;
+                                    style.border_radius_br = radius;
+                                }
+                            }
+
+                            // background-color fallback (when LibCSS reports transparent)
+                            if (rule.background_color) |bg| {
+                                if (style.background_color == 0x00000000) {
+                                    style.background_color = bg;
+                                }
+                            }
+
+                            // color fallback (when LibCSS reports default)
+                            if (rule.color) |fg| {
+                                if (style.color == 0xFFcdd6f4) {
+                                    style.color = fg;
+                                }
+                            }
+
+                            // height fallback (when LibCSS reports auto/unset)
+                            if (rule.height) |h| {
+                                if (style.height == .auto) {
+                                    style.height = .{ .px = h };
+                                }
                             }
                         }
                     }
 
-                    // Parse opacity from inline style (fallback if LibCSS didn't handle it)
-                    if (style.opacity == 1.0) {
-                        if (node.getAttribute("style")) |style_attr| {
+                    // Parse additional properties from inline style as fallback
+                    if (node.getAttribute("style")) |style_attr| {
+                        // Opacity
+                        if (style.opacity == 1.0) {
                             if (std.mem.indexOf(u8, style_attr, "opacity")) |op_idx| {
                                 if (extractPropertyValue(style_attr, op_idx + "opacity".len)) |val| {
                                     if (std.fmt.parseFloat(f32, std.mem.trim(u8, val, " \t"))) |op| {
                                         style.opacity = std.math.clamp(op, 0.0, 1.0);
                                     } else |_| {}
+                                }
+                            }
+                        }
+
+                        // background-color from inline style
+                        if (style.background_color == 0x00000000) {
+                            if (std.mem.indexOf(u8, style_attr, "background-color")) |bc_idx| {
+                                if (extractPropertyValue(style_attr, bc_idx + "background-color".len)) |val| {
+                                    if (parseCssColor(val)) |c| {
+                                        style.background_color = c;
+                                    }
+                                }
+                            }
+                        }
+
+                        // background shorthand from inline style
+                        if (style.background_color == 0x00000000) {
+                            if (std.mem.indexOf(u8, style_attr, "background")) |bg_idx| {
+                                const after_pos = bg_idx + "background".len;
+                                const is_shorthand = after_pos >= style_attr.len or
+                                    (style_attr[after_pos] == ':' or style_attr[after_pos] == ' ' or style_attr[after_pos] == '\t');
+                                if (is_shorthand) {
+                                    if (extractPropertyValue(style_attr, after_pos)) |val| {
+                                        if (extractBgShorthandColor(val)) |c| {
+                                            style.background_color = c;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // color from inline style
+                        if (style.color == 0xFFcdd6f4) {
+                            var search_pos: usize = 0;
+                            while (search_pos < style_attr.len) {
+                                const ci = std.mem.indexOfPos(u8, style_attr, search_pos, "color") orelse break;
+                                const is_standalone = (ci == 0 or (style_attr[ci - 1] != '-' and style_attr[ci - 1] != '_'));
+                                if (is_standalone) {
+                                    if (extractPropertyValue(style_attr, ci + "color".len)) |val| {
+                                        if (parseCssColor(val)) |c| {
+                                            style.color = c;
+                                        }
+                                    }
+                                    break;
+                                }
+                                search_pos = ci + 1;
+                            }
+                        }
+
+                        // height from inline style
+                        if (style.height == .auto) {
+                            if (std.mem.indexOf(u8, style_attr, "height")) |h_idx| {
+                                const is_plain = (h_idx == 0 or (style_attr[h_idx - 1] != '-' and style_attr[h_idx - 1] != '_'));
+                                if (is_plain) {
+                                    if (extractPropertyValue(style_attr, h_idx + "height".len)) |val| {
+                                        if (parseCssLength(val, 16.0)) |px| {
+                                            style.height = .{ .px = px };
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -975,7 +1309,7 @@ fn walkAndSelect(
     // Recurse into children
     var child = node.firstChild();
     while (child) |c| {
-        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, radius_rules);
+        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, property_rules);
         child = c.nextSibling();
     }
 }
@@ -1033,12 +1367,12 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator) !CascadeResult {
     // 7. Set up handler
     var handler = select_handler.getHandler();
 
-    // 8. Extract border-radius rules from CSS text (LibCSS doesn't support border-radius)
-    var radius_rules = try extractBorderRadiusRules(css_text, allocator);
-    defer radius_rules.deinit(allocator);
+    // 8. Extract CSS property rules from raw text (border-radius, background-color, color, height)
+    var property_rules = try extractCssPropertyRules(css_text, allocator);
+    defer property_rules.deinit(allocator);
 
     // 9. Walk DOM and select styles
-    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, radius_rules.items);
+    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, property_rules.items);
 
     return result;
 }
