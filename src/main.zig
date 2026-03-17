@@ -2748,33 +2748,8 @@ fn submitForm(
 
     std.debug.print("[form] Query string: {s}\n", .{query_string});
 
-    // Intercept Google/Bing/Yahoo search forms → redirect to Brave Search
-    // (their results pages require heavy JS that we can't execute)
-    const base = if (current_url) |u| u else "";
-    if (std.mem.indexOf(u8, base, "google.") != null or
-        std.mem.indexOf(u8, base, "bing.") != null or
-        std.mem.indexOf(u8, base, "yahoo.") != null)
-    {
-        // Extract the "q" parameter from query string
-        if (extractQueryParam(query_string, "q")) |q_value| {
-            const brave_url_str = std.fmt.allocPrint(allocator, "https://search.brave.com/search?q={s}&source=web", .{q_value}) catch return null;
-            std.debug.print("[form] Redirecting search to Brave: {s}\n", .{brave_url_str});
-
-            const url_z = allocator.allocSentinel(u8, brave_url_str.len, 0) catch {
-                allocator.free(brave_url_str);
-                return null;
-            };
-            @memcpy(url_z, brave_url_str);
-
-            _ = navigateTo(allocator, loader, url_z, fonts, page, storage, win_w);
-            allocator.free(url_z);
-
-            // Return the brave URL for URL bar update
-            return brave_url_str;
-        }
-    }
-
     // Build full URL: resolve action against current URL, append query string
+    const base = if (current_url) |u| u else "";
     const resolved_action = resolveUrl(allocator, base, action) catch return null;
     defer allocator.free(resolved_action);
 
