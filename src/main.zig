@@ -202,6 +202,45 @@ fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged([]const u8), 
     }
 }
 
+/// Recursively update replaced box intrinsic dimensions from decoded image cache.
+/// When only width OR height was specified in HTML, computes the other from the
+/// actual image aspect ratio. When neither was specified, uses actual image dimensions.
+fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
+    if (box.box_type == .replaced) {
+        if (box.image_url) |url| {
+            if (cache.get(url)) |img| {
+                const actual_w: f32 = @floatFromInt(img.width);
+                const actual_h: f32 = @floatFromInt(img.height);
+                if (actual_w > 0 and actual_h > 0) {
+                    const has_html_w = box.dom_node != null and
+                        (if (box.dom_node.?.getAttribute("width")) |_| true else false);
+                    const has_html_h = box.dom_node != null and
+                        (if (box.dom_node.?.getAttribute("height")) |_| true else false);
+
+                    if (has_html_w and !has_html_h) {
+                        // Width specified, compute height from aspect ratio
+                        box.intrinsic_height = box.intrinsic_width * actual_h / actual_w;
+                        updated.* = true;
+                    } else if (!has_html_w and has_html_h) {
+                        // Height specified, compute width from aspect ratio
+                        box.intrinsic_width = box.intrinsic_height * actual_w / actual_h;
+                        updated.* = true;
+                    } else if (!has_html_w and !has_html_h) {
+                        // Neither specified, use actual image dimensions
+                        box.intrinsic_width = actual_w;
+                        box.intrinsic_height = actual_h;
+                        updated.* = true;
+                    }
+                    // Both specified: keep HTML-specified dimensions (may distort)
+                }
+            }
+        }
+    }
+    for (box.children.items) |child| {
+        updateImageDimensions(child, cache, updated);
+    }
+}
+
 /// Navigate to a URL: fetch, parse, style, layout.
 /// Returns true on success, false on failure.
 fn navigateTo(
@@ -392,6 +431,16 @@ fn navigateTo(
             };
             images_loaded += 1;
         }
+    }
+
+    // Update replaced box intrinsic dimensions from actual decoded images
+    // and re-layout so aspect ratios are correct
+    var images_updated = false;
+    updateImageDimensions(root_box, &img_cache, &images_updated);
+    if (images_updated) {
+        block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
+        block_layout.adjustXPositions(root_box, root_box.margin.left);
+        block_layout.adjustYPositions(root_box, root_box.margin.top);
     }
 
     const total_h = painter_mod.contentHeight(root_box);

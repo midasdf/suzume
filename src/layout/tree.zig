@@ -171,11 +171,32 @@ fn buildChildren(
 
                     // Handle <img> elements as replaced boxes
                     if (std.mem.eql(u8, tag, "img")) {
+                        const img_src = child.getAttribute("src");
+
+                        // Skip SVG images entirely — stb_image can't decode them
+                        // and showing alt text / placeholders just creates visual spam
+                        const is_svg = if (img_src) |src| blk: {
+                            // Strip query string and fragment
+                            const path_end = std.mem.indexOf(u8, src, "?") orelse
+                                std.mem.indexOf(u8, src, "#") orelse src.len;
+                            const path = src[0..path_end];
+                            if (path.len >= 4) {
+                                const ext = path[path.len - 4 ..];
+                                break :blk std.mem.eql(u8, ext, ".svg");
+                            }
+                            break :blk false;
+                        } else false;
+
+                        if (is_svg) {
+                            // Skip this element entirely — don't create any box
+                            continue;
+                        }
+
                         child_box.box_type = .replaced;
-                        child_box.image_url = child.getAttribute("src");
+                        child_box.image_url = img_src;
 
                         // If no src attribute, use minimal placeholder size
-                        const has_src = child.getAttribute("src") != null;
+                        const has_src = img_src != null;
                         var img_w: f32 = if (has_src) 300 else 0; // default placeholder
                         var img_h: f32 = if (has_src) 150 else 0;
                         if (child.getAttribute("width")) |w_str| {

@@ -49,11 +49,28 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         return;
     }
 
-    const gap_total = if (children.len > 1) gap * @as(f32, @floatFromInt(children.len - 1)) else 0;
+    // Layout position:absolute/fixed children out of flow first
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) {
+            block.layoutBlock(child, container_width, box.content.y, fonts);
+            block.adjustXPositions(child, box.content.x);
+        }
+    }
+
+    // Count flex-participating children (exclude position:absolute/fixed)
+    var flex_child_count: usize = 0;
+    for (children) |child| {
+        if (child.style.position != .absolute and child.style.position != .fixed) {
+            flex_child_count += 1;
+        }
+    }
+
+    const gap_total = if (flex_child_count > 1) gap * @as(f32, @floatFromInt(flex_child_count - 1)) else 0;
 
     // Phase 1: Measure children to get their base main sizes
     // First, lay them out as blocks to get intrinsic sizes
     for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
         // Get flex-basis or intrinsic width
         const basis = switch (child.style.flex_basis) {
             .px => |b| b,
@@ -83,6 +100,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     var total_shrink: f32 = 0;
 
     for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
         const basis = switch (child.style.flex_basis) {
             .px => |b| b,
             .percent => |pct| pct * container_width / 100.0,
@@ -93,10 +111,15 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
             .percent => |pct| pct * container_width / 100.0,
             else => null,
         };
-        const child_main = basis orelse (explicit_child_w orelse child.content.width);
-        total_base_size += child_main + child.margin.left + child.margin.right +
-            child.padding.left + child.padding.right +
+        const child_pad_bdr = child.padding.left + child.padding.right +
             child.border.left + child.border.right;
+        const child_main = basis orelse (explicit_child_w orelse child.content.width);
+        // With border-box, explicit width already includes padding+border
+        const is_border_box = child.style.box_sizing == .border_box and
+            (basis != null or explicit_child_w != null);
+        const outer_extra = child.margin.left + child.margin.right +
+            if (is_border_box) @as(f32, 0) else child_pad_bdr;
+        total_base_size += child_main + outer_extra;
         total_grow += child.style.flex_grow;
         total_shrink += child.style.flex_shrink;
     }
@@ -108,6 +131,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     var final_widths_buf: [256]f32 = undefined;
     var final_widths_len: usize = 0;
     for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
         if (final_widths_len >= 256) break;
         const basis = switch (child.style.flex_basis) {
             .px => |b| b,
@@ -119,9 +143,13 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
             .percent => |pct| pct * container_width / 100.0,
             else => null,
         };
-        const child_outer = child.margin.left + child.margin.right +
-            child.padding.left + child.padding.right +
+        const child_pad_bdr = child.padding.left + child.padding.right +
             child.border.left + child.border.right;
+        // With border-box, explicit width already includes padding+border
+        const is_border_box = child.style.box_sizing == .border_box and
+            (basis != null or explicit_child_w != null);
+        const child_outer = child.margin.left + child.margin.right +
+            if (is_border_box) @as(f32, 0) else child_pad_bdr;
         var child_main = basis orelse (explicit_child_w orelse child.content.width);
 
         if (free_space > 0 and total_grow > 0) {
@@ -136,13 +164,16 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
 
     // Re-layout children with final widths
     var max_cross: f32 = 0;
-    for (children, 0..) |child, idx| {
-        if (idx < final_widths_len) {
-            block.layoutBlock(child, final_widths_buf[idx], box.content.y, fonts);
+    var flex_idx: usize = 0;
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        if (flex_idx < final_widths_len) {
+            block.layoutBlock(child, final_widths_buf[flex_idx], box.content.y, fonts);
         }
         const child_cross = child.content.height + child.padding.top + child.padding.bottom +
             child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
         if (child_cross > max_cross) max_cross = child_cross;
+        flex_idx += 1;
     }
 
     // Container cross size
@@ -176,20 +207,20 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         },
         .space_between => {
             main_offset = 0;
-            if (children.len > 1) {
-                per_gap = gap + remaining / @as(f32, @floatFromInt(children.len - 1));
+            if (flex_child_count > 1) {
+                per_gap = gap + remaining / @as(f32, @floatFromInt(flex_child_count - 1));
             }
         },
         .space_around => {
-            if (children.len > 0) {
-                const space = remaining / @as(f32, @floatFromInt(children.len));
+            if (flex_child_count > 0) {
+                const space = remaining / @as(f32, @floatFromInt(flex_child_count));
                 main_offset = space / 2;
                 per_gap = gap + space;
             }
         },
         .space_evenly => {
-            if (children.len > 0) {
-                const space = remaining / @as(f32, @floatFromInt(children.len + 1));
+            if (flex_child_count > 0) {
+                const space = remaining / @as(f32, @floatFromInt(flex_child_count + 1));
                 main_offset = space;
                 per_gap = gap + space;
             }
@@ -197,18 +228,15 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     }
 
     // Assign positions
-    const order = if (is_reverse) children.len else 0;
-    _ = order;
-
     var cursor_x = main_offset;
+    var flex_pos_idx: usize = 0;
     var i: usize = 0;
     while (i < children.len) : (i += 1) {
         const idx = if (is_reverse) children.len - 1 - i else i;
         const child = children[idx];
 
-        // Reset child position relative to container
-        const child_width = if (idx < final_widths_len) final_widths_buf[idx] else child.content.width;
-        _ = child_width;
+        // Skip absolute/fixed positioned children
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
 
         // Cross axis alignment
         const child_cross = child.content.height + child.padding.top + child.padding.bottom +
@@ -252,7 +280,8 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         cursor_x += child.content.width + child.margin.left + child.margin.right +
             child.padding.left + child.padding.right +
             child.border.left + child.border.right;
-        if (i < children.len - 1) cursor_x += per_gap;
+        flex_pos_idx += 1;
+        if (flex_pos_idx < flex_child_count) cursor_x += per_gap;
     }
 
     box.content.height = container_cross;
@@ -271,18 +300,37 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
         return;
     }
 
+    // Layout position:absolute/fixed children out of flow
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) {
+            block.layoutBlock(child, container_width, box.content.y, fonts);
+            block.adjustXPositions(child, box.content.x);
+            continue;
+        }
+    }
+
+    // Count flex-participating children
+    var col_flex_count: usize = 0;
+    for (children) |child| {
+        if (child.style.position != .absolute and child.style.position != .fixed) {
+            col_flex_count += 1;
+        }
+    }
+
     // Layout each child with full container width
     for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
         block.layoutBlock(child, container_width, box.content.y, fonts);
     }
 
     // Calculate total main (vertical) size
     var total_main: f32 = 0;
     for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
         total_main += child.content.height + child.padding.top + child.padding.bottom +
             child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
     }
-    const gap_total = if (children.len > 1) gap * @as(f32, @floatFromInt(children.len - 1)) else 0;
+    const gap_total = if (col_flex_count > 1) gap * @as(f32, @floatFromInt(col_flex_count - 1)) else 0;
     total_main += gap_total;
 
     // Explicit height for justify-content distribution
@@ -308,30 +356,34 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
             cursor_y = free_space / 2;
         },
         .space_between => {
-            if (children.len > 1) {
-                per_gap = gap + free_space / @as(f32, @floatFromInt(children.len - 1));
+            if (col_flex_count > 1) {
+                per_gap = gap + free_space / @as(f32, @floatFromInt(col_flex_count - 1));
             }
         },
         .space_around => {
-            if (children.len > 0) {
-                const space = free_space / @as(f32, @floatFromInt(children.len));
+            if (col_flex_count > 0) {
+                const space = free_space / @as(f32, @floatFromInt(col_flex_count));
                 cursor_y = space / 2;
                 per_gap = gap + space;
             }
         },
         .space_evenly => {
-            if (children.len > 0) {
-                const space = free_space / @as(f32, @floatFromInt(children.len + 1));
+            if (col_flex_count > 0) {
+                const space = free_space / @as(f32, @floatFromInt(col_flex_count + 1));
                 cursor_y = space;
                 per_gap = gap + space;
             }
         },
     }
 
+    var col_flex_pos: usize = 0;
     var i: usize = 0;
     while (i < children.len) : (i += 1) {
         const idx = if (is_reverse) children.len - 1 - i else i;
         const child = children[idx];
+
+        // Skip absolute/fixed positioned children
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
 
         // Cross-axis (horizontal) alignment
         const child_cross_size = child.content.width + child.padding.left + child.padding.right +
@@ -368,7 +420,8 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
 
         cursor_y += child.content.height + child.padding.top + child.padding.bottom +
             child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-        if (i < children.len - 1) cursor_y += per_gap;
+        col_flex_pos += 1;
+        if (col_flex_pos < col_flex_count) cursor_y += per_gap;
     }
 
     box.content.height = @max(container_main, cursor_y);

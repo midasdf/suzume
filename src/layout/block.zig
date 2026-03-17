@@ -278,6 +278,15 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
     var float_right_width: f32 = 0;
 
     for (box.children.items) |child| {
+        // Elements with position:absolute or position:fixed are out of normal flow.
+        // They should NOT push siblings down or contribute to parent height.
+        // Layout them at (0,0) relative to parent content area but don't advance child_y.
+        if (child.style.position == .absolute or child.style.position == .fixed) {
+            layoutBlock(child, box.content.width, box.content.y, fonts);
+            adjustXPositions(child, box.content.x);
+            continue;
+        }
+
         switch (child.box_type) {
             .block, .anonymous_block, .inline_box => {
                 // Handle clear property
@@ -418,6 +427,13 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
     // For inline-box (inline-block), we treat it as a single unit on the line.
 
     for (box.children.items) |child| {
+        // Skip absolute/fixed positioned children in inline context too
+        if (child.style.position == .absolute or child.style.position == .fixed) {
+            layoutBlock(child, container_width, base_y, fonts);
+            adjustXPositions(child, base_x);
+            continue;
+        }
+
         switch (child.box_type) {
             .inline_text => {
                 const text = child.text orelse continue;
