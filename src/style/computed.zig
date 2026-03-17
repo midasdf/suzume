@@ -59,6 +59,12 @@ pub const ComputedStyle = struct {
     margin_left_auto: bool = false,
     margin_right_auto: bool = false,
 
+    // Border radius
+    border_radius_tl: f32 = 0, // top-left
+    border_radius_tr: f32 = 0, // top-right
+    border_radius_bl: f32 = 0, // bottom-left
+    border_radius_br: f32 = 0, // bottom-right
+
     // Flexbox properties
     flex_direction: FlexDirection = .row,
     flex_wrap: FlexWrap = .nowrap,

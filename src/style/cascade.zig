@@ -461,6 +461,113 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
     return result;
 }
 
+/// Parse a CSS length value (e.g. "10px", "1.5em", "50%") from a string slice.
+/// Returns the value in pixels, or null if parsing fails.
+fn parseCssLength(value: []const u8, default_font_size: f32) ?f32 {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    // Try to find where the numeric part ends
+    var num_end: usize = 0;
+    var has_dot = false;
+    for (trimmed) |ch| {
+        if (ch >= '0' and ch <= '9') {
+            num_end += 1;
+        } else if (ch == '.' and !has_dot) {
+            has_dot = true;
+            num_end += 1;
+        } else {
+            break;
+        }
+    }
+    if (num_end == 0) return null;
+
+    const num = std.fmt.parseFloat(f32, trimmed[0..num_end]) catch return null;
+    const unit = std.mem.trim(u8, trimmed[num_end..], " \t");
+
+    if (unit.len == 0 or std.mem.eql(u8, unit, "px")) {
+        return num;
+    } else if (std.mem.eql(u8, unit, "em") or std.mem.eql(u8, unit, "rem")) {
+        return num * default_font_size;
+    } else if (std.mem.eql(u8, unit, "pt")) {
+        return num * (96.0 / 72.0);
+    } else if (std.mem.eql(u8, unit, "%")) {
+        // For border-radius, percentage is relative to box size — approximate with font size
+        return num * default_font_size / 100.0;
+    }
+    return num; // fallback: treat as px
+}
+
+/// Extract border-radius values from an inline style string.
+/// Handles: border-radius: Xpx; and individual corner properties.
+fn parseBorderRadius(style_text: []const u8, result: *ComputedStyle) void {
+    const default_font_size: f32 = 16.0;
+
+    // Search for "border-radius" in the style text
+    var pos: usize = 0;
+    while (pos < style_text.len) {
+        // Find next "border-" prefix
+        const remaining = style_text[pos..];
+        const idx = std.mem.indexOf(u8, remaining, "border-") orelse break;
+        const start = pos + idx;
+
+        // Check which border-radius property
+        const after = style_text[start..];
+        if (std.mem.startsWith(u8, after, "border-top-left-radius")) {
+            if (extractPropertyValue(style_text, start + "border-top-left-radius".len)) |val| {
+                if (parseCssLength(val, default_font_size)) |px| result.border_radius_tl = px;
+            }
+        } else if (std.mem.startsWith(u8, after, "border-top-right-radius")) {
+            if (extractPropertyValue(style_text, start + "border-top-right-radius".len)) |val| {
+                if (parseCssLength(val, default_font_size)) |px| result.border_radius_tr = px;
+            }
+        } else if (std.mem.startsWith(u8, after, "border-bottom-left-radius")) {
+            if (extractPropertyValue(style_text, start + "border-bottom-left-radius".len)) |val| {
+                if (parseCssLength(val, default_font_size)) |px| result.border_radius_bl = px;
+            }
+        } else if (std.mem.startsWith(u8, after, "border-bottom-right-radius")) {
+            if (extractPropertyValue(style_text, start + "border-bottom-right-radius".len)) |val| {
+                if (parseCssLength(val, default_font_size)) |px| result.border_radius_br = px;
+            }
+        } else if (std.mem.startsWith(u8, after, "border-radius")) {
+            // Shorthand: border-radius: X; (use same value for all corners)
+            if (extractPropertyValue(style_text, start + "border-radius".len)) |val| {
+                if (parseCssLength(val, default_font_size)) |px| {
+                    result.border_radius_tl = px;
+                    result.border_radius_tr = px;
+                    result.border_radius_bl = px;
+                    result.border_radius_br = px;
+                }
+            }
+        }
+
+        pos = start + 7; // advance past "border-"
+    }
+}
+
+/// Extract the value part after a property name, skipping ':' and whitespace, up to ';' or end.
+fn extractPropertyValue(text: []const u8, prop_end: usize) ?[]const u8 {
+    if (prop_end >= text.len) return null;
+    var i = prop_end;
+
+    // Skip whitespace
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+
+    // Expect ':'
+    if (i >= text.len or text[i] != ':') return null;
+    i += 1;
+
+    // Skip whitespace after ':'
+    while (i < text.len and (text[i] == ' ' or text[i] == '\t')) i += 1;
+
+    // Find end (';' or end of string)
+    const val_start = i;
+    while (i < text.len and text[i] != ';' and text[i] != '}') i += 1;
+
+    if (val_start >= i) return null;
+    return std.mem.trim(u8, text[val_start..i], " \t");
+}
+
 /// Style map: maps node pointer (usize) -> ComputedStyle.
 pub const StyleMap = std.AutoHashMap(usize, ComputedStyle);
 
@@ -680,7 +787,13 @@ fn walkAndSelect(
             if (results) |res| {
                 defer _ = css.css_select_results_destroy(res);
                 if (res.styles[css.CSS_PSEUDO_ELEMENT_NONE]) |computed| {
-                    const style = extractStyle(computed, is_root);
+                    var style = extractStyle(computed, is_root);
+
+                    // Parse border-radius from inline style (LibCSS doesn't support it)
+                    if (node.getAttribute("style")) |style_attr| {
+                        parseBorderRadius(style_attr, &style);
+                    }
+
                     try styles.put(@intFromPtr(node.lxb_node), style);
                 }
             }

@@ -99,6 +99,59 @@ pub const Surface = struct {
         return null;
     }
 
+    /// Fill a rounded rectangle. Uses circle-test for corners.
+    /// All four corners use the same radius (pass the average or max of individual radii).
+    pub fn fillRoundedRect(self: *Surface, x: i32, y: i32, w: i32, h: i32, r_raw: i32, colour: u32) void {
+        if (r_raw <= 0 or w <= 0 or h <= 0) {
+            self.fillRect(x, y, w, h, colour);
+            return;
+        }
+
+        // Clamp radius to half of smallest dimension
+        const max_r = @min(@divTrunc(w, 2), @divTrunc(h, 2));
+        const r: i32 = @min(r_raw, max_r);
+        if (r <= 0) {
+            self.fillRect(x, y, w, h, colour);
+            return;
+        }
+
+        // Center column (full height)
+        self.fillRect(x + r, y, w - 2 * r, h, colour);
+        // Left strip (between corners)
+        self.fillRect(x, y + r, r, h - 2 * r, colour);
+        // Right strip (between corners)
+        self.fillRect(x + w - r, y + r, r, h - 2 * r, colour);
+
+        // Draw four corners using circle test
+        // For each pixel in the r x r corner box, check if it falls within the rounded area
+        const r_sq = @as(i64, r) * @as(i64, r);
+
+        var dy: i32 = 0;
+        while (dy < r) : (dy += 1) {
+            var dx: i32 = 0;
+            while (dx < r) : (dx += 1) {
+                // Distance from corner center (r-1, r-1 relative to corner box)
+                const cx: i64 = @as(i64, r - 1 - dx);
+                const cy: i64 = @as(i64, r - 1 - dy);
+                if (cx * cx + cy * cy <= r_sq) {
+                    // Top-left corner
+                    self.plotPoint(x + dx, y + dy, colour);
+                    // Top-right corner
+                    self.plotPoint(x + w - 1 - dx, y + dy, colour);
+                    // Bottom-left corner
+                    self.plotPoint(x + dx, y + h - 1 - dy, colour);
+                    // Bottom-right corner
+                    self.plotPoint(x + w - 1 - dx, y + h - 1 - dy, colour);
+                }
+            }
+        }
+    }
+
+    /// Plot a single pixel using libnsfb's point plotter.
+    fn plotPoint(self: *Surface, x: i32, y: i32, colour: u32) void {
+        _ = c.nsfb_plot_point(self.fb, x, y, colour);
+    }
+
     /// Convert 0xAARRGGBB (standard hex) to libnsfb ABGR colour format.
     /// libnsfb stores colours as 0xAABBGGRR in memory.
     pub fn argbToColour(argb: u32) u32 {

@@ -130,13 +130,22 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                 const bg = box.style.background_color;
                 const alpha = (bg >> 24) & 0xFF;
                 if (alpha > 0) {
-                    surface.fillRect(
-                        @as(i32, @intFromFloat(pbox.x)) - sx_i,
-                        screen_y,
-                        @intFromFloat(@max(pbox.width, 0)),
-                        @intFromFloat(@max(pbox.height, 0)),
-                        Surface.argbToColour(bg),
-                    );
+                    const bg_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
+                    const bg_y = screen_y;
+                    const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
+                    const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
+                    const bg_colour = Surface.argbToColour(bg);
+
+                    // Use rounded rect if any border-radius is set
+                    const avg_radius = (box.style.border_radius_tl +
+                        box.style.border_radius_tr +
+                        box.style.border_radius_bl +
+                        box.style.border_radius_br) / 4.0;
+                    if (avg_radius > 0.5) {
+                        surface.fillRoundedRect(bg_x, bg_y, bg_w, bg_h, @intFromFloat(avg_radius), bg_colour);
+                    } else {
+                        surface.fillRect(bg_x, bg_y, bg_w, bg_h, bg_colour);
+                    }
                 }
 
                 // Paint borders
