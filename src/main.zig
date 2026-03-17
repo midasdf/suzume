@@ -2292,16 +2292,38 @@ fn handleClick(
 
         const hit_link = painter_mod.hitTestLink(root_box, layout_x, layout_y);
         const hit_node = painter_mod.hitTestNode(root_box, layout_x, layout_y);
-        std.debug.print("[click] hitLink={s} hitNode={}\n", .{ if (hit_link) |l| l else "(none)", hit_node != null });
+        if (hit_node) |np| {
+            const hn: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(np));
+            const hdn = DomNode{ .lxb_node = hn };
+            std.debug.print("[click] hitNode tag={s} link={s}\n", .{ hdn.tagName() orelse "?", if (hit_link) |l| l else "(none)" });
+        } else {
+            std.debug.print("[click] hitNode=null link={s}\n", .{if (hit_link) |l| l else "(none)"});
+        }
 
         // Check for form element clicks before link navigation
         if (hit_node) |node_ptr| {
             const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
             const dom_node = DomNode{ .lxb_node = node };
-            const tag_name = dom_node.tagName();
 
-            // Walk up to find the actual form element (click might hit text child)
-            const form_node = findFormElement(node);
+            // Walk up/down to find the actual form element
+            var form_node = findFormElement(node);
+            if (form_node == null) {
+                // Fallback: search the entire page DOM for a form element near click
+                if (page.doc) |*doc| {
+                    if (doc.body()) |body| {
+                        form_node = findFormElementInChildren(body.lxb_node, 0);
+                        if (form_node != null) {
+                            std.debug.print("[form] Fallback: found form element in page DOM\n", .{});
+                        }
+                    }
+                }
+            }
+            if (form_node) |fn_| {
+                const fdn = DomNode{ .lxb_node = fn_ };
+                std.debug.print("[form] Found form element: {s}\n", .{fdn.tagName() orelse "?"});
+            } else {
+                std.debug.print("[form] No form element found near {s}\n", .{dom_node.tagName() orelse "?"});
+            }
 
             if (form_node) |fnode| {
                 const fdom = DomNode{ .lxb_node = fnode };
@@ -2361,6 +2383,14 @@ fn handleClick(
                         needs_repaint.* = true;
                         return;
                     }
+                } else if (std.mem.eql(u8, ftag, "textarea")) {
+                    // <textarea> — focus for text input (Google search uses textarea)
+                    focused_input_node.* = fnode;
+                    const current_value = fdom.getAttribute("value") orelse "";
+                    form_input.setText(current_value);
+                    std.debug.print("[form] Focused textarea\n", .{});
+                    needs_repaint.* = true;
+                    return;
                 } else if (std.mem.eql(u8, ftag, "button")) {
                     // <button> click — submit the form
                     std.debug.print("[form] <button> clicked\n", .{});
@@ -2396,7 +2426,7 @@ fn handleClick(
             }
 
             // If clicked on something that's not a form element, unfocus
-            _ = tag_name; // suppress unused
+            // dom_node used in debug print above
             focused_input_node.* = null;
         } else {
             focused_input_node.* = null;
@@ -2457,25 +2487,73 @@ fn handleClick(
 /// Walk up the DOM tree to find a form-relevant element (input, button, textarea, select).
 /// This handles clicks on text children inside form elements.
 fn findFormElement(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
-    var current: ?*lxb.lxb_dom_node_t = node;
+    // First check: is this node itself a form element?
+    if (isFormElement(node)) return node;
+
+    // Search UP (ancestors) — maybe we clicked on text inside a button
+    var current: ?*lxb.lxb_dom_node_t = node.parent;
     var depth: u32 = 0;
     while (current) |n| : (depth += 1) {
-        if (depth > 10) break; // safety limit
-        if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            const dn = DomNode{ .lxb_node = n };
-            if (dn.tagName()) |tag| {
-                if (std.mem.eql(u8, tag, "input") or
-                    std.mem.eql(u8, tag, "button") or
-                    std.mem.eql(u8, tag, "textarea") or
-                    std.mem.eql(u8, tag, "select"))
-                {
-                    return n;
-                }
-            }
-        }
+        if (depth > 5) break;
+        if (isFormElement(n)) return n;
         current = n.parent;
     }
+
+    // Search DOWN (descendants) — maybe we clicked on a div containing an input
+    if (findFormElementInChildren(node, 0)) |found| return found;
+
     return null;
+}
+
+fn isFormElement(node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const dn = DomNode{ .lxb_node = node };
+    const tag = dn.tagName() orelse return false;
+    return std.mem.eql(u8, tag, "input") or
+        std.mem.eql(u8, tag, "button") or
+        std.mem.eql(u8, tag, "textarea") or
+        std.mem.eql(u8, tag, "select");
+}
+
+fn findFormElementInChildren(node: *lxb.lxb_dom_node_t, depth: u32) ?*lxb.lxb_dom_node_t {
+    if (depth > 20) return null;
+    // First pass: look for text inputs (input[text/search/...], textarea) — preferred
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |c| {
+        if (isTextFormElement(c)) return c;
+        child = c.next;
+    }
+    // Recurse for text inputs
+    child = node.first_child;
+    while (child) |c| {
+        if (findFormElementInChildren(c, depth + 1)) |found| {
+            if (isTextFormElement(found)) return found;
+        }
+        child = c.next;
+    }
+    // Second pass: any form element
+    child = node.first_child;
+    while (child) |c| {
+        if (isFormElement(c)) return c;
+        if (findFormElementInChildren(c, depth + 1)) |found| return found;
+        child = c.next;
+    }
+    return null;
+}
+
+fn isTextFormElement(node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const dn = DomNode{ .lxb_node = node };
+    const tag = dn.tagName() orelse return false;
+    if (std.mem.eql(u8, tag, "textarea")) return true;
+    if (std.mem.eql(u8, tag, "input")) {
+        const it = dn.getAttribute("type") orelse "text";
+        return std.mem.eql(u8, it, "text") or std.mem.eql(u8, it, "search") or
+            std.mem.eql(u8, it, "password") or std.mem.eql(u8, it, "email") or
+            std.mem.eql(u8, it, "url") or std.mem.eql(u8, it, "tel") or
+            std.mem.eql(u8, it, "number");
+    }
+    return false;
 }
 
 /// Find the parent <form> element of a given DOM node.
@@ -2552,7 +2630,28 @@ fn collectFormDataRecurse(
     if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
         const dn = DomNode{ .lxb_node = node };
         if (dn.tagName()) |tag| {
-            if (std.mem.eql(u8, tag, "input")) {
+            if (std.mem.eql(u8, tag, "textarea")) {
+                // Textarea: collect name and value (use form_text if focused)
+                if (dn.getAttribute("name")) |name| {
+                    const value = if (focused_node != null and node == focused_node.?)
+                        form_text.getText()
+                    else
+                        (dn.getAttribute("value") orelse "");
+
+                    const enc_name = urlEncode(allocator, name) orelse return;
+                    defer allocator.free(enc_name);
+                    const enc_value = urlEncode(allocator, value) orelse return;
+                    defer allocator.free(enc_value);
+
+                    if (!first.*) {
+                        pairs.append(allocator, '&') catch return;
+                    }
+                    pairs.appendSlice(allocator, enc_name) catch return;
+                    pairs.append(allocator, '=') catch return;
+                    pairs.appendSlice(allocator, enc_value) catch return;
+                    first.* = false;
+                }
+            } else if (std.mem.eql(u8, tag, "input")) {
                 const input_type = dn.getAttribute("type") orelse "text";
                 // Skip submit/button/hidden/reset for data collection
                 // Actually include hidden inputs, skip submit/button/reset
