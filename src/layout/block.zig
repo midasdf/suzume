@@ -7,6 +7,95 @@ const FontCache = @import("../paint/painter.zig").FontCache;
 const flex = @import("flex.zig");
 const table = @import("table.zig");
 
+/// Check if a Unicode codepoint is in a CJK range where line breaks are allowed
+/// between any two adjacent CJK characters (no spaces needed).
+fn isCjkCodepoint(cp: u21) bool {
+    return (cp >= 0x3000 and cp <= 0x9FFF) or // CJK Symbols, Hiragana, Katakana, CJK Unified Ideographs
+        (cp >= 0xF900 and cp <= 0xFAFF) or // CJK Compatibility Ideographs
+        (cp >= 0xFE30 and cp <= 0xFE4F) or // CJK Compatibility Forms
+        (cp >= 0xFF00 and cp <= 0xFFEF) or // Halfwidth and Fullwidth Forms
+        (cp >= 0x20000 and cp <= 0x2FFFF); // CJK Unified Ideographs Extension B+
+}
+
+/// Decode a single UTF-8 codepoint starting at text[pos].
+/// Returns the codepoint and the byte length of that codepoint (1-4).
+fn decodeUtf8(text: []const u8, pos: usize) struct { cp: u21, len: u3 } {
+    if (pos >= text.len) return .{ .cp = 0, .len = 1 };
+    const b0 = text[pos];
+    if (b0 < 0x80) {
+        return .{ .cp = b0, .len = 1 };
+    } else if (b0 < 0xE0) {
+        if (pos + 1 >= text.len) return .{ .cp = 0xFFFD, .len = 1 };
+        const cp = (@as(u21, b0 & 0x1F) << 6) | @as(u21, text[pos + 1] & 0x3F);
+        return .{ .cp = cp, .len = 2 };
+    } else if (b0 < 0xF0) {
+        if (pos + 2 >= text.len) return .{ .cp = 0xFFFD, .len = 1 };
+        const cp = (@as(u21, b0 & 0x0F) << 12) | (@as(u21, text[pos + 1] & 0x3F) << 6) | @as(u21, text[pos + 2] & 0x3F);
+        return .{ .cp = cp, .len = 3 };
+    } else {
+        if (pos + 3 >= text.len) return .{ .cp = 0xFFFD, .len = 1 };
+        const cp = (@as(u21, b0 & 0x07) << 18) | (@as(u21, text[pos + 1] & 0x3F) << 12) | (@as(u21, text[pos + 2] & 0x3F) << 6) | @as(u21, text[pos + 3] & 0x3F);
+        return .{ .cp = cp, .len = 4 };
+    }
+}
+
+/// Find the best break position in text[line_start..] that fits within avail_width.
+/// Returns byte offset (relative to text start) where the line should end.
+/// Tries: space breaks, CJK inter-character breaks, then forced character break (break-word).
+/// Returns null if the very first character doesn't fit (caller should force at least 1 char).
+fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_renderer: anytype) ?usize {
+    if (line_start >= text.len) return null;
+
+    var last_space_break: ?usize = null;
+    var last_cjk_break: ?usize = null;
+    var last_char_break: ?usize = null; // for break-word: last position that fit
+    var prev_was_cjk = false;
+
+    var i: usize = line_start;
+    while (i < text.len) {
+        const decoded = decodeUtf8(text, i);
+        const char_end = i + decoded.len;
+        const is_cjk = isCjkCodepoint(decoded.cp);
+
+        // Check if text from line_start to char_end fits
+        const segment = text[line_start..char_end];
+        const seg_metrics = text_renderer.measure(segment);
+        const seg_width: f32 = @floatFromInt(seg_metrics.width);
+
+        if (seg_width > avail_width and i > line_start) {
+            // This character pushed us over. Use best available break.
+            // Priority: space > CJK > character (break-word)
+            if (last_space_break) |bp| return bp;
+            if (last_cjk_break) |bp| return bp;
+            // break-word fallback: break at last character that fit
+            if (last_char_break) |bp| return bp;
+            // Nothing fit at all — force break at current position
+            return i;
+        }
+
+        // Track possible break points
+        if (decoded.cp == ' ') {
+            last_space_break = char_end; // break after space
+        }
+        // CJK: can break before this character (if previous was CJK) or after this character
+        if (is_cjk) {
+            last_cjk_break = char_end; // break after this CJK character
+        } else if (prev_was_cjk and !is_cjk and decoded.cp != ' ') {
+            // Transition from CJK to non-CJK: can break before this char
+            if (last_cjk_break == null or last_cjk_break.? < i) {
+                last_cjk_break = i;
+            }
+        }
+
+        last_char_break = char_end;
+        prev_was_cjk = is_cjk;
+        i = char_end;
+    }
+
+    // All text fits
+    return null;
+}
+
 /// Compute effective line height from CSS line-height property and raw font metrics height.
 fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_size: f32) f32 {
     return switch (style_lh) {
@@ -368,26 +457,23 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     cursor_x += text_width;
                     if (text_line_height > line_height) line_height = text_line_height;
                 } else {
-                    // Need to word-wrap, possibly starting mid-line
+                    // Need to word-wrap using CJK-aware + break-word logic, possibly starting mid-line
                     var total_text_height: f32 = 0;
                     var max_text_width: f32 = 0;
                     var line_start: usize = 0;
-                    var last_break: usize = 0;
-                    var current_line_width = cursor_x;
+                    var current_line_width: f32 = 0;
                     var first_line = true;
 
-                    var i: usize = 0;
-                    while (i < text.len) {
-                        if (text[i] == ' ') {
-                            last_break = i;
+                    while (line_start < text.len) {
+                        // Skip leading space at line start (but not on first line mid-flow)
+                        if (!first_line and line_start < text.len and text[line_start] == ' ') {
+                            line_start += 1;
+                            continue;
                         }
-                        const segment = text[line_start .. i + 1];
-                        const seg_metrics = text_renderer.measure(segment);
-                        const seg_width: f32 = @floatFromInt(seg_metrics.width);
 
                         const avail_w = if (first_line) (container_width - cursor_x) else container_width;
-                        if (seg_width > avail_w and line_start < i) {
-                            const break_pos = if (last_break > line_start) last_break else i;
+
+                        if (findBreakPoint(text, line_start, avail_w, text_renderer)) |break_pos| {
                             const line_text = text[line_start..break_pos];
                             if (line_text.len > 0) {
                                 const lm = text_renderer.measure(line_text);
@@ -410,28 +496,25 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                             if (line_start < text.len and text[line_start] == ' ') {
                                 line_start += 1;
                             }
-                            last_break = line_start;
+                        } else {
+                            // Remaining text fits
+                            const line_text = text[line_start..];
+                            const lm = text_renderer.measure(line_text);
+                            const lw: f32 = @floatFromInt(lm.width);
+                            const lx = if (first_line) (base_x + cursor_x) else base_x;
+                            child.lines.append(allocator, .{
+                                .x = lx,
+                                .y = base_y + cursor_y + total_text_height,
+                                .width = lw,
+                                .height = text_line_height,
+                                .text = line_text,
+                                .ascent = ascent,
+                            }) catch {};
+                            total_text_height += text_line_height;
+                            current_line_width = lw;
+                            if (lw > max_text_width) max_text_width = lw;
+                            break;
                         }
-                        i += 1;
-                    }
-
-                    // Last segment
-                    if (line_start < text.len) {
-                        const line_text = text[line_start..];
-                        const lm = text_renderer.measure(line_text);
-                        const lw: f32 = @floatFromInt(lm.width);
-                        const lx = if (first_line) (base_x + cursor_x) else base_x;
-                        child.lines.append(allocator, .{
-                            .x = lx,
-                            .y = base_y + cursor_y + total_text_height,
-                            .width = lw,
-                            .height = text_line_height,
-                            .text = line_text,
-                            .ascent = ascent,
-                        }) catch {};
-                        total_text_height += text_line_height;
-                        current_line_width = lw;
-                        if (lw > max_text_width) max_text_width = lw;
                     }
 
                     child.content.width = max_text_width;
@@ -625,26 +708,19 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
         return;
     }
 
-    // Word-break the text
+    // Word-break the text using CJK-aware + break-word logic
     var total_height: f32 = 0;
     var max_width: f32 = 0;
     var line_start: usize = 0;
-    var last_break: usize = 0;
-    var i: usize = 0;
 
-    while (i < text.len) {
-        // Find next word boundary
-        if (text[i] == ' ') {
-            last_break = i;
+    while (line_start < text.len) {
+        // Skip leading space at line start
+        if (text[line_start] == ' ') {
+            line_start += 1;
+            continue;
         }
-        // Check if text from line_start to i+1 fits
-        const segment = text[line_start .. i + 1];
-        const seg_metrics = text_renderer.measure(segment);
-        const seg_width: f32 = @floatFromInt(seg_metrics.width);
 
-        if (seg_width > container_width and line_start < i) {
-            // Need to break
-            const break_pos = if (last_break > line_start) last_break else i;
+        if (findBreakPoint(text, line_start, container_width, text_renderer)) |break_pos| {
             const line_text = text[line_start..break_pos];
             if (line_text.len > 0) {
                 const lm = text_renderer.measure(line_text);
@@ -660,31 +736,28 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
                 total_height += line_height;
                 if (lw > max_width) max_width = lw;
             }
-            // Skip space after break
             line_start = break_pos;
+            // Skip space after break
             if (line_start < text.len and text[line_start] == ' ') {
                 line_start += 1;
             }
-            last_break = line_start;
+        } else {
+            // Remaining text fits on one line
+            const line_text = text[line_start..];
+            const lm = text_renderer.measure(line_text);
+            const lw: f32 = @floatFromInt(lm.width);
+            box.lines.append(allocator, .{
+                .x = applyTextAlign(base_x, lw, container_width, box.style.text_align),
+                .y = base_y + total_height,
+                .width = lw,
+                .height = line_height,
+                .text = line_text,
+                .ascent = ascent,
+            }) catch {};
+            total_height += line_height;
+            if (lw > max_width) max_width = lw;
+            break;
         }
-        i += 1;
-    }
-
-    // Last line
-    if (line_start < text.len) {
-        const line_text = text[line_start..];
-        const lm = text_renderer.measure(line_text);
-        const lw: f32 = @floatFromInt(lm.width);
-        box.lines.append(allocator, .{
-            .x = applyTextAlign(base_x, lw, container_width, box.style.text_align),
-            .y = base_y + total_height,
-            .width = lw,
-            .height = line_height,
-            .text = line_text,
-            .ascent = ascent,
-        }) catch {};
-        total_height += line_height;
-        if (lw > max_width) max_width = lw;
     }
 
     box.content.width = max_width;

@@ -209,11 +209,53 @@ fn buildChildren(
                             continue;
                         }
                         {
-                            child_box.box_type = .block;
+                            child_box.box_type = .inline_box;
+                            child_box.style.display = .inline_block;
                             // Add default styling for form inputs
                             if (child_box.style.background_color == 0x00000000) {
                                 child_box.style.background_color = 0xFF313244; // surface0
                             }
+                            // Default padding for inputs
+                            if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
+                                child_box.padding.top = 2;
+                                child_box.padding.bottom = 2;
+                                child_box.padding.left = 4;
+                                child_box.padding.right = 4;
+                            }
+                            // Default border for inputs
+                            if (child_box.border.top == 0 and child_box.border.bottom == 0) {
+                                child_box.border.top = 1;
+                                child_box.border.bottom = 1;
+                                child_box.border.left = 1;
+                                child_box.border.right = 1;
+                                child_box.style.border_top_color = 0xFF585b70;
+                                child_box.style.border_bottom_color = 0xFF585b70;
+                                child_box.style.border_left_color = 0xFF585b70;
+                                child_box.style.border_right_color = 0xFF585b70;
+                            }
+
+                            // Compute width from size attribute or type
+                            const is_submit = std.mem.eql(u8, input_type, "submit") or
+                                std.mem.eql(u8, input_type, "button") or
+                                std.mem.eql(u8, input_type, "reset");
+
+                            if (child_box.style.width == .auto) {
+                                if (is_submit) {
+                                    // Submit/button: sized to text content + padding
+                                    const btn_text = child.getAttribute("value") orelse
+                                        (if (std.mem.eql(u8, input_type, "reset")) "Reset" else "Submit");
+                                    const char_width: f32 = child_box.style.font_size_px * 0.6;
+                                    const text_w = char_width * @as(f32, @floatFromInt(btn_text.len));
+                                    child_box.style.width = .{ .px = text_w + 16 }; // 8px padding each side
+                                } else {
+                                    // Text/password/etc: width from size attr (default 20 chars)
+                                    const size_attr = child.getAttribute("size");
+                                    const size_val: f32 = if (size_attr) |s| parseFloatAttr(s) else 20;
+                                    const char_width: f32 = child_box.style.font_size_px * 0.6;
+                                    child_box.style.width = .{ .px = size_val * char_width };
+                                }
+                            }
+
                             // Create text child for value or placeholder
                             const display_text = child.getAttribute("value") orelse
                                 (child.getAttribute("placeholder") orelse "");
@@ -233,24 +275,93 @@ fn buildChildren(
                         }
                     }
 
-                    // Handle <button> elements — ensure visible styling
+                    // Handle <button> elements — inline-block with padding
                     if (std.mem.eql(u8, tag, "button")) {
+                        child_box.box_type = .inline_box;
+                        child_box.style.display = .inline_block;
                         if (child_box.style.background_color == 0x00000000) {
                             child_box.style.background_color = 0xFF313244; // surface0
                         }
+                        if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
+                            child_box.padding.top = 4;
+                            child_box.padding.bottom = 4;
+                            child_box.padding.left = 16;
+                            child_box.padding.right = 16;
+                        }
+                        if (child_box.border.top == 0 and child_box.border.bottom == 0) {
+                            child_box.border.top = 1;
+                            child_box.border.bottom = 1;
+                            child_box.border.left = 1;
+                            child_box.border.right = 1;
+                            child_box.style.border_top_color = 0xFF585b70;
+                            child_box.style.border_bottom_color = 0xFF585b70;
+                            child_box.style.border_left_color = 0xFF585b70;
+                            child_box.style.border_right_color = 0xFF585b70;
+                        }
                     }
 
-                    // Handle <select> elements
+                    // Handle <select> elements — inline-block with default width
                     if (std.mem.eql(u8, tag, "select")) {
+                        child_box.box_type = .inline_box;
+                        child_box.style.display = .inline_block;
                         if (child_box.style.background_color == 0x00000000) {
                             child_box.style.background_color = 0xFF313244; // surface0
                         }
+                        if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
+                            child_box.padding.top = 2;
+                            child_box.padding.bottom = 2;
+                            child_box.padding.left = 4;
+                            child_box.padding.right = 20; // space for dropdown arrow
+                        }
+                        if (child_box.border.top == 0 and child_box.border.bottom == 0) {
+                            child_box.border.top = 1;
+                            child_box.border.bottom = 1;
+                            child_box.border.left = 1;
+                            child_box.border.right = 1;
+                            child_box.style.border_top_color = 0xFF585b70;
+                            child_box.style.border_bottom_color = 0xFF585b70;
+                            child_box.style.border_left_color = 0xFF585b70;
+                            child_box.style.border_right_color = 0xFF585b70;
+                        }
+                        if (child_box.style.width == .auto) {
+                            // Default width: ~15 chars + arrow space
+                            const char_width: f32 = child_box.style.font_size_px * 0.6;
+                            child_box.style.width = .{ .px = 15 * char_width + 20 };
+                        }
                     }
 
-                    // Handle <textarea> elements
+                    // Handle <textarea> elements — block with rows/cols sizing
                     if (std.mem.eql(u8, tag, "textarea")) {
                         if (child_box.style.background_color == 0x00000000) {
                             child_box.style.background_color = 0xFF313244; // surface0
+                        }
+                        if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
+                            child_box.padding.top = 4;
+                            child_box.padding.bottom = 4;
+                            child_box.padding.left = 4;
+                            child_box.padding.right = 4;
+                        }
+                        if (child_box.border.top == 0 and child_box.border.bottom == 0) {
+                            child_box.border.top = 1;
+                            child_box.border.bottom = 1;
+                            child_box.border.left = 1;
+                            child_box.border.right = 1;
+                            child_box.style.border_top_color = 0xFF585b70;
+                            child_box.style.border_bottom_color = 0xFF585b70;
+                            child_box.style.border_left_color = 0xFF585b70;
+                            child_box.style.border_right_color = 0xFF585b70;
+                        }
+                        const char_width: f32 = child_box.style.font_size_px * 0.6;
+                        const line_h: f32 = child_box.style.font_size_px * 1.4;
+                        if (child_box.style.width == .auto) {
+                            const cols_attr = child.getAttribute("cols");
+                            const cols: f32 = if (cols_attr) |s| parseFloatAttr(s) else 20;
+                            child_box.style.width = .{ .px = cols * char_width };
+                        }
+                        if (child_box.style.height == .auto) {
+                            const rows_attr = child.getAttribute("rows");
+                            const rows: f32 = if (rows_attr) |s| parseFloatAttr(s) else 2;
+                            child_box.style.height = .{ .px = rows * line_h };
                         }
                     }
 
