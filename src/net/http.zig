@@ -61,7 +61,9 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, @as(c_long, 30));
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "suzume/0.1");
+        // Use a simple UA that tells servers we prefer basic HTML
+        // (Google serves simpler pages without display:none to text-mode UAs)
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "suzume/0.1 (compatible; Lynx/2.9)");
 
         const rc = c.curl_easy_perform(self.handle);
         if (rc != c.CURLE_OK) {
