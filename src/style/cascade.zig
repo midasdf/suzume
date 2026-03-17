@@ -1335,9 +1335,10 @@ fn walkForStyles(node: DomNode, buf: *std.ArrayListUnmanaged(u8), allocator: std
     }
 }
 
-/// Filter out CSS rules that hide all content (e.g., "table,div,span,p{display:none}")
-/// These are used by JS-heavy sites as a pre-JS state; since our JS support is limited,
-/// we strip them so content remains visible.
+/// Filter out ONLY blanket "hide everything" CSS rules like:
+///   "table,div,span,p{display:none}"
+/// These are used by Google as a pre-JS hidden state. We only strip rules where
+/// the selector contains MULTIPLE common element tags (not class/id selectors).
 fn filterHarmfulCss(input: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     var result: std.ArrayListUnmanaged(u8) = .empty;
     errdefer result.deinit(allocator);
@@ -1353,19 +1354,26 @@ fn filterHarmfulCss(input: []const u8, allocator: std.mem.Allocator) ![]const u8
             break;
         };
 
-        const body = input[brace_open + 1 .. brace_close];
-        const trimmed_body = std.mem.trim(u8, body, " \t\r\n");
+        const selector = std.mem.trim(u8, input[pos..brace_open], " \t\r\n");
+        const body = std.mem.trim(u8, input[brace_open + 1 .. brace_close], " \t\r\n");
 
-        // Check if this rule ONLY sets display:none (harmful blanket hiding)
-        const is_harmful = std.mem.indexOf(u8, trimmed_body, "display") != null and
-            std.mem.indexOf(u8, trimmed_body, "none") != null and
-            trimmed_body.len < 30; // short rule = likely just "display:none"
+        // Only strip if: body is EXACTLY "display:none" AND selector is a
+        // comma-separated list of bare tag names (no dots, hashes, or colons)
+        const is_blanket_hide = blk: {
+            if (!std.mem.eql(u8, body, "display:none")) break :blk false;
+            // Must have commas (multiple selectors)
+            if (std.mem.indexOf(u8, selector, ",") == null) break :blk false;
+            // Must NOT contain class/id/pseudo selectors
+            if (std.mem.indexOf(u8, selector, ".") != null) break :blk false;
+            if (std.mem.indexOf(u8, selector, "#") != null) break :blk false;
+            if (std.mem.indexOf(u8, selector, ":") != null) break :blk false;
+            if (std.mem.indexOf(u8, selector, "[") != null) break :blk false;
+            break :blk true;
+        };
 
-        if (is_harmful) {
-            // Skip this rule entirely
+        if (is_blanket_hide) {
             pos = brace_close + 1;
         } else {
-            // Keep this rule
             try result.appendSlice(allocator, input[pos .. brace_close + 1]);
             pos = brace_close + 1;
         }
