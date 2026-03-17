@@ -2,9 +2,19 @@ const std = @import("std");
 const Box = @import("box.zig").Box;
 const BoxType = @import("box.zig").BoxType;
 const LineBox = @import("box.zig").LineBox;
+const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const flex = @import("flex.zig");
 const table = @import("table.zig");
+
+/// Compute effective line height from CSS line-height property and raw font metrics height.
+fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_size: f32) f32 {
+    return switch (style_lh) {
+        .px => |px| @max(px, raw_height),
+        .number => |n| font_size * n,
+        .normal => raw_height * 1.4,
+    };
+}
 
 /// Lay out a block box and all its children within the given containing width.
 /// Sets content x, y, width, height for each box.
@@ -318,7 +328,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 // Measure text
                 const full_metrics = text_renderer.measure(text);
                 const raw_height: f32 = @floatFromInt(full_metrics.height);
-                const text_line_height: f32 = raw_height * 1.4;
+                const text_line_height: f32 = computeLineHeight(child.style.line_height, raw_height, child.style.font_size_px);
                 const ascent: f32 = @floatFromInt(full_metrics.ascent);
                 const text_width: f32 = @floatFromInt(full_metrics.width);
 
@@ -585,9 +595,8 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
 
     // Measure full text first
     const full_metrics = text_renderer.measure(text);
-    // Apply 1.4x line-height for comfortable spacing (browsers default ~1.2)
     const raw_height: f32 = @floatFromInt(full_metrics.height);
-    const line_height: f32 = raw_height * 1.4;
+    const line_height: f32 = computeLineHeight(box.style.line_height, raw_height, box.style.font_size_px);
     const ascent: f32 = @floatFromInt(full_metrics.ascent);
 
     // Handle white-space: pre — preserve all whitespace and newlines

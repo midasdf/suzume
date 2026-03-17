@@ -112,6 +112,10 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
 }
 
 fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
+    // Skip painting for visibility: hidden (but still recurse for children
+    // which may have visibility: visible)
+    const is_visible = box.style.visibility == .visible;
+
     const sx_i: i32 = @intFromFloat(scroll_x);
     switch (box.box_type) {
         .block, .anonymous_block, .inline_box => {
@@ -121,38 +125,41 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const screen_bottom = screen_y + @as(i32, @intFromFloat(@max(pbox.height, 0)));
             if (screen_bottom < clip_top or screen_y > clip_bottom) return;
 
-            // Paint background if not transparent
-            const bg = box.style.background_color;
-            const alpha = (bg >> 24) & 0xFF;
-            if (alpha > 0) {
-                surface.fillRect(
-                    @as(i32, @intFromFloat(pbox.x)) - sx_i,
-                    screen_y,
-                    @intFromFloat(@max(pbox.width, 0)),
-                    @intFromFloat(@max(pbox.height, 0)),
-                    Surface.argbToColour(bg),
-                );
+            if (is_visible) {
+                // Paint background if not transparent
+                const bg = box.style.background_color;
+                const alpha = (bg >> 24) & 0xFF;
+                if (alpha > 0) {
+                    surface.fillRect(
+                        @as(i32, @intFromFloat(pbox.x)) - sx_i,
+                        screen_y,
+                        @intFromFloat(@max(pbox.width, 0)),
+                        @intFromFloat(@max(pbox.height, 0)),
+                        Surface.argbToColour(bg),
+                    );
+                }
+
+                // Paint borders
+                paintBorders(box, surface, scroll_y, scroll_x);
+
+                // Paint <hr> line
+                if (box.is_hr) {
+                    paintHr(box, surface, scroll_y, scroll_x, clip_top, clip_bottom);
+                }
+
+                // Paint list item marker
+                if (box.style.display == .list_item and box.list_index > 0) {
+                    paintListMarker(box, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom);
+                }
             }
 
-            // Paint borders
-            paintBorders(box, surface, scroll_y, scroll_x);
-
-            // Paint <hr> line
-            if (box.is_hr) {
-                paintHr(box, surface, scroll_y, scroll_x, clip_top, clip_bottom);
-            }
-
-            // Paint list item marker
-            if (box.style.display == .list_item and box.list_index > 0) {
-                paintListMarker(box, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom);
-            }
-
-            // Paint children
+            // Paint children (always recurse — children may override visibility)
             for (box.children.items) |child| {
                 paintBox(child, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom, image_cache);
             }
         },
         .replaced => {
+            if (!is_visible) return;
             // Replaced element (image)
             const screen_y = @as(i32, @intFromFloat(box.content.y - scroll_y));
             const screen_bottom = screen_y + @as(i32, @intFromFloat(@max(box.content.height, 0)));
@@ -201,6 +208,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             paintBorders(box, surface, scroll_y, scroll_x);
         },
         .inline_text => {
+            if (!is_visible) return;
             const colour = Surface.argbToColour(box.style.color);
             const size_px: u32 = @intFromFloat(box.style.font_size_px);
             const tr = fonts.getRenderer(size_px) orelse return;

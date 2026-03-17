@@ -95,6 +95,13 @@ fn lengthToPxPct(length: css.css_fixed, unit: css.css_unit, default_font_size: f
     return lengthToPx(length, unit, default_font_size);
 }
 
+/// Check if a border style should be rendered (anything other than none/hidden/inherit).
+fn hasBorderStyle(style_val: u8) bool {
+    return style_val != css.CSS_BORDER_STYLE_NONE and
+        style_val != css.CSS_BORDER_STYLE_HIDDEN and
+        style_val != css.CSS_BORDER_STYLE_INHERIT;
+}
+
 /// Convert border-width type + value to pixels.
 fn borderWidthValue(bw_type: u8, length: css.css_fixed, unit: css.css_unit, default_font_size: f32) f32 {
     return switch (bw_type) {
@@ -182,33 +189,33 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
     if (css.css_computed_padding_left(style, &p_len, &p_unit) == css.CSS_PADDING_SET)
         result.padding_left = lengthToPx(p_len, p_unit, default_font_size);
 
-    // Borders — only render if border-style is solid
+    // Borders — render for any visible border-style (not none/hidden)
     var b_len: css.css_fixed = 0;
     var b_unit: css.css_unit = css.CSS_UNIT_PX;
     var b_color: css.css_color = 0;
 
-    if (css.css_computed_border_top_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+    if (hasBorderStyle(css.css_computed_border_top_style(style))) {
         const bw_type = css.css_computed_border_top_width(style, &b_len, &b_unit);
         result.border_top_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
         if (css.css_computed_border_top_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
             result.border_top_color = b_color;
         }
     }
-    if (css.css_computed_border_right_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+    if (hasBorderStyle(css.css_computed_border_right_style(style))) {
         const bw_type = css.css_computed_border_right_width(style, &b_len, &b_unit);
         result.border_right_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
         if (css.css_computed_border_right_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
             result.border_right_color = b_color;
         }
     }
-    if (css.css_computed_border_bottom_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+    if (hasBorderStyle(css.css_computed_border_bottom_style(style))) {
         const bw_type = css.css_computed_border_bottom_width(style, &b_len, &b_unit);
         result.border_bottom_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
         if (css.css_computed_border_bottom_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
             result.border_bottom_color = b_color;
         }
     }
-    if (css.css_computed_border_left_style(style) == css.CSS_BORDER_STYLE_SOLID) {
+    if (hasBorderStyle(css.css_computed_border_left_style(style))) {
         const bw_type = css.css_computed_border_left_width(style, &b_len, &b_unit);
         result.border_left_width = borderWidthValue(bw_type, b_len, b_unit, default_font_size);
         if (css.css_computed_border_left_color(style, &b_color) == css.CSS_BORDER_COLOR_COLOR) {
@@ -417,6 +424,40 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         else => .content_box,
     };
 
+    // Visibility
+    const vis_val = css.css_computed_visibility(style);
+    result.visibility = switch (vis_val) {
+        css.CSS_VISIBILITY_HIDDEN => .hidden,
+        css.CSS_VISIBILITY_COLLAPSE => .collapse,
+        else => .visible,
+    };
+
+    // Text transform
+    const tt_val = css.css_computed_text_transform(style);
+    result.text_transform = switch (tt_val) {
+        css.CSS_TEXT_TRANSFORM_CAPITALIZE => .capitalize,
+        css.CSS_TEXT_TRANSFORM_UPPERCASE => .uppercase,
+        css.CSS_TEXT_TRANSFORM_LOWERCASE => .lowercase,
+        else => .none,
+    };
+
+    // Letter spacing
+    var ls_len: css.css_fixed = 0;
+    var ls_unit: css.css_unit = css.CSS_UNIT_PX;
+    if (css.css_computed_letter_spacing(style, &ls_len, &ls_unit) == css.CSS_LETTER_SPACING_SET) {
+        result.letter_spacing = lengthToPx(ls_len, ls_unit, default_font_size);
+    }
+
+    // Line height
+    var lh_len: css.css_fixed = 0;
+    var lh_unit: css.css_unit = css.CSS_UNIT_PX;
+    const lh_type = css.css_computed_line_height(style, &lh_len, &lh_unit);
+    if (lh_type == css.CSS_LINE_HEIGHT_DIMENSION) {
+        result.line_height = .{ .px = lengthToPx(lh_len, lh_unit, default_font_size) };
+    } else if (lh_type == css.CSS_LINE_HEIGHT_NUMBER) {
+        result.line_height = .{ .number = fixedToF32(lh_len) };
+    }
+
     return result;
 }
 
@@ -489,6 +530,8 @@ const ua_stylesheet_text =
     \\sub, sup { font-size: 0.75em; }
     \\mark { color: #1e1e2e; }
     \\abbr { text-decoration: underline; }
+    \\center { display: block; text-align: center; }
+    \\noscript { display: none; }
 ;
 
 /// Walk the DOM tree recursively and collect <style> element text content.
@@ -567,6 +610,45 @@ fn createSheet(css_text: []const u8, url: [*c]const u8) !*css.css_stylesheet {
     return sheet.?;
 }
 
+/// Create an inline stylesheet from a style attribute value.
+fn createInlineSheet(style_text: []const u8) ?*css.css_stylesheet {
+    var params = std.mem.zeroes(css.css_stylesheet_params);
+    params.params_version = css.CSS_STYLESHEET_PARAMS_VERSION_1;
+    params.level = css.CSS_LEVEL_DEFAULT;
+    params.charset = "UTF-8";
+    params.url = "about:inline";
+    params.title = null;
+    params.allow_quirks = false;
+    params.inline_style = true;
+    params.resolve = resolveUrl;
+    params.resolve_pw = null;
+    params.import = null;
+    params.import_pw = null;
+    params.color = null;
+    params.color_pw = null;
+    params.font = null;
+    params.font_pw = null;
+
+    var sheet: ?*css.css_stylesheet = null;
+    var err = css.css_stylesheet_create(&params, &sheet);
+    if (err != css.CSS_OK or sheet == null) return null;
+
+    if (style_text.len > 0) {
+        err = css.css_stylesheet_append_data(sheet.?, style_text.ptr, style_text.len);
+        if (err != css.CSS_OK and err != css.CSS_NEEDDATA) {
+            _ = css.css_stylesheet_destroy(sheet.?);
+            return null;
+        }
+    }
+    err = css.css_stylesheet_data_done(sheet.?);
+    if (err != css.CSS_OK) {
+        _ = css.css_stylesheet_destroy(sheet.?);
+        return null;
+    }
+
+    return sheet.?;
+}
+
 /// Walk DOM tree and select styles for each element node.
 fn walkAndSelect(
     node: DomNode,
@@ -583,8 +665,17 @@ fn walkAndSelect(
             is_root = (p.nodeType() == .document);
         }
 
+        // Check for inline style attribute
+        var inline_sheet: ?*css.css_stylesheet = null;
+        if (node.getAttribute("style")) |style_attr| {
+            inline_sheet = createInlineSheet(style_attr);
+        }
+        defer if (inline_sheet) |s| {
+            _ = css.css_stylesheet_destroy(s);
+        };
+
         var results: ?*css.css_select_results = null;
-        const err = css.css_select_style(ctx, @ptrCast(node.lxb_node), unit_ctx, media, null, handler, null, &results);
+        const err = css.css_select_style(ctx, @ptrCast(node.lxb_node), unit_ctx, media, inline_sheet, handler, null, &results);
         if (err == css.CSS_OK) {
             if (results) |res| {
                 defer _ = css.css_select_results_destroy(res);

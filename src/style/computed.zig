@@ -27,6 +27,10 @@ pub const ComputedStyle = struct {
     text_align: TextAlign = .left,
     text_decoration: TextDecoration = .{},
     white_space: WhiteSpace = .normal,
+    text_transform: TextTransform = .none,
+    letter_spacing: f32 = 0,
+    line_height: LineHeight = .normal,
+    visibility: Visibility = .visible,
 
     // Dimensions
     width: Dimension = .auto,
@@ -184,6 +188,25 @@ pub const ComputedStyle = struct {
     pub const BoxSizing = enum {
         content_box,
         border_box,
+    };
+
+    pub const TextTransform = enum {
+        none,
+        capitalize,
+        uppercase,
+        lowercase,
+    };
+
+    pub const Visibility = enum {
+        visible,
+        hidden,
+        collapse,
+    };
+
+    pub const LineHeight = union(enum) {
+        normal,
+        px: f32,
+        number: f32,
     };
 
     pub const Dimension = union(enum) {

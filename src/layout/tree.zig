@@ -294,10 +294,16 @@ fn buildChildren(
                     // In pre mode, preserve whitespace (but still skip completely empty)
                     if (text.len == 0) continue;
 
+                    // Apply text-transform even in pre mode
+                    const display_text = if (parent_box.style.text_transform != .none)
+                        applyTextTransform(text, parent_box.style.text_transform, allocator) catch text
+                    else
+                        text;
+
                     const text_box = try allocator.create(Box);
                     text_box.* = .{};
                     text_box.box_type = .inline_text;
-                    text_box.text = text;
+                    text_box.text = display_text;
                     text_box.parent = parent_box;
                     text_box.style = parent_box.style;
                     text_box.link_url = inherited_link;
@@ -320,10 +326,16 @@ fn buildChildren(
                         continue;
                     };
 
+                    // 3. Apply text-transform
+                    const transformed = if (parent_box.style.text_transform != .none)
+                        applyTextTransform(collapsed, parent_box.style.text_transform, allocator) catch collapsed
+                    else
+                        collapsed;
+
                     const text_box = try allocator.create(Box);
                     text_box.* = .{};
                     text_box.box_type = .inline_text;
-                    text_box.text = collapsed;
+                    text_box.text = transformed;
                     text_box.parent = parent_box;
                     // Inherit style from parent
                     text_box.style = parent_box.style;
@@ -339,6 +351,48 @@ fn buildChildren(
             },
             else => {},
         }
+    }
+}
+
+/// Apply CSS text-transform to a string.
+fn applyTextTransform(text: []const u8, transform: ComputedStyle.TextTransform, allocator: std.mem.Allocator) ![]const u8 {
+    switch (transform) {
+        .uppercase => {
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            errdefer buf.deinit(allocator);
+            for (text) |ch| {
+                try buf.append(allocator, std.ascii.toUpper(ch));
+            }
+            return buf.toOwnedSlice(allocator);
+        },
+        .lowercase => {
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            errdefer buf.deinit(allocator);
+            for (text) |ch| {
+                try buf.append(allocator, std.ascii.toLower(ch));
+            }
+            return buf.toOwnedSlice(allocator);
+        },
+        .capitalize => {
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
+            errdefer buf.deinit(allocator);
+            var after_space = true;
+            for (text) |ch| {
+                if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
+                    after_space = true;
+                    try buf.append(allocator, ch);
+                } else {
+                    if (after_space) {
+                        try buf.append(allocator, std.ascii.toUpper(ch));
+                    } else {
+                        try buf.append(allocator, ch);
+                    }
+                    after_space = false;
+                }
+            }
+            return buf.toOwnedSlice(allocator);
+        },
+        .none => return try allocator.dupe(u8, text),
     }
 }
 
