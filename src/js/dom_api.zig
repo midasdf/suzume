@@ -46,6 +46,27 @@ fn setDomDirty() void {
     dom_dirty = true;
 }
 
+/// Global root box pointer — set from main after layout, used for offset/rect queries.
+const Box = @import("../layout/box.zig").Box;
+const DomNode = @import("../dom/node.zig").DomNode;
+var g_root_box: ?*const Box = null;
+
+/// Set the root box pointer (called from main after layout).
+pub fn setRootBox(root: ?*const Box) void {
+    g_root_box = root;
+}
+
+/// Find the Box in the tree that corresponds to a given DOM node pointer.
+fn findBoxForNode(root: *const Box, target: *lxb.lxb_dom_node_t) ?*const Box {
+    if (root.dom_node) |dn| {
+        if (dn.lxb_node == target) return root;
+    }
+    for (root.children.items) |child| {
+        if (findBoxForNode(child, target)) |found| return found;
+    }
+    return null;
+}
+
 /// Current page URL — set from main when navigating.
 var g_current_url: ?[]const u8 = null;
 
@@ -1453,63 +1474,108 @@ fn elementQuerySelectorAll(
 
 // ── Element geometry (stub — returns 0 without layout) ──────────────
 
+/// Helper: get Box dimensions for the element attached to this_val.
+fn getBoxForThis(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?*const Box {
+    const root = g_root_box orelse return null;
+    const node = getNodeFromThis(ctx, this_val) orelse return null;
+    return findBoxForNode(root, node);
+}
+
+fn getNodeFromThis(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
+    // Try element class first, then text class
+    const ptr1 = qjs.JS_GetOpaque2(ctx, this_val, element_class_id);
+    if (ptr1) |p| return @ptrCast(@alignCast(p));
+    const ptr2 = qjs.JS_GetOpaque2(ctx, this_val, text_class_id);
+    if (ptr2) |p| return @ptrCast(@alignCast(p));
+    return null;
+}
+
 fn elementGetOffsetWidth(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        const bbox = box.borderBox();
+        return qjs.JS_NewInt32(c, @intFromFloat(bbox.width));
+    }
     return qjs.JS_NewInt32(c, 0);
 }
 
 fn elementGetOffsetHeight(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        const bbox = box.borderBox();
+        return qjs.JS_NewInt32(c, @intFromFloat(bbox.height));
+    }
     return qjs.JS_NewInt32(c, 0);
 }
 
 fn elementGetOffsetTop(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        const bbox = box.borderBox();
+        return qjs.JS_NewInt32(c, @intFromFloat(bbox.y));
+    }
     return qjs.JS_NewInt32(c, 0);
 }
 
 fn elementGetOffsetLeft(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        const bbox = box.borderBox();
+        return qjs.JS_NewInt32(c, @intFromFloat(bbox.x));
+    }
     return qjs.JS_NewInt32(c, 0);
 }
 
 fn elementGetBoundingClientRect(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const obj = qjs.JS_NewObject(c);
     if (quickjs.JS_IsException(obj)) return obj;
-    _ = qjs.JS_SetPropertyStr(c, obj, "top", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "left", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "width", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "height", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "right", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "bottom", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "x", qjs.JS_NewFloat64(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "y", qjs.JS_NewFloat64(c, 0));
+
+    if (getBoxForThis(c, this_val)) |box| {
+        const bbox = box.borderBox();
+        _ = qjs.JS_SetPropertyStr(c, obj, "x", qjs.JS_NewFloat64(c, bbox.x));
+        _ = qjs.JS_SetPropertyStr(c, obj, "y", qjs.JS_NewFloat64(c, bbox.y));
+        _ = qjs.JS_SetPropertyStr(c, obj, "top", qjs.JS_NewFloat64(c, bbox.y));
+        _ = qjs.JS_SetPropertyStr(c, obj, "left", qjs.JS_NewFloat64(c, bbox.x));
+        _ = qjs.JS_SetPropertyStr(c, obj, "width", qjs.JS_NewFloat64(c, bbox.width));
+        _ = qjs.JS_SetPropertyStr(c, obj, "height", qjs.JS_NewFloat64(c, bbox.height));
+        _ = qjs.JS_SetPropertyStr(c, obj, "right", qjs.JS_NewFloat64(c, bbox.x + bbox.width));
+        _ = qjs.JS_SetPropertyStr(c, obj, "bottom", qjs.JS_NewFloat64(c, bbox.y + bbox.height));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, obj, "x", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "y", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "top", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "left", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "width", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "height", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "right", qjs.JS_NewFloat64(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, obj, "bottom", qjs.JS_NewFloat64(c, 0));
+    }
     return obj;
 }
 

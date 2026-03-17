@@ -268,6 +268,57 @@ pub fn deinitTimers(ctx: *qjs.JSContext) void {
     global_ctx = null;
 }
 
+// ── requestAnimationFrame (as setTimeout ~16ms) ─────────────────────
+
+fn jsRequestAnimationFrame(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+
+    const callback = args[0];
+    if (!qjs.JS_IsFunction(c, callback)) return quickjs.JS_UNDEFINED();
+
+    const id = next_timer_id;
+    next_timer_id += 1;
+
+    const entry = TimerEntry{
+        .id = id,
+        .callback = qjs.JS_DupValue(c, callback),
+        .delay_ms = 16, // ~60fps
+        .interval = false,
+        .next_fire = currentTimeMs() + 16,
+        .cleared = false,
+    };
+
+    timer_list.append(std.heap.c_allocator, entry) catch {
+        qjs.JS_FreeValue(c, entry.callback);
+        return quickjs.JS_UNDEFINED();
+    };
+
+    return qjs.JS_NewInt32(c, @intCast(id));
+}
+
+// ── performance.now() ───────────────────────────────────────────────
+
+var perf_origin: i64 = 0;
+
+fn jsPerformanceNow(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (perf_origin == 0) perf_origin = currentTimeMs();
+    const elapsed: f64 = @floatFromInt(currentTimeMs() - perf_origin);
+    return qjs.JS_NewFloat64(c, elapsed);
+}
+
 // ── Registration ────────────────────────────────────────────────────
 
 pub fn registerWebApis(js_rt: anytype) void {
@@ -289,4 +340,14 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "setInterval", qjs.JS_NewCFunction(ctx, &jsSetInterval, "setInterval", 2));
     _ = qjs.JS_SetPropertyStr(ctx, global, "clearTimeout", qjs.JS_NewCFunction(ctx, &jsClearTimeout, "clearTimeout", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "clearInterval", qjs.JS_NewCFunction(ctx, &jsClearInterval, "clearInterval", 1));
+
+    // -- requestAnimationFrame / cancelAnimationFrame --
+    // Implemented as setTimeout(cb, 16) (~60fps) since we don't have a real vsync loop
+    _ = qjs.JS_SetPropertyStr(ctx, global, "requestAnimationFrame", qjs.JS_NewCFunction(ctx, &jsRequestAnimationFrame, "requestAnimationFrame", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "cancelAnimationFrame", qjs.JS_NewCFunction(ctx, &jsClearTimeout, "cancelAnimationFrame", 1));
+
+    // -- performance.now() --
+    const perf_obj = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "now", qjs.JS_NewCFunction(ctx, &jsPerformanceNow, "now", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "performance", perf_obj);
 }

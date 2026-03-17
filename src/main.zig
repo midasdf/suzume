@@ -97,6 +97,48 @@ fn testHttp(allocator: std.mem.Allocator) !void {
     std.debug.print("=== Test complete ===\n", .{});
 }
 
+/// Re-style and re-layout a page after JS DOM mutation.
+/// Rebuilds the style cascade, box tree, and layout from the current DOM state.
+fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32) void {
+    const doc = &(page.doc orelse return);
+
+    const root_node = doc.root() orelse return;
+    const body_node = doc.body() orelse return;
+
+    // Re-cascade styles from the current DOM (includes any <style> tags JS may have added)
+    var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css) catch return;
+
+    // Build new box tree
+    const new_root_box = box_tree.buildBoxTree(body_node, &new_styles, allocator) catch {
+        new_styles.deinit();
+        return;
+    };
+
+    // Apply body margin
+    const body_style = new_styles.getStyle(body_node) orelse @import("style/computed.zig").ComputedStyle{};
+    const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
+    new_root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
+
+    // Layout
+    const content_w: f32 = @floatFromInt(layout_width);
+    const root_containing_width = content_w - new_root_box.margin.left - new_root_box.margin.right;
+    block_layout.layoutBlock(new_root_box, root_containing_width, 0, fonts);
+    block_layout.adjustXPositions(new_root_box, new_root_box.margin.left);
+    block_layout.adjustYPositions(new_root_box, new_root_box.margin.top);
+
+    // Replace old styles and box tree
+    if (page.styles) |*s| s.deinit();
+    page.styles = new_styles;
+    page.root_box = new_root_box;
+    page.total_height = painter_mod.contentHeight(new_root_box);
+    page.total_width = painter_mod.contentWidth(new_root_box);
+
+    // Update global root box pointer for JS layout queries
+    dom_api.setRootBox(new_root_box);
+
+    std.debug.print("[JS] DOM mutation → re-styled and re-laid out\n", .{});
+}
+
 /// Browser state holding the current page's data.
 const PageState = struct {
     doc: ?Document = null,
@@ -106,6 +148,8 @@ const PageState = struct {
     total_width: f32 = 0,
     image_cache: ?ImageCache = null,
     js_rt: ?JsRuntime = null,
+    /// External CSS text (from <link> fetches), kept for re-cascade after DOM mutation.
+    external_css: ?[]const u8 = null,
     /// Error message to display when page load fails.
     error_message: ?[]const u8 = null,
     error_alloc: ?[]u8 = null,
@@ -116,6 +160,7 @@ const PageState = struct {
             jrt.deinit();
         }
         if (self.image_cache) |*ic| ic.deinit();
+        if (self.external_css) |ec| std.heap.c_allocator.free(ec);
         if (self.styles) |*s| s.deinit();
         if (self.doc) |*d| d.deinit();
         if (self.error_alloc) |ea| std.heap.c_allocator.free(ea);
@@ -476,6 +521,16 @@ fn navigateTo(
     const total_h = painter_mod.contentHeight(root_box);
     const total_w = painter_mod.contentWidth(root_box);
 
+    // Save external CSS for re-cascade after DOM mutations
+    const saved_ext_css: ?[]const u8 = if (content.css.len > 0) blk: {
+        const css_copy = allocator.alloc(u8, content.css.len) catch null;
+        if (css_copy) |cc| {
+            @memcpy(cc, content.css);
+            break :blk cc;
+        }
+        break :blk null;
+    } else null;
+
     page.* = .{
         .doc = doc,
         .styles = styles,
@@ -483,10 +538,20 @@ fn navigateTo(
         .total_height = total_h,
         .total_width = total_w,
         .image_cache = img_cache,
+        .external_css = saved_ext_css,
     };
+
+    // Set root box pointer for JS layout queries (offsetWidth, getBoundingClientRect, etc.)
+    dom_api.setRootBox(page.root_box);
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page);
+
+    // Re-style if JS mutated the DOM during script execution
+    if (dom_api.dom_dirty) {
+        dom_api.dom_dirty = false;
+        restylePage(page, allocator, fonts, layout_width);
+    }
 
     // Execute user scripts after page load
     if (page.js_rt) |*js_rt| {
@@ -1339,6 +1404,7 @@ pub fn main() !void {
                     js_rt.executePending();
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
+                        restylePage(pg, allocator, &fonts, surface.width);
                         needs_repaint = true;
                     }
                 }
@@ -2394,11 +2460,11 @@ fn handleClick(
                 const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
                 _ = events.dispatchEvent(js_rt.ctx, node, "click");
                 js_rt.executePending();
-                // Check if DOM was mutated by the event handler
+                // Re-style and re-layout if DOM was mutated by the event handler
                 if (dom_api.dom_dirty) {
                     dom_api.dom_dirty = false;
+                    restylePage(page, allocator, fonts, win_w);
                     needs_repaint.* = true;
-                    // TODO: re-style and re-layout after DOM mutation
                 }
             }
         }
