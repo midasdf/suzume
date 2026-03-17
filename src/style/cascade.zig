@@ -552,6 +552,209 @@ fn parseBorderRadius(style_text: []const u8, result: *ComputedStyle) void {
     }
 }
 
+/// Parse a box-shadow or text-shadow value string.
+/// Handles: Xpx Ypx [blur] [color] — skips 'inset' keyword.
+/// Returns (offset_x, offset_y, blur, color_argb).
+fn parseShadowValue(value: []const u8) ?struct { x: f32, y: f32, blur: f32, color: u32 } {
+    const trimmed = std.mem.trim(u8, value, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    // Skip "none"
+    if (std.mem.eql(u8, trimmed, "none")) return null;
+
+    // Tokenize, skip "inset"
+    var tokens: [8][]const u8 = undefined;
+    var token_count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, trimmed, " \t");
+    while (iter.next()) |tok| {
+        if (token_count >= 8) break;
+        // Skip 'inset' keyword
+        if (std.mem.eql(u8, tok, "inset")) continue;
+        tokens[token_count] = tok;
+        token_count += 1;
+    }
+
+    if (token_count < 2) return null;
+
+    // First two tokens must be lengths (offset-x, offset-y)
+    const x = parseCssLength(tokens[0], 16.0) orelse return null;
+    const y = parseCssLength(tokens[1], 16.0) orelse return null;
+
+    var blur: f32 = 0;
+    var color: u32 = 0x80000000; // default semi-transparent black
+
+    var color_start: usize = 2;
+
+    // Third token might be blur-radius (if it's a length)
+    if (token_count >= 3) {
+        if (parseCssLength(tokens[2], 16.0)) |b| {
+            blur = b;
+            color_start = 3;
+            // Fourth token could also be spread-radius — skip it if it's a number
+            if (token_count >= 4) {
+                if (parseCssLength(tokens[3], 16.0)) |_| {
+                    // This is spread-radius, skip it
+                    color_start = 4;
+                }
+            }
+        }
+    }
+
+    // Remaining tokens form the color
+    if (color_start < token_count) {
+        // Join remaining tokens to handle "rgb(0, 0, 0)" etc.
+        // For simplicity, try each remaining token and the full remainder
+        var color_buf: [128]u8 = undefined;
+        var color_len: usize = 0;
+        for (color_start..token_count) |i| {
+            if (color_len > 0 and color_len < color_buf.len) {
+                color_buf[color_len] = ' ';
+                color_len += 1;
+            }
+            const tok = tokens[i];
+            if (color_len + tok.len <= color_buf.len) {
+                @memcpy(color_buf[color_len .. color_len + tok.len], tok);
+                color_len += tok.len;
+            }
+        }
+        if (color_len > 0) {
+            if (parseCssColor(color_buf[0..color_len])) |c| {
+                color = c;
+            }
+        }
+    }
+
+    return .{ .x = x, .y = y, .blur = blur, .color = color };
+}
+
+/// Extract box-shadow values from an inline style string.
+fn parseBoxShadow(style_text: []const u8, result: *ComputedStyle) void {
+    const idx = std.mem.indexOf(u8, style_text, "box-shadow") orelse return;
+    // Make sure it's not "-box-shadow" or similar
+    if (idx > 0 and style_text[idx - 1] != ';' and style_text[idx - 1] != ' ' and
+        style_text[idx - 1] != '\t' and style_text[idx - 1] != '{')
+    {
+        return;
+    }
+    if (extractPropertyValue(style_text, idx + "box-shadow".len)) |val| {
+        if (parseShadowValue(val)) |s| {
+            result.box_shadow_x = s.x;
+            result.box_shadow_y = s.y;
+            result.box_shadow_blur = s.blur;
+            result.box_shadow_color = s.color;
+        }
+    }
+}
+
+/// Extract text-shadow values from an inline style string.
+fn parseTextShadow(style_text: []const u8, result: *ComputedStyle) void {
+    const idx = std.mem.indexOf(u8, style_text, "text-shadow") orelse return;
+    if (idx > 0 and style_text[idx - 1] != ';' and style_text[idx - 1] != ' ' and
+        style_text[idx - 1] != '\t' and style_text[idx - 1] != '{')
+    {
+        return;
+    }
+    if (extractPropertyValue(style_text, idx + "text-shadow".len)) |val| {
+        if (parseShadowValue(val)) |s| {
+            result.text_shadow_x = s.x;
+            result.text_shadow_y = s.y;
+            result.text_shadow_blur = s.blur;
+            result.text_shadow_color = s.color;
+        }
+    }
+}
+
+/// Parse a linear-gradient value and extract start/end colors + direction.
+/// Handles: linear-gradient(to bottom, #fff, #000), linear-gradient(180deg, red, blue)
+fn parseLinearGradient(value: []const u8, result: *ComputedStyle) void {
+    // Find "linear-gradient("
+    const lg_start = std.mem.indexOf(u8, value, "linear-gradient(") orelse return;
+    const inner_start = lg_start + "linear-gradient(".len;
+    const inner_end = std.mem.indexOfScalarPos(u8, value, inner_start, ')') orelse return;
+    const inner = value[inner_start..inner_end];
+
+    // Split by commas
+    var parts: [8][]const u8 = undefined;
+    var part_count: usize = 0;
+    var part_iter = std.mem.splitScalar(u8, inner, ',');
+    while (part_iter.next()) |part| {
+        if (part_count >= 8) break;
+        parts[part_count] = std.mem.trim(u8, part, " \t\r\n");
+        part_count += 1;
+    }
+
+    if (part_count < 2) return;
+
+    var direction: ComputedStyle.GradientDirection = .to_bottom;
+    var color_start_idx: usize = 0;
+
+    // Check if first part is a direction
+    const first = parts[0];
+    if (std.mem.startsWith(u8, first, "to ")) {
+        const dir = std.mem.trim(u8, first[3..], " \t");
+        if (std.mem.eql(u8, dir, "bottom")) {
+            direction = .to_bottom;
+        } else if (std.mem.eql(u8, dir, "right")) {
+            direction = .to_right;
+        } else if (std.mem.eql(u8, dir, "top")) {
+            direction = .to_top;
+        } else if (std.mem.eql(u8, dir, "left")) {
+            direction = .to_left;
+        }
+        color_start_idx = 1;
+    } else if (std.mem.endsWith(u8, first, "deg")) {
+        // Parse degree
+        const deg_str = first[0 .. first.len - 3];
+        if (std.fmt.parseFloat(f32, deg_str)) |deg| {
+            // Map common degrees to directions
+            const normalized = @mod(deg, 360.0);
+            if (normalized < 45 or normalized >= 315) {
+                direction = .to_bottom; // 0deg = to bottom (CSS convention: 0deg = to top, but common usage)
+            } else if (normalized >= 45 and normalized < 135) {
+                direction = .to_right;
+            } else if (normalized >= 135 and normalized < 225) {
+                direction = .to_bottom;
+            } else {
+                direction = .to_left;
+            }
+            // More precise: CSS 0deg = to top, 90deg = to right, 180deg = to bottom
+            if (normalized >= 0 and normalized < 90) {
+                direction = .to_top;
+            } else if (normalized >= 90 and normalized < 180) {
+                direction = .to_right;
+            } else if (normalized >= 180 and normalized < 270) {
+                direction = .to_bottom;
+            } else {
+                direction = .to_left;
+            }
+        } else |_| {}
+        color_start_idx = 1;
+    }
+
+    // Extract first and last color
+    if (color_start_idx >= part_count) return;
+    const first_color_str = parts[color_start_idx];
+    const last_color_str = parts[part_count - 1];
+
+    // Strip any percentage/length suffix from color stops (e.g., "red 20%")
+    const first_color_tok = blk: {
+        // If it contains a space, take only the first word (color part)
+        var tok_iter = std.mem.tokenizeScalar(u8, first_color_str, ' ');
+        break :blk tok_iter.next() orelse return;
+    };
+    const last_color_tok = blk: {
+        var tok_iter = std.mem.tokenizeScalar(u8, last_color_str, ' ');
+        break :blk tok_iter.next() orelse return;
+    };
+
+    const start_color = parseCssColor(first_color_tok) orelse return;
+    const end_color = parseCssColor(last_color_tok) orelse return;
+
+    result.gradient_color_start = start_color;
+    result.gradient_color_end = end_color;
+    result.gradient_direction = direction;
+}
+
 /// Extract the value part after a property name, skipping ':' and whitespace, up to ';' or end.
 fn extractPropertyValue(text: []const u8, prop_end: usize) ?[]const u8 {
     if (prop_end >= text.len) return null;
@@ -583,6 +786,11 @@ const CssPropertyRule = struct {
     background_color: ?u32 = null, // ARGB
     color: ?u32 = null, // ARGB
     height: ?f32 = null, // px
+    box_shadow: ?struct { x: f32, y: f32, blur: f32, color: u32 } = null,
+    text_shadow: ?struct { x: f32, y: f32, blur: f32, color: u32 } = null,
+    gradient_start: ?u32 = null,
+    gradient_end: ?u32 = null,
+    gradient_direction: ?ComputedStyle.GradientDirection = null,
 };
 
 /// Parse a CSS color value from text.
@@ -851,6 +1059,62 @@ fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !
                     if (parseCssLength(val, 16.0)) |px| {
                         rule.height = px;
                         has_any = true;
+                    }
+                }
+            }
+        }
+
+        // box-shadow
+        if (std.mem.indexOf(u8, body, "box-shadow")) |bs_idx| {
+            // Make sure it's not "-box-shadow"
+            const is_plain = (bs_idx == 0 or (body[bs_idx - 1] != '-' and body[bs_idx - 1] != '_'));
+            if (is_plain) {
+                if (extractPropertyValue(body, bs_idx + "box-shadow".len)) |val| {
+                    if (parseShadowValue(val)) |s| {
+                        rule.box_shadow = .{ .x = s.x, .y = s.y, .blur = s.blur, .color = s.color };
+                        has_any = true;
+                    }
+                }
+            }
+        }
+
+        // text-shadow
+        if (std.mem.indexOf(u8, body, "text-shadow")) |ts_idx| {
+            const is_plain = (ts_idx == 0 or (body[ts_idx - 1] != '-' and body[ts_idx - 1] != '_'));
+            if (is_plain) {
+                if (extractPropertyValue(body, ts_idx + "text-shadow".len)) |val| {
+                    if (parseShadowValue(val)) |s| {
+                        rule.text_shadow = .{ .x = s.x, .y = s.y, .blur = s.blur, .color = s.color };
+                        has_any = true;
+                    }
+                }
+            }
+        }
+
+        // linear-gradient in background/background-image
+        if (std.mem.indexOf(u8, body, "linear-gradient")) |_| {
+            // Find the full property value containing the gradient
+            if (std.mem.indexOf(u8, body, "background")) |bg_idx| {
+                const after_pos = bg_idx + "background".len;
+                // Skip "background-color", "background-image" prefix — get the value
+                if (after_pos < body.len and (body[after_pos] == ':' or body[after_pos] == '-')) {
+                    // If it's "background-image:" or "background:", both work
+                    var val_start = after_pos;
+                    // Skip to ':' if we're at '-image' etc.
+                    while (val_start < body.len and body[val_start] != ':') val_start += 1;
+                    if (val_start < body.len) {
+                        if (extractPropertyValue(body, val_start)) |_| {
+                            // We need the full value including "linear-gradient(...)"
+                            // Re-extract from the body directly
+                            var dummy_style = ComputedStyle{};
+                            parseLinearGradient(body, &dummy_style);
+                            if ((dummy_style.gradient_color_start >> 24) > 0 or (dummy_style.gradient_color_end >> 24) > 0) {
+                                rule.gradient_start = dummy_style.gradient_color_start;
+                                rule.gradient_end = dummy_style.gradient_color_end;
+                                rule.gradient_direction = dummy_style.gradient_direction;
+                                has_any = true;
+                            }
+                        }
                     }
                 }
             }
@@ -1224,6 +1488,35 @@ fn walkAndSelect(
                                     style.height = .{ .px = h };
                                 }
                             }
+
+                            // box-shadow from CSS rules
+                            if (rule.box_shadow) |bs| {
+                                if (style.box_shadow_color == 0x00000000) {
+                                    style.box_shadow_x = bs.x;
+                                    style.box_shadow_y = bs.y;
+                                    style.box_shadow_blur = bs.blur;
+                                    style.box_shadow_color = bs.color;
+                                }
+                            }
+
+                            // text-shadow from CSS rules
+                            if (rule.text_shadow) |ts| {
+                                if (style.text_shadow_color == 0x00000000) {
+                                    style.text_shadow_x = ts.x;
+                                    style.text_shadow_y = ts.y;
+                                    style.text_shadow_blur = ts.blur;
+                                    style.text_shadow_color = ts.color;
+                                }
+                            }
+
+                            // gradient from CSS rules
+                            if (rule.gradient_start) |gs| {
+                                if (style.gradient_color_start == 0x00000000 and style.gradient_color_end == 0x00000000) {
+                                    style.gradient_color_start = gs;
+                                    style.gradient_color_end = rule.gradient_end orelse 0x00000000;
+                                    style.gradient_direction = rule.gradient_direction orelse .to_bottom;
+                                }
+                            }
                         }
                     }
 
@@ -1296,6 +1589,23 @@ fn walkAndSelect(
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        // box-shadow from inline style
+                        if (style.box_shadow_color == 0x00000000) {
+                            parseBoxShadow(style_attr, &style);
+                        }
+
+                        // text-shadow from inline style
+                        if (style.text_shadow_color == 0x00000000) {
+                            parseTextShadow(style_attr, &style);
+                        }
+
+                        // linear-gradient from inline background
+                        if (style.gradient_color_start == 0x00000000 and style.gradient_color_end == 0x00000000) {
+                            if (std.mem.indexOf(u8, style_attr, "linear-gradient") != null) {
+                                parseLinearGradient(style_attr, &style);
                             }
                         }
                     }

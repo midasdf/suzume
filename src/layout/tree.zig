@@ -256,6 +256,17 @@ fn buildChildren(
                             if (is_button and child_box.style.color == 0xFFcdd6f4) {
                                 child_box.style.color = 0xFF1f1f1f;
                             }
+                            // Default border-radius for button-type inputs (3px)
+                            if (is_button and child_box.style.border_radius_tl == 0 and
+                                child_box.style.border_radius_tr == 0 and
+                                child_box.style.border_radius_bl == 0 and
+                                child_box.style.border_radius_br == 0)
+                            {
+                                child_box.style.border_radius_tl = 3;
+                                child_box.style.border_radius_tr = 3;
+                                child_box.style.border_radius_bl = 3;
+                                child_box.style.border_radius_br = 3;
+                            }
 
                             // Compute width from size attribute or type
                             if (child_box.style.width == .auto) {
@@ -316,6 +327,17 @@ fn buildChildren(
                             child_box.style.border_bottom_color = 0xFF585b70;
                             child_box.style.border_left_color = 0xFF585b70;
                             child_box.style.border_right_color = 0xFF585b70;
+                        }
+                        // Default border-radius for buttons (3px)
+                        if (child_box.style.border_radius_tl == 0 and
+                            child_box.style.border_radius_tr == 0 and
+                            child_box.style.border_radius_bl == 0 and
+                            child_box.style.border_radius_br == 0)
+                        {
+                            child_box.style.border_radius_tl = 3;
+                            child_box.style.border_radius_tr = 3;
+                            child_box.style.border_radius_bl = 3;
+                            child_box.style.border_radius_br = 3;
                         }
                     }
 

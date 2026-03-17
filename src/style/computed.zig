@@ -78,6 +78,23 @@ pub const ComputedStyle = struct {
     // Opacity
     opacity: f32 = 1.0,
 
+    // Box shadow
+    box_shadow_x: f32 = 0,
+    box_shadow_y: f32 = 0,
+    box_shadow_blur: f32 = 0,
+    box_shadow_color: u32 = 0x00000000, // ARGB, transparent = no shadow
+
+    // Text shadow
+    text_shadow_x: f32 = 0,
+    text_shadow_y: f32 = 0,
+    text_shadow_blur: f32 = 0,
+    text_shadow_color: u32 = 0x00000000, // ARGB, transparent = no shadow
+
+    // Linear gradient (basic 2-color)
+    gradient_color_start: u32 = 0x00000000, // ARGB, transparent = no gradient
+    gradient_color_end: u32 = 0x00000000, // ARGB
+    gradient_direction: GradientDirection = .to_bottom,
+
     pub const Display = enum {
         block,
         inline_,
@@ -223,5 +240,12 @@ pub const ComputedStyle = struct {
         none,
         px: f32,
         percent: f32,
+    };
+
+    pub const GradientDirection = enum {
+        to_bottom,
+        to_right,
+        to_top,
+        to_left,
     };
 };

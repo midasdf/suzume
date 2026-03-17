@@ -111,6 +111,68 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
     }
 }
 
+/// Paint box-shadow behind an element.
+fn paintBoxShadow(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32) void {
+    const style = box.style;
+    // Check if shadow is set (non-transparent color)
+    const shadow_alpha = (style.box_shadow_color >> 24) & 0xFF;
+    if (shadow_alpha == 0) return;
+
+    const pbox = box.paddingBox();
+    const sx_i: i32 = @intFromFloat(scroll_x);
+    const base_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
+    const base_y = @as(i32, @intFromFloat(pbox.y - scroll_y));
+    const base_w: i32 = @intFromFloat(@max(pbox.width, 0));
+    const base_h: i32 = @intFromFloat(@max(pbox.height, 0));
+
+    const off_x: i32 = @intFromFloat(style.box_shadow_x);
+    const off_y: i32 = @intFromFloat(style.box_shadow_y);
+    const blur: i32 = @intFromFloat(@max(style.box_shadow_blur, 0));
+
+    const shadow_colour = Surface.argbToColour(style.box_shadow_color);
+
+    if (blur <= 1) {
+        // Simple shadow: single offset rectangle
+        const has_radius = style.border_radius_tl > 0.5 or style.border_radius_tr > 0.5 or
+            style.border_radius_bl > 0.5 or style.border_radius_br > 0.5;
+        if (has_radius) {
+            surface.fillRoundedRectPerCorner(
+                base_x + off_x,
+                base_y + off_y,
+                base_w,
+                base_h,
+                @intFromFloat(style.border_radius_tl),
+                @intFromFloat(style.border_radius_tr),
+                @intFromFloat(style.border_radius_bl),
+                @intFromFloat(style.border_radius_br),
+                shadow_colour,
+            );
+        } else {
+            surface.fillRectBlend(base_x + off_x, base_y + off_y, base_w, base_h, shadow_colour);
+        }
+    } else {
+        // Approximate blur with multiple expanding semi-transparent rectangles
+        const passes: i32 = @min(blur, 4); // limit passes for performance
+        const base_alpha = @as(f32, @floatFromInt(shadow_alpha));
+
+        var i: i32 = 0;
+        while (i < passes) : (i += 1) {
+            const expand = @divTrunc(blur * (i + 1), passes);
+            const alpha_fraction = base_alpha / @as(f32, @floatFromInt(passes + 1));
+            const pass_alpha: u32 = @intFromFloat(@max(alpha_fraction, 1));
+            const pass_colour = (shadow_colour & 0x00FFFFFF) | (pass_alpha << 24);
+
+            surface.fillRectBlend(
+                base_x + off_x - expand,
+                base_y + off_y - expand,
+                base_w + expand * 2,
+                base_h + expand * 2,
+                pass_colour,
+            );
+        }
+    }
+}
+
 fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip_top: i32, clip_bottom: i32, image_cache: ?*ImageCache) void {
     // Skip painting for visibility: hidden (but still recurse for children
     // which may have visibility: visible)
@@ -126,10 +188,35 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             if (screen_bottom < clip_top or screen_y > clip_bottom) return;
 
             if (is_visible) {
-                // Paint background if not transparent
+                // Paint box-shadow behind the element
+                paintBoxShadow(box, surface, scroll_y, scroll_x);
+
+                // Paint background — gradient or solid color
+                const has_gradient = (box.style.gradient_color_start >> 24) > 0 or
+                    (box.style.gradient_color_end >> 24) > 0;
+
                 const bg = box.style.background_color;
                 const alpha = (bg >> 24) & 0xFF;
-                if (alpha > 0) {
+                if (has_gradient) {
+                    const bg_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
+                    const bg_y = screen_y;
+                    const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
+                    const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
+                    const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
+                    const horizontal = (box.style.gradient_direction == ComputedStyle.GradientDirection.to_right or
+                        box.style.gradient_direction == ComputedStyle.GradientDirection.to_left);
+                    var start_color = Surface.argbToColour(box.style.gradient_color_start);
+                    var end_color = Surface.argbToColour(box.style.gradient_color_end);
+                    // Reverse for to_top and to_left
+                    if (box.style.gradient_direction == ComputedStyle.GradientDirection.to_top or
+                        box.style.gradient_direction == ComputedStyle.GradientDirection.to_left)
+                    {
+                        const tmp = start_color;
+                        start_color = end_color;
+                        end_color = tmp;
+                    }
+                    surface.fillGradientRect(bg_x, bg_y, bg_w, bg_h, start_color, end_color, horizontal);
+                } else if (alpha > 0) {
                     const bg_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
                     const bg_y = screen_y;
                     const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
@@ -259,6 +346,9 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                 }
             }
 
+            // Check if text-shadow is set
+            const has_text_shadow = ((box.style.text_shadow_color >> 24) & 0xFF) > 0;
+
             for (box.lines.items) |line| {
                 const draw_y: i32 = @intFromFloat(line.y + line.ascent - scroll_y);
                 const draw_x: i32 = @as(i32, @intFromFloat(line.x)) - sx_i;
@@ -266,6 +356,21 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
 
                 // Skip lines entirely outside clip
                 if (line_bottom < clip_top or draw_y - @as(i32, @intFromFloat(line.ascent)) > clip_bottom) continue;
+
+                // Paint text-shadow first (rendered behind the text)
+                if (has_text_shadow) {
+                    const shadow_colour = Surface.argbToColour(box.style.text_shadow_color);
+                    const shadow_off_x: i32 = @intFromFloat(box.style.text_shadow_x);
+                    const shadow_off_y: i32 = @intFromFloat(box.style.text_shadow_y);
+                    tr.renderGlyphs(
+                        line.text,
+                        draw_x + shadow_off_x,
+                        draw_y + shadow_off_y,
+                        BlitCtx,
+                        .{ .surface = surface, .colour = shadow_colour, .clip_top = clip_top, .clip_bottom = clip_bottom, .offset_x = 0 },
+                        blitGlyphClipped,
+                    );
+                }
 
                 tr.renderGlyphs(
                     line.text,

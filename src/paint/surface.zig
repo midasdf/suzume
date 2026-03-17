@@ -271,6 +271,73 @@ pub const Surface = struct {
         self.fillRoundedRectPerCorner(x, y, w, h, r_raw, r_raw, r_raw, r_raw, colour);
     }
 
+    /// Fill a rectangle with a vertical or horizontal linear gradient (two colors).
+    /// color_start and color_end are in libnsfb ABGR format.
+    pub fn fillGradientRect(self: *Surface, x: i32, y: i32, w: i32, h: i32, color_start: u32, color_end: u32, horizontal: bool) void {
+        if (w <= 0 or h <= 0) return;
+
+        // Clip to surface bounds
+        const x0 = @max(x, 0);
+        const y0 = @max(y, 0);
+        const x1 = @min(x + w, self.width);
+        const y1 = @min(y + h, self.height);
+        if (x0 >= x1 or y0 >= y1) return;
+
+        // Get framebuffer pointer
+        const nsfb_c = @import("../bindings/nsfb.zig").c;
+        var raw_ptr: ?[*]u8 = null;
+        var fb_stride: c_int = 0;
+        if (nsfb_c.nsfb_get_buffer(self.fb, @ptrCast(&raw_ptr), &fb_stride) != 0) return;
+        const fb_ptr: [*]u8 = raw_ptr orelse return;
+        const stride: usize = @intCast(fb_stride);
+
+        // Extract ABGR components for start and end colors (use u32 to prevent overflow)
+        const s_r: u32 = color_start & 0xFF;
+        const s_g: u32 = (color_start >> 8) & 0xFF;
+        const s_b: u32 = (color_start >> 16) & 0xFF;
+        const s_a: u32 = (color_start >> 24) & 0xFF;
+        const e_r: u32 = color_end & 0xFF;
+        const e_g: u32 = (color_end >> 8) & 0xFF;
+        const e_b: u32 = (color_end >> 16) & 0xFF;
+        const e_a: u32 = (color_end >> 24) & 0xFF;
+
+        // Use original dimensions for interpolation (not clipped) to avoid visual shift
+        const steps: u32 = @intCast(if (horizontal) w else h);
+        if (steps == 0) return;
+
+        var py: i32 = y0;
+        while (py < y1) : (py += 1) {
+            const row_offset: usize = @as(usize, @intCast(py)) * stride;
+            var px: i32 = x0;
+            while (px < x1) : (px += 1) {
+                // t based on original coordinate, not clipped
+                const t: u32 = @intCast(if (horizontal) (px - x) else (py - y));
+                // Interpolate each channel in u32 to prevent overflow
+                const r: u8 = @intCast((s_r * (steps - t) + e_r * t) / steps);
+                const g: u8 = @intCast((s_g * (steps - t) + e_g * t) / steps);
+                const b: u8 = @intCast((s_b * (steps - t) + e_b * t) / steps);
+                const a: u8 = @intCast((s_a * (steps - t) + e_a * t) / steps);
+
+                const idx = row_offset + @as(usize, @intCast(px)) * 4;
+                if (a == 255) {
+                    // Opaque: write directly (XRGB8888 little-endian: B, G, R, X)
+                    fb_ptr[idx + 0] = b;
+                    fb_ptr[idx + 1] = g;
+                    fb_ptr[idx + 2] = r;
+                    fb_ptr[idx + 3] = 0xFF;
+                } else if (a > 0) {
+                    // Alpha blend
+                    const a16: u16 = a;
+                    const inv_a: u16 = 255 - a16;
+                    fb_ptr[idx + 0] = @intCast((@as(u16, fb_ptr[idx + 0]) * inv_a + @as(u16, b) * a16) / 255);
+                    fb_ptr[idx + 1] = @intCast((@as(u16, fb_ptr[idx + 1]) * inv_a + @as(u16, g) * a16) / 255);
+                    fb_ptr[idx + 2] = @intCast((@as(u16, fb_ptr[idx + 2]) * inv_a + @as(u16, r) * a16) / 255);
+                    fb_ptr[idx + 3] = 0xFF;
+                }
+            }
+        }
+    }
+
     /// Convert 0xAARRGGBB (standard hex) to libnsfb ABGR colour format.
     /// libnsfb stores colours as 0xAABBGGRR in memory.
     pub fn argbToColour(argb: u32) u32 {
