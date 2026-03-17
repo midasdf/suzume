@@ -692,6 +692,8 @@ fn serializeSession(allocator: std.mem.Allocator, tab_mgr: *const TabManager) ?[
 }
 
 /// Restore tabs from session JSON.
+/// Tabs are restored with URLs and titles but pages are NOT loaded (lazy loading).
+/// The active tab will be loaded on first paint; other tabs load when switched to.
 fn restoreSession(
     allocator: std.mem.Allocator,
     json: []const u8,
@@ -699,7 +701,7 @@ fn restoreSession(
     page_states: *std.ArrayListUnmanaged(PageState),
 ) void {
     // Simple JSON array parser for [{"url":"...","title":"...","scroll_y":N}, ...]
-    // We just extract url fields using basic string scanning
+    // We extract url and title fields using basic string scanning
     var pos: usize = 0;
     var tab_count: usize = 0;
 
@@ -710,13 +712,25 @@ fn restoreSession(
         const url_end = std.mem.indexOfPos(u8, json, url_start, "\"") orelse break;
         const url = json[url_start..url_end];
 
+        // Try to extract title
+        var title: []const u8 = url;
+        const title_key = std.mem.indexOfPos(u8, json, url_end, "\"title\":\"");
+        if (title_key) |tk| {
+            const title_start = tk + 9;
+            if (std.mem.indexOfPos(u8, json, title_start, "\"")) |title_end| {
+                title = json[title_start..title_end];
+            }
+        }
+
         if (url.len > 0) {
             if (tab_count == 0 and tab_mgr.tabCount() == 1) {
                 // Replace the default first tab instead of creating a new one
                 tab_mgr.updateActiveUrl(url);
-                tab_mgr.updateActiveTitle(url);
+                tab_mgr.updateActiveTitle(if (title.len > 0) title else url);
             } else {
                 _ = tab_mgr.newTab(url);
+                // Update the title for the newly created tab
+                tab_mgr.updateActiveTitle(if (title.len > 0) title else url);
                 page_states.append(allocator, PageState{}) catch |err| {
                     std.debug.print("[Error] Failed to append page state: {}\n", .{err});
                 };
@@ -730,7 +744,7 @@ fn restoreSession(
     if (tab_count > 0) {
         // Switch to first tab
         _ = tab_mgr.switchTo(0);
-        std.debug.print("[Session] Restored {d} tabs\n", .{tab_count});
+        std.debug.print("[Session] Restored {d} tabs (lazy loading)\n", .{tab_count});
     }
 }
 
@@ -874,6 +888,29 @@ pub fn main() !void {
             if (s.loadSession()) |session_json| {
                 defer allocator.free(session_json);
                 restoreSession(allocator, session_json, &tab_mgr, &page_states);
+
+                // Auto-load the active (first) tab after session restore
+                if (tab_mgr.getActiveTab()) |tab| {
+                    if (tab.url.len > 0 and tab_mgr.active_index < page_states.items.len) {
+                        const pg = &page_states.items[tab_mgr.active_index];
+                        const url_z = allocator.allocSentinel(u8, tab.url.len, 0) catch null;
+                        if (url_z) |uz| {
+                            defer allocator.free(uz);
+                            @memcpy(uz, tab.url);
+                            url_input.setText(tab.url);
+                            url_input.focused = false;
+                            status_text = "Loading...";
+                            if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width)) {
+                                status_text = "Done";
+                                scroll_y = 0;
+                                if (current_url) |old| allocator.free(old);
+                                current_url = allocator.dupe(u8, tab.url) catch null;
+                            } else {
+                                status_text = "Failed";
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -1389,6 +1426,25 @@ pub fn main() !void {
                                         url_input.focused = false;
                                         if (current_url) |old| allocator.free(old);
                                         current_url = allocator.dupe(u8, tab.url) catch null;
+
+                                        // Lazy load: if this tab has no loaded page, navigate to its URL
+                                        if (tab_hit.index < page_states.items.len) {
+                                            const pg = &page_states.items[tab_hit.index];
+                                            if (pg.root_box == null and pg.error_message == null and tab.url.len > 0) {
+                                                const url_z = allocator.allocSentinel(u8, tab.url.len, 0) catch null;
+                                                if (url_z) |uz| {
+                                                    defer allocator.free(uz);
+                                                    @memcpy(uz, tab.url);
+                                                    status_text = "Loading...";
+                                                    if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                                                        status_text = "Done";
+                                                        scroll_y = 0;
+                                                    } else {
+                                                        status_text = "Failed";
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                     needs_repaint = true;
                                 }

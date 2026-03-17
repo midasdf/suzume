@@ -1,6 +1,6 @@
 /// Zig-friendly computed style struct extracted from LibCSS's css_computed_style.
 pub const ComputedStyle = struct {
-    color: u32 = 0xFF000000, // ARGB, black default
+    color: u32 = 0xFFcdd6f4, // ARGB, Catppuccin Mocha text default
     background_color: u32 = 0x00000000, // ARGB, transparent default
     font_size_px: f32 = 16.0,
     font_weight: u16 = 400,

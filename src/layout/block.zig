@@ -219,7 +219,9 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
 
     // Measure full text first
     const full_metrics = text_renderer.measure(text);
-    const line_height: f32 = @floatFromInt(full_metrics.height);
+    // Apply 1.4x line-height for comfortable spacing (browsers default ~1.2)
+    const raw_height: f32 = @floatFromInt(full_metrics.height);
+    const line_height: f32 = raw_height * 1.4;
     const ascent: f32 = @floatFromInt(full_metrics.ascent);
 
     // Handle white-space: pre — preserve all whitespace and newlines

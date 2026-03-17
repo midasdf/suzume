@@ -407,13 +407,15 @@ pub const CascadeResult = struct {
     }
 };
 
-/// Minimal user-agent default stylesheet.
+/// Minimal user-agent default stylesheet (Catppuccin Mocha theme).
 const ua_stylesheet_text =
+    \\html { color: #cdd6f4; }
+    \\body { margin: 8px; color: #cdd6f4; }
     \\html, body, div, section, article, aside, nav, main,
     \\header, footer, h1, h2, h3, h4, h5, h6, p, blockquote,
     \\dl, dt, dd, figure, figcaption, form, fieldset,
     \\hr, address, details, summary { display: block; }
-    \\head, style, script, link, meta, title { display: none; }
+    \\head, style, script, link, meta, title, template { display: none; }
     \\table { display: table; border-collapse: separate; }
     \\tr { display: table-row; }
     \\td, th { display: table-cell; padding: 1px; }
@@ -436,9 +438,22 @@ const ua_stylesheet_text =
     \\em, i { font-style: italic; }
     \\a { color: #89b4fa; text-decoration: underline; }
     \\pre, code { white-space: pre; }
+    \\code { color: #a6e3a1; }
+    \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
     \\hr { border-top: 1px solid #45475a; margin-top: 8px; margin-bottom: 8px; }
     \\p { margin-top: 1em; margin-bottom: 1em; }
-    \\blockquote { margin-left: 40px; margin-right: 40px; margin-top: 1em; margin-bottom: 1em; }
+    \\blockquote { margin-left: 40px; margin-right: 40px; margin-top: 1em; margin-bottom: 1em;
+    \\  border-left: 3px solid #45475a; padding-left: 12px; }
+    \\button { display: inline-block; padding: 4px 12px;
+    \\  border: 1px solid #45475a; color: #cdd6f4; }
+    \\input, textarea { display: inline-block; padding: 4px 6px;
+    \\  border: 1px solid #45475a; color: #cdd6f4; }
+    \\select { display: inline-block; padding: 4px 6px;
+    \\  border: 1px solid #45475a; color: #cdd6f4; }
+    \\small { font-size: 0.83em; }
+    \\sub, sup { font-size: 0.75em; }
+    \\mark { color: #1e1e2e; }
+    \\abbr { text-decoration: underline; }
 ;
 
 /// Walk the DOM tree recursively and collect <style> element text content.

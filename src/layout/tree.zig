@@ -101,9 +101,10 @@ fn buildChildren(
                         child_box.box_type = .replaced;
                         child_box.image_url = child.getAttribute("src");
 
-                        // Read width/height attributes
-                        var img_w: f32 = 300; // default placeholder
-                        var img_h: f32 = 150;
+                        // If no src attribute, use minimal placeholder size
+                        const has_src = child.getAttribute("src") != null;
+                        var img_w: f32 = if (has_src) 300 else 0; // default placeholder
+                        var img_h: f32 = if (has_src) 150 else 0;
                         if (child.getAttribute("width")) |w_str| {
                             img_w = parseFloatAttr(w_str);
                         }
@@ -114,9 +115,66 @@ fn buildChildren(
                         child_box.intrinsic_height = img_h;
                     }
 
+                    // Handle <br> as a line break — empty block with line-height spacing
+                    if (std.mem.eql(u8, tag, "br")) {
+                        child_box.box_type = .block;
+                        child_box.style.display = .block;
+                        // Give it one line's height to create a visual break
+                        child_box.style.height = .{ .px = child_box.style.font_size_px };
+                    }
+
                     // Handle <hr> as a special replaced element
                     if (std.mem.eql(u8, tag, "hr")) {
                         child_box.is_hr = true;
+                    }
+
+                    // Handle <input> elements — show value/placeholder as inline text
+                    if (std.mem.eql(u8, tag, "input")) {
+                        const input_type = child.getAttribute("type") orelse "text";
+                        if (!std.mem.eql(u8, input_type, "hidden")) {
+                            child_box.box_type = .block;
+                            // Add default styling for form inputs
+                            if (child_box.style.background_color == 0x00000000) {
+                                child_box.style.background_color = 0xFF313244; // surface0
+                            }
+                            // Create text child for value or placeholder
+                            const display_text = child.getAttribute("value") orelse
+                                (child.getAttribute("placeholder") orelse "");
+                            if (display_text.len > 0) {
+                                const text_box = try allocator.create(Box);
+                                text_box.* = .{};
+                                text_box.box_type = .inline_text;
+                                text_box.text = display_text;
+                                text_box.parent = child_box;
+                                text_box.style = child_box.style;
+                                // Placeholder text is dimmer
+                                if (child.getAttribute("value") == null) {
+                                    text_box.style.color = 0xFF6c7086; // overlay0
+                                }
+                                try child_box.children.append(allocator, text_box);
+                            }
+                        }
+                    }
+
+                    // Handle <button> elements — ensure visible styling
+                    if (std.mem.eql(u8, tag, "button")) {
+                        if (child_box.style.background_color == 0x00000000) {
+                            child_box.style.background_color = 0xFF313244; // surface0
+                        }
+                    }
+
+                    // Handle <select> elements
+                    if (std.mem.eql(u8, tag, "select")) {
+                        if (child_box.style.background_color == 0x00000000) {
+                            child_box.style.background_color = 0xFF313244; // surface0
+                        }
+                    }
+
+                    // Handle <textarea> elements
+                    if (std.mem.eql(u8, tag, "textarea")) {
+                        if (child_box.style.background_color == 0x00000000) {
+                            child_box.style.background_color = 0xFF313244; // surface0
+                        }
                     }
 
                     // Track list item counters
@@ -127,8 +185,15 @@ fn buildChildren(
                 }
                 child_box.link_url = link_url;
 
-                // Recurse into children (skip for replaced elements)
-                if (child_box.box_type != .replaced) {
+                // Recurse into children (skip for replaced/void elements)
+                const skip_recurse = child_box.box_type == .replaced or
+                    (if (child.tagName()) |tag|
+                    (std.mem.eql(u8, tag, "input") or
+                        std.mem.eql(u8, tag, "br") or
+                        std.mem.eql(u8, tag, "hr"))
+                else
+                    false);
+                if (!skip_recurse) {
                     // If this is an ordered/unordered list, start counter at 0
                     const sub_counter: u32 = if (child.tagName()) |tag| blk: {
                         if (std.mem.eql(u8, tag, "ol") or std.mem.eql(u8, tag, "ul")) {
