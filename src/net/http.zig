@@ -66,8 +66,9 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
-        // Chrome-like UA to avoid "update your browser" blocks
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
+        // Honest UA — suzume is its own browser, not pretending to be Chrome.
+        // Compatible with DDG HTML, Brave Search, Wikipedia, and most sites.
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "suzume/1.0 (Linux; aarch64)");
 
         const rc = c.curl_easy_perform(self.handle);
         if (rc != c.CURLE_OK) {
