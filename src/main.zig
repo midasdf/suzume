@@ -444,6 +444,17 @@ fn navigateTo(
             }
 
             const img = decodeImage(resp.body) catch continue;
+
+            // Guard against decoded image OOM: reject if decoded pixels exceed 4MP (16MB RGBA)
+            const max_decoded_pixels: u64 = 4 * 1024 * 1024; // 4 megapixels
+            const pixel_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+            if (pixel_count > max_decoded_pixels) {
+                std.debug.print("[Images] Skipping large decoded image ({d}x{d} = {d}MP): {s}\n", .{ img.width, img.height, pixel_count / (1024 * 1024), resolved });
+                var mimg = img;
+                mimg.deinit();
+                continue;
+            }
+
             img_cache.put(img_url, img) catch {
                 var mimg = img;
                 mimg.deinit();
@@ -935,16 +946,20 @@ fn processUrlInput(allocator: std.mem.Allocator, input: []const u8) ![:0]const u
 /// Check if a URL is likely a tracking pixel or beacon image.
 fn isTrackingPixel(url: []const u8, intrinsic_w: f32, intrinsic_h: f32) bool {
     // Skip if HTML attributes indicate tiny dimensions (1x1, 2x1, etc.)
-    if (intrinsic_w > 0 and intrinsic_h > 0 and intrinsic_w <= 2 and intrinsic_h <= 2) {
+    const is_tiny = intrinsic_w > 0 and intrinsic_h > 0 and intrinsic_w <= 2 and intrinsic_h <= 2;
+    if (is_tiny) {
         return true;
     }
 
-    // Check URL for common tracking pixel patterns
-    const tracking_keywords = [_][]const u8{ "pixel", "beacon", "track", "1x1", "spacer" };
-    const lower_url = url;
-    for (tracking_keywords) |keyword| {
-        if (std.mem.indexOf(u8, lower_url, keyword) != null) {
-            return true;
+    // URL keyword check only when dimensions are unknown (0x0) — avoids
+    // false positives on URLs like "/pixel-art/logo.png"
+    if (intrinsic_w == 0 and intrinsic_h == 0) {
+        // Only match path-segment boundaries: "/pixel." "/beacon/" "/1x1" "/spacer."
+        const tracking_patterns = [_][]const u8{ "/pixel.", "/beacon", "/1x1", "/spacer." };
+        for (tracking_patterns) |pattern| {
+            if (std.mem.indexOf(u8, url, pattern) != null) {
+                return true;
+            }
         }
     }
 

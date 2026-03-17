@@ -452,8 +452,11 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache, f
         line_heights[line_idx] = line_max_cross;
     }
 
-    // Compute total cross size (sum of all line heights)
-    var total_cross: f32 = 0;
+    // Compute total cross size (sum of all line heights + gaps between lines)
+    var total_cross: f32 = if (line_count > 1)
+        gap * @as(f32, @floatFromInt(line_count - 1))
+    else
+        0;
     for (0..line_count) |li| {
         total_cross += line_heights[li];
     }
@@ -571,6 +574,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache, f
         }
 
         cross_cursor += line_height;
+        if (raw_line_idx + 1 < line_count) cross_cursor += gap;
     }
 
     box.content.height = container_cross;
