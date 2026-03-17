@@ -336,28 +336,61 @@ fn navigateTo(
     block_layout.adjustXPositions(root_box, root_box.margin.left);
     block_layout.adjustYPositions(root_box, root_box.margin.top);
 
-    // Load images
+    // Load images (with limits for performance)
+    const max_images: usize = 10;
+    const max_image_bytes: usize = 500 * 1024; // 500KB per image
     var img_cache = ImageCache.init(allocator);
     var img_urls: std.ArrayListUnmanaged([]const u8) = .empty;
     defer img_urls.deinit(allocator);
     collectImageUrls(root_box, &img_urls, allocator);
 
+    var images_loaded: usize = 0;
     for (img_urls.items) |img_url| {
+        if (images_loaded >= max_images) {
+            std.debug.print("[Images] Limit reached ({d}/{d}), skipping remaining\n", .{ images_loaded, img_urls.items.len });
+            break;
+        }
+
+        // Skip SVG images (stb_image can't decode them)
+        if (isSvgUrl(img_url)) {
+            std.debug.print("[Images] Skipping SVG: {s}\n", .{img_url});
+            continue;
+        }
+
         // Resolve relative URL
         const resolved = resolveUrl(allocator, url_z, img_url) catch continue;
         defer allocator.free(resolved);
 
-        std.debug.print("Loading image: {s}\n", .{resolved});
+        // Also check resolved URL for SVG
+        if (isSvgUrl(resolved)) {
+            std.debug.print("[Images] Skipping SVG: {s}\n", .{resolved});
+            continue;
+        }
 
-        var resp = loader.loadBytes(resolved) catch continue;
+        std.debug.print("[Images] Loading ({d}/{d}): {s}\n", .{ images_loaded + 1, @min(img_urls.items.len, max_images), resolved });
+
+        var resp = loader.loadBytesWithTimeout(resolved, 5) catch continue;
         defer resp.deinit();
 
         if (resp.status_code == 200 and resp.body.len > 0) {
+            // Skip if content-type is SVG
+            if (isSvgContentType(resp.content_type)) {
+                std.debug.print("[Images] Skipping SVG (content-type): {s}\n", .{resolved});
+                continue;
+            }
+
+            // Skip oversized images
+            if (resp.body.len > max_image_bytes) {
+                std.debug.print("[Images] Skipping oversized image ({d} bytes): {s}\n", .{ resp.body.len, resolved });
+                continue;
+            }
+
             const img = decodeImage(resp.body) catch continue;
             img_cache.put(img_url, img) catch {
                 var mimg = img;
                 mimg.deinit();
             };
+            images_loaded += 1;
         }
     }
 
@@ -758,6 +791,120 @@ fn restoreSession(
     }
 }
 
+/// Process URL bar input: detect search queries vs URLs.
+/// - If input starts with http:// or https://, use as-is.
+/// - If input contains a dot (e.g. "example.com"), prepend https://
+/// - Otherwise, treat as a search query and redirect to Brave Search.
+/// Returns an owned sentinel-terminated string.
+fn processUrlInput(allocator: std.mem.Allocator, input: []const u8) ![:0]const u8 {
+    // Already a full URL
+    if (std.mem.startsWith(u8, input, "http://") or std.mem.startsWith(u8, input, "https://")) {
+        const result = try allocator.allocSentinel(u8, input.len, 0);
+        @memcpy(result, input);
+        return result;
+    }
+
+    // Internal pages
+    if (std.mem.startsWith(u8, input, "suzume://")) {
+        const result = try allocator.allocSentinel(u8, input.len, 0);
+        @memcpy(result, input);
+        return result;
+    }
+
+    // Contains a dot — likely a domain name, prepend https://
+    if (std.mem.indexOf(u8, input, ".") != null) {
+        const prefix = "https://";
+        const result = try allocator.allocSentinel(u8, prefix.len + input.len, 0);
+        @memcpy(result[0..prefix.len], prefix);
+        @memcpy(result[prefix.len..][0..input.len], input);
+        return result;
+    }
+
+    // Otherwise, treat as a search query
+    // URL-encode the query for Brave Search
+    const base = "https://search.brave.com/search?q=";
+    const source = "&source=web";
+
+    // Calculate encoded length
+    var encoded_len: usize = 0;
+    for (input) |ch| {
+        if (isUrlSafe(ch)) {
+            encoded_len += 1;
+        } else if (ch == ' ') {
+            encoded_len += 1; // '+'
+        } else {
+            encoded_len += 3; // %XX
+        }
+    }
+
+    const total_len = base.len + encoded_len + source.len;
+    const result = try allocator.allocSentinel(u8, total_len, 0);
+
+    @memcpy(result[0..base.len], base);
+
+    var pos: usize = base.len;
+    for (input) |ch| {
+        if (isUrlSafe(ch)) {
+            result[pos] = ch;
+            pos += 1;
+        } else if (ch == ' ') {
+            result[pos] = '+';
+            pos += 1;
+        } else {
+            const hex = "0123456789ABCDEF";
+            result[pos] = '%';
+            result[pos + 1] = hex[(ch >> 4) & 0x0f];
+            result[pos + 2] = hex[ch & 0x0f];
+            pos += 3;
+        }
+    }
+
+    @memcpy(result[pos..][0..source.len], source);
+    return result;
+}
+
+/// Check if a URL points to an SVG image (by file extension).
+fn isSvgUrl(url: []const u8) bool {
+    // Strip query string and fragment
+    const path_end = std.mem.indexOf(u8, url, "?") orelse std.mem.indexOf(u8, url, "#") orelse url.len;
+    const path = url[0..path_end];
+    if (path.len < 4) return false;
+
+    const ext = path[path.len - 4 ..];
+    return std.mem.eql(u8, ext, ".svg");
+}
+
+/// Check if content-type indicates SVG.
+fn isSvgContentType(content_type: []const u8) bool {
+    return std.mem.startsWith(u8, content_type, "image/svg");
+}
+
+fn isUrlSafe(ch: u8) bool {
+    return (ch >= 'A' and ch <= 'Z') or
+        (ch >= 'a' and ch <= 'z') or
+        (ch >= '0' and ch <= '9') or
+        ch == '-' or ch == '_' or ch == '.' or ch == '~';
+}
+
+/// Extract the <title> text from a parsed document.
+fn extractTitle(doc: *Document) ?[]const u8 {
+    const head_node = doc.head() orelse return null;
+    var child = head_node.firstChild();
+    while (child) |node| {
+        defer child = node.nextSibling();
+        if (node.nodeType() != .element) continue;
+        const tag = node.tagName() orelse continue;
+        if (std.mem.eql(u8, tag, "title")) {
+            // Get text content of <title>
+            if (node.firstChild()) |text_node| {
+                return text_node.textContent();
+            }
+            return null;
+        }
+    }
+    return null;
+}
+
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
@@ -963,7 +1110,9 @@ pub fn main() !void {
                     scroll_y = 0;
                     scroll_x = 0;
                     tab_mgr.updateActiveUrl(url);
-                    tab_mgr.updateActiveTitle(url);
+                    // Extract page title
+                    const init_title = if (page_states.items[0].doc) |*d| extractTitle(d) else null;
+                    tab_mgr.updateActiveTitle(init_title orelse url);
                     // Store in history
                     const owned = allocator.alloc(u8, url.len) catch null;
                     if (owned) |o| {
@@ -981,7 +1130,7 @@ pub fn main() !void {
                     if (storage_inst) |*s| {
                         const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
                         if (!is_priv) {
-                            s.addHistory(url, url);
+                            s.addHistory(url, init_title orelse url);
                         }
                     }
                 } else {
@@ -1152,11 +1301,12 @@ pub fn main() !void {
                         continue;
                     }
 
-                    // Ctrl+L: focus URL bar
+                    // Ctrl+L: focus URL bar and select all (clear for new input)
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_l) {
                         url_input.focused = true;
-                        // Select all (move cursor to end)
-                        url_input.cursor = url_input.buf.items.len;
+                        // Clear the URL bar so user can immediately type a new URL.
+                        // Old URL is restored on Escape.
+                        url_input.setText("");
                         needs_repaint = true;
                         continue;
                     }
@@ -1558,10 +1708,17 @@ pub fn main() !void {
                                 &focused_input_node,
                                 &form_input,
                             );
-                            // Update tab with new URL
+                            // Update tab with new URL and page title
                             if (current_url) |cu| {
                                 tab_mgr.updateActiveUrl(cu);
-                                tab_mgr.updateActiveTitle(cu);
+                                const active_pg_title: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                                const click_title = if (active_pg_title) |pgt| (if (pgt.doc) |*d| extractTitle(d) else null) else null;
+                                tab_mgr.updateActiveTitle(click_title orelse cu);
+                                // Record in storage with title
+                                if (storage_inst) |*s| {
+                                    const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
+                                    if (!is_priv) s.addHistory(cu, click_title orelse cu);
+                                }
                             }
                         }
                         continue;
@@ -1758,12 +1915,17 @@ pub fn main() !void {
                             .submit => {
                                 // Clear form focus before navigation
                                 focused_input_node = null;
-                                // Navigate to URL
+                                // Navigate to URL (with search query detection)
                                 const url_text = url_input.getText();
                                 if (url_text.len > 0) {
-                                    const url_z = allocator.allocSentinel(u8, url_text.len, 0) catch continue;
-                                    defer allocator.free(url_z);
-                                    @memcpy(url_z, url_text);
+                                    // Determine the actual URL to navigate to
+                                    const nav_target = processUrlInput(allocator, url_text) catch continue;
+                                    defer allocator.free(nav_target);
+
+                                    // Update the URL bar to show the resolved URL
+                                    url_input.setText(nav_target);
+
+                                    const url_z = nav_target;
 
                                     status_text = "Loading...";
                                     needs_repaint = true;
@@ -1783,27 +1945,25 @@ pub fn main() !void {
                                             history.shrinkRetainingCapacity(history_pos + 1);
                                         }
 
-                                        // Add to history
-                                        const owned = allocator.alloc(u8, url_text.len) catch null;
+                                        // Add to history (use nav_target since url_text may be stale)
+                                        const owned = allocator.dupe(u8, nav_target) catch null;
                                         if (owned) |o| {
-                                            @memcpy(o, url_text);
                                             history.append(allocator, o) catch {};
                                             history_pos = history.items.len - 1;
                                         }
                                         if (current_url) |old| allocator.free(old);
-                                        const cu = allocator.alloc(u8, url_text.len) catch null;
-                                        if (cu) |c| {
-                                            @memcpy(c, url_text);
-                                            current_url = c;
-                                        }
-                                        // Update tab
-                                        tab_mgr.updateActiveUrl(url_text);
-                                        tab_mgr.updateActiveTitle(url_text);
+                                        current_url = allocator.dupe(u8, nav_target) catch null;
+
+                                        // Update tab URL and extract page title
+                                        tab_mgr.updateActiveUrl(nav_target);
+                                        const page_title = if (pg.doc) |*d| extractTitle(d) else null;
+                                        tab_mgr.updateActiveTitle(page_title orelse nav_target);
+
                                         // Record in storage (skip for private tabs)
                                         if (storage_inst) |*s| {
                                             const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
                                             if (!is_priv) {
-                                                s.addHistory(url_text, url_text);
+                                                s.addHistory(nav_target, page_title orelse nav_target);
                                             }
                                         }
                                     } else {

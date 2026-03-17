@@ -111,6 +111,12 @@ pub fn generateBookmarksPage(allocator: std.mem.Allocator, storage: *Storage) ?[
 /// Generate HTML for an internal page by URL. Returns owned HTML slice or null.
 pub fn generatePage(allocator: std.mem.Allocator, url: []const u8, storage: ?*Storage) ?[]u8 {
     const page_name = getPageName(url) orelse return null;
+
+    // Pages that don't need storage
+    if (std.mem.eql(u8, page_name, "home")) {
+        return generateHomePage(allocator);
+    }
+
     const store = storage orelse return generateErrorPage(allocator, "Storage not available");
 
     if (std.mem.eql(u8, page_name, "history")) {
@@ -120,6 +126,37 @@ pub fn generatePage(allocator: std.mem.Allocator, url: []const u8, storage: ?*St
     } else {
         return generateErrorPage(allocator, "Unknown internal page");
     }
+}
+
+/// Generate HTML content for suzume://home (homepage with quick links).
+pub fn generateHomePage(allocator: std.mem.Allocator) ?[]u8 {
+    var html: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer html.deinit(allocator);
+
+    html.appendSlice(allocator,
+        \\<html><head><title>suzume</title><style>
+        \\body{background:#1e1e2e;color:#cdd6f4;font-family:sans-serif;padding:20px;max-width:600px;margin:0 auto}
+        \\h1{color:#89b4fa;text-align:center;font-size:28px;margin-top:40px}
+        \\h2{color:#cba6f7;font-size:16px;margin-top:24px}
+        \\a{color:#89b4fa;display:block;padding:8px 12px;margin:4px 0;background:#313244;border-radius:4px;text-decoration:none;font-size:14px}
+        \\.tip{color:#6c7086;font-size:12px;text-align:center;margin-top:32px}
+        \\</style></head><body>
+        \\<h1>suzume</h1>
+        \\<p style="text-align:center;color:#6c7086;font-size:14px">Type a URL or search query in the address bar</p>
+        \\<h2>Quick Links</h2>
+        \\<a href="https://en.wikipedia.org">Wikipedia</a>
+        \\<a href="https://news.ycombinator.com">Hacker News</a>
+        \\<a href="https://search.brave.com">Brave Search</a>
+        \\<a href="https://lobste.rs">Lobsters</a>
+        \\<a href="https://lite.cnn.com">CNN Lite</a>
+        \\<a href="https://text.npr.org">NPR Text</a>
+        \\<a href="suzume://bookmarks">Bookmarks</a>
+        \\<a href="suzume://history">History</a>
+        \\<p class="tip">Ctrl+L: address bar | Ctrl+T: new tab | Ctrl+F: find | Ctrl+D: bookmark</p>
+        \\</body></html>
+    ) catch return null;
+
+    return html.toOwnedSlice(allocator) catch null;
 }
 
 fn generateErrorPage(allocator: std.mem.Allocator, message: []const u8) ?[]u8 {

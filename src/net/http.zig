@@ -46,6 +46,11 @@ pub const HttpClient = struct {
     }
 
     pub fn get(self: *HttpClient, allocator: std.mem.Allocator, url: [:0]const u8) !Response {
+        return self.getWithTimeout(allocator, url, 30);
+    }
+
+    /// GET with a custom timeout in seconds.
+    pub fn getWithTimeout(self: *HttpClient, allocator: std.mem.Allocator, url: [:0]const u8, timeout_secs: c_long) !Response {
         var ctx = WriteContext{
             .buffer = .empty,
             .allocator = allocator,
@@ -60,7 +65,7 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(&ctx)));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, @as(c_long, 30));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
         // Chrome-like UA to avoid "update your browser" blocks
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
 

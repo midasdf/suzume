@@ -119,6 +119,15 @@ pub const Loader = struct {
         return try self.client.get(self.allocator, url);
     }
 
+    /// Fetch raw bytes with a custom timeout (for images: shorter timeout).
+    pub fn loadBytesWithTimeout(self: *Loader, url: [:0]const u8, timeout_secs: c_long) !Response {
+        if (self.adblock_enabled and adblock.shouldBlock(url)) {
+            std.debug.print("[AdBlock] Blocked: {s}\n", .{url});
+            return error.AdBlocked;
+        }
+        return try self.client.getWithTimeout(self.allocator, url, timeout_secs);
+    }
+
     /// Check if a response should be downloaded (non-renderable content type).
     pub fn isDownloadable(content_type: []const u8) bool {
         // Renderable types that the browser handles

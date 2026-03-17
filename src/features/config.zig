@@ -6,7 +6,7 @@ pub const Config = struct {
 
     const defaults = [_]struct { key: []const u8, value: []const u8 }{
         .{ .key = "max_active_tabs", .value = "3" },
-        .{ .key = "homepage", .value = "about:blank" },
+        .{ .key = "homepage", .value = "suzume://home" },
         .{ .key = "adblock_enabled", .value = "true" },
     };
 
@@ -123,7 +123,7 @@ pub const Config = struct {
             \\# Lines starting with # are comments
             \\
             \\max_active_tabs=3
-            \\homepage=about:blank
+            \\homepage=suzume://home
             \\adblock_enabled=true
             \\
         ;
