@@ -1612,18 +1612,23 @@ pub fn main() !void {
                             const xim_res = surface.processKeyXim(true);
                             switch (xim_res.result) {
                                 .text => {
-                                    // XIM produced composed text (e.g., Japanese from Mozc)
+                                    // XIM produced text — but skip control characters
+                                    // (Enter→\r/\n, Escape→\x1b, etc. should be handled normally)
                                     if (xim_res.text) |composed| {
-                                        if (find_bar.visible) {
-                                            find_bar.insertText(composed);
-                                        } else if (focused_input_node != null) {
-                                            form_input.insertText(composed);
-                                        } else if (url_input.focused) {
-                                            url_input.insertText(composed);
+                                        const is_control = composed.len > 0 and composed[0] < 0x20;
+                                        if (!is_control) {
+                                            if (find_bar.visible) {
+                                                find_bar.insertText(composed);
+                                            } else if (focused_input_node != null) {
+                                                form_input.insertText(composed);
+                                            } else if (url_input.focused) {
+                                                url_input.insertText(composed);
+                                            }
+                                            needs_repaint = true;
+                                            continue;
                                         }
-                                        needs_repaint = true;
+                                        // Control char — fall through to normal handling
                                     }
-                                    continue;
                                 },
                                 .filtered => {
                                     // Key consumed by IME (composing) — skip normal handler
