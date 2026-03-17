@@ -65,8 +65,6 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         }
     }
 
-    const gap_total = if (flex_child_count > 1) gap * @as(f32, @floatFromInt(flex_child_count - 1)) else 0;
-
     // Phase 1: Measure children to get their base main sizes
     // First, lay them out as blocks to get intrinsic sizes
     for (children) |child| {
@@ -93,6 +91,26 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
             block.layoutBlock(child, container_width, box.content.y, fonts);
         }
     }
+
+    // Check if wrapping is enabled
+    const wrapping = style.flex_wrap == .wrap or style.flex_wrap == .wrap_reverse;
+
+    if (!wrapping) {
+        // === NOWRAP path (original behavior) ===
+        layoutFlexRowNowrap(box, is_reverse, gap, fonts, flex_child_count);
+    } else {
+        // === WRAP path ===
+        layoutFlexRowWrap(box, is_reverse, gap, fonts, flex_child_count);
+    }
+}
+
+/// Nowrap path for flex row layout (original single-line behavior).
+fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache, flex_child_count: usize) void {
+    const style = box.style;
+    const container_width = box.content.width;
+    const children = box.children.items;
+
+    const gap_total = if (flex_child_count > 1) gap * @as(f32, @floatFromInt(flex_child_count - 1)) else 0;
 
     // Phase 2: Calculate total main size and distribute free space
     var total_base_size: f32 = 0;
@@ -282,6 +300,277 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
             child.border.left + child.border.right;
         flex_pos_idx += 1;
         if (flex_pos_idx < flex_child_count) cursor_x += per_gap;
+    }
+
+    box.content.height = container_cross;
+}
+
+/// Wrap path for flex row layout. Splits children into multiple lines.
+fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache, flex_child_count: usize) void {
+    const style = box.style;
+    const container_width = box.content.width;
+    const children = box.children.items;
+    const is_wrap_reverse = style.flex_wrap == .wrap_reverse;
+    _ = flex_child_count;
+
+    // Build a list of flex-participating child indices
+    var flex_indices_buf: [256]usize = undefined;
+    var flex_count: usize = 0;
+    for (children, 0..) |child, ci| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        if (flex_count >= 256) break;
+        flex_indices_buf[flex_count] = ci;
+        flex_count += 1;
+    }
+    const flex_indices = flex_indices_buf[0..flex_count];
+
+    // Compute outer widths for each flex child (from Phase 1 measurement)
+    var outer_widths_buf: [256]f32 = undefined;
+    for (flex_indices, 0..) |ci, fi| {
+        const child = children[ci];
+        const basis = switch (child.style.flex_basis) {
+            .px => |b| b,
+            .percent => |pct| pct * container_width / 100.0,
+            else => null,
+        };
+        const explicit_child_w = switch (child.style.width) {
+            .px => |w| w,
+            .percent => |pct| pct * container_width / 100.0,
+            else => null,
+        };
+        const child_pad_bdr = child.padding.left + child.padding.right +
+            child.border.left + child.border.right;
+        const child_main = basis orelse (explicit_child_w orelse child.content.width);
+        const is_border_box = child.style.box_sizing == .border_box and
+            (basis != null or explicit_child_w != null);
+        const outer_extra = child.margin.left + child.margin.right +
+            if (is_border_box) @as(f32, 0) else child_pad_bdr;
+        outer_widths_buf[fi] = child_main + outer_extra;
+    }
+
+    // Split into wrap lines
+    // Each line is stored as (start_flex_idx, end_flex_idx) into flex_indices
+    const max_lines = 64;
+    var line_starts: [max_lines]usize = undefined;
+    var line_ends: [max_lines]usize = undefined;
+    var line_count: usize = 0;
+
+    {
+        var line_start: usize = 0;
+        var cumulative_width: f32 = 0;
+        var items_in_line: usize = 0;
+
+        for (0..flex_count) |fi| {
+            const item_width = outer_widths_buf[fi];
+            const needed = if (items_in_line > 0) item_width + gap else item_width;
+
+            // Start a new line if this item would overflow and we have at least one item
+            if (items_in_line > 0 and cumulative_width + needed > container_width and line_count < max_lines) {
+                line_starts[line_count] = line_start;
+                line_ends[line_count] = fi;
+                line_count += 1;
+                line_start = fi;
+                cumulative_width = item_width;
+                items_in_line = 1;
+            } else {
+                cumulative_width += needed;
+                items_in_line += 1;
+            }
+        }
+        // Last line
+        if (items_in_line > 0 and line_count < max_lines) {
+            line_starts[line_count] = line_start;
+            line_ends[line_count] = flex_count;
+            line_count += 1;
+        }
+    }
+
+    // Process each line: flex-grow/shrink, re-layout, measure cross size
+    var line_heights: [max_lines]f32 = undefined;
+    var final_widths_buf: [256]f32 = undefined;
+
+    for (0..line_count) |line_idx| {
+        const l_start = line_starts[line_idx];
+        const l_end = line_ends[line_idx];
+        const line_item_count = l_end - l_start;
+        const line_gap_total = if (line_item_count > 1) gap * @as(f32, @floatFromInt(line_item_count - 1)) else 0;
+
+        // Sum base sizes, grow, shrink for this line
+        var line_base_size: f32 = 0;
+        var line_grow: f32 = 0;
+        var line_shrink: f32 = 0;
+        for (l_start..l_end) |fi| {
+            const child = children[flex_indices[fi]];
+            line_base_size += outer_widths_buf[fi];
+            line_grow += child.style.flex_grow;
+            line_shrink += child.style.flex_shrink;
+        }
+
+        const line_available = container_width - line_gap_total;
+        const line_free = line_available - line_base_size;
+
+        // Compute final widths for this line
+        for (l_start..l_end) |fi| {
+            const child = children[flex_indices[fi]];
+            const basis = switch (child.style.flex_basis) {
+                .px => |b| b,
+                .percent => |pct| pct * container_width / 100.0,
+                else => null,
+            };
+            const explicit_child_w = switch (child.style.width) {
+                .px => |w| w,
+                .percent => |pct| pct * container_width / 100.0,
+                else => null,
+            };
+            const child_pad_bdr = child.padding.left + child.padding.right +
+                child.border.left + child.border.right;
+            const is_border_box = child.style.box_sizing == .border_box and
+                (basis != null or explicit_child_w != null);
+            const child_outer = child.margin.left + child.margin.right +
+                if (is_border_box) @as(f32, 0) else child_pad_bdr;
+            var child_main = basis orelse (explicit_child_w orelse child.content.width);
+
+            if (line_free > 0 and line_grow > 0) {
+                child_main += line_free * child.style.flex_grow / line_grow;
+            } else if (line_free < 0 and line_shrink > 0) {
+                child_main += line_free * child.style.flex_shrink / line_shrink;
+            }
+
+            final_widths_buf[fi] = @max(child_main + child_outer, 0);
+        }
+
+        // Re-layout children in this line with final widths and measure cross size
+        var line_max_cross: f32 = 0;
+        for (l_start..l_end) |fi| {
+            const child = children[flex_indices[fi]];
+            block.layoutBlock(child, final_widths_buf[fi], box.content.y, fonts);
+            const child_cross = child.content.height + child.padding.top + child.padding.bottom +
+                child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+            if (child_cross > line_max_cross) line_max_cross = child_cross;
+        }
+
+        line_heights[line_idx] = line_max_cross;
+    }
+
+    // Compute total cross size (sum of all line heights)
+    var total_cross: f32 = 0;
+    for (0..line_count) |li| {
+        total_cross += line_heights[li];
+    }
+
+    const explicit_h = switch (style.height) {
+        .px => |h| h,
+        .percent, .auto, .none => null,
+    };
+    const container_cross = explicit_h orelse total_cross;
+
+    // Position children line by line
+    var cross_cursor: f32 = 0;
+
+    for (0..line_count) |raw_line_idx| {
+        const line_idx = if (is_wrap_reverse) line_count - 1 - raw_line_idx else raw_line_idx;
+        const l_start = line_starts[line_idx];
+        const l_end = line_ends[line_idx];
+        const line_item_count = l_end - l_start;
+        const line_height = line_heights[line_idx];
+        const line_gap_total = if (line_item_count > 1) gap * @as(f32, @floatFromInt(line_item_count - 1)) else 0;
+
+        // Compute total used width for justify-content
+        var line_total_used: f32 = line_gap_total;
+        for (l_start..l_end) |fi| {
+            line_total_used += final_widths_buf[fi];
+        }
+        const line_remaining = container_width - line_total_used;
+
+        var main_offset: f32 = 0;
+        var per_gap = gap;
+
+        switch (style.justify_content) {
+            .flex_start => {
+                main_offset = 0;
+            },
+            .flex_end => {
+                main_offset = line_remaining;
+            },
+            .center => {
+                main_offset = line_remaining / 2;
+            },
+            .space_between => {
+                main_offset = 0;
+                if (line_item_count > 1) {
+                    per_gap = gap + line_remaining / @as(f32, @floatFromInt(line_item_count - 1));
+                }
+            },
+            .space_around => {
+                if (line_item_count > 0) {
+                    const space = line_remaining / @as(f32, @floatFromInt(line_item_count));
+                    main_offset = space / 2;
+                    per_gap = gap + space;
+                }
+            },
+            .space_evenly => {
+                if (line_item_count > 0) {
+                    const space = line_remaining / @as(f32, @floatFromInt(line_item_count + 1));
+                    main_offset = space;
+                    per_gap = gap + space;
+                }
+            },
+        }
+
+        // Assign positions for items in this line
+        var cursor_x = main_offset;
+        var pos_in_line: usize = 0;
+
+        var iter: usize = 0;
+        while (iter < line_item_count) : (iter += 1) {
+            const fi = if (is_reverse) l_end - 1 - iter else l_start + iter;
+            const child = children[flex_indices[fi]];
+
+            // Cross axis alignment within this line
+            const child_cross = child.content.height + child.padding.top + child.padding.bottom +
+                child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+            var cross_offset: f32 = 0;
+
+            switch (style.align_items) {
+                .flex_start => {
+                    cross_offset = 0;
+                },
+                .flex_end => {
+                    cross_offset = line_height - child_cross;
+                },
+                .center => {
+                    cross_offset = (line_height - child_cross) / 2;
+                },
+                .stretch => {
+                    cross_offset = 0;
+                    const child_non_content = child.padding.top + child.padding.bottom +
+                        child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+                    const stretched_height = @max(line_height - child_non_content, 0);
+                    if (switch (child.style.height) {
+                        .auto => true,
+                        else => false,
+                    }) {
+                        child.content.height = stretched_height;
+                    }
+                },
+                .baseline => {
+                    cross_offset = 0;
+                },
+            }
+
+            const dx = box.content.x + cursor_x - child.content.x + child.padding.left + child.border.left + child.margin.left;
+            const dy = cross_cursor + cross_offset + child.margin.top;
+            block.adjustXPositions(child, dx);
+            block.adjustYPositions(child, dy);
+
+            cursor_x += child.content.width + child.margin.left + child.margin.right +
+                child.padding.left + child.padding.right +
+                child.border.left + child.border.right;
+            pos_in_line += 1;
+            if (pos_in_line < line_item_count) cursor_x += per_gap;
+        }
+
+        cross_cursor += line_height;
     }
 
     box.content.height = container_cross;

@@ -43,13 +43,21 @@ fn decodeUtf8(text: []const u8, pos: usize) struct { cp: u21, len: u3 } {
 /// Returns byte offset (relative to text start) where the line should end.
 /// Tries: space breaks, CJK inter-character breaks, then forced character break (break-word).
 /// Returns null if the very first character doesn't fit (caller should force at least 1 char).
+///
+/// Optimized: measures at word/CJK boundaries first (O(n_words) calls to measure),
+/// then only does character-level measurement within the single overflowing segment.
 fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_renderer: anytype) ?usize {
     if (line_start >= text.len) return null;
 
+    // Phase 1: Scan word-by-word / CJK-character-by-CJK-character.
+    // Collect break opportunities and only call measure() at each one.
     var last_space_break: ?usize = null;
     var last_cjk_break: ?usize = null;
-    var last_char_break: ?usize = null; // for break-word: last position that fit
     var prev_was_cjk = false;
+    // The last boundary position that fit within avail_width
+    var last_fitting_boundary: ?usize = null;
+    // The first boundary position that overflowed
+    var overflow_boundary: ?usize = null;
 
     var i: usize = line_start;
     while (i < text.len) {
@@ -57,39 +65,126 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
         const char_end = i + decoded.len;
         const is_cjk = isCjkCodepoint(decoded.cp);
 
-        // Check if text from line_start to char_end fits
-        const segment = text[line_start..char_end];
-        const seg_metrics = text_renderer.measure(segment);
-        const seg_width: f32 = @floatFromInt(seg_metrics.width);
+        // Determine if this position is a break opportunity
+        var is_break_opportunity = false;
+        var break_pos_space: ?usize = null;
+        var break_pos_cjk: ?usize = null;
 
-        if (seg_width > avail_width and i > line_start) {
-            // This character pushed us over. Use best available break.
-            // Priority: space > CJK > character (break-word)
+        if (decoded.cp == ' ') {
+            is_break_opportunity = true;
+            break_pos_space = char_end; // break after space
+        }
+        if (is_cjk) {
+            is_break_opportunity = true;
+            break_pos_cjk = char_end; // break after CJK char
+        } else if (prev_was_cjk and !is_cjk and decoded.cp != ' ') {
+            // Transition from CJK to non-CJK: break before this char
+            is_break_opportunity = true;
+            break_pos_cjk = i;
+        }
+
+        prev_was_cjk = is_cjk;
+
+        if (is_break_opportunity) {
+            // Measure from line_start to char_end (the end of this break unit)
+            const measure_end = char_end;
+            const segment = text[line_start..measure_end];
+            const seg_metrics = text_renderer.measure(segment);
+            const seg_width: f32 = @floatFromInt(seg_metrics.width);
+
+            if (seg_width > avail_width and measure_end > line_start) {
+                // This boundary overflowed. We know the answer is between
+                // last_fitting_boundary (or line_start) and measure_end.
+                overflow_boundary = measure_end;
+
+                // If we have a space or CJK break from a previous boundary, use it
+                if (last_space_break) |bp| return bp;
+                if (last_cjk_break) |bp| return bp;
+
+                // No previous break — need character-level scan (Phase 2)
+                break;
+            }
+
+            // Still fits — record break points
+            last_fitting_boundary = measure_end;
+            if (break_pos_space) |bp| last_space_break = bp;
+            if (break_pos_cjk) |bp| last_cjk_break = bp;
+        }
+
+        i = char_end;
+    }
+
+    // If we never overflowed at any boundary, check if we ran out of text
+    if (overflow_boundary == null) {
+        // All text fits (we either measured at every boundary and it fit,
+        // or the last chunk after the last boundary might overflow).
+        // We need to check the trailing non-boundary text.
+        if (i >= text.len) {
+            // Measure the full remaining text
+            const segment = text[line_start..text.len];
+            const seg_metrics = text_renderer.measure(segment);
+            const seg_width: f32 = @floatFromInt(seg_metrics.width);
+            if (seg_width <= avail_width) return null; // all fits
+            // Overflows — use last known break
             if (last_space_break) |bp| return bp;
             if (last_cjk_break) |bp| return bp;
-            // break-word fallback: break at last character that fit
+            // Fall through to Phase 2 for character-level break
+            overflow_boundary = text.len;
+        }
+    }
+
+    // Phase 2: Character-level scan within the overflowing segment.
+    // Scan from the last fitting boundary (or line_start) to overflow_boundary,
+    // measuring character by character to find the exact break-word point.
+    const scan_start = last_fitting_boundary orelse line_start;
+    var last_char_break: ?usize = null;
+    var j: usize = scan_start;
+    // Reset CJK tracking for the fine-grained scan
+    var fine_prev_cjk = false;
+    if (scan_start > line_start) {
+        // Check if the character just before scan_start was CJK
+        // by scanning backward one codepoint
+        var back: usize = scan_start;
+        if (back > 0) {
+            back -= 1;
+            while (back > 0 and (text[back] & 0xC0) == 0x80) back -= 1;
+            const prev_dec = decodeUtf8(text, back);
+            fine_prev_cjk = isCjkCodepoint(prev_dec.cp);
+        }
+    }
+
+    while (j < text.len) {
+        const decoded2 = decodeUtf8(text, j);
+        const char_end2 = j + decoded2.len;
+        const is_cjk2 = isCjkCodepoint(decoded2.cp);
+
+        const segment2 = text[line_start..char_end2];
+        const seg_metrics2 = text_renderer.measure(segment2);
+        const seg_width2: f32 = @floatFromInt(seg_metrics2.width);
+
+        if (seg_width2 > avail_width and j > line_start) {
+            // Overflowed. Use best available break.
+            if (last_space_break) |bp| return bp;
+            if (last_cjk_break) |bp| return bp;
             if (last_char_break) |bp| return bp;
-            // Nothing fit at all — force break at current position
-            return i;
+            return j;
         }
 
-        // Track possible break points
-        if (decoded.cp == ' ') {
-            last_space_break = char_end; // break after space
+        // Track break points in fine scan
+        if (decoded2.cp == ' ') {
+            last_space_break = char_end2;
         }
-        // CJK: can break before this character (if previous was CJK) or after this character
-        if (is_cjk) {
-            last_cjk_break = char_end; // break after this CJK character
-        } else if (prev_was_cjk and !is_cjk and decoded.cp != ' ') {
-            // Transition from CJK to non-CJK: can break before this char
-            if (last_cjk_break == null or last_cjk_break.? < i) {
-                last_cjk_break = i;
+        if (is_cjk2) {
+            last_cjk_break = char_end2;
+        } else if (fine_prev_cjk and !is_cjk2 and decoded2.cp != ' ') {
+            if (last_cjk_break == null or last_cjk_break.? < j) {
+                last_cjk_break = j;
             }
         }
 
-        last_char_break = char_end;
-        prev_was_cjk = is_cjk;
-        i = char_end;
+        last_char_break = char_end2;
+        fine_prev_cjk = is_cjk2;
+        j = char_end2;
     }
 
     // All text fits
