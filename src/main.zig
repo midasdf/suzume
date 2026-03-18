@@ -324,8 +324,6 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
 
     // Register event APIs (addEventListener on window/document/elements)
     events.registerEventApis(js_rt.ctx);
-    events.injectElementEventMethods(js_rt.ctx, events.getElementClassId());
-    events.injectElementEventMethods(js_rt.ctx, events.getTextClassId());
 
     // Execute <script> tags (including external scripts via src attribute)
     executeScripts(doc, &js_rt, allocator, loader, base_url);
@@ -806,8 +804,6 @@ fn testDomJs() void {
     // Register DOM APIs
     dom_api.registerDomApis(js_rt.rt, js_rt.ctx, @ptrCast(@alignCast(doc.html_doc)));
     events.registerEventApis(js_rt.ctx);
-    events.injectElementEventMethods(js_rt.ctx, events.getElementClassId());
-    events.injectElementEventMethods(js_rt.ctx, events.getTextClassId());
 
     // Execute scripts (test mode: no loader/base_url for external scripts)
     executeScripts(&doc, &js_rt, std.heap.c_allocator, null, null);

@@ -2442,6 +2442,18 @@ fn documentCreateDocumentFragment(
     return wrapNode(c, node);
 }
 
+// ── No-op constructor for DOM interface globals ─────────────────────
+
+fn jsNoOpConstructor(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewObject(c);
+}
+
 // ── Registration ────────────────────────────────────────────────────
 
 /// Register DOM API classes and the `document` global.
@@ -2472,190 +2484,259 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     };
     _ = qjs.JS_NewClass(rt, text_class_id, &text_class_def);
 
-    // Build Element prototype
-    const elem_proto = qjs.JS_NewObject(ctx);
+    // ── DOM Prototype Chain ──────────────────────────────────────────
+    // EventTarget.prototype → Node.prototype → Element.prototype → HTMLElement.prototype
+    // This mirrors the browser's prototype chain so instanceof checks work.
 
-    // Methods
+    const events = @import("events.zig");
+
+    // ── EventTarget.prototype ──────────────────────────────────────
+    const event_target_proto = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPropertyStr(ctx, event_target_proto, "addEventListener", qjs.JS_NewCFunction(ctx, &events.jsAddEventListener, "addEventListener", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, event_target_proto, "removeEventListener", qjs.JS_NewCFunction(ctx, &events.jsRemoveEventListener, "removeEventListener", 2));
+
+    // ── Node.prototype (inherits EventTarget.prototype) ────────────
+    const node_proto = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPrototype(ctx, node_proto, event_target_proto);
+
+    // Node methods
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "appendChild", qjs.JS_NewCFunction(ctx, &elementAppendChild, "appendChild", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "removeChild", qjs.JS_NewCFunction(ctx, &elementRemoveChild, "removeChild", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "insertBefore", qjs.JS_NewCFunction(ctx, &elementInsertBefore, "insertBefore", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "contains", qjs.JS_NewCFunction(ctx, &elementContains, "contains", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "cloneNode", qjs.JS_NewCFunction(ctx, &elementCloneNode, "cloneNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "replaceWith", qjs.JS_NewCFunction(ctx, &elementReplaceWith, "replaceWith", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "before", qjs.JS_NewCFunction(ctx, &elementBefore, "before", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "after", qjs.JS_NewCFunction(ctx, &elementAfter, "after", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "remove", qjs.JS_NewCFunction(ctx, &elementRemove, "remove", 0));
+
+    // Node constants
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "TEXT_NODE", qjs.JS_NewInt32(ctx, 3));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "COMMENT_NODE", qjs.JS_NewInt32(ctx, 8));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_NODE", qjs.JS_NewInt32(ctx, 9));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_FRAGMENT_NODE", qjs.JS_NewInt32(ctx, 11));
+
+    // Node getters
+    {
+        const textContentAtom = qjs.JS_NewAtom(ctx, "textContent");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, textContentAtom, qjs.JS_NewCFunction(ctx, &elementGetTextContent, "get textContent", 0), qjs.JS_NewCFunction(ctx, &elementSetTextContent, "set textContent", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, textContentAtom);
+    }
+    {
+        const innerTextAtom = qjs.JS_NewAtom(ctx, "innerText");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, innerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get innerText", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerText, "set innerText", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, innerTextAtom);
+    }
+    {
+        const parentNodeAtom = qjs.JS_NewAtom(ctx, "parentNode");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, parentNodeAtom, qjs.JS_NewCFunction(ctx, &elementGetParentNode, "get parentNode", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, parentNodeAtom);
+    }
+    {
+        const parentElementAtom = qjs.JS_NewAtom(ctx, "parentElement");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, parentElementAtom, qjs.JS_NewCFunction(ctx, &elementGetParentElement, "get parentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, parentElementAtom);
+    }
+    {
+        const firstChildAtom = qjs.JS_NewAtom(ctx, "firstChild");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, firstChildAtom, qjs.JS_NewCFunction(ctx, &elementGetFirstChild, "get firstChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, firstChildAtom);
+    }
+    {
+        const lastChildAtom = qjs.JS_NewAtom(ctx, "lastChild");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, lastChildAtom, qjs.JS_NewCFunction(ctx, &elementGetLastChild, "get lastChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, lastChildAtom);
+    }
+    {
+        const nextSiblingAtom = qjs.JS_NewAtom(ctx, "nextSibling");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nextSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetNextSibling, "get nextSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, nextSiblingAtom);
+    }
+    {
+        const prevSiblingAtom = qjs.JS_NewAtom(ctx, "previousSibling");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, prevSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetPreviousSibling, "get previousSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, prevSiblingAtom);
+    }
+    {
+        const childNodesAtom = qjs.JS_NewAtom(ctx, "childNodes");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, childNodesAtom, qjs.JS_NewCFunction(ctx, &elementGetChildNodes, "get childNodes", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, childNodesAtom);
+    }
+    {
+        const firstElementChildAtom = qjs.JS_NewAtom(ctx, "firstElementChild");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, firstElementChildAtom, qjs.JS_NewCFunction(ctx, &elementGetFirstElementChild, "get firstElementChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, firstElementChildAtom);
+    }
+    {
+        const lastElementChildAtom = qjs.JS_NewAtom(ctx, "lastElementChild");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, lastElementChildAtom, qjs.JS_NewCFunction(ctx, &elementGetLastElementChild, "get lastElementChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, lastElementChildAtom);
+    }
+    {
+        const nextElementSiblingAtom = qjs.JS_NewAtom(ctx, "nextElementSibling");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nextElementSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetNextElementSibling, "get nextElementSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, nextElementSiblingAtom);
+    }
+    {
+        const previousElementSiblingAtom = qjs.JS_NewAtom(ctx, "previousElementSibling");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, previousElementSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetPreviousElementSibling, "get previousElementSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, previousElementSiblingAtom);
+    }
+    {
+        const childElementCountAtom = qjs.JS_NewAtom(ctx, "childElementCount");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, childElementCountAtom, qjs.JS_NewCFunction(ctx, &elementGetChildElementCount, "get childElementCount", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, childElementCountAtom);
+    }
+    {
+        const nodeTypeAtom = qjs.JS_NewAtom(ctx, "nodeType");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nodeTypeAtom, qjs.JS_NewCFunction(ctx, &elementGetNodeType, "get nodeType", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, nodeTypeAtom);
+    }
+    {
+        const nodeNameAtom = qjs.JS_NewAtom(ctx, "nodeName");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nodeNameAtom, qjs.JS_NewCFunction(ctx, &elementGetNodeName, "get nodeName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, nodeNameAtom);
+    }
+
+    // ── Element.prototype (inherits Node.prototype) ────────────────
+    const elem_proto = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPrototype(ctx, elem_proto, node_proto);
+
+    // Element methods
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttribute", qjs.JS_NewCFunction(ctx, &elementGetAttribute, "getAttribute", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "setAttribute", qjs.JS_NewCFunction(ctx, &elementSetAttribute, "setAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeAttribute", qjs.JS_NewCFunction(ctx, &elementRemoveAttribute, "removeAttribute", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttribute", qjs.JS_NewCFunction(ctx, &elementHasAttribute, "hasAttribute", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "appendChild", qjs.JS_NewCFunction(ctx, &elementAppendChild, "appendChild", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeChild", qjs.JS_NewCFunction(ctx, &elementRemoveChild, "removeChild", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertBefore", qjs.JS_NewCFunction(ctx, &elementInsertBefore, "insertBefore", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "remove", qjs.JS_NewCFunction(ctx, &elementRemove, "remove", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "contains", qjs.JS_NewCFunction(ctx, &elementContains, "contains", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "matches", qjs.JS_NewCFunction(ctx, &elementMatches, "matches", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "closest", qjs.JS_NewCFunction(ctx, &elementClosest, "closest", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "cloneNode", qjs.JS_NewCFunction(ctx, &elementCloneNode, "cloneNode", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "replaceWith", qjs.JS_NewCFunction(ctx, &elementReplaceWith, "replaceWith", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "before", qjs.JS_NewCFunction(ctx, &elementBefore, "before", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "after", qjs.JS_NewCFunction(ctx, &elementAfter, "after", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect", qjs.JS_NewCFunction(ctx, &elementGetBoundingClientRect, "getBoundingClientRect", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelector", qjs.JS_NewCFunction(ctx, &elementQuerySelector, "querySelector", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
 
-    // Define getter/setter properties using JS_DefinePropertyGetSet
-    const tagNameAtom = qjs.JS_NewAtom(ctx, "tagName");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, tagNameAtom, qjs.JS_NewCFunction(ctx, &elementGetTagName, "get tagName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, tagNameAtom);
+    // Element getters
+    {
+        const tagNameAtom = qjs.JS_NewAtom(ctx, "tagName");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, tagNameAtom, qjs.JS_NewCFunction(ctx, &elementGetTagName, "get tagName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, tagNameAtom);
+    }
+    {
+        const idAtom = qjs.JS_NewAtom(ctx, "id");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, idAtom, qjs.JS_NewCFunction(ctx, &elementGetId, "get id", 0), qjs.JS_NewCFunction(ctx, &elementSetId, "set id", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, idAtom);
+    }
+    {
+        const classNameAtom = qjs.JS_NewAtom(ctx, "className");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classNameAtom, qjs.JS_NewCFunction(ctx, &elementGetClassName, "get className", 0), qjs.JS_NewCFunction(ctx, &elementSetClassName, "set className", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, classNameAtom);
+    }
+    {
+        const classListAtom = qjs.JS_NewAtom(ctx, "classList");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &elementGetClassList, "get classList", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, classListAtom);
+    }
+    {
+        const innerHTMLAtom = qjs.JS_NewAtom(ctx, "innerHTML");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, innerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerHTML, "get innerHTML", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerHTML, "set innerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, innerHTMLAtom);
+    }
+    {
+        const outerHTMLAtom = qjs.JS_NewAtom(ctx, "outerHTML");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, outerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetOuterHTML, "get outerHTML", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, outerHTMLAtom);
+    }
+    {
+        const childrenAtom = qjs.JS_NewAtom(ctx, "children");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, childrenAtom, qjs.JS_NewCFunction(ctx, &elementGetChildren, "get children", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, childrenAtom);
+    }
 
-    const idAtom = qjs.JS_NewAtom(ctx, "id");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, idAtom, qjs.JS_NewCFunction(ctx, &elementGetId, "get id", 0), qjs.JS_NewCFunction(ctx, &elementSetId, "set id", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, idAtom);
+    // ── HTMLElement.prototype (inherits Element.prototype) ──────────
+    const html_element_proto = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPrototype(ctx, html_element_proto, elem_proto);
 
-    const classNameAtom = qjs.JS_NewAtom(ctx, "className");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classNameAtom, qjs.JS_NewCFunction(ctx, &elementGetClassName, "get className", 0), qjs.JS_NewCFunction(ctx, &elementSetClassName, "set className", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, classNameAtom);
+    // HTMLElement getters
+    {
+        const styleAtom = qjs.JS_NewAtom(ctx, "style");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, styleAtom, qjs.JS_NewCFunction(ctx, &elementGetStyle, "get style", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, styleAtom);
+    }
+    {
+        const datasetAtom = qjs.JS_NewAtom(ctx, "dataset");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, datasetAtom, qjs.JS_NewCFunction(ctx, &elementGetDataset, "get dataset", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, datasetAtom);
+    }
+    {
+        const offsetWidthAtom = qjs.JS_NewAtom(ctx, "offsetWidth");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetWidthAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetWidth, "get offsetWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, offsetWidthAtom);
+    }
+    {
+        const offsetHeightAtom = qjs.JS_NewAtom(ctx, "offsetHeight");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetHeightAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetHeight, "get offsetHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, offsetHeightAtom);
+    }
+    {
+        const offsetTopAtom = qjs.JS_NewAtom(ctx, "offsetTop");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetTopAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetTop, "get offsetTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, offsetTopAtom);
+    }
+    {
+        const offsetLeftAtom = qjs.JS_NewAtom(ctx, "offsetLeft");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetLeft, "get offsetLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, offsetLeftAtom);
+    }
+    {
+        const scrollTopAtom = qjs.JS_NewAtom(ctx, "scrollTop");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollTop, "get scrollTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, scrollTopAtom);
+    }
+    {
+        const scrollLeftAtom = qjs.JS_NewAtom(ctx, "scrollLeft");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollLeft, "get scrollLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, scrollLeftAtom);
+    }
 
-    const textContentAtom = qjs.JS_NewAtom(ctx, "textContent");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, textContentAtom, qjs.JS_NewCFunction(ctx, &elementGetTextContent, "get textContent", 0), qjs.JS_NewCFunction(ctx, &elementSetTextContent, "set textContent", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, textContentAtom);
+    // Set HTMLElement.prototype as the class prototype (elements get this as their __proto__)
+    qjs.JS_SetClassProto(ctx, element_class_id, qjs.JS_DupValue(ctx, html_element_proto));
 
-    const innerTextAtom = qjs.JS_NewAtom(ctx, "innerText");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, innerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get innerText", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerText, "set innerText", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, innerTextAtom);
+    // ── Expose constructors as globals for instanceof ──────────────
+    const global = qjs.JS_GetGlobalObject(ctx);
 
-    const parentNodeAtom = qjs.JS_NewAtom(ctx, "parentNode");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, parentNodeAtom, qjs.JS_NewCFunction(ctx, &elementGetParentNode, "get parentNode", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, parentNodeAtom);
+    const event_target_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "EventTarget", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, event_target_ctor, "prototype", qjs.JS_DupValue(ctx, event_target_proto));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "EventTarget", event_target_ctor);
 
-    const parentElementAtom = qjs.JS_NewAtom(ctx, "parentElement");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, parentElementAtom, qjs.JS_NewCFunction(ctx, &elementGetParentElement, "get parentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, parentElementAtom);
+    const node_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Node", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "prototype", qjs.JS_DupValue(ctx, node_proto));
+    // Node constants on the constructor too
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "TEXT_NODE", qjs.JS_NewInt32(ctx, 3));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "COMMENT_NODE", qjs.JS_NewInt32(ctx, 8));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_NODE", qjs.JS_NewInt32(ctx, 9));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_FRAGMENT_NODE", qjs.JS_NewInt32(ctx, 11));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Node", node_ctor);
 
-    const firstChildAtom = qjs.JS_NewAtom(ctx, "firstChild");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, firstChildAtom, qjs.JS_NewCFunction(ctx, &elementGetFirstChild, "get firstChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, firstChildAtom);
+    const element_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Element", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, element_ctor, "prototype", qjs.JS_DupValue(ctx, elem_proto));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Element", element_ctor);
 
-    const lastChildAtom = qjs.JS_NewAtom(ctx, "lastChild");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, lastChildAtom, qjs.JS_NewCFunction(ctx, &elementGetLastChild, "get lastChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, lastChildAtom);
+    const html_element_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "HTMLElement", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, html_element_ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLElement", html_element_ctor);
 
-    const nextSiblingAtom = qjs.JS_NewAtom(ctx, "nextSibling");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, nextSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetNextSibling, "get nextSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, nextSiblingAtom);
-
-    const prevSiblingAtom = qjs.JS_NewAtom(ctx, "previousSibling");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, prevSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetPreviousSibling, "get previousSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, prevSiblingAtom);
-
-    const childrenAtom = qjs.JS_NewAtom(ctx, "children");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, childrenAtom, qjs.JS_NewCFunction(ctx, &elementGetChildren, "get children", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, childrenAtom);
-
-    const childNodesAtom = qjs.JS_NewAtom(ctx, "childNodes");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, childNodesAtom, qjs.JS_NewCFunction(ctx, &elementGetChildNodes, "get childNodes", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, childNodesAtom);
-
-    const firstElementChildAtom = qjs.JS_NewAtom(ctx, "firstElementChild");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, firstElementChildAtom, qjs.JS_NewCFunction(ctx, &elementGetFirstElementChild, "get firstElementChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, firstElementChildAtom);
-
-    const lastElementChildAtom = qjs.JS_NewAtom(ctx, "lastElementChild");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, lastElementChildAtom, qjs.JS_NewCFunction(ctx, &elementGetLastElementChild, "get lastElementChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, lastElementChildAtom);
-
-    const nextElementSiblingAtom = qjs.JS_NewAtom(ctx, "nextElementSibling");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, nextElementSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetNextElementSibling, "get nextElementSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, nextElementSiblingAtom);
-
-    const previousElementSiblingAtom = qjs.JS_NewAtom(ctx, "previousElementSibling");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, previousElementSiblingAtom, qjs.JS_NewCFunction(ctx, &elementGetPreviousElementSibling, "get previousElementSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, previousElementSiblingAtom);
-
-    const childElementCountAtom = qjs.JS_NewAtom(ctx, "childElementCount");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, childElementCountAtom, qjs.JS_NewCFunction(ctx, &elementGetChildElementCount, "get childElementCount", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, childElementCountAtom);
-
-    const classListAtom = qjs.JS_NewAtom(ctx, "classList");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &elementGetClassList, "get classList", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, classListAtom);
-
-    // innerHTML getter/setter
-    const innerHTMLAtom = qjs.JS_NewAtom(ctx, "innerHTML");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, innerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerHTML, "get innerHTML", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerHTML, "set innerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, innerHTMLAtom);
-
-    // outerHTML getter
-    const outerHTMLAtom = qjs.JS_NewAtom(ctx, "outerHTML");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, outerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetOuterHTML, "get outerHTML", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, outerHTMLAtom);
-
-    // style getter
-    const styleAtom = qjs.JS_NewAtom(ctx, "style");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, styleAtom, qjs.JS_NewCFunction(ctx, &elementGetStyle, "get style", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, styleAtom);
-
-    // dataset getter
-    const datasetAtom = qjs.JS_NewAtom(ctx, "dataset");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, datasetAtom, qjs.JS_NewCFunction(ctx, &elementGetDataset, "get dataset", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, datasetAtom);
-
-    // Element geometry (stubs without layout info)
-    const offsetWidthAtom = qjs.JS_NewAtom(ctx, "offsetWidth");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, offsetWidthAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetWidth, "get offsetWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, offsetWidthAtom);
-
-    const offsetHeightAtom = qjs.JS_NewAtom(ctx, "offsetHeight");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, offsetHeightAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetHeight, "get offsetHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, offsetHeightAtom);
-
-    const offsetTopAtom = qjs.JS_NewAtom(ctx, "offsetTop");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, offsetTopAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetTop, "get offsetTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, offsetTopAtom);
-
-    const offsetLeftAtom = qjs.JS_NewAtom(ctx, "offsetLeft");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, offsetLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetLeft, "get offsetLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, offsetLeftAtom);
-
-    const scrollTopAtom = qjs.JS_NewAtom(ctx, "scrollTop");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollTop, "get scrollTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, scrollTopAtom);
-
-    const scrollLeftAtom = qjs.JS_NewAtom(ctx, "scrollLeft");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollLeft, "get scrollLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, scrollLeftAtom);
-
-    // nodeType getter
-    const nodeTypeAtom = qjs.JS_NewAtom(ctx, "nodeType");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, nodeTypeAtom, qjs.JS_NewCFunction(ctx, &elementGetNodeType, "get nodeType", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, nodeTypeAtom);
-
-    // nodeName getter
-    const nodeNameAtom = qjs.JS_NewAtom(ctx, "nodeName");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, nodeNameAtom, qjs.JS_NewCFunction(ctx, &elementGetNodeName, "get nodeName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, nodeNameAtom);
-
-    // Set prototype for Element class
-    qjs.JS_SetClassProto(ctx, element_class_id, qjs.JS_DupValue(ctx, elem_proto));
-    qjs.JS_FreeValue(ctx, elem_proto);
-
-    // Create minimal Text prototype (text-relevant properties)
+    // ── Text prototype (inherits Node.prototype) ─────────────────────
+    // Text nodes get Node methods (textContent, parentNode, etc.) via prototype chain.
+    // No need to duplicate them — just set Node.prototype as the text proto's prototype.
     const text_proto = qjs.JS_NewObject(ctx);
-    const text_tcAtom = qjs.JS_NewAtom(ctx, "textContent");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_tcAtom, qjs.JS_NewCFunction(ctx, &elementGetTextContent, "get textContent", 0), qjs.JS_NewCFunction(ctx, &elementSetTextContent, "set textContent", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_tcAtom);
-    const text_parentAtom = qjs.JS_NewAtom(ctx, "parentNode");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_parentAtom, qjs.JS_NewCFunction(ctx, &elementGetParentNode, "get parentNode", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_parentAtom);
-    const text_parentElemAtom = qjs.JS_NewAtom(ctx, "parentElement");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_parentElemAtom, qjs.JS_NewCFunction(ctx, &elementGetParentElement, "get parentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_parentElemAtom);
-    const text_nextAtom = qjs.JS_NewAtom(ctx, "nextSibling");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_nextAtom, qjs.JS_NewCFunction(ctx, &elementGetNextSibling, "get nextSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_nextAtom);
-    const text_prevAtom = qjs.JS_NewAtom(ctx, "previousSibling");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_prevAtom, qjs.JS_NewCFunction(ctx, &elementGetPreviousSibling, "get previousSibling", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_prevAtom);
-    const text_nodeTypeAtom = qjs.JS_NewAtom(ctx, "nodeType");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_nodeTypeAtom, qjs.JS_NewCFunction(ctx, &elementGetNodeType, "get nodeType", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_nodeTypeAtom);
-    const text_nodeNameAtom = qjs.JS_NewAtom(ctx, "nodeName");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, text_proto, text_nodeNameAtom, qjs.JS_NewCFunction(ctx, &elementGetNodeName, "get nodeName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-    qjs.JS_FreeAtom(ctx, text_nodeNameAtom);
-    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "remove", qjs.JS_NewCFunction(ctx, &elementRemove, "remove", 0));
+    _ = qjs.JS_SetPrototype(ctx, text_proto, node_proto);
     qjs.JS_SetClassProto(ctx, text_class_id, text_proto);
+
+    // Free local proto references (class proto + constructors hold refs)
+    qjs.JS_FreeValue(ctx, event_target_proto);
+    qjs.JS_FreeValue(ctx, node_proto);
+    qjs.JS_FreeValue(ctx, elem_proto);
+    qjs.JS_FreeValue(ctx, html_element_proto);
 
     // Build document global
     const doc_obj = qjs.JS_NewObject(ctx);
@@ -2691,8 +2772,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, cookieAtom, qjs.JS_NewCFunction(ctx, &documentGetCookie, "get cookie", 0), qjs.JS_NewCFunction(ctx, &documentSetCookie, "set cookie", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, cookieAtom);
 
-    // Set document global
-    const global = qjs.JS_GetGlobalObject(ctx);
+    // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
 
     // window.location

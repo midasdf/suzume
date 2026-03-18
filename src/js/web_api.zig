@@ -634,7 +634,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof customElements==='undefined'){
         \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
         \\}
-        \\if(typeof HTMLElement==='undefined'){globalThis.HTMLElement=function(){};}
         \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(){this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(){this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
         \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(){this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}

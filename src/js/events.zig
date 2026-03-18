@@ -77,7 +77,7 @@ fn findOrCreateEntry(node: *lxb.lxb_dom_node_t, event_type: []const u8) ?*Listen
 
 // ── addEventListener / removeEventListener ──────────────────────────
 
-fn jsAddEventListener(
+pub fn jsAddEventListener(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
     argc: c_int,
@@ -108,7 +108,7 @@ fn jsAddEventListener(
     return quickjs.JS_UNDEFINED();
 }
 
-fn jsRemoveEventListener(
+pub fn jsRemoveEventListener(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
     argc: c_int,
