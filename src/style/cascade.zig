@@ -1769,6 +1769,211 @@ fn createInlineSheet(style_text: []const u8) ?*css.css_stylesheet {
     return sheet.?;
 }
 
+/// CSS Custom Properties (CSS Variables) support.
+/// LibCSS does not support var() references, so we pre-process CSS text
+/// to resolve variable references before passing it to LibCSS.
+const CssVarMap = std.StringHashMap([]const u8);
+
+/// Extract CSS custom property declarations (--name: value) from CSS text.
+/// Focuses on :root, html, *, body blocks (global scope) which covers ~80% of real usage.
+fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssVarMap {
+    var vars = CssVarMap.init(allocator);
+    errdefer {
+        var it = vars.iterator();
+        while (it.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        vars.deinit();
+    }
+
+    var pos: usize = 0;
+    while (pos < css_text.len) {
+        // Find next '{'
+        const brace_open = std.mem.indexOfScalarPos(u8, css_text, pos, '{') orelse break;
+        // Find matching '}' — handle nested braces (e.g. @media blocks)
+        var depth: usize = 1;
+        var brace_close: usize = brace_open + 1;
+        while (brace_close < css_text.len and depth > 0) : (brace_close += 1) {
+            if (css_text[brace_close] == '{') depth += 1;
+            if (css_text[brace_close] == '}') depth -= 1;
+        }
+        if (depth != 0) break;
+        // brace_close now points one past the '}'
+        brace_close -= 1;
+
+        const body = css_text[brace_open + 1 .. brace_close];
+
+        // Parse body for --* declarations
+        var body_pos: usize = 0;
+        while (body_pos < body.len) {
+            // Skip whitespace
+            while (body_pos < body.len and (body[body_pos] == ' ' or body[body_pos] == '\t' or
+                body[body_pos] == '\n' or body[body_pos] == '\r'))
+            {
+                body_pos += 1;
+            }
+            if (body_pos >= body.len) break;
+
+            // Check if this is a custom property declaration (starts with --)
+            if (body_pos + 2 < body.len and body[body_pos] == '-' and body[body_pos + 1] == '-') {
+                // Find the property name (up to ':')
+                const name_start = body_pos;
+                const colon = std.mem.indexOfScalarPos(u8, body, body_pos, ':') orelse {
+                    body_pos = (std.mem.indexOfScalarPos(u8, body, body_pos, ';') orelse body.len);
+                    if (body_pos < body.len) body_pos += 1;
+                    continue;
+                };
+                const name = std.mem.trim(u8, body[name_start..colon], " \t");
+
+                // Find the value (up to ';' or '}')
+                // Handle values with nested parens (e.g. rgb(...), calc(...))
+                const val_start = colon + 1;
+                var val_end = val_start;
+                var paren_depth: usize = 0;
+                while (val_end < body.len) : (val_end += 1) {
+                    if (body[val_end] == '(') paren_depth += 1;
+                    if (body[val_end] == ')') {
+                        if (paren_depth > 0) paren_depth -= 1;
+                    }
+                    if (body[val_end] == ';' and paren_depth == 0) break;
+                    if (body[val_end] == '}' and paren_depth == 0) break;
+                }
+                const value = std.mem.trim(u8, body[val_start..val_end], " \t\r\n");
+
+                if (name.len > 2 and value.len > 0) {
+                    // Store in map (allocate copies)
+                    const name_copy = try allocator.dupe(u8, name);
+                    const value_copy = try allocator.dupe(u8, value);
+                    // If key already exists, free old value before replacing
+                    if (try vars.fetchPut(name_copy, value_copy)) |old| {
+                        allocator.free(old.value);
+                        // Key is the same string content, free the duplicate
+                        allocator.free(old.key);
+                    }
+                }
+
+                body_pos = if (val_end < body.len and body[val_end] == ';') val_end + 1 else val_end;
+            } else {
+                // Skip to next ';' or nested block
+                var skip_depth: usize = 0;
+                while (body_pos < body.len) : (body_pos += 1) {
+                    if (body[body_pos] == '{') skip_depth += 1;
+                    if (body[body_pos] == '}') {
+                        if (skip_depth > 0) {
+                            skip_depth -= 1;
+                        } else break;
+                    }
+                    if (body[body_pos] == ';' and skip_depth == 0) {
+                        body_pos += 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        pos = brace_close + 1;
+    }
+
+    return vars;
+}
+
+/// Resolve var() references in CSS text using the provided variable map.
+/// Handles nested var() in values and fallback values: var(--name, fallback).
+/// max_depth prevents infinite recursion from circular variable references.
+fn resolveCssVariables(css_text: []const u8, vars: *const CssVarMap, allocator: std.mem.Allocator) ![]const u8 {
+    return resolveCssVariablesDepth(css_text, vars, allocator, 0);
+}
+
+fn resolveCssVariablesDepth(css_text: []const u8, vars: *const CssVarMap, allocator: std.mem.Allocator, depth: usize) ![]const u8 {
+    if (depth > 10) {
+        // Prevent infinite recursion from circular references
+        return try allocator.dupe(u8, css_text);
+    }
+
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer result.deinit(allocator);
+
+    var pos: usize = 0;
+    while (pos < css_text.len) {
+        // Find next "var("
+        const var_start = std.mem.indexOfPos(u8, css_text, pos, "var(") orelse {
+            try result.appendSlice(allocator, css_text[pos..]);
+            break;
+        };
+
+        // Copy everything before "var("
+        try result.appendSlice(allocator, css_text[pos..var_start]);
+
+        // Find matching closing ')' — handle nested parentheses
+        var paren_depth: usize = 1;
+        var i: usize = var_start + 4; // after "var("
+        while (i < css_text.len and paren_depth > 0) : (i += 1) {
+            if (css_text[i] == '(') paren_depth += 1;
+            if (css_text[i] == ')') paren_depth -= 1;
+        }
+
+        if (paren_depth == 0) {
+            // i now points one past the closing ')'
+            const inner = std.mem.trim(u8, css_text[var_start + 4 .. i - 1], " \t");
+
+            // Parse: --name or --name, fallback
+            // Find first comma that isn't inside nested parens
+            var comma_pos: ?usize = null;
+            var inner_depth: usize = 0;
+            for (inner, 0..) |ch, idx| {
+                if (ch == '(') inner_depth += 1;
+                if (ch == ')') {
+                    if (inner_depth > 0) inner_depth -= 1;
+                }
+                if (ch == ',' and inner_depth == 0) {
+                    comma_pos = idx;
+                    break;
+                }
+            }
+
+            const var_name = std.mem.trim(u8, if (comma_pos) |c| inner[0..c] else inner, " \t");
+            const fallback = if (comma_pos) |c| std.mem.trim(u8, inner[c + 1 ..], " \t") else null;
+
+            // Look up variable value
+            if (vars.get(var_name)) |value| {
+                // Recursively resolve if the value itself contains var()
+                if (std.mem.indexOf(u8, value, "var(") != null) {
+                    const resolved = try resolveCssVariablesDepth(value, vars, allocator, depth + 1);
+                    defer allocator.free(resolved);
+                    try result.appendSlice(allocator, resolved);
+                } else {
+                    try result.appendSlice(allocator, value);
+                }
+            } else if (fallback) |fb| {
+                // Use fallback value
+                if (std.mem.indexOf(u8, fb, "var(") != null) {
+                    const resolved = try resolveCssVariablesDepth(fb, vars, allocator, depth + 1);
+                    defer allocator.free(resolved);
+                    try result.appendSlice(allocator, resolved);
+                } else {
+                    try result.appendSlice(allocator, fb);
+                }
+            }
+            // else: no value and no fallback — output nothing (property becomes invalid per CSS spec)
+
+            pos = i; // past ')'
+        } else {
+            // Malformed var() — no matching ')'. Copy "var(" literally and continue.
+            try result.appendSlice(allocator, css_text[var_start .. var_start + 4]);
+            pos = var_start + 4;
+        }
+    }
+
+    return result.toOwnedSlice(allocator);
+}
+
+/// Resolve var() references in an inline style string using the global variable map.
+fn resolveInlineStyleVars(style_attr: []const u8, vars: *const CssVarMap, allocator: std.mem.Allocator) !?[]const u8 {
+    if (std.mem.indexOf(u8, style_attr, "var(") == null) return null;
+    return try resolveCssVariables(style_attr, vars, allocator);
+}
+
 /// Walk DOM tree and select styles for each element node.
 fn walkAndSelect(
     node: DomNode,
@@ -1780,6 +1985,8 @@ fn walkAndSelect(
     property_rules: []const CssPropertyRule,
     vw: f32,
     vh: f32,
+    css_vars: *const CssVarMap,
+    allocator: std.mem.Allocator,
 ) !void {
     if (node.nodeType() == .element) {
         // Determine if this is the root element
@@ -1788,11 +1995,14 @@ fn walkAndSelect(
             is_root = (p.nodeType() == .document);
         }
 
-        // Check for inline style attribute
+        // Check for inline style attribute, resolving var() references
         var inline_sheet: ?*css.css_stylesheet = null;
+        var resolved_inline: ?[]const u8 = null;
         if (node.getAttribute("style")) |style_attr| {
-            inline_sheet = createInlineSheet(style_attr);
+            resolved_inline = try resolveInlineStyleVars(style_attr, css_vars, allocator);
+            inline_sheet = createInlineSheet(resolved_inline orelse style_attr);
         }
+        defer if (resolved_inline) |r| allocator.free(r);
         defer if (inline_sheet) |s| {
             _ = css.css_stylesheet_destroy(s);
         };
@@ -1806,7 +2016,9 @@ fn walkAndSelect(
                     var style = extractStyleVp(computed, is_root, vw, vh);
 
                     // Parse border-radius from inline style (LibCSS doesn't support it)
-                    if (node.getAttribute("style")) |style_attr| {
+                    // Use resolved inline style (with var() substituted) if available
+                    const effective_inline = resolved_inline orelse node.getAttribute("style");
+                    if (effective_inline) |style_attr| {
                         parseBorderRadius(style_attr, &style);
                     }
 
@@ -1894,7 +2106,7 @@ fn walkAndSelect(
                     }
 
                     // Parse additional properties from inline style as fallback
-                    if (node.getAttribute("style")) |style_attr| {
+                    if (effective_inline) |style_attr| {
                         // Opacity
                         if (style.opacity == 1.0) {
                             if (std.mem.indexOf(u8, style_attr, "opacity")) |op_idx| {
@@ -2029,7 +2241,7 @@ fn walkAndSelect(
     // Recurse into children
     var child = node.firstChild();
     while (child) |c| {
-        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, property_rules, vw, vh);
+        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, property_rules, vw, vh, css_vars, allocator);
         child = c.nextSibling();
     }
 }
@@ -2076,24 +2288,41 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
         try allocator.dupe(u8, combined_css);
     defer allocator.free(css_text);
 
-    // 3. Create author stylesheet
-    const sheet = try createSheet(css_text, "about:style");
+    // 4.5. Resolve CSS custom properties (var() references)
+    var css_vars = try extractCssVariables(css_text, allocator);
+    defer {
+        var vit = css_vars.iterator();
+        while (vit.next()) |entry| {
+            allocator.free(entry.key_ptr.*);
+            allocator.free(entry.value_ptr.*);
+        }
+        css_vars.deinit();
+    }
+
+    const resolved_css = if (std.mem.indexOf(u8, css_text, "var(") != null)
+        try resolveCssVariables(css_text, &css_vars, allocator)
+    else
+        try allocator.dupe(u8, css_text);
+    defer allocator.free(resolved_css);
+
+    // 5. Create author stylesheet (using resolved CSS with var() substituted)
+    const sheet = try createSheet(resolved_css, "about:style");
     result.sheet = sheet;
 
-    // 4. Create select context
+    // 6. Create select context
     var ctx: ?*css.css_select_ctx = null;
     var err = css.css_select_ctx_create(&ctx);
     if (err != css.CSS_OK or ctx == null) return error.CssSelectCtxCreateFailed;
     result.ctx = ctx;
 
-    // 5. Add stylesheets to context (UA first, then author)
+    // 7. Add stylesheets to context (UA first, then author)
     err = css.css_select_ctx_append_sheet(ctx.?, ua_sheet, css.CSS_ORIGIN_UA, null);
     if (err != css.CSS_OK) return error.CssAppendSheetFailed;
 
     err = css.css_select_ctx_append_sheet(ctx.?, sheet, css.CSS_ORIGIN_AUTHOR, null);
     if (err != css.CSS_OK) return error.CssAppendSheetFailed;
 
-    // 6. Set up media and unit context
+    // 8. Set up media and unit context
     var media = std.mem.zeroes(css.css_media);
     media.type = css.CSS_MEDIA_SCREEN;
 
@@ -2107,17 +2336,17 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
     unit_ctx.pw = null;
     unit_ctx.measure = null;
 
-    // 7. Set up handler
+    // 9. Set up handler
     var handler = select_handler.getHandler();
 
-    // 8. Extract CSS property rules from raw text (border-radius, background-color, color, height)
-    var property_rules = try extractCssPropertyRules(css_text, allocator);
+    // 10. Extract CSS property rules from resolved text (border-radius, background-color, color, height)
+    var property_rules = try extractCssPropertyRules(resolved_css, allocator);
     defer property_rules.deinit(allocator);
 
-    // 9. Walk DOM and select styles
+    // 11. Walk DOM and select styles (pass css_vars for inline style var() resolution)
     const vw_f: f32 = @floatFromInt(viewport_width);
     const vh_f: f32 = @floatFromInt(viewport_height);
-    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, property_rules.items, vw_f, vh_f);
+    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, property_rules.items, vw_f, vh_f, &css_vars, allocator);
 
     return result;
 }
