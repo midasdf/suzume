@@ -114,18 +114,20 @@ const SelectorParser = struct {
     pos: usize,
     components: std.ArrayList(SelectorComponent),
     specificity: Specificity,
+    allocator: std.mem.Allocator,
 
     fn init(source: []const u8, allocator: std.mem.Allocator) SelectorParser {
         return .{
             .source = source,
             .pos = 0,
-            .components = std.ArrayList(SelectorComponent).init(allocator),
+            .components = .empty,
             .specificity = .{},
+            .allocator = allocator,
         };
     }
 
     fn deinit(self: *SelectorParser) void {
-        self.components.deinit();
+        self.components.deinit(self.allocator);
     }
 
     fn peek(self: *SelectorParser) u8 {
@@ -208,19 +210,19 @@ const SelectorParser = struct {
             if (c == '>') {
                 self.advance();
                 self.skipWhitespace();
-                try self.components.append(.{ .combinator = .child });
+                try self.components.append(self.allocator,.{ .combinator = .child });
                 continue;
             }
             if (c == '+') {
                 self.advance();
                 self.skipWhitespace();
-                try self.components.append(.{ .combinator = .next_sibling });
+                try self.components.append(self.allocator,.{ .combinator = .next_sibling });
                 continue;
             }
             if (c == '~') {
                 self.advance();
                 self.skipWhitespace();
-                try self.components.append(.{ .combinator = .subsequent_sibling });
+                try self.components.append(self.allocator,.{ .combinator = .subsequent_sibling });
                 continue;
             }
 
@@ -233,7 +235,7 @@ const SelectorParser = struct {
                 if (next == 0 or next == ',' or next == '{') break;
                 if (next == '>' or next == '+' or next == '~') continue; // explicit combinator follows
                 if (self.lastIsSimple()) {
-                    try self.components.append(.{ .combinator = .descendant });
+                    try self.components.append(self.allocator,.{ .combinator = .descendant });
                 }
                 continue;
             }
@@ -243,7 +245,7 @@ const SelectorParser = struct {
                 self.advance();
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
-                try self.components.append(.{ .simple = .{ .class = name } });
+                try self.components.append(self.allocator,.{ .simple = .{ .class = name } });
                 self.specificity.b += 1;
                 continue;
             }
@@ -253,7 +255,7 @@ const SelectorParser = struct {
                 self.advance();
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
-                try self.components.append(.{ .simple = .{ .id = name } });
+                try self.components.append(self.allocator,.{ .simple = .{ .id = name } });
                 self.specificity.a += 1;
                 continue;
             }
@@ -261,7 +263,7 @@ const SelectorParser = struct {
             // Universal selector
             if (c == '*') {
                 self.advance();
-                try self.components.append(.{ .simple = .universal });
+                try self.components.append(self.allocator,.{ .simple = .universal });
                 continue;
             }
 
@@ -269,7 +271,7 @@ const SelectorParser = struct {
             if (c == '[') {
                 const attr = try self.parseAttribute();
                 if (attr) |a| {
-                    try self.components.append(.{ .simple = .{ .attribute = a } });
+                    try self.components.append(self.allocator,.{ .simple = .{ .attribute = a } });
                     self.specificity.b += 1;
                 } else {
                     return null;
@@ -285,7 +287,7 @@ const SelectorParser = struct {
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
                 if (PseudoClass.fromString(name)) |pc| {
-                    try self.components.append(.{ .simple = .{ .pseudo_class = pc } });
+                    try self.components.append(self.allocator,.{ .simple = .{ .pseudo_class = pc } });
                     self.specificity.b += 1;
                 } else {
                     // Unknown pseudo-class, skip including any parenthesized args
@@ -316,7 +318,7 @@ const SelectorParser = struct {
                 }
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
-                try self.components.append(.{ .simple = .{ .type_sel = name } });
+                try self.components.append(self.allocator,.{ .simple = .{ .type_sel = name } });
                 self.specificity.c += 1;
                 continue;
             }
@@ -328,7 +330,7 @@ const SelectorParser = struct {
         if (self.components.items.len == 0) return null;
 
         return .{
-            .components = try self.components.toOwnedSlice(),
+            .components = try self.components.toOwnedSlice(self.allocator),
             .specificity = self.specificity,
         };
     }

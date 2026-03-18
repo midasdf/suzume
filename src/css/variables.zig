@@ -59,8 +59,8 @@ fn resolveVarRefsDepth(
     if (depth >= 16) return null; // prevent cycles
     if (std.mem.indexOf(u8, value_raw, "var(") == null) return null;
 
-    var result = std.ArrayList(u8).init(allocator);
-    errdefer result.deinit();
+    var result: std.ArrayList(u8) = .empty;
+    errdefer result.deinit(allocator);
 
     var pos: usize = 0;
     while (pos < value_raw.len) {
@@ -70,7 +70,7 @@ fn resolveVarRefsDepth(
             pos += 4;
             const close = findMatchingParen(value_raw, pos) orelse {
                 // Malformed — copy remainder as-is
-                result.appendSlice(value_raw[var_start..]) catch return null;
+                result.appendSlice(allocator, value_raw[var_start..]) catch return null;
                 break;
             };
 
@@ -90,29 +90,29 @@ fn resolveVarRefsDepth(
             if (var_map.get(name)) |val| {
                 // Recursively resolve in case the value itself contains var()
                 if (resolveVarRefsDepth(val, var_map, allocator, depth + 1)) |resolved| {
-                    result.appendSlice(resolved) catch return null;
+                    result.appendSlice(allocator, resolved) catch return null;
                     allocator.free(resolved);
                 } else {
-                    result.appendSlice(val) catch return null;
+                    result.appendSlice(allocator, val) catch return null;
                 }
             } else if (fallback) |fb| {
                 // Resolve fallback (may contain nested var())
                 if (resolveVarRefsDepth(fb, var_map, allocator, depth + 1)) |resolved| {
-                    result.appendSlice(resolved) catch return null;
+                    result.appendSlice(allocator, resolved) catch return null;
                     allocator.free(resolved);
                 } else {
-                    result.appendSlice(fb) catch return null;
+                    result.appendSlice(allocator, fb) catch return null;
                 }
             } else {
                 // No value and no fallback — leave empty (property becomes invalid)
             }
         } else {
-            result.append(value_raw[pos]) catch return null;
+            result.append(allocator, value_raw[pos]) catch return null;
             pos += 1;
         }
     }
 
-    return result.toOwnedSlice() catch null;
+    return result.toOwnedSlice(allocator) catch null;
 }
 
 /// Find the position of the closing parenthesis matching an open one.

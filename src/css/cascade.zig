@@ -188,10 +188,10 @@ pub fn cascade(
     const author_sheet = try author_parser.parse();
 
     // 5. Flatten @media rules and collect applicable style rules
-    var ua_rules = std.ArrayList(FlatRule).init(arena);
+    var ua_rules: std.ArrayList(FlatRule) = .empty;
     try flattenRules(ua_sheet.rules, vw, vh, &ua_rules, arena);
 
-    var author_rules = std.ArrayList(FlatRule).init(arena);
+    var author_rules: std.ArrayList(FlatRule) = .empty;
     try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena);
 
     // 6. Extract CSS variables from author rules
@@ -245,20 +245,20 @@ fn flattenRules(
         switch (rule) {
             .style => |sr| {
                 // Expand shorthands
-                var expanded = std.ArrayList(Declaration).init(arena);
+                var expanded: std.ArrayList(Declaration) = .empty;
                 for (sr.declarations) |decl| {
                     if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |exp| {
                         for (exp) |*ed| {
                             ed.important = decl.important;
                         }
-                        try expanded.appendSlice(exp);
+                        try expanded.appendSlice(arena, exp);
                     } else {
-                        try expanded.append(decl);
+                        try expanded.append(arena, decl);
                     }
                 }
-                try out.append(.{
+                try out.append(arena, .{
                     .selectors = sr.selectors,
-                    .declarations = try expanded.toOwnedSlice(),
+                    .declarations = try expanded.toOwnedSlice(arena),
                     .source_order = sr.source_order,
                 });
             },
@@ -383,10 +383,10 @@ fn domPrevSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
     var sib = node.lxb_node.prev;
     while (sib != null) {
         const s = sib.?;
-        if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        if (s.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
             return makeDomAdapter(DomNode{ .lxb_node = s });
         }
-        sib = s.prev;
+        sib = s.*.prev;
     }
     return null;
 }
@@ -397,10 +397,10 @@ fn domNextSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
     var sib = node.lxb_node.next;
     while (sib != null) {
         const s = sib.?;
-        if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        if (s.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
             return makeDomAdapter(DomNode{ .lxb_node = s });
         }
-        sib = s.next;
+        sib = s.*.next;
     }
     return null;
 }
@@ -438,7 +438,7 @@ fn walkAndCompute(
         }
 
         // Collect matching declarations
-        var entries = std.ArrayList(CascadeEntry).init(arena);
+        var entries: std.ArrayList(CascadeEntry) = .empty;
 
         // UA rules
         try collectMatching(node, ua_index, .ua, &entries, arena);
@@ -490,7 +490,7 @@ fn collectMatching(
     for (index.universal.items) |rule| {
         if (selectors.matches(&rule.selector, adapter)) {
             for (rule.declarations) |decl| {
-                try entries.append(.{
+                try entries.append(arena, .{
                     .decl = decl,
                     .specificity = rule.selector.specificity.toU32(),
                     .source_order = rule.source_order,
@@ -510,7 +510,7 @@ fn collectMatching(
                 for (rules.items) |rule| {
                     if (selectors.matches(&rule.selector, adapter)) {
                         for (rule.declarations) |decl| {
-                            try entries.append(.{
+                            try entries.append(arena, .{
                                 .decl = decl,
                                 .specificity = rule.selector.specificity.toU32(),
                                 .source_order = rule.source_order,
@@ -532,7 +532,7 @@ fn collectMatching(
                 for (rules.items) |rule| {
                     if (selectors.matches(&rule.selector, adapter)) {
                         for (rule.declarations) |decl| {
-                            try entries.append(.{
+                            try entries.append(arena, .{
                                 .decl = decl,
                                 .specificity = rule.selector.specificity.toU32(),
                                 .source_order = rule.source_order,
@@ -551,7 +551,7 @@ fn collectMatching(
             for (rules.items) |rule| {
                 if (selectors.matches(&rule.selector, adapter)) {
                     for (rule.declarations) |decl| {
-                        try entries.append(.{
+                        try entries.append(arena, .{
                             .decl = decl,
                             .specificity = rule.selector.specificity.toU32(),
                             .source_order = rule.source_order,
@@ -588,7 +588,7 @@ fn collectInlineDecls(
                     if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |exp| {
                         for (exp) |*ed| {
                             ed.important = decl.important;
-                            try entries.append(.{
+                            try entries.append(arena, .{
                                 .decl = ed.*,
                                 .specificity = 0, // inline style wins by origin, not specificity
                                 .source_order = 0xFFFFFF, // high source order
@@ -596,7 +596,7 @@ fn collectInlineDecls(
                             });
                         }
                     } else {
-                        try entries.append(.{
+                        try entries.append(arena, .{
                             .decl = decl,
                             .specificity = 0,
                             .source_order = 0xFFFFFF,
