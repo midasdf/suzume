@@ -1890,6 +1890,7 @@ pub fn main() !void {
 
                     // Handle mouse events regardless of focus
                     if (key == nsfb_c.NSFB_KEY_MOUSE_1) {
+                        std.debug.print("[MOUSE] click at ({d},{d})\n", .{ mouse_x, mouse_y });
                         // Check tab bar clicks first
                         const tab_hit = chrome.hitTestTabBar(mouse_x, mouse_y, &tab_mgr, surface.width);
                         switch (tab_hit.action) {
