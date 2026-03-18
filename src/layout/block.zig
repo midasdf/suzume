@@ -548,6 +548,24 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 if (child_y < float_left_bottom) {
                     x_offset += float_left_width;
                 }
+
+                // Block-level centering: if parent has text-align:center and child
+                // is narrower than container, center the child block.
+                // This handles <center> tag and similar patterns.
+                if (box.style.text_align == .center) {
+                    const child_total_w = child.content.width + child.padding.left + child.padding.right +
+                        child.border.left + child.border.right + child.margin.left + child.margin.right;
+                    if (child_total_w < avail_width) {
+                        x_offset += (avail_width - child_total_w) / 2;
+                    }
+                } else if (box.style.text_align == .right) {
+                    const child_total_w = child.content.width + child.padding.left + child.padding.right +
+                        child.border.left + child.border.right + child.margin.left + child.margin.right;
+                    if (child_total_w < avail_width) {
+                        x_offset += avail_width - child_total_w;
+                    }
+                }
+
                 adjustXPositions(child, x_offset);
 
                 child_y += child.padding.top + child.border.top +
