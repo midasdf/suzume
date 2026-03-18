@@ -303,6 +303,8 @@ pub const Parser = struct {
             return try self.parseKeyframesRule();
         } else if (eqlIgnoreCase(name, "font-face")) {
             return try self.parseFontFaceRule();
+        } else if (eqlIgnoreCase(name, "supports")) {
+            return try self.parseSupportsRule();
         } else {
             self.skipAtRule();
             return null;
@@ -417,6 +419,95 @@ pub const Parser = struct {
         return .{ .font_face = .{
             .declarations = declarations,
         } };
+    }
+
+    fn parseSupportsRule(self: *Parser) ParseError!?ast.Rule {
+        // @supports works like @media: condition + rule block.
+        // Evaluate the condition: if supported, parse inner rules.
+        // If not supported, skip the block.
+        const first_t = self.skipWhitespace();
+        if (first_t.type == .eof) return null;
+
+        // Collect condition tokens until '{'
+        const cond_start = first_t.start;
+        var cond_end = first_t.start + first_t.len;
+        var found_brace = false;
+
+        if (first_t.type == .open_curly) {
+            found_brace = true;
+        } else {
+            while (true) {
+                const t = self.peekToken();
+                if (t.type == .open_curly or t.type == .eof) break;
+                _ = self.nextToken();
+                cond_end = t.start + t.len;
+            }
+            const brace = self.nextToken();
+            if (brace.type == .open_curly) found_brace = true;
+        }
+
+        if (!found_brace) return null;
+
+        const condition = std.mem.trim(u8, self.sourceSlice(cond_start, cond_end), " \t\r\n");
+
+        // Evaluate: check if the property in the condition is known
+        if (evaluateSupports(condition)) {
+            // Supported — parse inner rules (reuse as media rule for flattening)
+            const rules = try self.parseRuleList();
+            // Return as media rule with "all" query (always applies)
+            return .{ .media = .{
+                .query = .{ .raw = "all" },
+                .rules = rules,
+            } };
+        } else {
+            // Not supported — skip the block
+            var depth: u32 = 1;
+            while (depth > 0) {
+                const t = self.nextToken();
+                if (t.type == .eof) break;
+                if (t.type == .open_curly) depth += 1;
+                if (t.type == .close_curly) depth -= 1;
+            }
+            return null;
+        }
+    }
+
+    fn evaluateSupports(condition: []const u8) bool {
+        // Parse @supports condition: (property: value), not(...), and/or
+        // Simple approach: check if property name inside (...) is a known PropertyId
+
+        // Handle "not (...)"
+        var cond = condition;
+        var negate = false;
+        if (cond.len > 4 and eqlIgnoreCase(cond[0..4], "not ")) {
+            negate = true;
+            cond = std.mem.trim(u8, cond[4..], " \t");
+        }
+
+        // Find (property: value) — extract property name
+        if (std.mem.indexOf(u8, cond, "(")) |open| {
+            const inner_start = open + 1;
+            // Find matching close paren
+            var depth: usize = 1;
+            var inner_end = inner_start;
+            while (inner_end < cond.len and depth > 0) : (inner_end += 1) {
+                if (cond[inner_end] == '(') depth += 1;
+                if (cond[inner_end] == ')') depth -= 1;
+            }
+            if (depth == 0 and inner_end > inner_start) {
+                const inner = std.mem.trim(u8, cond[inner_start .. inner_end - 1], " \t");
+                // Split by ':'
+                if (std.mem.indexOfScalar(u8, inner, ':')) |colon| {
+                    const prop_name = std.mem.trim(u8, inner[0..colon], " \t");
+                    const prop_id = ast.PropertyId.fromString(prop_name);
+                    const supported = (prop_id != .unknown);
+                    return if (negate) !supported else supported;
+                }
+            }
+        }
+
+        // For "and"/"or" conditions, be optimistic: return true
+        return !negate;
     }
 
     fn skipAtRule(self: *Parser) void {
