@@ -315,7 +315,9 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     const auto_width = @max(containing_width - h_space, 0);
 
     if (explicit_width) |ew| {
-        box.content.width = @min(ew, @max(containing_width - pad_h - bdr_h, 0));
+        // CSS: explicit width is respected even if it exceeds containing block
+        // (overflow is handled by overflow property, not by clamping width)
+        box.content.width = ew;
 
         // margin:auto centering — only when both margins are auto and width is set
         if (box.style.margin_left_auto and box.style.margin_right_auto) {
