@@ -870,6 +870,12 @@ fn parseCssColor(value: []const u8) ?u32 {
     if (std.mem.startsWith(u8, trimmed, "rgb(")) {
         return parseRgbFunc(trimmed);
     }
+    if (std.mem.startsWith(u8, trimmed, "hsla(")) {
+        return parseHslaFunc(trimmed);
+    }
+    if (std.mem.startsWith(u8, trimmed, "hsl(")) {
+        return parseHslFunc(trimmed);
+    }
 
     // Named colors (case-insensitive)
     return namedColor(trimmed);
@@ -963,6 +969,96 @@ fn parseRgbaFunc(text: []const u8) ?u32 {
     return (@as(u32, a) << 24) | (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
 }
 
+fn hslToRgb(h_deg: f32, s_pct: f32, l_pct: f32) struct { r: u8, g: u8, b: u8 } {
+    const s = std.math.clamp(s_pct / 100.0, 0.0, 1.0);
+    const l = std.math.clamp(l_pct / 100.0, 0.0, 1.0);
+    // Normalize hue to 0-360
+    var h = @mod(h_deg, 360.0);
+    if (h < 0) h += 360.0;
+
+    const c = (1.0 - @abs(2.0 * l - 1.0)) * s;
+    const h_prime = h / 60.0;
+    const x = c * (1.0 - @abs(@mod(h_prime, 2.0) - 1.0));
+    const m = l - c / 2.0;
+
+    var r1: f32 = 0;
+    var g1: f32 = 0;
+    var b1: f32 = 0;
+
+    if (h_prime < 1.0) {
+        r1 = c;
+        g1 = x;
+    } else if (h_prime < 2.0) {
+        r1 = x;
+        g1 = c;
+    } else if (h_prime < 3.0) {
+        g1 = c;
+        b1 = x;
+    } else if (h_prime < 4.0) {
+        g1 = x;
+        b1 = c;
+    } else if (h_prime < 5.0) {
+        r1 = x;
+        b1 = c;
+    } else {
+        r1 = c;
+        b1 = x;
+    }
+
+    return .{
+        .r = @intFromFloat(std.math.clamp((r1 + m) * 255.0 + 0.5, 0.0, 255.0)),
+        .g = @intFromFloat(std.math.clamp((g1 + m) * 255.0 + 0.5, 0.0, 255.0)),
+        .b = @intFromFloat(std.math.clamp((b1 + m) * 255.0 + 0.5, 0.0, 255.0)),
+    };
+}
+
+fn parseHslFunc(text: []const u8) ?u32 {
+    // hsl(H, S%, L%) or hsl(H S% L%)
+    const start = std.mem.indexOf(u8, text, "(") orelse return null;
+    const end = std.mem.indexOf(u8, text, ")") orelse return null;
+    if (start >= end) return null;
+    const inner = text[start + 1 .. end];
+    var vals: [3]f32 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", \t");
+    while (iter.next()) |tok| {
+        if (count >= 3) break;
+        // Strip trailing '%' if present
+        const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
+        // Strip "deg" suffix if present
+        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
+        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        count += 1;
+    }
+    if (count < 3) return null;
+    const rgb = hslToRgb(vals[0], vals[1], vals[2]);
+    return 0xFF000000 | (@as(u32, rgb.r) << 16) | (@as(u32, rgb.g) << 8) | @as(u32, rgb.b);
+}
+
+fn parseHslaFunc(text: []const u8) ?u32 {
+    // hsla(H, S%, L%, A) or hsla(H S% L% / A)
+    const start = std.mem.indexOf(u8, text, "(") orelse return null;
+    const end = std.mem.indexOf(u8, text, ")") orelse return null;
+    if (start >= end) return null;
+    const inner = text[start + 1 .. end];
+    var vals: [4]f32 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
+        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
+        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        count += 1;
+    }
+    if (count < 4) return null;
+    const rgb = hslToRgb(vals[0], vals[1], vals[2]);
+    // Alpha: if > 1.0 treat as 0-255, otherwise 0.0-1.0
+    const alpha_f = if (vals[3] <= 1.0) vals[3] * 255.0 else vals[3];
+    const a: u8 = @intFromFloat(std.math.clamp(alpha_f, 0.0, 255.0));
+    return (@as(u32, a) << 24) | (@as(u32, rgb.r) << 16) | (@as(u32, rgb.g) << 8) | @as(u32, rgb.b);
+}
+
 fn namedColor(name: []const u8) ?u32 {
     const table = .{
         .{ "transparent", 0x00000000 },
@@ -995,6 +1091,91 @@ fn namedColor(name: []const u8) ?u32 {
         .{ "darkgray", 0xFFA9A9A9 },
         .{ "darkgrey", 0xFFA9A9A9 },
         .{ "whitesmoke", 0xFFF5F5F5 },
+        .{ "wheat", 0xFFF5DEB3 },
+        .{ "linen", 0xFFFAF0E6 },
+        .{ "beige", 0xFFF5F5DC },
+        .{ "ivory", 0xFFFFFFF0 },
+        .{ "azure", 0xFFF0FFFF },
+        .{ "lavender", 0xFFE6E6FA },
+        .{ "plum", 0xFFDDA0DD },
+        .{ "orchid", 0xFFDA70D6 },
+        .{ "salmon", 0xFFFA8072 },
+        .{ "khaki", 0xFFF0E68C },
+        .{ "sienna", 0xFFA0522D },
+        .{ "chocolate", 0xFFD2691E },
+        .{ "tan", 0xFFD2B48C },
+        .{ "indigo", 0xFF4B0082 },
+        .{ "crimson", 0xFFDC143C },
+        .{ "turquoise", 0xFF40E0D0 },
+        .{ "steelblue", 0xFF4682B4 },
+        .{ "slategray", 0xFF708090 },
+        .{ "slategrey", 0xFF708090 },
+        .{ "dimgray", 0xFF696969 },
+        .{ "dimgrey", 0xFF696969 },
+        .{ "gainsboro", 0xFFDCDCDC },
+        .{ "honeydew", 0xFFF0FFF0 },
+        .{ "mintcream", 0xFFF5FFFA },
+        .{ "seashell", 0xFFFFF5EE },
+        .{ "snow", 0xFFFFFAFA },
+        .{ "ghostwhite", 0xFFF8F8FF },
+        .{ "floralwhite", 0xFFFFFAF0 },
+        .{ "aliceblue", 0xFFF0F8FF },
+        .{ "antiquewhite", 0xFFFAEBD7 },
+        .{ "cornsilk", 0xFFFFF8DC },
+        .{ "lemonchiffon", 0xFFFFFACD },
+        .{ "lightyellow", 0xFFFFFFE0 },
+        .{ "lightcyan", 0xFFE0FFFF },
+        .{ "lightblue", 0xFFADD8E6 },
+        .{ "lightgreen", 0xFF90EE90 },
+        .{ "lightpink", 0xFFFFB6C1 },
+        .{ "lightsalmon", 0xFFFFA07A },
+        .{ "lightcoral", 0xFFF08080 },
+        .{ "lightsteelblue", 0xFFB0C4DE },
+        .{ "lightskyblue", 0xFF87CEFA },
+        .{ "lightseagreen", 0xFF20B2AA },
+        .{ "darkblue", 0xFF00008B },
+        .{ "darkcyan", 0xFF008B8B },
+        .{ "darkgreen", 0xFF006400 },
+        .{ "darkred", 0xFF8B0000 },
+        .{ "darkorange", 0xFFFF8C00 },
+        .{ "darkviolet", 0xFF9400D3 },
+        .{ "deeppink", 0xFFFF1493 },
+        .{ "deepskyblue", 0xFF00BFFF },
+        .{ "dodgerblue", 0xFF1E90FF },
+        .{ "firebrick", 0xFFB22222 },
+        .{ "forestgreen", 0xFF228B22 },
+        .{ "greenyellow", 0xFFADFF2F },
+        .{ "hotpink", 0xFFFF69B4 },
+        .{ "limegreen", 0xFF32CD32 },
+        .{ "mediumblue", 0xFF0000CD },
+        .{ "mediumpurple", 0xFF9370DB },
+        .{ "mediumseagreen", 0xFF3CB371 },
+        .{ "midnightblue", 0xFF191970 },
+        .{ "mistyrose", 0xFFFFE4E1 },
+        .{ "moccasin", 0xFFFFE4B5 },
+        .{ "navajowhite", 0xFFFFDEAD },
+        .{ "oldlace", 0xFFFDF5E6 },
+        .{ "olivedrab", 0xFF6B8E23 },
+        .{ "orangered", 0xFFFF4500 },
+        .{ "palegoldenrod", 0xFFEEE8AA },
+        .{ "palegreen", 0xFF98FB98 },
+        .{ "paleturquoise", 0xFFAFEEEE },
+        .{ "palevioletred", 0xFFDB7093 },
+        .{ "papayawhip", 0xFFFFEFD5 },
+        .{ "peachpuff", 0xFFFFDAB9 },
+        .{ "peru", 0xFFCD853F },
+        .{ "powderblue", 0xFFB0E0E6 },
+        .{ "rosybrown", 0xFFBC8F8F },
+        .{ "royalblue", 0xFF4169E1 },
+        .{ "saddlebrown", 0xFF8B4513 },
+        .{ "sandybrown", 0xFFF4A460 },
+        .{ "seagreen", 0xFF2E8B57 },
+        .{ "skyblue", 0xFF87CEEB },
+        .{ "slateblue", 0xFF6A5ACD },
+        .{ "springgreen", 0xFF00FF7F },
+        .{ "thistle", 0xFFD8BFD8 },
+        .{ "violet", 0xFFEE82EE },
+        .{ "yellowgreen", 0xFF9ACD32 },
         .{ "inherit", null },
         .{ "initial", null },
     };
