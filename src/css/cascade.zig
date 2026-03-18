@@ -244,21 +244,10 @@ fn flattenRules(
     for (rules) |rule| {
         switch (rule) {
             .style => |sr| {
-                // Expand shorthands
-                var expanded: std.ArrayList(Declaration) = .empty;
-                for (sr.declarations) |decl| {
-                    if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |exp| {
-                        for (exp) |*ed| {
-                            ed.important = decl.important;
-                        }
-                        try expanded.appendSlice(arena, exp);
-                    } else {
-                        try expanded.append(arena, decl);
-                    }
-                }
+                // Store original declarations — shorthand expansion deferred to applyDeclaration
                 try out.append(arena, .{
                     .selectors = sr.selectors,
-                    .declarations = try expanded.toOwnedSlice(arena),
+                    .declarations = sr.declarations,
                     .source_order = sr.source_order,
                 });
             },
@@ -687,6 +676,19 @@ fn applyDeclaration(
     vh: f32,
     arena: std.mem.Allocator,
 ) void {
+    // Try shorthand expansion for unknown properties (margin, padding, border, etc.)
+    if (decl.property == .unknown or decl.property == .custom) {
+        if (decl.property != .custom) {
+            if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |expanded| {
+                for (expanded) |*ed| {
+                    ed.important = decl.important;
+                    applyDeclaration(style, ed.*, var_map, parent, parent_fs, vw, vh, arena);
+                }
+                return;
+            }
+        }
+    }
+
     // Resolve var() references
     var raw = decl.value_raw;
     var resolved_raw: ?[]const u8 = null;
@@ -1192,7 +1194,9 @@ fn collectStyleText(node: DomNode, allocator: std.mem.Allocator) ![]const u8 {
 fn walkForStyles(node: DomNode, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) !void {
     if (node.nodeType() == .element) {
         if (node.tagName()) |tag| {
-            if (std.mem.eql(u8, tag, "style")) {
+            // Skip <noscript> — its <style> rules are for JS-disabled browsers only
+            if (std.ascii.eqlIgnoreCase(tag, "noscript")) return;
+            if (std.ascii.eqlIgnoreCase(tag, "style")) {
                 var child = node.firstChild();
                 while (child) |c| {
                     if (c.nodeType() == .text) {
