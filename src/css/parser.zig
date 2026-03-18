@@ -8,7 +8,7 @@ const ast = @import("ast.zig");
 pub const Parser = struct {
     source: []const u8,
     tokenizer: Tokenizer,
-    arena: std.heap.ArenaAllocator,
+    allocator: std.mem.Allocator,
     source_order: u32,
     peeked: ?Token,
 
@@ -16,18 +16,19 @@ pub const Parser = struct {
         return .{
             .source = source,
             .tokenizer = Tokenizer.init(source),
-            .arena = std.heap.ArenaAllocator.init(backing_allocator),
+            .allocator = backing_allocator,
             .source_order = 0,
             .peeked = null,
         };
     }
 
     pub fn deinit(self: *Parser) void {
-        self.arena.deinit();
+        _ = self;
+        // No-op: caller owns the allocator (typically an arena)
     }
 
     fn alloc(self: *Parser) std.mem.Allocator {
-        return self.arena.allocator();
+        return self.allocator;
     }
 
     fn nextToken(self: *Parser) Token {
