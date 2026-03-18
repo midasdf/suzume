@@ -467,6 +467,19 @@ fn buildChildren(
                 else
                     false);
                 if (!skip_recurse) {
+                    // Insert ::before pseudo-element as first child
+                    if (style.before_content) |before_content| {
+                        const before_box = try allocator.create(Box);
+                        before_box.* = .{};
+                        before_box.parent = child_box;
+                        before_box.style = style;
+                        before_box.style.display = style.before_display;
+                        before_box.box_type = if (style.before_display == .block) .block else .inline_text;
+                        before_box.text = before_content;
+                        before_box.link_url = link_url;
+                        try child_box.children.append(allocator, before_box);
+                    }
+
                     // If this is an ordered/unordered list, start counter at 0
                     const sub_counter: u32 = if (child.tagName()) |tag| blk: {
                         if (std.mem.eql(u8, tag, "ol") or std.mem.eql(u8, tag, "ul")) {
@@ -506,6 +519,19 @@ fn buildChildren(
                         }
                     } else {
                         try buildChildren(child_box, child, styles, allocator, link_url, sub_counter);
+                    }
+
+                    // Insert ::after pseudo-element as last child
+                    if (style.after_content) |after_content| {
+                        const after_box = try allocator.create(Box);
+                        after_box.* = .{};
+                        after_box.parent = child_box;
+                        after_box.style = style;
+                        after_box.style.display = style.after_display;
+                        after_box.box_type = if (style.after_display == .block) .block else .inline_text;
+                        after_box.text = after_content;
+                        after_box.link_url = link_url;
+                        try child_box.children.append(allocator, after_box);
                     }
                 }
 

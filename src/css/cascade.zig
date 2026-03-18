@@ -429,10 +429,10 @@ fn walkAndCompute(
         // Collect matching declarations
         var entries: std.ArrayList(CascadeEntry) = .empty;
 
-        // UA rules
-        try collectMatching(node, ua_index, .ua, &entries, arena);
+        // UA rules (null = non-pseudo-element rules only)
+        try collectMatching(node, ua_index, .ua, &entries, arena, null);
         // Author rules
-        try collectMatching(node, author_index, .author, &entries, arena);
+        try collectMatching(node, author_index, .author, &entries, arena, null);
         // Inline style
         if (node.getAttribute("style")) |inline_style| {
             try collectInlineDecls(inline_style, &entries, arena);
@@ -445,6 +445,17 @@ fn walkAndCompute(
         const parent_fs = if (parent_style) |ps| ps.font_size_px else 16.0;
         for (entries.items) |entry| {
             applyDeclaration(&style, entry.decl, var_map, parent_style, parent_fs, vw, vh, arena);
+        }
+
+        // Compute ::before pseudo-element style
+        if (computePseudoContent(node, &style, ua_index, author_index, var_map, .before, vw, vh, arena)) |ps| {
+            style.before_content = ps.content;
+            style.before_display = ps.display;
+        }
+        // Compute ::after pseudo-element style
+        if (computePseudoContent(node, &style, ua_index, author_index, var_map, .after, vw, vh, arena)) |ps| {
+            style.after_content = ps.content;
+            style.after_display = ps.display;
         }
 
         try styles.put(@intFromPtr(node.lxb_node), style);
@@ -473,11 +484,13 @@ fn collectMatching(
     origin: Origin,
     entries: *std.ArrayList(CascadeEntry),
     arena: std.mem.Allocator,
+    pseudo: ?selectors.PseudoElement,
 ) !void {
     const adapter = makeDomAdapter(node);
 
     // Check universal rules
     for (index.universal.items) |rule| {
+        if (rule.selector.pseudo_element != pseudo) continue;
         if (selectors.matches(&rule.selector, adapter)) {
             for (rule.declarations) |decl| {
                 try entries.append(arena, .{
@@ -498,6 +511,7 @@ fn collectMatching(
         if (lower_tag) |lt| {
             if (index.by_tag.get(lt)) |rules| {
                 for (rules.items) |rule| {
+                    if (rule.selector.pseudo_element != pseudo) continue;
                     if (selectors.matches(&rule.selector, adapter)) {
                         for (rule.declarations) |decl| {
                             try entries.append(arena, .{
@@ -520,6 +534,7 @@ fn collectMatching(
             if (cls.len == 0) continue;
             if (index.by_class.get(cls)) |rules| {
                 for (rules.items) |rule| {
+                    if (rule.selector.pseudo_element != pseudo) continue;
                     if (selectors.matches(&rule.selector, adapter)) {
                         for (rule.declarations) |decl| {
                             try entries.append(arena, .{
@@ -539,6 +554,7 @@ fn collectMatching(
     if (node.getAttribute("id")) |id| {
         if (index.by_id.get(id)) |rules| {
             for (rules.items) |rule| {
+                if (rule.selector.pseudo_element != pseudo) continue;
                 if (selectors.matches(&rule.selector, adapter)) {
                     for (rule.declarations) |decl| {
                         try entries.append(arena, .{
@@ -552,6 +568,51 @@ fn collectMatching(
             }
         }
     }
+}
+
+/// Compute pseudo-element style (::before or ::after) for a given node.
+/// Returns a struct with content and display if the pseudo-element has a non-empty content property.
+const PseudoContentResult = struct {
+    content: []const u8,
+    display: ComputedStyle.Display,
+};
+
+fn computePseudoContent(
+    node: DomNode,
+    parent_style: *const ComputedStyle,
+    ua_index: *const FlatRuleIndex,
+    author_index: *const FlatRuleIndex,
+    var_map: *const VarMap,
+    pseudo: selectors.PseudoElement,
+    vw: f32,
+    vh: f32,
+    arena: std.mem.Allocator,
+) ?PseudoContentResult {
+    var style = ComputedStyle{};
+    inheritAll(&style, parent_style);
+
+    // Collect matching declarations for this pseudo-element
+    var entries: std.ArrayList(CascadeEntry) = .empty;
+    collectMatching(node, ua_index, .ua, &entries, arena, pseudo) catch return null;
+    collectMatching(node, author_index, .author, &entries, arena, pseudo) catch return null;
+
+    if (entries.items.len == 0) return null;
+
+    std.mem.sort(CascadeEntry, entries.items, {}, cascadeEntryLessThan);
+
+    const parent_fs = parent_style.font_size_px;
+    for (entries.items) |entry| {
+        applyDeclaration(&style, entry.decl, var_map, parent_style, parent_fs, vw, vh, arena);
+    }
+
+    // Must have content property set (and not empty)
+    const content = style.content orelse return null;
+    if (content.len == 0) return null;
+
+    return .{
+        .content = content,
+        .display = style.display,
+    };
 }
 
 fn collectInlineDecls(
@@ -1038,6 +1099,20 @@ fn applyDeclaration(
         .grid_column_end => style.grid_column_end = parseGridLine(trimmed),
         .grid_row_start => style.grid_row_start = parseGridLine(trimmed),
         .grid_row_end => style.grid_row_end = parseGridLine(trimmed),
+        .content => {
+            // Parse CSS content property value (for ::before/::after)
+            if (trimmed.len >= 2 and (trimmed[0] == '"' or trimmed[0] == '\'')) {
+                const quote = trimmed[0];
+                if (trimmed[trimmed.len - 1] == quote) {
+                    style.content = trimmed[1 .. trimmed.len - 1];
+                }
+            } else if (eqlIgnoreCase(trimmed, "none") or eqlIgnoreCase(trimmed, "normal")) {
+                style.content = null;
+            } else if (trimmed.len > 0) {
+                // For counters, attr(), etc. — just store raw for now
+                style.content = trimmed;
+            }
+        },
         // Skip border-style — we don't track it but it's needed for border-width to display
         .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},
         // Skip custom properties (already extracted)

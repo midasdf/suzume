@@ -113,6 +113,15 @@ pub const ComputedStyle = struct {
     gradient_color_end: u32 = 0x00000000, // ARGB
     gradient_direction: GradientDirection = .to_bottom,
 
+    // CSS content property (for ::before/::after pseudo-elements)
+    content: ?[]const u8 = null,
+
+    // Pseudo-element generated content
+    before_content: ?[]const u8 = null,
+    after_content: ?[]const u8 = null,
+    before_display: Display = .inline_,
+    after_display: Display = .inline_,
+
     pub const Display = enum {
         block,
         inline_,
