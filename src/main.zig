@@ -150,6 +150,12 @@ const PageState = struct {
     js_rt: ?JsRuntime = null,
     /// External CSS text (from <link> fetches), kept for re-cascade after DOM mutation.
     external_css: ?[]const u8 = null,
+    /// Pending image URLs for incremental loading (1 per event loop tick).
+    pending_images: std.ArrayListUnmanaged(ImageUrlEntry) = .empty,
+    pending_images_idx: usize = 0,
+    pending_images_loaded: usize = 0,
+    /// Base URL for resolving relative image URLs.
+    base_url: ?[]const u8 = null,
     /// Error message to display when page load fails.
     error_message: ?[]const u8 = null,
     error_alloc: ?[]u8 = null,
@@ -160,6 +166,8 @@ const PageState = struct {
             jrt.deinit();
         }
         if (self.image_cache) |*ic| ic.deinit();
+        self.pending_images.deinit(std.heap.c_allocator);
+        if (self.base_url) |bu| std.heap.c_allocator.free(bu);
         if (self.external_css) |ec| std.heap.c_allocator.free(ec);
         if (self.styles) |*s| s.deinit();
         if (self.doc) |*d| d.deinit();
@@ -431,92 +439,17 @@ fn navigateTo(
     block_layout.adjustXPositions(root_box, root_box.margin.left);
     block_layout.adjustYPositions(root_box, root_box.margin.top);
 
-    // Load images (with limits for performance)
-    const max_images: usize = 30;
-    const max_image_bytes: usize = 2 * 1024 * 1024; // 2MB per image
-    var img_cache = ImageCache.init(allocator);
-    var img_urls: std.ArrayListUnmanaged(ImageUrlEntry) = .empty;
-    defer img_urls.deinit(allocator);
-    collectImageUrls(root_box, &img_urls, allocator);
+    // Collect image URLs for incremental loading (loaded 1 per event loop tick)
+    const img_cache = ImageCache.init(allocator);
+    var pending_imgs: std.ArrayListUnmanaged(ImageUrlEntry) = .empty;
+    collectImageUrls(root_box, &pending_imgs, allocator);
 
-    var images_loaded: usize = 0;
-    for (img_urls.items) |entry| {
-        const img_url = entry.url;
-
-        if (images_loaded >= max_images) {
-            std.debug.print("[Images] Limit reached ({d}/{d}), skipping remaining\n", .{ images_loaded, img_urls.items.len });
-            break;
-        }
-
-        // Skip tracking pixels and tiny images
-        if (isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
-            std.debug.print("[Images] Skipping tracking pixel: {s}\n", .{img_url});
-            continue;
-        }
-
-        // Skip SVG images (stb_image can't decode them)
-        if (isSvgUrl(img_url)) {
-            std.debug.print("[Images] Skipping SVG: {s}\n", .{img_url});
-            continue;
-        }
-
-        // Resolve relative URL
-        const resolved = resolveUrl(allocator, url_z, img_url) catch continue;
-        defer allocator.free(resolved);
-
-        // Also check resolved URL for SVG
-        if (isSvgUrl(resolved)) {
-            std.debug.print("[Images] Skipping SVG: {s}\n", .{resolved});
-            continue;
-        }
-
-        std.debug.print("[Images] Loading ({d}/{d}): {s}\n", .{ images_loaded + 1, @min(img_urls.items.len, max_images), resolved });
-
-        var resp = loader.loadBytesWithTimeout(resolved, 5) catch continue;
-        defer resp.deinit();
-
-        if (resp.status_code == 200 and resp.body.len > 0) {
-            // Skip if content-type is SVG
-            if (isSvgContentType(resp.content_type)) {
-                std.debug.print("[Images] Skipping SVG (content-type): {s}\n", .{resolved});
-                continue;
-            }
-
-            // Skip oversized images
-            if (resp.body.len > max_image_bytes) {
-                std.debug.print("[Images] Skipping oversized image ({d} bytes): {s}\n", .{ resp.body.len, resolved });
-                continue;
-            }
-
-            const img = decodeImage(resp.body) catch continue;
-
-            // Guard against decoded image OOM: reject if decoded pixels exceed 4MP (16MB RGBA)
-            const max_decoded_pixels: u64 = 4 * 1024 * 1024; // 4 megapixels
-            const pixel_count: u64 = @as(u64, img.width) * @as(u64, img.height);
-            if (pixel_count > max_decoded_pixels) {
-                std.debug.print("[Images] Skipping large decoded image ({d}x{d} = {d}MP): {s}\n", .{ img.width, img.height, pixel_count / (1024 * 1024), resolved });
-                var mimg = img;
-                mimg.deinit();
-                continue;
-            }
-
-            img_cache.put(img_url, img) catch {
-                var mimg = img;
-                mimg.deinit();
-            };
-            images_loaded += 1;
-        }
-    }
-
-    // Update replaced box intrinsic dimensions from actual decoded images
-    // and re-layout so aspect ratios are correct
-    var images_updated = false;
-    updateImageDimensions(root_box, &img_cache, &images_updated);
-    if (images_updated) {
-        block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
-        block_layout.adjustXPositions(root_box, root_box.margin.left);
-        block_layout.adjustYPositions(root_box, root_box.margin.top);
-    }
+    // Save base URL for image resolution
+    const base_url_copy: ?[]const u8 = blk: {
+        const bu = allocator.alloc(u8, url_z.len) catch break :blk null;
+        @memcpy(bu, url_z);
+        break :blk bu;
+    };
 
     const total_h = painter_mod.contentHeight(root_box);
     const total_w = painter_mod.contentWidth(root_box);
@@ -539,6 +472,10 @@ fn navigateTo(
         .total_width = total_w,
         .image_cache = img_cache,
         .external_css = saved_ext_css,
+        .pending_images = pending_imgs,
+        .pending_images_idx = 0,
+        .pending_images_loaded = 0,
+        .base_url = base_url_copy,
     };
 
     // Set root box pointer for JS layout queries (offsetWidth, getBoundingClientRect, etc.)
@@ -1434,6 +1371,58 @@ pub fn main() !void {
                 if (serializeSession(allocator, &tab_mgr)) |json| {
                     defer allocator.free(json);
                     s.saveSession(json);
+                }
+            }
+        }
+
+        // Incremental image loading: load 1 image per event loop tick
+        {
+            const active_img_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                &page_states.items[tab_mgr.active_index]
+            else
+                null;
+            if (active_img_pg) |pg| {
+                if (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 30) {
+                    const entry = pg.pending_images.items[pg.pending_images_idx];
+                    pg.pending_images_idx += 1;
+
+                    const img_url = entry.url;
+                    if (!isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height) and !isSvgUrl(img_url)) {
+                        if (pg.base_url) |base| {
+                            if (resolveUrl(allocator, base, img_url)) |resolved| {
+                                defer allocator.free(resolved);
+                                if (!isSvgUrl(resolved)) {
+                                    if (loader.loadBytesWithTimeout(resolved, 3)) |resp_val| {
+                                        var resp = resp_val;
+                                        defer resp.deinit();
+                                        if (resp.status_code == 200 and resp.body.len > 0 and resp.body.len <= 2 * 1024 * 1024 and !isSvgContentType(resp.content_type)) {
+                                            if (decodeImage(resp.body)) |img| {
+                                                const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+                                                if (px_count <= 4 * 1024 * 1024) {
+                                                    if (pg.image_cache) |*ic| {
+                                                        ic.put(img_url, img) catch {
+                                                            var mimg = img;
+                                                            mimg.deinit();
+                                                        };
+                                                        pg.pending_images_loaded += 1;
+                                                        // Update dimensions and repaint
+                                                        if (pg.root_box) |rb| {
+                                                            var updated = false;
+                                                            updateImageDimensions(rb, ic, &updated);
+                                                        }
+                                                        needs_repaint = true;
+                                                    }
+                                                } else {
+                                                    var mimg = img;
+                                                    mimg.deinit();
+                                                }
+                                            } else |_| {}
+                                        }
+                                    } else |_| {}
+                                }
+                            } else |_| {}
+                        }
+                    }
                 }
             }
         }
