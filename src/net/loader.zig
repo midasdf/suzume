@@ -57,7 +57,7 @@ pub const Loader = struct {
         // Walk entire document for <link rel="stylesheet"> and <style>
         // (not just <head> — many sites put CSS links in <body>)
         var css_link_count: usize = 0;
-        const max_css_links: usize = 20; // Limit to prevent slow loads
+        const max_css_links: usize = 40; // Allow more CSS for complex sites like GitHub
         if (doc.root()) |root_node| {
             try self.walkForCssLinks(root_node, url, &css_parts, &css_link_count, max_css_links);
         }
@@ -105,7 +105,7 @@ pub const Loader = struct {
 
                         if (self.adblock_enabled and adblock.shouldBlock(resolved)) return;
 
-                        var css_resp = self.client.getWithTimeout(self.allocator, resolved, 5) catch return;
+                        var css_resp = self.client.getWithTimeout(self.allocator, resolved, 3) catch return;
                         defer css_resp.deinit();
 
                         if (css_resp.status_code == 200 and css_resp.body.len > 0) {
