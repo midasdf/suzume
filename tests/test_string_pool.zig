@@ -1,5 +1,5 @@
 const std = @import("std");
-const StringPool = @import("string_pool").StringPool;
+const StringPool = @import("css").string_pool.StringPool;
 
 test "same string returns same pointer" {
     var pool = StringPool.init(std.testing.allocator);

@@ -3,7 +3,7 @@ const Surface = @import("paint/surface.zig").Surface;
 const TextRenderer = @import("paint/text.zig").TextRenderer;
 const GlyphBitmap = @import("paint/text.zig").GlyphBitmap;
 const Document = @import("dom/tree.zig").Document;
-const cascade_mod = @import("style/cascade.zig");
+const cascade_mod = @import("css/cascade.zig");
 const box_tree = @import("layout/tree.zig");
 const block_layout = @import("layout/block.zig");
 const painter_mod = @import("paint/painter.zig");
@@ -3154,8 +3154,7 @@ pub const dom = struct {
 
 pub const style = struct {
     pub const computed = @import("style/computed.zig");
-    pub const select = @import("style/select.zig");
-    pub const cascade = @import("style/cascade.zig");
+    pub const cascade = @import("css/cascade.zig");
 };
 
 pub const layout = struct {

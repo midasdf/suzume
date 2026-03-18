@@ -1,6 +1,6 @@
 const std = @import("std");
-const values = @import("values");
-const ast = @import("ast");
+const values = @import("values.zig");
+const ast = @import("ast.zig");
 
 // ── Color Parsing ───────────────────────────────────────────────────
 

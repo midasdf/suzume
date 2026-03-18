@@ -1,0 +1,1218 @@
+const std = @import("std");
+const ast = @import("ast.zig");
+const parser_mod = @import("parser.zig");
+const selectors = @import("selectors.zig");
+const properties = @import("properties.zig");
+const values = @import("values.zig");
+const media = @import("media.zig");
+const variables = @import("variables.zig");
+const computed_mod = @import("../style/computed.zig");
+const dom = @import("../dom/node.zig");
+
+const ComputedStyle = computed_mod.ComputedStyle;
+const DomNode = dom.DomNode;
+const PropertyId = ast.PropertyId;
+const Declaration = ast.Declaration;
+const VarMap = variables.VarMap;
+
+pub const StyleMap = std.AutoHashMap(usize, ComputedStyle);
+
+pub const CascadeResult = struct {
+    styles: StyleMap,
+    arena: std.heap.ArenaAllocator,
+
+    pub fn getStyle(self: *const CascadeResult, node: DomNode) ?ComputedStyle {
+        return self.styles.get(@intFromPtr(node.lxb_node));
+    }
+
+    pub fn deinit(self: *CascadeResult) void {
+        self.styles.deinit();
+        self.arena.deinit();
+    }
+};
+
+/// Minimal user-agent default stylesheet (Catppuccin Mocha theme).
+const ua_stylesheet_text =
+    \\html { color: #cdd6f4; }
+    \\body { margin: 8px; color: #cdd6f4; }
+    \\html, body, div, section, article, aside, nav, main,
+    \\header, footer, h1, h2, h3, h4, h5, h6, p, blockquote,
+    \\dl, dt, dd, figure, figcaption, form, fieldset,
+    \\hr, address, details, summary { display: block; }
+    \\head, style, script, link, meta, title, template { display: none; }
+    \\table { display: table; }
+    \\tr { display: table-row; }
+    \\td, th { display: table-cell; padding: 1px; }
+    \\th { font-weight: bold; text-align: center; }
+    \\thead { display: table-header-group; }
+    \\tbody { display: table-row-group; }
+    \\tfoot { display: table-footer-group; }
+    \\col { display: table-column; }
+    \\colgroup { display: table-column-group; }
+    \\caption { display: table-caption; }
+    \\ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
+    \\li { display: list-item; }
+    \\h1 { font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
+    \\h2 { font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
+    \\h3 { font-size: 1.17em; font-weight: bold; margin-top: 1em; margin-bottom: 1em; }
+    \\h4 { font-weight: bold; margin-top: 1.33em; margin-bottom: 1.33em; }
+    \\h5 { font-size: 0.83em; font-weight: bold; margin-top: 1.67em; margin-bottom: 1.67em; }
+    \\h6 { font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
+    \\b, strong { font-weight: bold; display: inline; }
+    \\em, i { font-style: italic; display: inline; }
+    \\a { color: #89b4fa; text-decoration: underline; display: inline; }
+    \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp { display: inline; }
+    \\pre, code { white-space: pre; }
+    \\code { color: #a6e3a1; }
+    \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
+    \\hr { border-top-width: 1px; margin-top: 8px; margin-bottom: 8px; }
+    \\p { margin-top: 1em; margin-bottom: 1em; }
+    \\blockquote { margin-left: 40px; margin-right: 40px; margin-top: 1em; margin-bottom: 1em;
+    \\  padding-left: 12px; }
+    \\button { display: inline-block; padding: 4px; }
+    \\input, textarea { display: inline-block; padding: 4px; }
+    \\select { display: inline-block; padding: 4px; }
+    \\small { font-size: 0.83em; }
+    \\sub, sup { font-size: 0.75em; }
+    \\abbr { text-decoration: underline; }
+    \\center { display: block; text-align: center; }
+    \\noscript { display: none; }
+    \\details { display: block; }
+    \\summary { display: block; }
+    \\dialog { display: none; }
+    \\template { display: none; }
+;
+
+// ── Inherited properties ─────────────────────────────────────────────
+// These properties inherit from parent by default when not explicitly set.
+const inherited_properties = [_]PropertyId{
+    .color,
+    .font_size,
+    .font_weight,
+    .font_style,
+    .line_height,
+    .letter_spacing,
+    .text_align,
+    .text_decoration,
+    .text_transform,
+    .white_space,
+    .word_break,
+    .overflow_wrap,
+    .visibility,
+    .list_style_type,
+    .text_overflow,
+};
+
+fn isInherited(prop: PropertyId) bool {
+    for (inherited_properties) |p| {
+        if (p == prop) return true;
+    }
+    return false;
+}
+
+// ── Cascade priority for sorting declarations ─────────────────────────
+
+const Origin = enum(u8) {
+    ua = 0,
+    author = 1,
+    inline_ = 2,
+};
+
+const CascadeEntry = struct {
+    decl: Declaration,
+    specificity: u32,
+    source_order: u32,
+    origin: Origin,
+
+    fn priority(self: CascadeEntry) u64 {
+        // Sort key: important bit (63), origin (56-62), specificity (24-55), source_order (0-23)
+        var p: u64 = 0;
+        if (self.decl.important) {
+            p |= @as(u64, 1) << 63;
+        }
+        p |= @as(u64, @intFromEnum(self.origin)) << 56;
+        p |= @as(u64, self.specificity) << 24;
+        p |= @as(u64, @min(self.source_order, 0xFFFFFF));
+        return p;
+    }
+};
+
+fn cascadeEntryLessThan(_: void, a: CascadeEntry, b: CascadeEntry) bool {
+    return a.priority() < b.priority();
+}
+
+// ── Main cascade function ─────────────────────────────────────────────
+
+pub fn cascade(
+    doc_root: DomNode,
+    allocator: std.mem.Allocator,
+    external_css: ?[]const u8,
+    viewport_width: u32,
+    viewport_height: u32,
+) !CascadeResult {
+    var result = CascadeResult{
+        .styles = StyleMap.init(allocator),
+        .arena = std.heap.ArenaAllocator.init(allocator),
+    };
+    errdefer result.deinit();
+
+    const arena = result.arena.allocator();
+    const vw: f32 = @floatFromInt(viewport_width);
+    const vh: f32 = @floatFromInt(viewport_height);
+
+    // 1. Parse UA stylesheet
+    var ua_parser = parser_mod.Parser.init(ua_stylesheet_text, arena);
+    const ua_sheet = try ua_parser.parse();
+
+    // 2. Collect DOM <style> text
+    const dom_css = try collectStyleText(doc_root, arena);
+
+    // 3. Combine external + DOM CSS
+    var combined_css: []const u8 = "";
+    if (external_css) |ext| {
+        if (dom_css.len > 0) {
+            const buf = try arena.alloc(u8, ext.len + 1 + dom_css.len);
+            @memcpy(buf[0..ext.len], ext);
+            buf[ext.len] = '\n';
+            @memcpy(buf[ext.len + 1 ..], dom_css);
+            combined_css = buf;
+        } else {
+            combined_css = ext;
+        }
+    } else {
+        combined_css = dom_css;
+    }
+
+    // 4. Parse author stylesheet
+    var author_parser = parser_mod.Parser.init(combined_css, arena);
+    const author_sheet = try author_parser.parse();
+
+    // 5. Flatten @media rules and collect applicable style rules
+    var ua_rules = std.ArrayList(FlatRule).init(arena);
+    try flattenRules(ua_sheet.rules, vw, vh, &ua_rules, arena);
+
+    var author_rules = std.ArrayList(FlatRule).init(arena);
+    try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena);
+
+    // 6. Extract CSS variables from author rules
+    var root_vars = VarMap.init(arena);
+    for (author_rules.items) |rule| {
+        for (rule.declarations) |decl| {
+            if (decl.property == .custom and decl.property_name.len >= 2 and
+                decl.property_name[0] == '-' and decl.property_name[1] == '-')
+            {
+                root_vars.set(decl.property_name, decl.value_raw);
+            }
+        }
+    }
+
+    // 7. Build rule indices
+    var ua_index = try buildFlatRuleIndex(ua_rules.items, arena);
+    var author_index = try buildFlatRuleIndex(author_rules.items, arena);
+
+    // 8. Walk DOM tree and compute styles
+    try walkAndCompute(
+        doc_root,
+        null,
+        &result.styles,
+        &ua_index,
+        &author_index,
+        &root_vars,
+        vw,
+        vh,
+        arena,
+    );
+
+    return result;
+}
+
+// ── Flattened rule (after @media evaluation) ──────────────────────────
+
+const FlatRule = struct {
+    selectors: []ast.Selector,
+    declarations: []Declaration,
+    source_order: u32,
+};
+
+fn flattenRules(
+    rules: []const ast.Rule,
+    vw: f32,
+    vh: f32,
+    out: *std.ArrayList(FlatRule),
+    arena: std.mem.Allocator,
+) !void {
+    for (rules) |rule| {
+        switch (rule) {
+            .style => |sr| {
+                // Expand shorthands
+                var expanded = std.ArrayList(Declaration).init(arena);
+                for (sr.declarations) |decl| {
+                    if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |exp| {
+                        for (exp) |*ed| {
+                            ed.important = decl.important;
+                        }
+                        try expanded.appendSlice(exp);
+                    } else {
+                        try expanded.append(decl);
+                    }
+                }
+                try out.append(.{
+                    .selectors = sr.selectors,
+                    .declarations = try expanded.toOwnedSlice(),
+                    .source_order = sr.source_order,
+                });
+            },
+            .media => |mr| {
+                if (media.evaluateMediaQuery(mr.query.raw, vw, vh)) {
+                    try flattenRules(mr.rules, vw, vh, out, arena);
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+// ── Simple flat rule index ────────────────────────────────────────────
+
+const FlatRuleIndex = struct {
+    by_id: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(IndexedFlatRule)),
+    by_class: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(IndexedFlatRule)),
+    by_tag: std.StringHashMapUnmanaged(std.ArrayListUnmanaged(IndexedFlatRule)),
+    universal: std.ArrayListUnmanaged(IndexedFlatRule),
+};
+
+const IndexedFlatRule = struct {
+    selector: selectors.ParsedSelector,
+    declarations: []const Declaration,
+    source_order: u32,
+};
+
+fn buildFlatRuleIndex(rules: []const FlatRule, arena: std.mem.Allocator) !FlatRuleIndex {
+    var index = FlatRuleIndex{
+        .by_id = .{},
+        .by_class = .{},
+        .by_tag = .{},
+        .universal = .{},
+    };
+
+    for (rules) |rule| {
+        for (rule.selectors) |sel| {
+            const trimmed = std.mem.trim(u8, sel.source, " \t\r\n");
+            if (selectors.parseSelector(trimmed, arena)) |parsed| {
+                const indexed = IndexedFlatRule{
+                    .selector = parsed,
+                    .declarations = rule.declarations,
+                    .source_order = rule.source_order,
+                };
+                const key = findKeySelector(parsed.components);
+                switch (key) {
+                    .id => |id| {
+                        const list_ptr = try index.by_id.getOrPutValue(arena, id, .{});
+                        try list_ptr.value_ptr.append(arena, indexed);
+                    },
+                    .class => |cls| {
+                        const list_ptr = try index.by_class.getOrPutValue(arena, cls, .{});
+                        try list_ptr.value_ptr.append(arena, indexed);
+                    },
+                    .type_sel => |tag| {
+                        const list_ptr = try index.by_tag.getOrPutValue(arena, tag, .{});
+                        try list_ptr.value_ptr.append(arena, indexed);
+                    },
+                    else => {
+                        try index.universal.append(arena, indexed);
+                    },
+                }
+            }
+        }
+    }
+
+    return index;
+}
+
+fn findKeySelector(components: []const selectors.SelectorComponent) selectors.SimpleSelector {
+    var i: usize = components.len;
+    while (i > 0) {
+        i -= 1;
+        switch (components[i]) {
+            .simple => |s| return s,
+            .combinator => continue,
+        }
+    }
+    return .universal;
+}
+
+// ── DOM adapter for selector matching ─────────────────────────────────
+
+fn makeDomAdapter(node: DomNode) selectors.ElementAdapter {
+    return .{
+        .ptr = @ptrCast(node.lxb_node),
+        .vtable = &dom_vtable,
+    };
+}
+
+const dom_vtable = selectors.ElementAdapter.VTable{
+    .tagName = domTagName,
+    .getAttribute = domGetAttribute,
+    .parent = domParent,
+    .previousElementSibling = domPrevSibling,
+    .nextElementSibling = domNextSibling,
+    .firstChild = domFirstChild,
+    .isDocumentNode = domIsDocument,
+};
+
+fn domTagName(ptr: *const anyopaque) ?[]const u8 {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    return node.tagName();
+}
+
+fn domGetAttribute(ptr: *const anyopaque, name: []const u8) ?[]const u8 {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    return node.getAttribute(name);
+}
+
+fn domParent(ptr: *const anyopaque) ?selectors.ElementAdapter {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    if (node.parent()) |p| return makeDomAdapter(p);
+    return null;
+}
+
+fn domPrevSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    // Walk backwards through siblings to find previous element
+    const lxb = @import("../bindings/lexbor.zig").c;
+    var sib = node.lxb_node.prev;
+    while (sib != null) {
+        const s = sib.?;
+        if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            return makeDomAdapter(DomNode{ .lxb_node = s });
+        }
+        sib = s.prev;
+    }
+    return null;
+}
+
+fn domNextSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const lxb = @import("../bindings/lexbor.zig").c;
+    var sib = node.lxb_node.next;
+    while (sib != null) {
+        const s = sib.?;
+        if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            return makeDomAdapter(DomNode{ .lxb_node = s });
+        }
+        sib = s.next;
+    }
+    return null;
+}
+
+fn domFirstChild(ptr: *const anyopaque) ?selectors.ElementAdapter {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    if (node.firstElementChild()) |c| return makeDomAdapter(c);
+    return null;
+}
+
+fn domIsDocument(ptr: *const anyopaque) bool {
+    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    return node.nodeType() == .document;
+}
+
+// ── Tree walk and style computation ───────────────────────────────────
+
+fn walkAndCompute(
+    node: DomNode,
+    parent_style: ?*const ComputedStyle,
+    styles: *StyleMap,
+    ua_index: *const FlatRuleIndex,
+    author_index: *const FlatRuleIndex,
+    var_map: *const VarMap,
+    vw: f32,
+    vh: f32,
+    arena: std.mem.Allocator,
+) !void {
+    if (node.nodeType() == .element) {
+        var style = ComputedStyle{};
+
+        // Inherit from parent
+        if (parent_style) |ps| {
+            inheritAll(&style, ps);
+        }
+
+        // Collect matching declarations
+        var entries = std.ArrayList(CascadeEntry).init(arena);
+
+        // UA rules
+        try collectMatching(node, ua_index, .ua, &entries, arena);
+        // Author rules
+        try collectMatching(node, author_index, .author, &entries, arena);
+        // Inline style
+        if (node.getAttribute("style")) |inline_style| {
+            try collectInlineDecls(inline_style, &entries, arena);
+        }
+
+        // Sort by cascade priority
+        std.mem.sort(CascadeEntry, entries.items, {}, cascadeEntryLessThan);
+
+        // Apply in order (lowest priority first, last write wins for same property)
+        const parent_fs = if (parent_style) |ps| ps.font_size_px else 16.0;
+        for (entries.items) |entry| {
+            applyDeclaration(&style, entry.decl, var_map, parent_style, parent_fs, vw, vh, arena);
+        }
+
+        try styles.put(@intFromPtr(node.lxb_node), style);
+
+        // Recurse into children with this node's style as parent
+        const style_ptr = styles.getPtr(@intFromPtr(node.lxb_node)).?;
+        var child = node.firstChild();
+        while (child) |c| {
+            try walkAndCompute(c, style_ptr, styles, ua_index, author_index, var_map, vw, vh, arena);
+            child = c.nextSibling();
+        }
+    } else {
+        // Non-element nodes (text, etc.) — recurse
+        var child = node.firstChild();
+        while (child) |c| {
+            try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena);
+            child = c.nextSibling();
+        }
+    }
+}
+
+fn collectMatching(
+    node: DomNode,
+    index: *const FlatRuleIndex,
+    origin: Origin,
+    entries: *std.ArrayList(CascadeEntry),
+    arena: std.mem.Allocator,
+) !void {
+    const adapter = makeDomAdapter(node);
+
+    // Check universal rules
+    for (index.universal.items) |rule| {
+        if (selectors.matches(&rule.selector, adapter)) {
+            for (rule.declarations) |decl| {
+                try entries.append(.{
+                    .decl = decl,
+                    .specificity = rule.selector.specificity.toU32(),
+                    .source_order = rule.source_order,
+                    .origin = origin,
+                });
+            }
+        }
+    }
+
+    // Check by tag
+    if (node.tagName()) |tag| {
+        // Need lowercase for lookup
+        var buf: [64]u8 = undefined;
+        const lower_tag = toLowerBuf(tag, &buf);
+        if (lower_tag) |lt| {
+            if (index.by_tag.get(lt)) |rules| {
+                for (rules.items) |rule| {
+                    if (selectors.matches(&rule.selector, adapter)) {
+                        for (rule.declarations) |decl| {
+                            try entries.append(.{
+                                .decl = decl,
+                                .specificity = rule.selector.specificity.toU32(),
+                                .source_order = rule.source_order,
+                                .origin = origin,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check by class
+    if (node.getAttribute("class")) |class_attr| {
+        var class_iter = std.mem.splitScalar(u8, class_attr, ' ');
+        while (class_iter.next()) |cls| {
+            if (cls.len == 0) continue;
+            if (index.by_class.get(cls)) |rules| {
+                for (rules.items) |rule| {
+                    if (selectors.matches(&rule.selector, adapter)) {
+                        for (rule.declarations) |decl| {
+                            try entries.append(.{
+                                .decl = decl,
+                                .specificity = rule.selector.specificity.toU32(),
+                                .source_order = rule.source_order,
+                                .origin = origin,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Check by ID
+    if (node.getAttribute("id")) |id| {
+        if (index.by_id.get(id)) |rules| {
+            for (rules.items) |rule| {
+                if (selectors.matches(&rule.selector, adapter)) {
+                    for (rule.declarations) |decl| {
+                        try entries.append(.{
+                            .decl = decl,
+                            .specificity = rule.selector.specificity.toU32(),
+                            .source_order = rule.source_order,
+                            .origin = origin,
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn collectInlineDecls(
+    inline_style: []const u8,
+    entries: *std.ArrayList(CascadeEntry),
+    arena: std.mem.Allocator,
+) !void {
+    // Wrap in a dummy rule block for the parser
+    const wrapped_len = 2 + inline_style.len + 1;
+    const wrapped = try arena.alloc(u8, wrapped_len);
+    wrapped[0] = '*';
+    wrapped[1] = '{';
+    @memcpy(wrapped[2 .. 2 + inline_style.len], inline_style);
+    wrapped[wrapped_len - 1] = '}';
+
+    var p = parser_mod.Parser.init(wrapped, arena);
+    const sheet = p.parse() catch return;
+
+    for (sheet.rules) |rule| {
+        switch (rule) {
+            .style => |sr| {
+                for (sr.declarations) |decl| {
+                    // Expand shorthands
+                    if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |exp| {
+                        for (exp) |*ed| {
+                            ed.important = decl.important;
+                            try entries.append(.{
+                                .decl = ed.*,
+                                .specificity = 0, // inline style wins by origin, not specificity
+                                .source_order = 0xFFFFFF, // high source order
+                                .origin = .inline_,
+                            });
+                        }
+                    } else {
+                        try entries.append(.{
+                            .decl = decl,
+                            .specificity = 0,
+                            .source_order = 0xFFFFFF,
+                            .origin = .inline_,
+                        });
+                    }
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+// ── Inheritance ──────────────────────────────────────────────────────
+
+fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
+    style.color = parent.color;
+    style.font_size_px = parent.font_size_px;
+    style.font_weight = parent.font_weight;
+    style.font_style = parent.font_style;
+    style.line_height = parent.line_height;
+    style.letter_spacing = parent.letter_spacing;
+    style.text_align = parent.text_align;
+    style.text_decoration = parent.text_decoration;
+    style.text_transform = parent.text_transform;
+    style.white_space = parent.white_space;
+    style.word_break = parent.word_break;
+    style.overflow_wrap = parent.overflow_wrap;
+    style.visibility = parent.visibility;
+    style.list_style_type = parent.list_style_type;
+    style.text_overflow = parent.text_overflow;
+}
+
+fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: PropertyId) void {
+    switch (prop) {
+        .color => style.color = parent.color,
+        .font_size => style.font_size_px = parent.font_size_px,
+        .font_weight => style.font_weight = parent.font_weight,
+        .font_style => style.font_style = parent.font_style,
+        .line_height => style.line_height = parent.line_height,
+        .letter_spacing => style.letter_spacing = parent.letter_spacing,
+        .text_align => style.text_align = parent.text_align,
+        .text_decoration => style.text_decoration = parent.text_decoration,
+        .text_transform => style.text_transform = parent.text_transform,
+        .white_space => style.white_space = parent.white_space,
+        .word_break => style.word_break = parent.word_break,
+        .overflow_wrap => style.overflow_wrap = parent.overflow_wrap,
+        .visibility => style.visibility = parent.visibility,
+        .list_style_type => style.list_style_type = parent.list_style_type,
+        .text_overflow => style.text_overflow = parent.text_overflow,
+        // For non-inherited properties, copy from parent too (explicit inherit keyword)
+        .display => style.display = parent.display,
+        .position => style.position = parent.position,
+        .width => style.width = parent.width,
+        .height => style.height = parent.height,
+        .margin_top => style.margin_top = parent.margin_top,
+        .margin_right => style.margin_right = parent.margin_right,
+        .margin_bottom => style.margin_bottom = parent.margin_bottom,
+        .margin_left => style.margin_left = parent.margin_left,
+        .padding_top => style.padding_top = parent.padding_top,
+        .padding_right => style.padding_right = parent.padding_right,
+        .padding_bottom => style.padding_bottom = parent.padding_bottom,
+        .padding_left => style.padding_left = parent.padding_left,
+        .background_color => style.background_color = parent.background_color,
+        .opacity => style.opacity = parent.opacity,
+        .border_top_width => style.border_top_width = parent.border_top_width,
+        .border_right_width => style.border_right_width = parent.border_right_width,
+        .border_bottom_width => style.border_bottom_width = parent.border_bottom_width,
+        .border_left_width => style.border_left_width = parent.border_left_width,
+        .border_top_color => style.border_top_color = parent.border_top_color,
+        .border_right_color => style.border_right_color = parent.border_right_color,
+        .border_bottom_color => style.border_bottom_color = parent.border_bottom_color,
+        .border_left_color => style.border_left_color = parent.border_left_color,
+        else => {},
+    }
+}
+
+// ── Apply a single declaration to a ComputedStyle ─────────────────────
+
+fn applyDeclaration(
+    style: *ComputedStyle,
+    decl: Declaration,
+    var_map: *const VarMap,
+    parent: ?*const ComputedStyle,
+    parent_fs: f32,
+    vw: f32,
+    vh: f32,
+    arena: std.mem.Allocator,
+) void {
+    // Resolve var() references
+    var raw = decl.value_raw;
+    var resolved_raw: ?[]const u8 = null;
+    if (std.mem.indexOf(u8, raw, "var(") != null) {
+        resolved_raw = variables.resolveVarRefs(raw, var_map, arena);
+        if (resolved_raw) |r| raw = r;
+    }
+
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return;
+
+    // Handle CSS-wide keywords
+    if (eqlIgnoreCase(trimmed, "inherit")) {
+        if (parent) |p| inheritProperty(style, p, decl.property);
+        return;
+    }
+    if (eqlIgnoreCase(trimmed, "initial") or eqlIgnoreCase(trimmed, "unset")) {
+        if (eqlIgnoreCase(trimmed, "unset") and isInherited(decl.property)) {
+            if (parent) |p| inheritProperty(style, p, decl.property);
+        }
+        // For initial / non-inherited unset: leave at default (ComputedStyle already has defaults)
+        return;
+    }
+
+    const fs = style.font_size_px;
+
+    switch (decl.property) {
+        .display => {
+            if (mapDisplay(trimmed)) |d| style.display = d;
+        },
+        .position => {
+            if (eqlIgnoreCase(trimmed, "static")) style.position = .static_
+            else if (eqlIgnoreCase(trimmed, "relative")) style.position = .relative
+            else if (eqlIgnoreCase(trimmed, "absolute")) style.position = .absolute
+            else if (eqlIgnoreCase(trimmed, "fixed")) style.position = .fixed
+            else if (eqlIgnoreCase(trimmed, "sticky")) style.position = .sticky;
+        },
+        .float_ => {
+            if (eqlIgnoreCase(trimmed, "left")) style.float_ = .left
+            else if (eqlIgnoreCase(trimmed, "right")) style.float_ = .right
+            else if (eqlIgnoreCase(trimmed, "none")) style.float_ = .none;
+        },
+        .clear => {
+            if (eqlIgnoreCase(trimmed, "left")) style.clear = .left
+            else if (eqlIgnoreCase(trimmed, "right")) style.clear = .right
+            else if (eqlIgnoreCase(trimmed, "both")) style.clear = .both
+            else if (eqlIgnoreCase(trimmed, "none")) style.clear = .none;
+        },
+        .box_sizing => {
+            if (eqlIgnoreCase(trimmed, "border-box")) style.box_sizing = .border_box
+            else if (eqlIgnoreCase(trimmed, "content-box")) style.box_sizing = .content_box;
+        },
+        .color => {
+            if (properties.parseColor(trimmed)) |c| style.color = c.toArgb();
+        },
+        .background_color => {
+            if (properties.parseColor(trimmed)) |c| style.background_color = c.toArgb();
+        },
+        .opacity => {
+            if (std.fmt.parseFloat(f32, trimmed)) |v| {
+                style.opacity = std.math.clamp(v, 0.0, 1.0);
+            } else |_| {}
+        },
+        .visibility => {
+            if (eqlIgnoreCase(trimmed, "visible")) style.visibility = .visible
+            else if (eqlIgnoreCase(trimmed, "hidden")) style.visibility = .hidden
+            else if (eqlIgnoreCase(trimmed, "collapse")) style.visibility = .collapse;
+        },
+        .font_size => {
+            if (parseLengthValue(trimmed, parent_fs, vw, vh)) |px| {
+                style.font_size_px = px;
+            }
+        },
+        .font_weight => {
+            if (std.fmt.parseInt(u16, trimmed, 10)) |w| {
+                style.font_weight = w;
+            } else |_| {
+                if (eqlIgnoreCase(trimmed, "bold")) style.font_weight = 700
+                else if (eqlIgnoreCase(trimmed, "normal")) style.font_weight = 400
+                else if (eqlIgnoreCase(trimmed, "lighter")) {
+                    style.font_weight = if (style.font_weight >= 600) 400 else 100;
+                } else if (eqlIgnoreCase(trimmed, "bolder")) {
+                    style.font_weight = if (style.font_weight <= 300) 400 else 700;
+                }
+            }
+        },
+        .font_style => {
+            if (eqlIgnoreCase(trimmed, "normal")) style.font_style = .normal
+            else if (eqlIgnoreCase(trimmed, "italic")) style.font_style = .italic
+            else if (eqlIgnoreCase(trimmed, "oblique")) style.font_style = .oblique;
+        },
+        .text_align => {
+            if (eqlIgnoreCase(trimmed, "left") or eqlIgnoreCase(trimmed, "start"))
+                style.text_align = .left
+            else if (eqlIgnoreCase(trimmed, "right") or eqlIgnoreCase(trimmed, "end"))
+                style.text_align = .right
+            else if (eqlIgnoreCase(trimmed, "center"))
+                style.text_align = .center
+            else if (eqlIgnoreCase(trimmed, "justify"))
+                style.text_align = .justify;
+        },
+        .text_decoration => {
+            if (eqlIgnoreCase(trimmed, "none")) {
+                style.text_decoration = .{};
+            } else if (eqlIgnoreCase(trimmed, "underline")) {
+                style.text_decoration = .{ .underline = true };
+            } else if (eqlIgnoreCase(trimmed, "line-through")) {
+                style.text_decoration = .{ .line_through = true };
+            } else if (eqlIgnoreCase(trimmed, "overline")) {
+                style.text_decoration = .{ .overline = true };
+            }
+        },
+        .text_transform => {
+            if (eqlIgnoreCase(trimmed, "none")) style.text_transform = .none
+            else if (eqlIgnoreCase(trimmed, "uppercase")) style.text_transform = .uppercase
+            else if (eqlIgnoreCase(trimmed, "lowercase")) style.text_transform = .lowercase
+            else if (eqlIgnoreCase(trimmed, "capitalize")) style.text_transform = .capitalize;
+        },
+        .white_space => {
+            if (eqlIgnoreCase(trimmed, "normal")) style.white_space = .normal
+            else if (eqlIgnoreCase(trimmed, "pre")) style.white_space = .pre
+            else if (eqlIgnoreCase(trimmed, "nowrap")) style.white_space = .nowrap
+            else if (eqlIgnoreCase(trimmed, "pre-wrap")) style.white_space = .pre_wrap
+            else if (eqlIgnoreCase(trimmed, "pre-line")) style.white_space = .pre_line;
+        },
+        .word_break => {
+            if (eqlIgnoreCase(trimmed, "normal")) style.word_break = .normal
+            else if (eqlIgnoreCase(trimmed, "break-all")) style.word_break = .break_all
+            else if (eqlIgnoreCase(trimmed, "keep-all")) style.word_break = .keep_all;
+        },
+        .overflow_wrap => {
+            if (eqlIgnoreCase(trimmed, "normal")) style.overflow_wrap = .normal
+            else if (eqlIgnoreCase(trimmed, "break-word")) style.overflow_wrap = .break_word
+            else if (eqlIgnoreCase(trimmed, "anywhere")) style.overflow_wrap = .anywhere;
+        },
+        .text_overflow => {
+            if (eqlIgnoreCase(trimmed, "clip")) style.text_overflow = .clip
+            else if (eqlIgnoreCase(trimmed, "ellipsis")) style.text_overflow = .ellipsis;
+        },
+        .vertical_align => {
+            if (eqlIgnoreCase(trimmed, "baseline")) style.vertical_align = .baseline
+            else if (eqlIgnoreCase(trimmed, "top")) style.vertical_align = .top
+            else if (eqlIgnoreCase(trimmed, "middle")) style.vertical_align = .middle
+            else if (eqlIgnoreCase(trimmed, "bottom")) style.vertical_align = .bottom
+            else if (eqlIgnoreCase(trimmed, "text-top")) style.vertical_align = .text_top
+            else if (eqlIgnoreCase(trimmed, "text-bottom")) style.vertical_align = .text_bottom
+            else if (eqlIgnoreCase(trimmed, "sub")) style.vertical_align = .sub
+            else if (eqlIgnoreCase(trimmed, "super")) style.vertical_align = .super;
+        },
+        .line_height => {
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.line_height = .normal;
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.line_height = .{ .px = px };
+            } else if (std.fmt.parseFloat(f32, trimmed)) |n| {
+                style.line_height = .{ .number = n };
+            } else |_| {}
+        },
+        .letter_spacing => {
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.letter_spacing = 0;
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.letter_spacing = px;
+            }
+        },
+        .width => style.width = parseDimension(trimmed, fs, vw, vh),
+        .height => style.height = parseDimension(trimmed, fs, vw, vh),
+        .min_width => style.min_width = parseDimension(trimmed, fs, vw, vh),
+        .max_width => style.max_width = parseDimensionOrNone(trimmed, fs, vw, vh),
+        .min_height => style.min_height = parseDimension(trimmed, fs, vw, vh),
+        .max_height => style.max_height = parseDimensionOrNone(trimmed, fs, vw, vh),
+        .margin_top => {
+            const md = parseMarginValue(trimmed, fs, vw, vh);
+            style.margin_top = md.value;
+        },
+        .margin_right => {
+            const md = parseMarginValue(trimmed, fs, vw, vh);
+            style.margin_right = md.value;
+            style.margin_right_auto = md.is_auto;
+        },
+        .margin_bottom => {
+            const md = parseMarginValue(trimmed, fs, vw, vh);
+            style.margin_bottom = md.value;
+        },
+        .margin_left => {
+            const md = parseMarginValue(trimmed, fs, vw, vh);
+            style.margin_left = md.value;
+            style.margin_left_auto = md.is_auto;
+        },
+        .padding_top => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_top = px;
+        },
+        .padding_right => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_right = px;
+        },
+        .padding_bottom => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_bottom = px;
+        },
+        .padding_left => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_left = px;
+        },
+        .border_top_width => {
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_top_width = px;
+        },
+        .border_right_width => {
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_right_width = px;
+        },
+        .border_bottom_width => {
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_bottom_width = px;
+        },
+        .border_left_width => {
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_left_width = px;
+        },
+        .border_top_color => {
+            if (properties.parseColor(trimmed)) |c| style.border_top_color = c.toArgb();
+        },
+        .border_right_color => {
+            if (properties.parseColor(trimmed)) |c| style.border_right_color = c.toArgb();
+        },
+        .border_bottom_color => {
+            if (properties.parseColor(trimmed)) |c| style.border_bottom_color = c.toArgb();
+        },
+        .border_left_color => {
+            if (properties.parseColor(trimmed)) |c| style.border_left_color = c.toArgb();
+        },
+        .border_radius_top_left => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.border_radius_tl = px;
+        },
+        .border_radius_top_right => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.border_radius_tr = px;
+        },
+        .border_radius_bottom_left => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.border_radius_bl = px;
+        },
+        .border_radius_bottom_right => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.border_radius_br = px;
+        },
+        .overflow_x => {
+            if (mapOverflow(trimmed)) |o| style.overflow_x = o;
+        },
+        .overflow_y => {
+            if (mapOverflow(trimmed)) |o| style.overflow_y = o;
+        },
+        .z_index => {
+            if (eqlIgnoreCase(trimmed, "auto")) {
+                style.z_index = 0;
+            } else if (std.fmt.parseInt(i32, trimmed, 10)) |v| {
+                style.z_index = v;
+            } else |_| {}
+        },
+        .top => style.top = parseDimension(trimmed, fs, vw, vh),
+        .right => style.right = parseDimension(trimmed, fs, vw, vh),
+        .bottom => style.bottom = parseDimension(trimmed, fs, vw, vh),
+        .left => style.left = parseDimension(trimmed, fs, vw, vh),
+        .list_style_type => {
+            if (eqlIgnoreCase(trimmed, "disc")) style.list_style_type = .disc
+            else if (eqlIgnoreCase(trimmed, "circle")) style.list_style_type = .circle
+            else if (eqlIgnoreCase(trimmed, "square")) style.list_style_type = .square
+            else if (eqlIgnoreCase(trimmed, "decimal")) style.list_style_type = .decimal
+            else if (eqlIgnoreCase(trimmed, "none")) style.list_style_type = .none;
+        },
+        .flex_direction => {
+            if (eqlIgnoreCase(trimmed, "row")) style.flex_direction = .row
+            else if (eqlIgnoreCase(trimmed, "row-reverse")) style.flex_direction = .row_reverse
+            else if (eqlIgnoreCase(trimmed, "column")) style.flex_direction = .column
+            else if (eqlIgnoreCase(trimmed, "column-reverse")) style.flex_direction = .column_reverse;
+        },
+        .flex_wrap => {
+            if (eqlIgnoreCase(trimmed, "nowrap")) style.flex_wrap = .nowrap
+            else if (eqlIgnoreCase(trimmed, "wrap")) style.flex_wrap = .wrap
+            else if (eqlIgnoreCase(trimmed, "wrap-reverse")) style.flex_wrap = .wrap_reverse;
+        },
+        .justify_content => {
+            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
+                style.justify_content = .flex_start
+            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end"))
+                style.justify_content = .flex_end
+            else if (eqlIgnoreCase(trimmed, "center"))
+                style.justify_content = .center
+            else if (eqlIgnoreCase(trimmed, "space-between"))
+                style.justify_content = .space_between
+            else if (eqlIgnoreCase(trimmed, "space-around"))
+                style.justify_content = .space_around
+            else if (eqlIgnoreCase(trimmed, "space-evenly"))
+                style.justify_content = .space_evenly;
+        },
+        .align_items => {
+            if (eqlIgnoreCase(trimmed, "stretch"))
+                style.align_items = .stretch
+            else if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
+                style.align_items = .flex_start
+            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end"))
+                style.align_items = .flex_end
+            else if (eqlIgnoreCase(trimmed, "center"))
+                style.align_items = .center
+            else if (eqlIgnoreCase(trimmed, "baseline"))
+                style.align_items = .baseline;
+        },
+        .flex_grow => {
+            if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_grow = v else |_| {}
+        },
+        .flex_shrink => {
+            if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_shrink = v else |_| {}
+        },
+        .flex_basis => {
+            style.flex_basis = parseDimension(trimmed, fs, vw, vh);
+        },
+        .gap, .column_gap => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.gap = px;
+        },
+        .box_shadow => {
+            parseShadow(trimmed, fs, &style.box_shadow_x, &style.box_shadow_y, &style.box_shadow_blur, &style.box_shadow_color);
+        },
+        .text_shadow => {
+            parseShadow(trimmed, fs, &style.text_shadow_x, &style.text_shadow_y, &style.text_shadow_blur, &style.text_shadow_color);
+        },
+        // Skip border-style — we don't track it but it's needed for border-width to display
+        .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},
+        // Skip custom properties (already extracted)
+        .custom => {},
+        // Skip unknown
+        else => {},
+    }
+}
+
+// ── Value parsing helpers ─────────────────────────────────────────────
+
+fn parseLengthValue(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+    if (s.len == 0) return null;
+    if (std.mem.eql(u8, s, "0")) return 0;
+
+    if (properties.parseLength(s)) |len| {
+        return resolveLengthToPx(len.value, len.unit, font_size, vw, vh);
+    }
+    // Try as bare number (px)
+    if (std.fmt.parseFloat(f32, s)) |v| return v else |_| {}
+    return null;
+}
+
+fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh: f32) f32 {
+    return switch (unit) {
+        .px => value,
+        .em => value * font_size,
+        .rem => value * 16.0,
+        .percent => value, // percentage stored as-is, resolved at layout
+        .vh => value * vh / 100.0,
+        .vw => value * vw / 100.0,
+        .pt => value * 4.0 / 3.0,
+        .cm => value * 96.0 / 2.54,
+        .mm => value * 96.0 / 25.4,
+        .in_ => value * 96.0,
+        else => value,
+    };
+}
+
+fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle.Dimension {
+    if (eqlIgnoreCase(s, "auto")) return .auto;
+    if (eqlIgnoreCase(s, "none")) return .none;
+    if (properties.parseLength(s)) |len| {
+        if (len.unit == .percent) return .{ .percent = len.value };
+        return .{ .px = resolveLengthToPx(len.value, len.unit, font_size, vw, vh) };
+    }
+    if (std.mem.eql(u8, s, "0")) return .{ .px = 0 };
+    if (std.fmt.parseFloat(f32, s)) |v| return .{ .px = v } else |_| {}
+    return .auto;
+}
+
+fn parseDimensionOrNone(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle.Dimension {
+    if (eqlIgnoreCase(s, "none")) return .none;
+    return parseDimension(s, font_size, vw, vh);
+}
+
+const MarginValue = struct {
+    value: f32,
+    is_auto: bool,
+};
+
+fn parseMarginValue(s: []const u8, font_size: f32, vw: f32, vh: f32) MarginValue {
+    if (eqlIgnoreCase(s, "auto")) return .{ .value = 0, .is_auto = true };
+    if (parseLengthValue(s, font_size, vw, vh)) |px| return .{ .value = px, .is_auto = false };
+    return .{ .value = 0, .is_auto = false };
+}
+
+fn parseBorderWidth(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+    if (eqlIgnoreCase(s, "thin")) return 1.0;
+    if (eqlIgnoreCase(s, "medium")) return 3.0;
+    if (eqlIgnoreCase(s, "thick")) return 5.0;
+    return parseLengthValue(s, font_size, vw, vh);
+}
+
+fn mapDisplay(s: []const u8) ?ComputedStyle.Display {
+    if (eqlIgnoreCase(s, "block")) return .block;
+    if (eqlIgnoreCase(s, "inline")) return .inline_;
+    if (eqlIgnoreCase(s, "none")) return .none;
+    if (eqlIgnoreCase(s, "flex")) return .flex;
+    if (eqlIgnoreCase(s, "inline-block")) return .inline_block;
+    if (eqlIgnoreCase(s, "inline-flex")) return .inline_flex;
+    if (eqlIgnoreCase(s, "grid")) return .grid;
+    if (eqlIgnoreCase(s, "inline-grid")) return .inline_grid;
+    if (eqlIgnoreCase(s, "table")) return .table;
+    if (eqlIgnoreCase(s, "list-item")) return .list_item;
+    if (eqlIgnoreCase(s, "table-row")) return .table_row;
+    if (eqlIgnoreCase(s, "table-cell")) return .table_cell;
+    if (eqlIgnoreCase(s, "table-row-group")) return .table_row_group;
+    if (eqlIgnoreCase(s, "table-header-group")) return .table_header_group;
+    if (eqlIgnoreCase(s, "table-footer-group")) return .table_footer_group;
+    if (eqlIgnoreCase(s, "table-column")) return .table_column;
+    if (eqlIgnoreCase(s, "table-column-group")) return .table_column_group;
+    if (eqlIgnoreCase(s, "table-caption")) return .table_caption;
+    return null;
+}
+
+fn mapOverflow(s: []const u8) ?ComputedStyle.Overflow {
+    if (eqlIgnoreCase(s, "visible")) return .visible;
+    if (eqlIgnoreCase(s, "hidden")) return .hidden;
+    if (eqlIgnoreCase(s, "scroll")) return .scroll;
+    if (eqlIgnoreCase(s, "auto")) return .auto_;
+    return null;
+}
+
+fn parseShadow(
+    s: []const u8,
+    font_size: f32,
+    x: *f32,
+    y: *f32,
+    blur: *f32,
+    color: *u32,
+) void {
+    if (eqlIgnoreCase(s, "none")) {
+        x.* = 0;
+        y.* = 0;
+        blur.* = 0;
+        color.* = 0x00000000;
+        return;
+    }
+
+    var tokens: [8][]const u8 = undefined;
+    var token_count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, s, " \t");
+    while (iter.next()) |tok| {
+        if (token_count >= 8) break;
+        if (eqlIgnoreCase(tok, "inset")) continue;
+        tokens[token_count] = tok;
+        token_count += 1;
+    }
+
+    if (token_count < 2) return;
+    const xv = parseLengthValue(tokens[0], font_size, 0, 0) orelse return;
+    const yv = parseLengthValue(tokens[1], font_size, 0, 0) orelse return;
+    x.* = xv;
+    y.* = yv;
+
+    var color_start: usize = 2;
+    if (token_count >= 3) {
+        if (parseLengthValue(tokens[2], font_size, 0, 0)) |b| {
+            blur.* = b;
+            color_start = 3;
+            // Skip spread radius if present
+            if (token_count >= 4) {
+                if (parseLengthValue(tokens[3], font_size, 0, 0)) |_| {
+                    color_start = 4;
+                }
+            }
+        }
+    }
+
+    if (color_start < token_count) {
+        if (properties.parseColor(tokens[color_start])) |c| {
+            color.* = c.toArgb();
+        }
+    } else {
+        color.* = 0x80000000; // default semi-transparent black
+    }
+}
+
+// ── Collect <style> text from DOM ─────────────────────────────────────
+
+fn collectStyleText(node: DomNode, allocator: std.mem.Allocator) ![]const u8 {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    try walkForStyles(node, &buf, allocator);
+    return buf.toOwnedSlice(allocator);
+}
+
+fn walkForStyles(node: DomNode, buf: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator) !void {
+    if (node.nodeType() == .element) {
+        if (node.tagName()) |tag| {
+            if (std.mem.eql(u8, tag, "style")) {
+                var child = node.firstChild();
+                while (child) |c| {
+                    if (c.nodeType() == .text) {
+                        if (c.textContent()) |text| {
+                            try buf.appendSlice(allocator, text);
+                            try buf.append(allocator, '\n');
+                        }
+                    }
+                    child = c.nextSibling();
+                }
+                return;
+            }
+        }
+    }
+    var child = node.firstChild();
+    while (child) |c| {
+        try walkForStyles(c, buf, allocator);
+        child = c.nextSibling();
+    }
+}
+
+// ── String utilities ──────────────────────────────────────────────────
+
+fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        if (toLower(ca) != toLower(cb)) return false;
+    }
+    return true;
+}
+
+fn toLower(c: u8) u8 {
+    return if (c >= 'A' and c <= 'Z') c + 32 else c;
+}
+
+fn toLowerBuf(s: []const u8, buf: *[64]u8) ?[]const u8 {
+    if (s.len > buf.len) return null;
+    for (s, 0..) |c, i| {
+        buf[i] = toLower(c);
+    }
+    return buf[0..s.len];
+}

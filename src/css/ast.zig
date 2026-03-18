@@ -1,5 +1,5 @@
 const std = @import("std");
-const values = @import("values");
+const values = @import("values.zig");
 
 pub const PropertyId = enum(u16) {
     // Box model

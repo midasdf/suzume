@@ -1,7 +1,8 @@
 const std = @import("std");
-const properties = @import("properties");
-const values = @import("values");
-const ast = @import("ast");
+const css = @import("css");
+const properties = css.properties;
+const values = css.values;
+const ast = css.ast;
 
 // ── Color Parsing Tests ─────────────────────────────────────────────
 
