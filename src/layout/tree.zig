@@ -120,8 +120,11 @@ fn buildChildren(
                 const style = styles.getStyle(child) orelse ComputedStyle{};
                 if (style.display == .none) continue;
 
-                // Skip elements with HTML hidden attribute
+                // Skip elements with HTML hidden attribute or aria-hidden="true"
                 if (child.getAttribute("hidden") != null) continue;
+                if (child.getAttribute("aria-hidden")) |ah| {
+                    if (std.mem.eql(u8, ah, "true")) continue;
+                }
 
                 // Skip closed <details> children (except <summary>)
                 if (child.tagName()) |tag| {
