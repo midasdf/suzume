@@ -2465,8 +2465,10 @@ fn handleClick(
             }
         }
 
-        const hit_link = painter_mod.hitTestLink(root_box, layout_x, layout_y);
-        const hit_node = painter_mod.hitTestNode(root_box, layout_x, layout_y);
+        // Re-read root_box in case restylePage replaced it
+        const current_root = page.root_box orelse return;
+        const hit_link = painter_mod.hitTestLink(current_root, layout_x, layout_y);
+        const hit_node = painter_mod.hitTestNode(current_root, layout_x, layout_y);
         if (hit_node) |np| {
             const hn: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(np));
             const hdn = DomNode{ .lxb_node = hn };
