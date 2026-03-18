@@ -75,6 +75,10 @@ pub const Storage = struct {
             .allocator = allocator,
         };
 
+        // Enable WAL mode for better concurrent access (reduces "database is locked")
+        self.exec("PRAGMA journal_mode=WAL") catch {};
+        self.exec("PRAGMA busy_timeout=100") catch {}; // wait up to 100ms before BUSY
+
         // Create tables
         try self.exec(schema);
 
@@ -90,7 +94,10 @@ pub const Storage = struct {
         const rc = c.sqlite3_exec(self.db, sql, null, null, &err_msg);
         if (rc != c.SQLITE_OK) {
             if (err_msg != null) {
-                std.debug.print("[Storage] SQL error: {s}\n", .{std.mem.span(err_msg)});
+                // Suppress noisy "database is locked" errors (don't spam stderr)
+                if (rc != c.SQLITE_BUSY and rc != c.SQLITE_LOCKED) {
+                    std.debug.print("[Storage] SQL error: {s}\n", .{std.mem.span(err_msg)});
+                }
                 c.sqlite3_free(err_msg);
             }
             return error.SqliteExecFailed;

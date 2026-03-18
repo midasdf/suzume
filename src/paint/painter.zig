@@ -712,11 +712,18 @@ pub fn hitTestNode(box: *const Box, x: f32, y: f32) ?*anyopaque {
 pub fn hitTestLink(box: *const Box, x: f32, y: f32) ?[]const u8 {
     switch (box.box_type) {
         .block, .anonymous_block, .inline_box => {
-            // Bounds check: skip if point is outside this box entirely
-            const mbox = box.marginBox();
-            if (x < mbox.x or x > mbox.x + mbox.width or
-                y < mbox.y or y > mbox.y + mbox.height)
-                return null;
+            // Bounds check: skip if point is outside this box.
+            // Use a generous check for blocks (children may be shifted by text-align)
+            // and skip bounds check entirely for anonymous blocks (they wrap inline
+            // content whose positions may differ from the anonymous block's own rect).
+            if (box.box_type != .anonymous_block) {
+                const mbox = box.marginBox();
+                // Add tolerance for text-align shifts
+                const tolerance: f32 = if (box.style.text_align == .center or box.style.text_align == .right) box.content.width else 0;
+                if (x < mbox.x - tolerance or x > mbox.x + mbox.width + tolerance or
+                    y < mbox.y or y > mbox.y + mbox.height)
+                    return null;
+            }
 
             // Check children in reverse order (later children are on top)
             var i = box.children.items.len;
