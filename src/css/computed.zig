@@ -1,40 +1,46 @@
 /// Zig-friendly computed style struct extracted from LibCSS's css_computed_style.
+///
+/// Fields are organized into logical groups for readability and to prepare for a
+/// future optimization where the struct is split into sub-structs (inherited vs.
+/// non-inherited, box-model, visual-effects, etc.) so that parent styles can share
+/// a single heap-allocated pointer for the inherited portion instead of copying
+/// every field on every child node.  That refactoring would touch layout, paint,
+/// cascade, and the whole tree traversal, so it is deferred; the grouping here
+/// makes the eventual split straightforward.
 pub const ComputedStyle = struct {
+
+    // ═══════════════════════════════════════════════════════════════
+    // Inherited Properties (cascade from parent when not overridden)
+    // ═══════════════════════════════════════════════════════════════
+
+    // Color & typography
     color: u32 = 0xFFcdd6f4, // ARGB, Catppuccin Mocha text default
-    background_color: u32 = 0x00000000, // ARGB, transparent default
     font_size_px: f32 = 16.0,
     font_weight: u16 = 400,
     font_style: FontStyle = .normal,
-    display: Display = .block,
-    margin_top: f32 = 0,
-    margin_right: f32 = 0,
-    margin_bottom: f32 = 0,
-    margin_left: f32 = 0,
-    padding_top: f32 = 0,
-    padding_right: f32 = 0,
-    padding_bottom: f32 = 0,
-    padding_left: f32 = 0,
-    border_top_width: f32 = 0,
-    border_right_width: f32 = 0,
-    border_bottom_width: f32 = 0,
-    border_left_width: f32 = 0,
-    border_top_color: u32 = 0xFF000000,
-    border_right_color: u32 = 0xFF000000,
-    border_bottom_color: u32 = 0xFF000000,
-    border_left_color: u32 = 0xFF000000,
+    line_height: LineHeight = .normal,
+    letter_spacing: f32 = 0,
 
-    // Text properties
+    // Text layout & wrapping
     text_align: TextAlign = .left,
     text_decoration: TextDecoration = .{},
+    text_transform: TextTransform = .none,
+    text_overflow: TextOverflow = .clip,
     white_space: WhiteSpace = .normal,
     word_break: WordBreak = .normal,
     overflow_wrap: OverflowWrap = .normal,
-    text_overflow: TextOverflow = .clip,
-    text_transform: TextTransform = .none,
     vertical_align: VerticalAlign = .baseline,
-    letter_spacing: f32 = 0,
-    line_height: LineHeight = .normal,
+
+    // Other inherited properties
     visibility: Visibility = .visible,
+    list_style_type: ListStyleType = .disc,
+
+    // ═══════════════════════════════════════════════════════════════
+    // Box Model (non-inherited)
+    // ═══════════════════════════════════════════════════════════════
+
+    display: Display = .block,
+    box_sizing: BoxSizing = .content_box,
 
     // Dimensions
     width: Dimension = .auto,
@@ -44,11 +50,41 @@ pub const ComputedStyle = struct {
     min_height: Dimension = .auto,
     max_height: Dimension = .none,
 
+    // Margins
+    margin_top: f32 = 0,
+    margin_right: f32 = 0,
+    margin_bottom: f32 = 0,
+    margin_left: f32 = 0,
+    margin_top_auto: bool = false,
+    margin_bottom_auto: bool = false,
+    margin_left_auto: bool = false,
+    margin_right_auto: bool = false,
+
+    // Padding
+    padding_top: f32 = 0,
+    padding_right: f32 = 0,
+    padding_bottom: f32 = 0,
+    padding_left: f32 = 0,
+
+    // Borders
+    border_top_width: f32 = 0,
+    border_right_width: f32 = 0,
+    border_bottom_width: f32 = 0,
+    border_left_width: f32 = 0,
+    border_top_color: u32 = 0xFF000000,
+    border_right_color: u32 = 0xFF000000,
+    border_bottom_color: u32 = 0xFF000000,
+    border_left_color: u32 = 0xFF000000,
+    border_radius_tl: f32 = 0, // top-left
+    border_radius_tr: f32 = 0, // top-right
+    border_radius_bl: f32 = 0, // bottom-left
+    border_radius_br: f32 = 0, // bottom-right
+
     // Overflow
     overflow_x: Overflow = .visible,
     overflow_y: Overflow = .visible,
 
-    // Position
+    // Positioning
     position: Position = .static_,
     z_index: i32 = 0,
     top: Dimension = .auto,
@@ -56,27 +92,14 @@ pub const ComputedStyle = struct {
     right: Dimension = .auto,
     bottom: Dimension = .auto,
 
-    // List
-    list_style_type: ListStyleType = .disc,
-
-    // Float / clear / box-sizing
+    // Float & clear
     float_: Float = .none,
     clear: Clear = .none,
-    box_sizing: BoxSizing = .content_box,
 
-    // Margin auto flags (for centering)
-    margin_top_auto: bool = false,
-    margin_bottom_auto: bool = false,
-    margin_left_auto: bool = false,
-    margin_right_auto: bool = false,
+    // ═══════════════════════════════════════════════════════════════
+    // Flexbox
+    // ═══════════════════════════════════════════════════════════════
 
-    // Border radius
-    border_radius_tl: f32 = 0, // top-left
-    border_radius_tr: f32 = 0, // top-right
-    border_radius_bl: f32 = 0, // bottom-left
-    border_radius_br: f32 = 0, // bottom-right
-
-    // Flexbox properties
     flex_direction: FlexDirection = .row,
     flex_wrap: FlexWrap = .nowrap,
     justify_content: JustifyContent = .flex_start,
@@ -88,7 +111,10 @@ pub const ComputedStyle = struct {
     gap: f32 = 0, // column-gap, used for both row and column in flex
     row_gap: f32 = 0, // row-gap, separate from column gap
 
-    // Grid properties
+    // ═══════════════════════════════════════════════════════════════
+    // Grid
+    // ═══════════════════════════════════════════════════════════════
+
     grid_template_columns: []const GridTrackSize = &.{},
     grid_template_rows: []const GridTrackSize = &.{},
     grid_auto_flow: GridAutoFlow = .row,
@@ -100,12 +126,13 @@ pub const ComputedStyle = struct {
     grid_column_span: u16 = 1,
     grid_row_span: u16 = 1,
 
-    // Transforms
-    transform_translate_x: f32 = 0,
-    transform_translate_y: f32 = 0,
+    // ═══════════════════════════════════════════════════════════════
+    // Visual Effects
+    // ═══════════════════════════════════════════════════════════════
 
-    // Opacity
+    background_color: u32 = 0x00000000, // ARGB, transparent default
     opacity: f32 = 1.0,
+    object_fit: ObjectFit = .fill,
 
     // Box shadow
     box_shadow_x: f32 = 0,
@@ -124,38 +151,53 @@ pub const ComputedStyle = struct {
     gradient_color_end: u32 = 0x00000000, // ARGB
     gradient_direction: GradientDirection = .to_bottom,
 
-    // Counters
-    counter_reset: ?[]const u8 = null,
-    counter_increment: ?[]const u8 = null,
-
-    // Transitions (parsed but not animated)
-    transition_duration: f32 = 0,
-    transition_delay: f32 = 0,
-
-    // Animations (parsed but not animated)
-    animation_name: ?[]const u8 = null,
-    animation_duration: f32 = 0,
-
     // Filters
     filter_grayscale: f32 = 0,
     filter_brightness: f32 = 1,
     filter_blur: f32 = 0,
 
-    // Object fit
-    object_fit: ObjectFit = .fill,
-
     // Outline
     outline_width: f32 = 0,
     outline_color: u32 = 0xFF000000,
 
+    // ═══════════════════════════════════════════════════════════════
+    // Transforms & Animations
+    // ═══════════════════════════════════════════════════════════════
+
+    // Transforms
+    transform_translate_x: f32 = 0,
+    transform_translate_y: f32 = 0,
+
+    // Transitions (parsed but not yet animated)
+    transition_duration: f32 = 0,
+    transition_delay: f32 = 0,
+
+    // Animations (parsed but not yet animated)
+    animation_name: ?[]const u8 = null,
+    animation_duration: f32 = 0,
+
+    // ═══════════════════════════════════════════════════════════════
+    // Counters & Generated Content
+    // ═══════════════════════════════════════════════════════════════
+
+    counter_reset: ?[]const u8 = null,
+    counter_increment: ?[]const u8 = null,
+
     // CSS content property (for ::before/::after pseudo-elements)
     content: ?[]const u8 = null,
 
-    // Pseudo-element generated content
+    // ═══════════════════════════════════════════════════════════════
+    // Pseudo-elements (::before / ::after)
+    // ═══════════════════════════════════════════════════════════════
+
     before_content: ?[]const u8 = null,
     after_content: ?[]const u8 = null,
     before_display: Display = .inline_,
     after_display: Display = .inline_,
+
+    // ═══════════════════════════════════════════════════════════════
+    // Type Definitions
+    // ═══════════════════════════════════════════════════════════════
 
     pub const Display = enum {
         block,
