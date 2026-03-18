@@ -1072,6 +1072,14 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "baseline"))
                 style.align_items = .baseline;
         },
+        .align_self => {
+            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start
+            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end
+            else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center
+            else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch
+            else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline
+            else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .stretch;
+        },
         .flex_grow => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_grow = v else |_| {}
         },

@@ -79,6 +79,7 @@ pub const ComputedStyle = struct {
     flex_wrap: FlexWrap = .nowrap,
     justify_content: JustifyContent = .flex_start,
     align_items: AlignItems = .stretch,
+    align_self: AlignItems = .stretch,
     flex_grow: f32 = 0,
     flex_shrink: f32 = 1,
     flex_basis: Dimension = .auto,

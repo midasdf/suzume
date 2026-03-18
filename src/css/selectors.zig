@@ -34,6 +34,9 @@ pub const PseudoClass = enum {
     only_child,
     first_of_type,
     last_of_type,
+    nth_child,
+    nth_last_child,
+    nth_of_type,
     root,
     empty,
     checked,
@@ -64,7 +67,11 @@ pub const PseudoClass = enum {
         for (name, 0..) |c, i| {
             buf[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
         }
-        return map.get(buf[0..name.len]);
+        const lower = buf[0..name.len];
+        if (std.mem.eql(u8, lower, "nth-child")) return .nth_child;
+        if (std.mem.eql(u8, lower, "nth-last-child")) return .nth_last_child;
+        if (std.mem.eql(u8, lower, "nth-of-type")) return .nth_of_type;
+        return map.get(lower);
     }
 };
 
@@ -310,6 +317,16 @@ const SelectorParser = struct {
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
                 if (PseudoClass.fromString(name)) |pc| {
+                    // nth-child, nth-last-child, nth-of-type take (an+b) args — skip them
+                    if (self.peek() == '(') {
+                        var depth: u32 = 1;
+                        self.advance();
+                        while (self.pos < self.source.len and depth > 0) {
+                            if (self.source[self.pos] == '(') depth += 1;
+                            if (self.source[self.pos] == ')') depth -= 1;
+                            self.pos += 1;
+                        }
+                    }
                     try self.components.append(self.allocator,.{ .simple = .{ .pseudo_class = pc } });
                     self.specificity.b += 1;
                 } else if (self.peek() == '(' and (eqlIgnoreCase(name, "where") or eqlIgnoreCase(name, "is"))) {
@@ -752,6 +769,8 @@ fn matchPseudoClass(pc: PseudoClass, element: ElementAdapter) bool {
             }
             return false;
         },
+        // nth-child/nth-last-child/nth-of-type: return true for now (full an+b parsing not yet implemented)
+        .nth_child, .nth_last_child, .nth_of_type => return true,
         // Interactive pseudo-classes: always false for now
         .hover, .focus, .active, .visited, .link => return false,
     }

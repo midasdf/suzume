@@ -44,12 +44,19 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
         }
         // Use the larger of max span total and 1
         num_cols = if (max_col > 0) max_col else 1;
-        // Cap at reasonable number to avoid excessive columns
-        if (num_cols > 12) num_cols = 12;
+        // Cap at actual child count to avoid excessive empty columns
+        if (num_cols > auto_children) num_cols = auto_children;
+        if (num_cols == 0) num_cols = 1;
         if (num_cols > 1) {
-            // Create equal-width columns
+            // Determine per-column width from grid-auto-columns if set, else equal widths
             const total_gap = gap * @as(f32, @floatFromInt(num_cols - 1));
-            const col_w = @max((box.content.width - total_gap) / @as(f32, @floatFromInt(num_cols)), 0);
+            const available = @max(box.content.width - total_gap, 0);
+            const col_w: f32 = switch (style.grid_auto_columns) {
+                .px => |px| px,
+                .percent => |pct| box.content.width * pct / 100.0,
+                .fr => |fr| available * fr / @as(f32, @floatFromInt(num_cols)), // treat as equal share
+                .auto => available / @as(f32, @floatFromInt(num_cols)),
+            };
             col_widths = fonts.allocator.alloc(f32, num_cols) catch &.{};
             if (col_widths.len > 0) {
                 col_widths_owned = true;
