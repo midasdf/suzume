@@ -68,6 +68,11 @@ pub const PseudoClass = enum {
     }
 };
 
+pub const PseudoElement = enum {
+    before,
+    after,
+};
+
 pub const SimpleSelector = union(enum) {
     type_sel: []const u8,
     class: []const u8,
@@ -101,6 +106,7 @@ pub const Specificity = struct {
 pub const ParsedSelector = struct {
     components: []SelectorComponent,
     specificity: Specificity,
+    pseudo_element: ?PseudoElement = null,
 
     pub fn deinit(self: *ParsedSelector, allocator: std.mem.Allocator) void {
         allocator.free(self.components);
@@ -115,6 +121,7 @@ const SelectorParser = struct {
     components: std.ArrayList(SelectorComponent),
     specificity: Specificity,
     allocator: std.mem.Allocator,
+    pseudo_element: ?PseudoElement = null,
 
     fn init(source: []const u8, allocator: std.mem.Allocator) SelectorParser {
         return .{
@@ -123,6 +130,7 @@ const SelectorParser = struct {
             .components = .empty,
             .specificity = .{},
             .allocator = allocator,
+            .pseudo_element = null,
         };
     }
 
@@ -282,11 +290,22 @@ const SelectorParser = struct {
             // Pseudo-class or pseudo-element
             if (c == ':') {
                 self.advance();
-                // :: pseudo-elements: don't match against regular elements
+                // :: pseudo-elements
                 if (self.peek() == ':') {
-                    // Pseudo-element selector — return null to skip this rule entirely
-                    // (::before, ::after, ::-webkit-scrollbar, etc.)
-                    return null;
+                    self.advance(); // skip second ':'
+                    const pe_name = self.consumeIdent();
+                    if (pe_name.len == 0) return null;
+                    if (eqlIgnoreCase(pe_name, "before")) {
+                        self.pseudo_element = .before;
+                        self.specificity.c += 1; // pseudo-elements have type specificity
+                    } else if (eqlIgnoreCase(pe_name, "after")) {
+                        self.pseudo_element = .after;
+                        self.specificity.c += 1;
+                    } else {
+                        // Unknown pseudo-element (e.g., ::-webkit-scrollbar) — skip entire selector
+                        return null;
+                    }
+                    continue;
                 }
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
@@ -336,6 +355,7 @@ const SelectorParser = struct {
         return .{
             .components = try self.components.toOwnedSlice(self.allocator),
             .specificity = self.specificity,
+            .pseudo_element = self.pseudo_element,
         };
     }
 
