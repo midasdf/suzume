@@ -726,9 +726,8 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
                 if ((text_width <= remaining_width or is_nowrap) and remaining_width > 0) {
                     // Fits on current line
-                    const line_x = applyTextAlignInline(base_x + cursor_x, text_width, container_width, cursor_x, child.style.text_align);
                     child.lines.append(allocator, .{
-                        .x = line_x,
+                        .x = base_x + cursor_x,
                         .y = base_y + cursor_y,
                         .width = text_width,
                         .height = text_line_height,
@@ -969,15 +968,120 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
     cursor_y += line_height;
 
     box.content.height = cursor_y;
+
+    // Post-pass: apply text-align to all visual lines (Line Box alignment)
+    alignInlineFormattingContextLines(box, container_width, base_x);
 }
 
-/// Apply text-align for inline text that starts at a given x offset within a line.
-fn applyTextAlignInline(base_x: f32, text_width: f32, container_width: f32, cursor_x: f32, text_align: @import("../css/computed.zig").ComputedStyle.TextAlign) f32 {
-    _ = cursor_x;
-    return switch (text_align) {
-        .center => base_x + @max((container_width - text_width) / 2, 0) - base_x + base_x,
-        else => base_x,
-    };
+const LineRecord = struct { y: f32, right_edge: f32 };
+
+/// Post-pass: align all items in the inline formatting context by visual line.
+/// Groups items by their y-position into lines, computes each line's content
+/// extent (rightmost edge - base_x), then shifts all items on that line.
+fn alignInlineFormattingContextLines(box: *Box, container_width: f32, base_x: f32) void {
+    const text_align = box.style.text_align;
+    if (text_align == .left or text_align == .justify) return;
+
+    // First pass: find all unique line y-positions and their right edges.
+    // A "visual line" is identified by y-position (epsilon = 0.5px for float tolerance).
+    var line_infos: [128]LineRecord = undefined;
+    var num_lines: usize = 0;
+
+    for (box.children.items) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        switch (child.box_type) {
+            .inline_text => {
+                for (child.lines.items) |line| {
+                    recordLineEdge(&line_infos, &num_lines, line.y, line.x + line.width);
+                }
+            },
+            .inline_box => {
+                const right = child.content.x + child.content.width +
+                    child.padding.right + child.border.right + child.margin.right;
+                const y = child.content.y - child.padding.top - child.border.top - child.margin.top;
+                recordLineEdge(&line_infos, &num_lines, y, right);
+            },
+            .replaced => {
+                const right = child.content.x + child.content.width +
+                    child.padding.right + child.border.right + child.margin.right;
+                const y = child.content.y - child.padding.top - child.border.top - child.margin.top;
+                recordLineEdge(&line_infos, &num_lines, y, right);
+            },
+            else => {},
+        }
+    }
+
+    if (num_lines == 0) return;
+
+    // Second pass: apply offset to each item based on its line
+    for (box.children.items) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        switch (child.box_type) {
+            .inline_text => {
+                for (child.lines.items) |*line| {
+                    const offset = computeLineAlignOffset(line_infos[0..num_lines], line.y, base_x, container_width, text_align);
+                    if (offset >= 1) {
+                        line.x += offset;
+                    }
+                }
+                // Also shift content.x using first line's offset
+                if (child.lines.items.len > 0) {
+                    const offset = computeLineAlignOffset(line_infos[0..num_lines], child.lines.items[0].y, base_x, container_width, text_align);
+                    if (offset >= 1) {
+                        child.content.x += offset;
+                    }
+                }
+            },
+            .inline_box => {
+                const y = child.content.y - child.padding.top - child.border.top - child.margin.top;
+                const offset = computeLineAlignOffset(line_infos[0..num_lines], y, base_x, container_width, text_align);
+                if (offset >= 1) {
+                    adjustXPositions(child, offset);
+                }
+            },
+            .replaced => {
+                const y = child.content.y - child.padding.top - child.border.top - child.margin.top;
+                const offset = computeLineAlignOffset(line_infos[0..num_lines], y, base_x, container_width, text_align);
+                if (offset >= 1) {
+                    child.content.x += offset;
+                }
+            },
+            else => {},
+        }
+    }
+}
+
+/// Record or update a line's right edge. If a line with matching y exists, update its right_edge.
+fn recordLineEdge(line_infos: *[128]LineRecord, num_lines: *usize, y: f32, right_edge: f32) void {
+    // Find existing line with matching y (within 0.5px tolerance)
+    for (line_infos.*[0..num_lines.*]) |*info| {
+        if (@abs(info.y - y) < 0.5) {
+            if (right_edge > info.right_edge) info.right_edge = right_edge;
+            return;
+        }
+    }
+    // Add new line
+    if (num_lines.* < 128) {
+        line_infos.*[num_lines.*] = .{ .y = y, .right_edge = right_edge };
+        num_lines.* += 1;
+    }
+}
+
+/// Compute the x-offset to apply for text-align on a given visual line.
+fn computeLineAlignOffset(line_infos: []const LineRecord, y: f32, base_x: f32, container_width: f32, text_align: @import("../css/computed.zig").ComputedStyle.TextAlign) f32 {
+    for (line_infos) |info| {
+        if (@abs(info.y - y) < 0.5) {
+            const line_width = info.right_edge - base_x;
+            const slack = container_width - line_width;
+            if (slack < 1) return 0;
+            return switch (text_align) {
+                .center => slack / 2,
+                .right => slack,
+                else => 0,
+            };
+        }
+    }
+    return 0;
 }
 
 /// Recursively adjust x positions of a box and all its descendants.
