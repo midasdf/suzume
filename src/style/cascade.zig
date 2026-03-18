@@ -1397,9 +1397,10 @@ const ua_stylesheet_text =
     \\h4 { font-weight: bold; margin-top: 1.33em; margin-bottom: 1.33em; }
     \\h5 { font-size: 0.83em; font-weight: bold; margin-top: 1.67em; margin-bottom: 1.67em; }
     \\h6 { font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
-    \\b, strong { font-weight: bold; }
-    \\em, i { font-style: italic; }
-    \\a { color: #89b4fa; text-decoration: underline; }
+    \\b, strong { font-weight: bold; display: inline; }
+    \\em, i { font-style: italic; display: inline; }
+    \\a { color: #89b4fa; text-decoration: underline; display: inline; }
+    \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp { display: inline; }
     \\pre, code { white-space: pre; }
     \\code { color: #a6e3a1; }
     \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
