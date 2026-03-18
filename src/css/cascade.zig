@@ -76,7 +76,7 @@ const ua_stylesheet_text =
     \\small { font-size: 0.83em; }
     \\sub, sup { font-size: 0.75em; }
     \\abbr { text-decoration: underline; }
-    \\center { display: block; text-align: center; }
+    \\center { display: block; text-align: center; margin-left: auto; margin-right: auto; }
     \\noscript { display: none; }
     \\details { display: block; }
     \\summary { display: block; }

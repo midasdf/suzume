@@ -571,7 +571,6 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
                 child_y += collapsed_margin;
 
-                child.content.x = box.content.x + child.margin.left + child.padding.left + child.border.left;
                 child.content.y = box.content.y + child_y + child.padding.top + child.border.top;
 
                 // Scale down if wider than container, preserving aspect ratio
@@ -586,6 +585,15 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                     img_h = img_h * scale;
                 }
                 child.content.width = img_w;
+
+                // Apply text-align for replaced elements (images centered by parent text-align)
+                const total_child_w = img_w + child.margin.left + child.margin.right +
+                    child.padding.left + child.padding.right + child.border.left + child.border.right;
+                child.content.x = switch (box.style.text_align) {
+                    .center => box.content.x + @max((box.content.width - total_child_w) / 2, 0) + child.margin.left + child.padding.left + child.border.left,
+                    .right => box.content.x + @max(box.content.width - total_child_w, 0) + child.margin.left + child.padding.left + child.border.left,
+                    else => box.content.x + child.margin.left + child.padding.left + child.border.left,
+                };
                 child.content.height = img_h;
 
                 child_y += child.padding.top + child.border.top +
