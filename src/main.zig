@@ -2483,18 +2483,7 @@ fn handleClick(
             const dom_node = DomNode{ .lxb_node = node };
 
             // Walk up/down to find the actual form element
-            var form_node = findFormElement(node);
-            if (form_node == null) {
-                // Fallback: search the entire page DOM for a form element near click
-                if (page.doc) |*doc| {
-                    if (doc.body()) |body| {
-                        form_node = findFormElementInChildren(body.lxb_node, 0);
-                        if (form_node != null) {
-                            std.debug.print("[form] Fallback: found form element in page DOM\n", .{});
-                        }
-                    }
-                }
-            }
+            const form_node = findFormElement(node);
             if (form_node) |fn_| {
                 const fdn = DomNode{ .lxb_node = fn_ };
                 std.debug.print("[form] Found form element: {s}\n", .{fdn.tagName() orelse "?"});
