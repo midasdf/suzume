@@ -210,6 +210,18 @@ pub fn build(b: *std.Build) void {
     });
     css_selectors_mod.addImport("ast", css_ast_mod);
 
+    const css_media_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/media.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const css_variables_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/variables.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Individual test modules (imported by name in test_css_all.zig)
     const test_string_pool_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_string_pool.zig"),
@@ -249,6 +261,20 @@ pub fn build(b: *std.Build) void {
     });
     test_selectors_mod.addImport("selectors", css_selectors_mod);
 
+    const test_media_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_media.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_media_mod.addImport("media", css_media_mod);
+
+    const test_variables_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_variables.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_variables_mod.addImport("variables", css_variables_mod);
+
     // Root test module that pulls in all CSS test modules
     const css_all_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_css_all.zig"),
@@ -260,6 +286,8 @@ pub fn build(b: *std.Build) void {
     css_all_test_mod.addImport("test_parser", test_parser_mod);
     css_all_test_mod.addImport("test_properties", test_properties_mod);
     css_all_test_mod.addImport("test_selectors", test_selectors_mod);
+    css_all_test_mod.addImport("test_media", test_media_mod);
+    css_all_test_mod.addImport("test_variables", test_variables_mod);
 
     const css_tests = b.addTest(.{
         .root_module = css_all_test_mod,
