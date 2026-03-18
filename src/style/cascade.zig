@@ -2289,7 +2289,15 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
     defer allocator.free(css_text);
 
     // 4.5. Resolve CSS custom properties (var() references)
-    var css_vars = try extractCssVariables(css_text, allocator);
+    // Skip var() resolution for very large CSS (>512KB) to prevent OOM on low-memory devices
+    const max_css_for_var_resolution: usize = 512 * 1024;
+    if (css_text.len > max_css_for_var_resolution) {
+        std.debug.print("[CSS] Skipping var() resolution: CSS too large ({d}KB)\n", .{css_text.len / 1024});
+    }
+    var css_vars = if (css_text.len <= max_css_for_var_resolution)
+        try extractCssVariables(css_text, allocator)
+    else
+        CssVarMap.init(allocator);
     defer {
         var vit = css_vars.iterator();
         while (vit.next()) |entry| {
