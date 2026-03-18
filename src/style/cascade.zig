@@ -1843,13 +1843,11 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
 
                 if (name.len > 2 and value.len > 0) {
                     // Store in map (allocate copies)
-                    const name_copy = try allocator.dupe(u8, name);
-                    const value_copy = try allocator.dupe(u8, value);
-                    // If key already exists, free old value before replacing
-                    if (try vars.fetchPut(name_copy, value_copy)) |old| {
-                        allocator.free(old.value);
-                        // Key is the same string content, free the duplicate
-                        allocator.free(old.key);
+                    // Skip if already exists (first declaration wins, simpler and safer)
+                    if (!vars.contains(name)) {
+                        const name_copy = try allocator.dupe(u8, name);
+                        const value_copy = try allocator.dupe(u8, value);
+                        try vars.put(name_copy, value_copy);
                     }
                 }
 
@@ -2277,7 +2275,9 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
 
     // 4.5. Resolve CSS custom properties (var() references)
     // Skip var() resolution for very large CSS (>512KB) to prevent OOM on low-memory devices
-    const max_css_for_var_resolution: usize = 2 * 1024 * 1024; // 2MB
+    // TODO: fix double-free in var() resolution with large CSS
+    // Disabled until memory bug is resolved
+    const max_css_for_var_resolution: usize = 128 * 1024; // 128KB safe limit
     if (css_text.len > max_css_for_var_resolution) {
         std.debug.print("[CSS] Skipping var() resolution: CSS too large ({d}KB)\n", .{css_text.len / 1024});
     }
