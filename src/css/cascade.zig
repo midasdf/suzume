@@ -21,6 +21,50 @@ const VarMap = variables.VarMap;
 
 pub const StyleMap = std.AutoHashMap(usize, ComputedStyle);
 
+// ── Style sharing cache ────────────────────────────────────────────────
+// When two elements share the same tag, class, id, inline style, and their
+// parent's computed style is equivalent, they will produce identical computed
+// styles. Cache and reuse to skip redundant cascade work (~30% win per Stylo).
+
+const StyleCacheKey = struct {
+    tag_hash: u32,
+    class_hash: u32,
+    id_hash: u32,
+    inline_hash: u32,
+    parent_hash: u32,
+};
+
+pub const StyleCache = std.AutoHashMap(StyleCacheKey, ComputedStyle);
+
+fn hashAttr(s: ?[]const u8) u32 {
+    const str = s orelse return 0;
+    var h: u32 = 0;
+    for (str) |c| h = h *% 31 +% @as(u32, c);
+    return h;
+}
+
+fn hashParentStyle(ps: ?*const ComputedStyle) u32 {
+    const p = ps orelse return 0;
+    // Mix a few inherited properties that most affect child style.
+    var h: u32 = @as(u32, @bitCast(p.font_size_px)) *% 2654435761;
+    h ^= p.color *% 7;
+    h ^= @as(u32, @intFromEnum(p.display)) *% 13;
+    // Hash line_height union: tag + payload bits
+    const lh_tag: u32 = @intFromEnum(p.line_height);
+    const lh_val: u32 = switch (p.line_height) {
+        .normal => 0,
+        .px => |v| @bitCast(v),
+        .number => |v| @bitCast(v),
+    };
+    h ^= (lh_tag *% 17) ^ (lh_val *% 19);
+    h ^= @as(u32, @intFromEnum(p.text_align)) *% 23;
+    h ^= @as(u32, p.font_weight) *% 29;
+    h ^= @as(u32, @intFromEnum(p.font_style)) *% 31;
+    h ^= @as(u32, @intFromEnum(p.white_space)) *% 37;
+    h ^= @as(u32, @intFromEnum(p.visibility)) *% 41;
+    return h;
+}
+
 pub const CascadeResult = struct {
     styles: StyleMap,
     arena: std.heap.ArenaAllocator,
@@ -213,6 +257,7 @@ pub fn cascade(
 
     // 8. Walk DOM tree and compute styles
     var root_bloom = SelectorBloomFilter.init();
+    var style_cache = StyleCache.init(arena);
     try walkAndCompute(
         doc_root,
         null,
@@ -224,6 +269,7 @@ pub fn cascade(
         vh,
         arena,
         &root_bloom,
+        &style_cache,
     );
 
     return result;
@@ -421,6 +467,7 @@ fn walkAndCompute(
     vh: f32,
     arena: std.mem.Allocator,
     parent_bloom: *const SelectorBloomFilter,
+    style_cache: *StyleCache,
 ) !void {
     if (node.nodeType() == .element) {
         // Build bloom filter: copy parent's filter and add this element's
@@ -437,6 +484,34 @@ fn walkAndCompute(
             var cls_iter = std.mem.splitScalar(u8, cls, ' ');
             while (cls_iter.next()) |c| {
                 if (c.len > 0) element_bloom.add(SelectorBloomFilter.hashString(c));
+            }
+        }
+
+        // ── Style sharing cache lookup ─────────────────────────────────
+        // Elements with identical attributes and equivalent parent style
+        // will produce the same computed style — skip the full cascade.
+        const cache_key = StyleCacheKey{
+            .tag_hash = hashAttr(node.tagName()),
+            .class_hash = hashAttr(node.getAttribute("class")),
+            .id_hash = hashAttr(node.getAttribute("id")),
+            .inline_hash = hashAttr(node.getAttribute("style")),
+            .parent_hash = hashParentStyle(parent_style),
+        };
+        // Only use the cache when there are no custom properties in scope
+        // (var_map.parent == null means we're at the root VarMap — no --vars
+        // have been defined by any ancestor, so cache is safe to use).
+        const can_use_cache = (var_map.parent == null);
+        if (can_use_cache) {
+            if (style_cache.get(cache_key)) |cached_style| {
+                try styles.put(@intFromPtr(node.lxb_node), cached_style);
+                // Recurse into children passing the cached style.
+                var cached_copy = cached_style;
+                var child = node.firstChild();
+                while (child) |c| {
+                    try walkAndCompute(c, &cached_copy, styles, ua_index, author_index, var_map, vw, vh, arena, &element_bloom, style_cache);
+                    child = c.nextSibling();
+                }
+                return;
             }
         }
 
@@ -511,19 +586,24 @@ fn walkAndCompute(
 
         try styles.put(@intFromPtr(node.lxb_node), style);
 
+        // Store in style sharing cache (only when no custom properties in scope).
+        if (can_use_cache) {
+            style_cache.put(cache_key, style) catch {};
+        }
+
         // Recurse into children with this element's VarMap (scoped inheritance).
         // IMPORTANT: pass style by value (stack copy), NOT by HashMap pointer.
         // Pass the element's bloom filter so children accumulate ancestor info.
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, &style, styles, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom);
+            try walkAndCompute(c, &style, styles, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom, style_cache);
             child = c.nextSibling();
         }
     } else {
         // Non-element nodes (text, etc.) — recurse with parent's VarMap and bloom
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena, parent_bloom);
+            try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena, parent_bloom, style_cache);
             child = c.nextSibling();
         }
     }
