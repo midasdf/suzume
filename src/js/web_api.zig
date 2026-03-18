@@ -631,16 +631,30 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- Stub Web APIs for compatibility --
     const compat_stubs =
         \\function Image(w,h){this.width=w||0;this.height=h||0;this.src='';this.onload=null;this.onerror=null;}
+        \\if(typeof self==='undefined'){globalThis.self=globalThis;}
+        \\if(typeof window==='undefined'){globalThis.window=globalThis;}
         \\if(typeof customElements==='undefined'){
         \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
         \\}
-        \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(){this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
-        \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(){this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
-        \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(){this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
-        \\if(typeof matchMedia==='undefined'){globalThis.matchMedia=function(q){return{matches:false,media:q,addEventListener:function(){},removeEventListener:function(){}};};}
+        \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
+        \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
+        \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
+        \\if(typeof matchMedia==='undefined'){globalThis.matchMedia=function(q){return{matches:false,media:q,addEventListener:function(){},removeEventListener:function(){},addListener:function(){},removeListener:function(){}};};}
         \\if(typeof getComputedStyle==='undefined'){globalThis.getComputedStyle=function(el){return new Proxy({},{get:function(_,p){return'';}});};}
         \\if(typeof requestIdleCallback==='undefined'){globalThis.requestIdleCallback=function(cb){return setTimeout(cb,1);};}
         \\if(typeof cancelIdleCallback==='undefined'){globalThis.cancelIdleCallback=function(id){clearTimeout(id);};}
+        \\if(typeof localStorage==='undefined'){
+        \\  var _ls={};globalThis.localStorage={getItem:function(k){return _ls[k]||null;},setItem:function(k,v){_ls[k]=String(v);},removeItem:function(k){delete _ls[k];},clear:function(){_ls={};},get length(){return Object.keys(_ls).length;},key:function(i){return Object.keys(_ls)[i]||null;}};
+        \\}
+        \\if(typeof sessionStorage==='undefined'){
+        \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
+        \\}
+        \\if(typeof fetch==='undefined'){globalThis.fetch=function(url,opts){return Promise.reject(new Error('fetch not supported'));};}
+        \\if(typeof AbortController==='undefined'){globalThis.AbortController=function(){this.signal={aborted:false,addEventListener:function(){}};this.abort=function(){this.signal.aborted=true;};};}
+        \\if(typeof XMLHttpRequest==='undefined'){globalThis.XMLHttpRequest=function(){this.open=function(){};this.send=function(){};this.setRequestHeader=function(){};this.addEventListener=function(){};};}
+        \\if(typeof DOMParser==='undefined'){globalThis.DOMParser=function(){this.parseFromString=function(){return null;};};}
+        \\if(typeof history==='undefined'){globalThis.history={pushState:function(){},replaceState:function(){},back:function(){},forward:function(){},go:function(){},get length(){return 1;},get state(){return null;}};}
+        \\if(typeof location==='undefined'){globalThis.location={href:'',protocol:'https:',host:'',hostname:'',pathname:'/',search:'',hash:'',origin:'',assign:function(){},replace:function(){},reload:function(){}};}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
