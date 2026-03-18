@@ -460,11 +460,12 @@ fn walkAndCompute(
 
         try styles.put(@intFromPtr(node.lxb_node), style);
 
-        // Recurse into children with this node's style as parent
-        const style_ptr = styles.getPtr(@intFromPtr(node.lxb_node)).?;
+        // Recurse into children with this node's style as parent.
+        // IMPORTANT: pass style by value (stack copy), NOT by HashMap pointer.
+        // HashMap.put() during child processing can rehash and invalidate pointers.
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, style_ptr, styles, ua_index, author_index, var_map, vw, vh, arena);
+            try walkAndCompute(c, &style, styles, ua_index, author_index, var_map, vw, vh, arena);
             child = c.nextSibling();
         }
     } else {
