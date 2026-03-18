@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 const tokenizer_mod = @import("tokenizer.zig");
 const Tokenizer = tokenizer_mod.Tokenizer;
 const TokenType = tokenizer_mod.TokenType;
@@ -546,13 +547,5 @@ pub const Parser = struct {
         }
     }
 
-    fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
-        if (a.len != b.len) return false;
-        for (a, b) |ac, bc| {
-            const al = if (ac >= 'A' and ac <= 'Z') ac + 32 else ac;
-            const bl = if (bc >= 'A' and bc <= 'Z') bc + 32 else bc;
-            if (al != bl) return false;
-        }
-        return true;
-    }
+    const eqlIgnoreCase = util.eqlIgnoreCase;
 };

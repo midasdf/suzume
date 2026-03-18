@@ -1,4 +1,5 @@
 const std = @import("std");
+const util = @import("util.zig");
 
 /// Evaluate a CSS media query string against viewport dimensions.
 /// Returns true if the query matches (or is empty/unknown — fail-open).
@@ -187,22 +188,5 @@ fn parsePixelValue(s: []const u8) ?f32 {
     return null;
 }
 
-fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (haystack.len < needle.len) return false;
-    for (haystack[0..needle.len], needle) |h, n| {
-        if (toLower(h) != toLower(n)) return false;
-    }
-    return true;
-}
-
-fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        if (toLower(ca) != toLower(cb)) return false;
-    }
-    return true;
-}
-
-fn toLower(c: u8) u8 {
-    return if (c >= 'A' and c <= 'Z') c + 32 else c;
-}
+const startsWithIgnoreCase = util.startsWithIgnoreCase;
+const eqlIgnoreCase = util.eqlIgnoreCase;

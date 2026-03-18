@@ -8,3 +8,5 @@ pub const properties = @import("properties.zig");
 pub const selectors = @import("selectors.zig");
 pub const media = @import("media.zig");
 pub const variables = @import("variables.zig");
+pub const util = @import("util.zig");
+pub const computed = @import("computed.zig");

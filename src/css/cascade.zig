@@ -6,7 +6,8 @@ const properties = @import("properties.zig");
 const values = @import("values.zig");
 const media = @import("media.zig");
 const variables = @import("variables.zig");
-const computed_mod = @import("../style/computed.zig");
+const util = @import("util.zig");
+const computed_mod = @import("computed.zig");
 const dom = @import("../dom/node.zig");
 
 const ComputedStyle = computed_mod.ComputedStyle;
@@ -1327,13 +1328,7 @@ fn parseLengthValueDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, depth:
     return null;
 }
 
-fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (haystack.len < needle.len) return false;
-    for (haystack[0..needle.len], needle) |h, n| {
-        if (toLower(h) != toLower(n)) return false;
-    }
-    return true;
-}
+const startsWithIgnoreCase = util.startsWithIgnoreCase;
 
 fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
     const start = 6; // "clamp(".len
@@ -1755,22 +1750,12 @@ fn walkForStyles(node: DomNode, buf: *std.ArrayListUnmanaged(u8), allocator: std
 
 // ── String utilities ──────────────────────────────────────────────────
 
-fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        if (toLower(ca) != toLower(cb)) return false;
-    }
-    return true;
-}
-
-fn toLower(c: u8) u8 {
-    return if (c >= 'A' and c <= 'Z') c + 32 else c;
-}
+const eqlIgnoreCase = util.eqlIgnoreCase;
 
 fn toLowerBuf(s: []const u8, buf: *[64]u8) ?[]const u8 {
     if (s.len > buf.len) return null;
     for (s, 0..) |c, i| {
-        buf[i] = toLower(c);
+        buf[i] = util.toLower(c);
     }
     return buf[0..s.len];
 }

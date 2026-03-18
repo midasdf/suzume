@@ -1,6 +1,7 @@
 const std = @import("std");
 const values = @import("values.zig");
 const ast = @import("ast.zig");
+const util = @import("util.zig");
 
 // ── Color Parsing ───────────────────────────────────────────────────
 
@@ -219,30 +220,13 @@ fn clampToU8(v: f32) u8 {
     return @intFromFloat(std.math.clamp(v, 0.0, 255.0));
 }
 
-fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
-    if (haystack.len < needle.len) return false;
-    for (haystack[0..needle.len], needle) |h, n| {
-        if (toLower(h) != toLower(n)) return false;
-    }
-    return true;
-}
-
-fn toLower(c: u8) u8 {
-    return if (c >= 'A' and c <= 'Z') c + 32 else c;
-}
-
-fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
-    if (a.len != b.len) return false;
-    for (a, b) |ca, cb| {
-        if (toLower(ca) != toLower(cb)) return false;
-    }
-    return true;
-}
+const startsWithIgnoreCase = util.startsWithIgnoreCase;
+const eqlIgnoreCase = util.eqlIgnoreCase;
 
 /// Lowercase s into buf. Returns null if s is longer than buf.
 fn toLowerBuf(s: []const u8, buf: []u8) ?[]u8 {
     if (s.len > buf.len) return null;
-    for (s, 0..) |c, i| buf[i] = toLower(c);
+    for (s, 0..) |c, i| buf[i] = util.toLower(c);
     return buf[0..s.len];
 }
 
@@ -283,7 +267,7 @@ fn namedColor(name: []const u8) ?values.Color {
     var buf: [32]u8 = undefined;
     if (name.len > buf.len) return null;
     for (name, 0..) |c, i| {
-        buf[i] = toLower(c);
+        buf[i] = util.toLower(c);
     }
     return named_color_table.get(buf[0..name.len]);
 }
@@ -356,7 +340,7 @@ fn parseUnit(unit_str: []const u8) ?values.Unit {
     var buf: [8]u8 = undefined;
     if (unit_str.len > buf.len) return null;
     for (unit_str, 0..) |c, i| {
-        buf[i] = toLower(c);
+        buf[i] = util.toLower(c);
     }
     return unit_map.get(buf[0..unit_str.len]);
 }
@@ -1071,7 +1055,7 @@ fn parseKeyword(s: []const u8) ?values.Keyword {
     var buf: [32]u8 = undefined;
     if (s.len > buf.len) return null;
     for (s, 0..) |c, i| {
-        buf[i] = toLower(c);
+        buf[i] = util.toLower(c);
     }
     return keyword_map.get(buf[0..s.len]);
 }
