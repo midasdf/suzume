@@ -1247,6 +1247,16 @@ fn parseLengthValue(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
     if (s.len == 0) return null;
     if (std.mem.eql(u8, s, "0")) return 0;
 
+    // Handle clamp(min, preferred, max)
+    if (startsWithIgnoreCase(s, "clamp(")) {
+        return parseClamp(s, font_size, vw, vh);
+    }
+
+    // Handle calc(expression)
+    if (startsWithIgnoreCase(s, "calc(")) {
+        return parseCalcSimple(s, font_size, vw, vh);
+    }
+
     if (properties.parseLength(s)) |len| {
         return resolveLengthToPx(len.value, len.unit, font_size, vw, vh);
     }
@@ -1255,14 +1265,95 @@ fn parseLengthValue(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
     return null;
 }
 
+fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (haystack.len < needle.len) return false;
+    for (haystack[0..needle.len], needle) |h, n| {
+        if (toLower(h) != toLower(n)) return false;
+    }
+    return true;
+}
+
+fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+    const start = 6; // "clamp(".len
+    // Find matching closing paren
+    var depth: usize = 1;
+    var end: usize = start;
+    while (end < s.len and depth > 0) : (end += 1) {
+        if (s[end] == '(') depth += 1;
+        if (s[end] == ')') depth -= 1;
+    }
+    if (depth != 0) return null;
+    const inner = s[start .. end - 1];
+
+    // Split by commas (respecting nested parens)
+    var parts: [3][]const u8 = .{ "", "", "" };
+    var part_idx: usize = 0;
+    var paren_depth: usize = 0;
+    var part_start: usize = 0;
+    for (inner, 0..) |c, i| {
+        if (c == '(') paren_depth += 1;
+        if (c == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
+        if (c == ',' and paren_depth == 0 and part_idx < 2) {
+            parts[part_idx] = std.mem.trim(u8, inner[part_start..i], " \t");
+            part_idx += 1;
+            part_start = i + 1;
+        }
+    }
+    if (part_idx == 2) {
+        parts[2] = std.mem.trim(u8, inner[part_start..], " \t");
+    } else return null;
+
+    const min_val = parseLengthValue(parts[0], font_size, vw, vh) orelse return null;
+    const pref_val = parseLengthValue(parts[1], font_size, vw, vh) orelse return null;
+    const max_val = parseLengthValue(parts[2], font_size, vw, vh) orelse return null;
+
+    return std.math.clamp(pref_val, min_val, max_val);
+}
+
+fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+    // Simple calc: calc(100vh - 300px), calc(50% + 10px)
+    const start = 5; // "calc(".len
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[start..end], " \t");
+
+    // Look for + or - operator (with spaces around it)
+    if (std.mem.indexOf(u8, inner, " + ")) |op_pos| {
+        const left_s = std.mem.trim(u8, inner[0..op_pos], " \t");
+        const right_s = std.mem.trim(u8, inner[op_pos + 3 ..], " \t");
+        const l = parseLengthValue(left_s, font_size, vw, vh) orelse return null;
+        const r = parseLengthValue(right_s, font_size, vw, vh) orelse return null;
+        return l + r;
+    }
+    if (std.mem.indexOf(u8, inner, " - ")) |op_pos| {
+        const left_s = std.mem.trim(u8, inner[0..op_pos], " \t");
+        const right_s = std.mem.trim(u8, inner[op_pos + 3 ..], " \t");
+        const l = parseLengthValue(left_s, font_size, vw, vh) orelse return null;
+        const r = parseLengthValue(right_s, font_size, vw, vh) orelse return null;
+        return l - r;
+    }
+    // Look for * operator
+    if (std.mem.indexOf(u8, inner, " * ")) |op_pos| {
+        const left_s = std.mem.trim(u8, inner[0..op_pos], " \t");
+        const right_s = std.mem.trim(u8, inner[op_pos + 3 ..], " \t");
+        const l = parseLengthValue(left_s, font_size, vw, vh) orelse return null;
+        const r = parseLengthValue(right_s, font_size, vw, vh) orelse return null;
+        return l * r;
+    }
+    // No operator -- just a single value
+    return parseLengthValue(inner, font_size, vw, vh);
+}
+
 fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh: f32) f32 {
     return switch (unit) {
         .px => value,
         .em => value * font_size,
         .rem => value * 16.0,
         .percent => value, // percentage stored as-is, resolved at layout
-        .vh => value * vh / 100.0,
-        .vw => value * vw / 100.0,
+        .vh, .svh, .dvh, .lvh => value * vh / 100.0,
+        .vw, .svw, .dvw, .lvw => value * vw / 100.0,
         .pt => value * 4.0 / 3.0,
         .cm => value * 96.0 / 2.54,
         .mm => value * 96.0 / 25.4,
@@ -1418,7 +1509,7 @@ fn mapDisplay(s: []const u8) ?ComputedStyle.Display {
 
 fn mapOverflow(s: []const u8) ?ComputedStyle.Overflow {
     if (eqlIgnoreCase(s, "visible")) return .visible;
-    if (eqlIgnoreCase(s, "hidden")) return .hidden;
+    if (eqlIgnoreCase(s, "hidden") or eqlIgnoreCase(s, "clip")) return .hidden;
     if (eqlIgnoreCase(s, "scroll")) return .scroll;
     if (eqlIgnoreCase(s, "auto")) return .auto_;
     return null;

@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const Unit = enum {
     px, em, rem, vh, vw, vmin, vmax,
+    svh, dvh, lvh, svw, dvw, lvw, // small/dynamic/large viewport units
     pt, pc, cm, mm, in_,
     ch, ex, lh,
     percent,
