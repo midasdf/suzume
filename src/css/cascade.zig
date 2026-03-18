@@ -9,6 +9,9 @@ const variables = @import("variables.zig");
 const util = @import("util.zig");
 const computed_mod = @import("computed.zig");
 const dom = @import("../dom/node.zig");
+const bloom_mod = @import("bloom.zig");
+
+const SelectorBloomFilter = bloom_mod.SelectorBloomFilter;
 
 const ComputedStyle = computed_mod.ComputedStyle;
 const DomNode = dom.DomNode;
@@ -209,6 +212,7 @@ pub fn cascade(
     var author_index = try buildFlatRuleIndex(author_rules.items, arena);
 
     // 8. Walk DOM tree and compute styles
+    var root_bloom = SelectorBloomFilter.init();
     try walkAndCompute(
         doc_root,
         null,
@@ -219,6 +223,7 @@ pub fn cascade(
         vw,
         vh,
         arena,
+        &root_bloom,
     );
 
     return result;
@@ -415,8 +420,26 @@ fn walkAndCompute(
     vw: f32,
     vh: f32,
     arena: std.mem.Allocator,
+    parent_bloom: *const SelectorBloomFilter,
 ) !void {
     if (node.nodeType() == .element) {
+        // Build bloom filter: copy parent's filter and add this element's
+        // tag name, id, and class names. This accumulates ancestor info
+        // so children can quickly reject descendant selectors.
+        var element_bloom = parent_bloom.*;
+        if (node.tagName()) |tag| {
+            element_bloom.add(SelectorBloomFilter.hashStringLower(tag));
+        }
+        if (node.getAttribute("id")) |id| {
+            element_bloom.add(SelectorBloomFilter.hashString(id));
+        }
+        if (node.getAttribute("class")) |cls| {
+            var cls_iter = std.mem.splitScalar(u8, cls, ' ');
+            while (cls_iter.next()) |c| {
+                if (c.len > 0) element_bloom.add(SelectorBloomFilter.hashString(c));
+            }
+        }
+
         var style = ComputedStyle{};
 
         // Inherit from parent
@@ -428,9 +451,9 @@ fn walkAndCompute(
         var entries: std.ArrayList(CascadeEntry) = .empty;
 
         // UA rules (null = non-pseudo-element rules only)
-        try collectMatching(node, ua_index, .ua, &entries, arena, null);
+        try collectMatching(node, ua_index, .ua, &entries, arena, null, &element_bloom);
         // Author rules
-        try collectMatching(node, author_index, .author, &entries, arena, null);
+        try collectMatching(node, author_index, .author, &entries, arena, null, &element_bloom);
         // Inline style
         if (node.getAttribute("style")) |inline_style| {
             try collectInlineDecls(inline_style, &entries, arena);
@@ -476,12 +499,12 @@ fn walkAndCompute(
         applyHtmlAttributes(node, &style);
 
         // Compute ::before pseudo-element style
-        if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .before, vw, vh, arena)) |ps| {
+        if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .before, vw, vh, arena, &element_bloom)) |ps| {
             style.before_content = ps.content;
             style.before_display = ps.display;
         }
         // Compute ::after pseudo-element style
-        if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .after, vw, vh, arena)) |ps| {
+        if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .after, vw, vh, arena, &element_bloom)) |ps| {
             style.after_content = ps.content;
             style.after_display = ps.display;
         }
@@ -490,16 +513,17 @@ fn walkAndCompute(
 
         // Recurse into children with this element's VarMap (scoped inheritance).
         // IMPORTANT: pass style by value (stack copy), NOT by HashMap pointer.
+        // Pass the element's bloom filter so children accumulate ancestor info.
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, &style, styles, ua_index, author_index, element_var_map, vw, vh, arena);
+            try walkAndCompute(c, &style, styles, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom);
             child = c.nextSibling();
         }
     } else {
-        // Non-element nodes (text, etc.) — recurse with parent's VarMap
+        // Non-element nodes (text, etc.) — recurse with parent's VarMap and bloom
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena);
+            try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena, parent_bloom);
             child = c.nextSibling();
         }
     }
@@ -512,13 +536,14 @@ fn collectMatching(
     entries: *std.ArrayList(CascadeEntry),
     arena: std.mem.Allocator,
     pseudo: ?selectors.PseudoElement,
+    ancestor_bloom: *const SelectorBloomFilter,
 ) !void {
     const adapter = makeDomAdapter(node);
 
     // Check universal rules
     for (index.universal.items) |rule| {
         if (rule.selector.pseudo_element != pseudo) continue;
-        if (selectors.matches(&rule.selector, adapter)) {
+        if (selectors.matchesWithBloom(&rule.selector, adapter, ancestor_bloom)) {
             for (rule.declarations) |decl| {
                 try entries.append(arena, .{
                     .decl = decl,
@@ -539,7 +564,7 @@ fn collectMatching(
             if (index.by_tag.get(lt)) |rules| {
                 for (rules.items) |rule| {
                     if (rule.selector.pseudo_element != pseudo) continue;
-                    if (selectors.matches(&rule.selector, adapter)) {
+                    if (selectors.matchesWithBloom(&rule.selector, adapter, ancestor_bloom)) {
                         for (rule.declarations) |decl| {
                             try entries.append(arena, .{
                                 .decl = decl,
@@ -562,7 +587,7 @@ fn collectMatching(
             if (index.by_class.get(cls)) |rules| {
                 for (rules.items) |rule| {
                     if (rule.selector.pseudo_element != pseudo) continue;
-                    if (selectors.matches(&rule.selector, adapter)) {
+                    if (selectors.matchesWithBloom(&rule.selector, adapter, ancestor_bloom)) {
                         for (rule.declarations) |decl| {
                             try entries.append(arena, .{
                                 .decl = decl,
@@ -582,7 +607,7 @@ fn collectMatching(
         if (index.by_id.get(id)) |rules| {
             for (rules.items) |rule| {
                 if (rule.selector.pseudo_element != pseudo) continue;
-                if (selectors.matches(&rule.selector, adapter)) {
+                if (selectors.matchesWithBloom(&rule.selector, adapter, ancestor_bloom)) {
                     for (rule.declarations) |decl| {
                         try entries.append(arena, .{
                             .decl = decl,
@@ -614,14 +639,15 @@ fn computePseudoContent(
     vw: f32,
     vh: f32,
     arena: std.mem.Allocator,
+    ancestor_bloom: *const SelectorBloomFilter,
 ) ?PseudoContentResult {
     var style = ComputedStyle{};
     inheritAll(&style, parent_style);
 
     // Collect matching declarations for this pseudo-element
     var entries: std.ArrayList(CascadeEntry) = .empty;
-    collectMatching(node, ua_index, .ua, &entries, arena, pseudo) catch return null;
-    collectMatching(node, author_index, .author, &entries, arena, pseudo) catch return null;
+    collectMatching(node, ua_index, .ua, &entries, arena, pseudo, ancestor_bloom) catch return null;
+    collectMatching(node, author_index, .author, &entries, arena, pseudo, ancestor_bloom) catch return null;
 
     if (entries.items.len == 0) return null;
 

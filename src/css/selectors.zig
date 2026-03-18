@@ -1,5 +1,7 @@
 const std = @import("std");
 const util = @import("util.zig");
+const bloom_mod = @import("bloom.zig");
+pub const SelectorBloomFilter = bloom_mod.SelectorBloomFilter;
 
 pub const Combinator = enum {
     descendant, // space
@@ -584,6 +586,13 @@ pub const ElementAdapter = struct {
 };
 
 pub fn matches(selector: *const ParsedSelector, element: ElementAdapter) bool {
+    return matchesWithBloom(selector, element, null);
+}
+
+/// Match a selector against an element, optionally using a Bloom filter
+/// populated with ancestor class names, IDs, and tag names to quickly reject
+/// descendant/child selectors that can't possibly match.
+pub fn matchesWithBloom(selector: *const ParsedSelector, element: ElementAdapter, ancestor_bloom: ?*const SelectorBloomFilter) bool {
     const components = selector.components;
     if (components.len == 0) return false;
 
@@ -615,12 +624,22 @@ pub fn matches(selector: *const ParsedSelector, element: ElementAdapter) bool {
 
                 switch (comb) {
                     .child => {
+                        // Bloom filter quick-reject: if the required ancestor simple
+                        // selector is definitely not in any ancestor, skip the DOM walk.
+                        if (ancestor_bloom) |bf| {
+                            if (bloomRejectSimple(left_simple, bf)) return false;
+                        }
                         const p = el.parent() orelse return false;
                         if (p.isDocumentNode()) return false;
                         if (!matchSimple(left_simple, p)) return false;
                         current_element = p;
                     },
                     .descendant => {
+                        // Bloom filter quick-reject: if the required ancestor simple
+                        // selector is definitely not in any ancestor, skip the DOM walk.
+                        if (ancestor_bloom) |bf| {
+                            if (bloomRejectSimple(left_simple, bf)) return false;
+                        }
                         var ancestor = el.parent();
                         while (ancestor) |anc| {
                             if (anc.isDocumentNode()) return false;
@@ -656,6 +675,19 @@ pub fn matches(selector: *const ParsedSelector, element: ElementAdapter) bool {
     }
 
     return true;
+}
+
+/// Check if the bloom filter can definitively reject a simple selector.
+/// Returns true if the selector CANNOT match any ancestor (definite rejection).
+/// Returns false if the selector MIGHT match (bloom says "maybe present").
+fn bloomRejectSimple(simple: SimpleSelector, bf: *const SelectorBloomFilter) bool {
+    return switch (simple) {
+        .type_sel => |name| !bf.mightContain(SelectorBloomFilter.hashStringLower(name)),
+        .class => |cls| !bf.mightContain(SelectorBloomFilter.hashString(cls)),
+        .id => |id| !bf.mightContain(SelectorBloomFilter.hashString(id)),
+        // universal, attribute, pseudo_class — can't reject via bloom filter
+        .universal, .attribute, .pseudo_class => false,
+    };
 }
 
 fn matchSimple(simple: SimpleSelector, element: ElementAdapter) bool {
