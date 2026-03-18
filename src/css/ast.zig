@@ -102,6 +102,32 @@ pub const PropertyId = enum(u16) {
     transform,
     // Content
     content,
+    // Counters
+    counter_reset,
+    counter_increment,
+    // Transitions
+    transition_property,
+    transition_duration,
+    transition_timing_function,
+    transition_delay,
+    // Animations
+    animation_name,
+    animation_duration,
+    animation_timing_function,
+    animation_delay,
+    animation_iteration_count,
+    animation_direction,
+    animation_fill_mode,
+    animation_play_state,
+    // Filters
+    filter,
+    backdrop_filter,
+    // Object fit
+    object_fit,
+    // Outline
+    outline_width,
+    outline_color,
+    outline_style,
     // Custom property
     custom,
     // Unknown (preserved)
@@ -198,6 +224,26 @@ pub const PropertyId = enum(u16) {
         .{ "text-shadow", .text_shadow },
         .{ "transform", .transform },
         .{ "content", .content },
+        .{ "counter-reset", .counter_reset },
+        .{ "counter-increment", .counter_increment },
+        .{ "transition-property", .transition_property },
+        .{ "transition-duration", .transition_duration },
+        .{ "transition-timing-function", .transition_timing_function },
+        .{ "transition-delay", .transition_delay },
+        .{ "animation-name", .animation_name },
+        .{ "animation-duration", .animation_duration },
+        .{ "animation-timing-function", .animation_timing_function },
+        .{ "animation-delay", .animation_delay },
+        .{ "animation-iteration-count", .animation_iteration_count },
+        .{ "animation-direction", .animation_direction },
+        .{ "animation-fill-mode", .animation_fill_mode },
+        .{ "animation-play-state", .animation_play_state },
+        .{ "filter", .filter },
+        .{ "backdrop-filter", .backdrop_filter },
+        .{ "object-fit", .object_fit },
+        .{ "outline-width", .outline_width },
+        .{ "outline-color", .outline_color },
+        .{ "outline-style", .outline_style },
     });
 
     pub fn fromString(name: []const u8) PropertyId {

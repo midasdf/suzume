@@ -117,6 +117,30 @@ pub const ComputedStyle = struct {
     gradient_color_end: u32 = 0x00000000, // ARGB
     gradient_direction: GradientDirection = .to_bottom,
 
+    // Counters
+    counter_reset: ?[]const u8 = null,
+    counter_increment: ?[]const u8 = null,
+
+    // Transitions (parsed but not animated)
+    transition_duration: f32 = 0,
+    transition_delay: f32 = 0,
+
+    // Animations (parsed but not animated)
+    animation_name: ?[]const u8 = null,
+    animation_duration: f32 = 0,
+
+    // Filters
+    filter_grayscale: f32 = 0,
+    filter_brightness: f32 = 1,
+    filter_blur: f32 = 0,
+
+    // Object fit
+    object_fit: ObjectFit = .fill,
+
+    // Outline
+    outline_width: f32 = 0,
+    outline_color: u32 = 0xFF000000,
+
     // CSS content property (for ::before/::after pseudo-elements)
     content: ?[]const u8 = null,
 
@@ -319,4 +343,6 @@ pub const ComputedStyle = struct {
         row,
         column,
     };
+
+    pub const ObjectFit = enum { fill, contain, cover, none, scale_down };
 };

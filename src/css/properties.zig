@@ -449,6 +449,15 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
         decls[0] = .{ .property = .row_gap, .property_name = "row-gap", .value_raw = trimmed, .important = false };
         return decls;
     }
+    if (std.mem.eql(u8, property_name, "transition")) {
+        return expandTransition(trimmed, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "animation")) {
+        return expandAnimation(trimmed, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "outline")) {
+        return expandOutline(trimmed, allocator);
+    }
     return null;
 }
 
@@ -736,6 +745,102 @@ fn isCssWideKeyword(value: []const u8) bool {
         eqlIgnoreCase(value, "initial") or
         eqlIgnoreCase(value, "unset") or
         eqlIgnoreCase(value, "revert");
+}
+
+fn expandTransition(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    // Simplest: scan tokens for a time value, treat it as transition-duration.
+    // E.g. "all 0.3s ease" → transition-duration: 0.3s
+    var iter = std.mem.tokenizeAny(u8, value, " \t,");
+    while (iter.next()) |tok| {
+        if (parseLength(tok)) |len| {
+            if (len.unit == .s or len.unit == .ms) {
+                const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+                decls[0] = .{ .property = .transition_duration, .property_name = "transition-duration", .value_raw = tok, .important = false };
+                return decls;
+            }
+        }
+    }
+    return null;
+}
+
+fn expandAnimation(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    // Parse "animation-duration animation-timing-function animation-delay ... animation-name"
+    // Simplified: find first time value → duration, last non-time/non-keyword token → name.
+    var duration_tok: ?[]const u8 = null;
+    var name_tok: ?[]const u8 = null;
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (parseLength(tok)) |len| {
+            if ((len.unit == .s or len.unit == .ms) and duration_tok == null) {
+                duration_tok = tok;
+                continue;
+            }
+        }
+        // Skip timing function keywords and iteration keywords
+        if (eqlIgnoreCase(tok, "ease") or eqlIgnoreCase(tok, "linear") or
+            eqlIgnoreCase(tok, "ease-in") or eqlIgnoreCase(tok, "ease-out") or
+            eqlIgnoreCase(tok, "ease-in-out") or eqlIgnoreCase(tok, "step-start") or
+            eqlIgnoreCase(tok, "step-end") or eqlIgnoreCase(tok, "infinite") or
+            eqlIgnoreCase(tok, "none") or eqlIgnoreCase(tok, "normal") or
+            eqlIgnoreCase(tok, "reverse") or eqlIgnoreCase(tok, "alternate") or
+            eqlIgnoreCase(tok, "alternate-reverse") or eqlIgnoreCase(tok, "both") or
+            eqlIgnoreCase(tok, "forwards") or eqlIgnoreCase(tok, "backwards") or
+            eqlIgnoreCase(tok, "running") or eqlIgnoreCase(tok, "paused"))
+        {
+            continue;
+        }
+        // Skip pure numbers (iteration count)
+        if (std.fmt.parseFloat(f32, tok)) |_| continue else |_| {}
+        // Whatever remains is likely the animation name
+        name_tok = tok;
+    }
+
+    var count: usize = 0;
+    if (duration_tok != null) count += 1;
+    if (name_tok != null) count += 1;
+    if (count == 0) return null;
+
+    const decls = allocator.alloc(ast.Declaration, count) catch return null;
+    var i: usize = 0;
+    if (duration_tok) |dur| {
+        decls[i] = .{ .property = .animation_duration, .property_name = "animation-duration", .value_raw = dur, .important = false };
+        i += 1;
+    }
+    if (name_tok) |nm| {
+        decls[i] = .{ .property = .animation_name, .property_name = "animation-name", .value_raw = nm, .important = false };
+    }
+    return decls;
+}
+
+fn expandOutline(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    if (isCssWideKeyword(value)) {
+        const decls = allocator.alloc(ast.Declaration, 3) catch return null;
+        decls[0] = .{ .property = .outline_width, .property_name = "outline-width", .value_raw = value, .important = false };
+        decls[1] = .{ .property = .outline_style, .property_name = "outline-style", .value_raw = value, .important = false };
+        decls[2] = .{ .property = .outline_color, .property_name = "outline-color", .value_raw = value, .important = false };
+        return decls;
+    }
+
+    var width: []const u8 = "medium";
+    var style: []const u8 = "none";
+    var color_val: []const u8 = "currentcolor";
+
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (isBorderStyle(tok)) {
+            style = tok;
+        } else if (parseLength(tok) != null) {
+            width = tok;
+        } else if (parseColor(tok) != null) {
+            color_val = tok;
+        }
+    }
+
+    const decls = allocator.alloc(ast.Declaration, 3) catch return null;
+    decls[0] = .{ .property = .outline_width, .property_name = "outline-width", .value_raw = width, .important = false };
+    decls[1] = .{ .property = .outline_style, .property_name = "outline-style", .value_raw = style, .important = false };
+    decls[2] = .{ .property = .outline_color, .property_name = "outline-color", .value_raw = color_val, .important = false };
+    return decls;
 }
 
 // ── General Value Parsing ───────────────────────────────────────────
