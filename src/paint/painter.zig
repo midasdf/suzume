@@ -314,8 +314,30 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                 };
                 child_clip = clip.intersect(box_clip);
             }
-            for (box.children.items) |child| {
-                paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+            // Paint children sorted by z-index: negative first, then zero, then positive
+            const has_nonzero_z = blk: {
+                for (box.children.items) |child| {
+                    if (child.style.z_index != 0) break :blk true;
+                }
+                break :blk false;
+            };
+            if (has_nonzero_z) {
+                // Pass 1: negative z-index
+                for (box.children.items) |child| {
+                    if (child.style.z_index < 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                }
+                // Pass 2: zero z-index (normal flow)
+                for (box.children.items) |child| {
+                    if (child.style.z_index == 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                }
+                // Pass 3: positive z-index
+                for (box.children.items) |child| {
+                    if (child.style.z_index > 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                }
+            } else {
+                for (box.children.items) |child| {
+                    paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                }
             }
         },
         .replaced => {

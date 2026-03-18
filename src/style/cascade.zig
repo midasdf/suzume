@@ -346,6 +346,28 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.bottom = if (pos_unit == css.CSS_UNIT_PCT) .{ .percent = fixedToF32(pos_len) } else .{ .px = lengthToPx(pos_len, pos_unit, default_font_size) };
     }
 
+    // z-index
+    var zi_val: i32 = 0;
+    if (css.css_computed_z_index(style, &zi_val) == css.CSS_Z_INDEX_SET) {
+        result.z_index = zi_val;
+    }
+
+    // vertical-align
+    var va_len: css.css_fixed = 0;
+    var va_unit: css.css_unit = css.CSS_UNIT_PX;
+    const va_val = css.css_computed_vertical_align(style, &va_len, &va_unit);
+    result.vertical_align = switch (va_val) {
+        css.CSS_VERTICAL_ALIGN_BASELINE => .baseline,
+        css.CSS_VERTICAL_ALIGN_SUB => .sub,
+        css.CSS_VERTICAL_ALIGN_SUPER => .super,
+        css.CSS_VERTICAL_ALIGN_TOP => .top,
+        css.CSS_VERTICAL_ALIGN_TEXT_TOP => .text_top,
+        css.CSS_VERTICAL_ALIGN_MIDDLE => .middle,
+        css.CSS_VERTICAL_ALIGN_BOTTOM => .bottom,
+        css.CSS_VERTICAL_ALIGN_TEXT_BOTTOM => .text_bottom,
+        else => .baseline,
+    };
+
     // List style type
     const lst_val = css.css_computed_list_style_type(style);
     result.list_style_type = switch (lst_val) {
@@ -807,6 +829,9 @@ const CssPropertyRule = struct {
     gradient_start: ?u32 = null,
     gradient_end: ?u32 = null,
     gradient_direction: ?ComputedStyle.GradientDirection = null,
+    word_break: ?ComputedStyle.WordBreak = null,
+    overflow_wrap: ?ComputedStyle.OverflowWrap = null,
+    text_overflow: ?ComputedStyle.TextOverflow = null,
 };
 
 /// Parse a CSS color value from text.
@@ -982,6 +1007,32 @@ fn extractBgShorthandColor(value: []const u8) ?u32 {
     return null;
 }
 
+/// Parse a word-break CSS value.
+fn parseWordBreak(val: []const u8) ?ComputedStyle.WordBreak {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (std.mem.eql(u8, trimmed, "break-all")) return .break_all;
+    if (std.mem.eql(u8, trimmed, "keep-all")) return .keep_all;
+    if (std.mem.eql(u8, trimmed, "normal")) return .normal;
+    return null;
+}
+
+/// Parse an overflow-wrap (or word-wrap) CSS value.
+fn parseOverflowWrap(val: []const u8) ?ComputedStyle.OverflowWrap {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (std.mem.eql(u8, trimmed, "break-word")) return .break_word;
+    if (std.mem.eql(u8, trimmed, "anywhere")) return .anywhere;
+    if (std.mem.eql(u8, trimmed, "normal")) return .normal;
+    return null;
+}
+
+/// Parse a text-overflow CSS value.
+fn parseTextOverflow(val: []const u8) ?ComputedStyle.TextOverflow {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (std.mem.eql(u8, trimmed, "ellipsis")) return .ellipsis;
+    if (std.mem.eql(u8, trimmed, "clip")) return .clip;
+    return null;
+}
+
 /// Parse raw CSS text to extract property rules for properties LibCSS doesn't handle well.
 /// Returns a list of selector -> property mappings.
 fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(CssPropertyRule) {
@@ -1133,6 +1184,42 @@ fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !
                         }
                     }
                 }
+            }
+        }
+
+        // word-break
+        if (std.mem.indexOf(u8, body, "word-break")) |wb_idx| {
+            const is_plain = (wb_idx == 0 or (body[wb_idx - 1] != '-' and body[wb_idx - 1] != '_'));
+            if (is_plain) {
+                if (extractPropertyValue(body, wb_idx + "word-break".len)) |val| {
+                    rule.word_break = parseWordBreak(val);
+                    if (rule.word_break != null) has_any = true;
+                }
+            }
+        }
+
+        // overflow-wrap (also handles legacy word-wrap)
+        if (std.mem.indexOf(u8, body, "overflow-wrap")) |ow_idx| {
+            if (extractPropertyValue(body, ow_idx + "overflow-wrap".len)) |val| {
+                rule.overflow_wrap = parseOverflowWrap(val);
+                if (rule.overflow_wrap != null) has_any = true;
+            }
+        } else if (std.mem.indexOf(u8, body, "word-wrap")) |ww_idx| {
+            // Legacy alias
+            const is_plain = (ww_idx == 0 or (body[ww_idx - 1] != '-' and body[ww_idx - 1] != '_'));
+            if (is_plain) {
+                if (extractPropertyValue(body, ww_idx + "word-wrap".len)) |val| {
+                    rule.overflow_wrap = parseOverflowWrap(val);
+                    if (rule.overflow_wrap != null) has_any = true;
+                }
+            }
+        }
+
+        // text-overflow
+        if (std.mem.indexOf(u8, body, "text-overflow")) |to_idx| {
+            if (extractPropertyValue(body, to_idx + "text-overflow".len)) |val| {
+                rule.text_overflow = parseTextOverflow(val);
+                if (rule.text_overflow != null) has_any = true;
             }
         }
 
@@ -1580,6 +1667,21 @@ fn walkAndSelect(
                                     style.gradient_direction = rule.gradient_direction orelse .to_bottom;
                                 }
                             }
+
+                            // word-break from CSS rules
+                            if (rule.word_break) |wb| {
+                                if (style.word_break == .normal) style.word_break = wb;
+                            }
+
+                            // overflow-wrap from CSS rules
+                            if (rule.overflow_wrap) |ow| {
+                                if (style.overflow_wrap == .normal) style.overflow_wrap = ow;
+                            }
+
+                            // text-overflow from CSS rules
+                            if (rule.text_overflow) |to| {
+                                if (style.text_overflow == .clip) style.text_overflow = to;
+                            }
                         }
                     }
 
@@ -1669,6 +1771,43 @@ fn walkAndSelect(
                         if (style.gradient_color_start == 0x00000000 and style.gradient_color_end == 0x00000000) {
                             if (std.mem.indexOf(u8, style_attr, "linear-gradient") != null) {
                                 parseLinearGradient(style_attr, &style);
+                            }
+                        }
+
+                        // word-break from inline style
+                        if (style.word_break == .normal) {
+                            if (std.mem.indexOf(u8, style_attr, "word-break")) |wb_idx| {
+                                const is_plain = (wb_idx == 0 or (style_attr[wb_idx - 1] != '-' and style_attr[wb_idx - 1] != '_'));
+                                if (is_plain) {
+                                    if (extractPropertyValue(style_attr, wb_idx + "word-break".len)) |val| {
+                                        if (parseWordBreak(val)) |wb| style.word_break = wb;
+                                    }
+                                }
+                            }
+                        }
+
+                        // overflow-wrap from inline style (also check word-wrap alias)
+                        if (style.overflow_wrap == .normal) {
+                            if (std.mem.indexOf(u8, style_attr, "overflow-wrap")) |ow_idx| {
+                                if (extractPropertyValue(style_attr, ow_idx + "overflow-wrap".len)) |val| {
+                                    if (parseOverflowWrap(val)) |ow| style.overflow_wrap = ow;
+                                }
+                            } else if (std.mem.indexOf(u8, style_attr, "word-wrap")) |ww_idx| {
+                                const is_plain = (ww_idx == 0 or (style_attr[ww_idx - 1] != '-' and style_attr[ww_idx - 1] != '_'));
+                                if (is_plain) {
+                                    if (extractPropertyValue(style_attr, ww_idx + "word-wrap".len)) |val| {
+                                        if (parseOverflowWrap(val)) |ow| style.overflow_wrap = ow;
+                                    }
+                                }
+                            }
+                        }
+
+                        // text-overflow from inline style
+                        if (style.text_overflow == .clip) {
+                            if (std.mem.indexOf(u8, style_attr, "text-overflow")) |to_idx| {
+                                if (extractPropertyValue(style_attr, to_idx + "text-overflow".len)) |val| {
+                                    if (parseTextOverflow(val)) |to| style.text_overflow = to;
+                                }
                             }
                         }
                     }

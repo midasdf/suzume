@@ -212,7 +212,81 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
     return event;
 }
 
+// ── Key code to key name mapping ────────────────────────────────────
+
+fn keyCodeToKeyName(buf: *[16]u8, key_code: u32) []const u8 {
+    return switch (key_code) {
+        8 => "Backspace",
+        9 => "Tab",
+        13 => "Enter",
+        27 => "Escape",
+        32 => " ",
+        37 => "ArrowLeft",
+        38 => "ArrowUp",
+        39 => "ArrowRight",
+        40 => "ArrowDown",
+        46 => "Delete",
+        else => {
+            if (key_code >= 32 and key_code < 127) {
+                buf[0] = @truncate(key_code);
+                return buf[0..1];
+            }
+            return "Unidentified";
+        },
+    };
+}
+
 // ── Event Dispatching ───────────────────────────────────────────────
+
+/// Dispatch a keyboard event (keydown/keyup) with key and keyCode properties.
+/// Returns true if preventDefault was NOT called.
+pub fn dispatchKeyboardEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, key_code: u32) bool {
+    current_event_flags = .{};
+
+    // Collect ancestors for bubbling (target -> ... -> document)
+    var path: [64]*lxb.lxb_dom_node_t = undefined;
+    var path_len: usize = 0;
+    var current: ?*lxb.lxb_dom_node_t = target;
+    while (current) |node| {
+        if (path_len < path.len) {
+            path[path_len] = node;
+            path_len += 1;
+        }
+        current = node.parent;
+    }
+
+    // Get key name
+    var key_buf: [16]u8 = undefined;
+    const key_name = keyCodeToKeyName(&key_buf, key_code);
+
+    // Bubble: from target up to root
+    for (path[0..path_len]) |node| {
+        if (current_event_flags.stop_propagation) break;
+
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                for (entry.callbacks.items) |callback| {
+                    const event_obj = createEventObject(ctx, event_type, target, node);
+                    // Add keyboard-specific properties
+                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "keyCode", qjs.JS_NewInt32(ctx, @intCast(key_code)));
+                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "which", qjs.JS_NewInt32(ctx, @intCast(key_code)));
+                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "key", qjs.JS_NewStringLen(ctx, key_name.ptr, key_name.len));
+                    var argv = [_]qjs.JSValue{event_obj};
+                    const this = dom_api.wrapNodePublic(ctx, node);
+                    const ret = qjs.JS_Call(ctx, callback, this, 1, &argv);
+                    qjs.JS_FreeValue(ctx, ret);
+                    qjs.JS_FreeValue(ctx, this);
+                    qjs.JS_FreeValue(ctx, event_obj);
+
+                    if (current_event_flags.stop_propagation) break;
+                }
+                break;
+            }
+        }
+    }
+
+    return !current_event_flags.prevent_default;
+}
 
 /// Dispatch an event to a target element with bubbling.
 /// Returns true if preventDefault was NOT called.

@@ -27,7 +27,11 @@ pub const ComputedStyle = struct {
     text_align: TextAlign = .left,
     text_decoration: TextDecoration = .{},
     white_space: WhiteSpace = .normal,
+    word_break: WordBreak = .normal,
+    overflow_wrap: OverflowWrap = .normal,
+    text_overflow: TextOverflow = .clip,
     text_transform: TextTransform = .none,
+    vertical_align: VerticalAlign = .baseline,
     letter_spacing: f32 = 0,
     line_height: LineHeight = .normal,
     visibility: Visibility = .visible,
@@ -46,6 +50,7 @@ pub const ComputedStyle = struct {
 
     // Position
     position: Position = .static_,
+    z_index: i32 = 0,
     top: Dimension = .auto,
     left: Dimension = .auto,
     right: Dimension = .auto,
@@ -233,6 +238,17 @@ pub const ComputedStyle = struct {
         collapse,
     };
 
+    pub const VerticalAlign = enum {
+        baseline,
+        top,
+        middle,
+        bottom,
+        text_top,
+        text_bottom,
+        sub,
+        super,
+    };
+
     pub const LineHeight = union(enum) {
         normal,
         px: f32,
@@ -244,6 +260,23 @@ pub const ComputedStyle = struct {
         none,
         px: f32,
         percent: f32,
+    };
+
+    pub const WordBreak = enum {
+        normal,
+        break_all,
+        keep_all,
+    };
+
+    pub const OverflowWrap = enum {
+        normal,
+        break_word,
+        anywhere,
+    };
+
+    pub const TextOverflow = enum {
+        clip,
+        ellipsis,
     };
 
     pub const GradientDirection = enum {

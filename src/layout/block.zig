@@ -40,14 +40,33 @@ fn decodeUtf8(text: []const u8, pos: usize) struct { cp: u21, len: u3 } {
 }
 
 /// Find the best break position in text[line_start..] that fits within avail_width.
+/// Break behavior flags passed to findBreakPoint.
+const BreakFlags = struct {
+    /// word-break: break-all — allow breaks between any characters
+    break_all: bool = false,
+    /// word-break: keep-all — don't break between CJK characters
+    keep_all: bool = false,
+    /// overflow-wrap: break-word/anywhere — break within words if needed (this is
+    /// already the default fallback behavior; the flag is kept for clarity)
+    break_word: bool = false,
+};
+
 /// Returns byte offset (relative to text start) where the line should end.
 /// Tries: space breaks, CJK inter-character breaks, then forced character break (break-word).
 /// Returns null if the very first character doesn't fit (caller should force at least 1 char).
 ///
 /// Optimized: measures at word/CJK boundaries first (O(n_words) calls to measure),
 /// then only does character-level measurement within the single overflowing segment.
-fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_renderer: anytype) ?usize {
+///
+/// When break_all is set, every character boundary is a break opportunity (skip Phase 1).
+/// When keep_all is set, CJK inter-character breaks are suppressed.
+fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_renderer: anytype, flags: BreakFlags) ?usize {
     if (line_start >= text.len) return null;
+
+    // For break-all: skip Phase 1 entirely — go straight to character-level scan.
+    if (flags.break_all) {
+        return findBreakPointCharLevel(text, line_start, avail_width, text_renderer);
+    }
 
     // Phase 1: Scan word-by-word / CJK-character-by-CJK-character.
     // Collect break opportunities and only call measure() at each one.
@@ -74,13 +93,16 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
             is_break_opportunity = true;
             break_pos_space = char_end; // break after space
         }
-        if (is_cjk) {
-            is_break_opportunity = true;
-            break_pos_cjk = char_end; // break after CJK char
-        } else if (prev_was_cjk and !is_cjk and decoded.cp != ' ') {
-            // Transition from CJK to non-CJK: break before this char
-            is_break_opportunity = true;
-            break_pos_cjk = i;
+        // CJK breaks only when keep_all is not set
+        if (!flags.keep_all) {
+            if (is_cjk) {
+                is_break_opportunity = true;
+                break_pos_cjk = char_end; // break after CJK char
+            } else if (prev_was_cjk and !is_cjk and decoded.cp != ' ') {
+                // Transition from CJK to non-CJK: break before this char
+                is_break_opportunity = true;
+                break_pos_cjk = i;
+            }
         }
 
         prev_was_cjk = is_cjk;
@@ -174,11 +196,13 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
         if (decoded2.cp == ' ') {
             last_space_break = char_end2;
         }
-        if (is_cjk2) {
-            last_cjk_break = char_end2;
-        } else if (fine_prev_cjk and !is_cjk2 and decoded2.cp != ' ') {
-            if (last_cjk_break == null or last_cjk_break.? < j) {
-                last_cjk_break = j;
+        if (!flags.keep_all) {
+            if (is_cjk2) {
+                last_cjk_break = char_end2;
+            } else if (fine_prev_cjk and !is_cjk2 and decoded2.cp != ' ') {
+                if (last_cjk_break == null or last_cjk_break.? < j) {
+                    last_cjk_break = j;
+                }
             }
         }
 
@@ -189,6 +213,41 @@ fn findBreakPoint(text: []const u8, line_start: usize, avail_width: f32, text_re
 
     // All text fits
     return null;
+}
+
+/// Character-level break point scanner for word-break: break-all.
+/// Every character boundary is a valid break point.
+fn findBreakPointCharLevel(text: []const u8, line_start: usize, avail_width: f32, text_renderer: anytype) ?usize {
+    var last_break: ?usize = null;
+    var j: usize = line_start;
+
+    while (j < text.len) {
+        const decoded = decodeUtf8(text, j);
+        const char_end = j + decoded.len;
+
+        const segment = text[line_start..char_end];
+        const seg_metrics = text_renderer.measure(segment);
+        const seg_width: f32 = @floatFromInt(seg_metrics.width);
+
+        if (seg_width > avail_width and j > line_start) {
+            return last_break orelse j;
+        }
+
+        last_break = char_end;
+        j = char_end;
+    }
+
+    // All text fits
+    return null;
+}
+
+/// Build BreakFlags from a ComputedStyle's word-break and overflow-wrap properties.
+fn breakFlagsFromStyle(style: ComputedStyle) BreakFlags {
+    return .{
+        .break_all = style.word_break == .break_all,
+        .keep_all = style.word_break == .keep_all,
+        .break_word = style.overflow_wrap == .break_word or style.overflow_wrap == .anywhere,
+    };
 }
 
 /// Compute effective line height from CSS line-height property and raw font metrics height.
@@ -627,7 +686,8 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
                         const avail_w = if (first_line) (container_width - cursor_x) else container_width;
 
-                        if (findBreakPoint(text, line_start, avail_w, text_renderer)) |break_pos| {
+                        const break_flags = breakFlagsFromStyle(child.style);
+                        if (findBreakPoint(text, line_start, avail_w, text_renderer, break_flags)) |break_pos| {
                             const line_text = text[line_start..break_pos];
                             if (line_text.len > 0) {
                                 const lm = text_renderer.measure(line_text);
@@ -942,6 +1002,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
     }
 
     // Word-break the text using CJK-aware + break-word logic
+    const break_flags = breakFlagsFromStyle(box.style);
     var total_height: f32 = 0;
     var max_width: f32 = 0;
     var line_start: usize = 0;
@@ -953,7 +1014,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
             continue;
         }
 
-        if (findBreakPoint(text, line_start, container_width, text_renderer)) |break_pos| {
+        if (findBreakPoint(text, line_start, container_width, text_renderer, break_flags)) |break_pos| {
             const line_text = text[line_start..break_pos];
             if (line_text.len > 0) {
                 const lm = text_renderer.measure(line_text);

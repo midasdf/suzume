@@ -1146,6 +1146,7 @@ pub fn main() !void {
 
     // Focused form input state
     var focused_input_node: ?*lxb.lxb_dom_node_t = null; // DOM node of focused <input>
+    var prev_focused_input_node: ?*lxb.lxb_dom_node_t = null; // Previously focused node (for blur events)
     var form_input = TextInput.init(allocator); // text buffer for focused input
     var xim_composing: bool = false; // true when Mozc/XIM is in composition state
     defer form_input.deinit();
@@ -1363,6 +1364,16 @@ pub fn main() !void {
                     find_bar.insertText(committed);
                 } else if (focused_input_node != null) {
                     form_input.insertText(committed);
+                    // Dispatch "input" event on the focused element
+                    {
+                        const xim_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        if (xim_pg) |pg| {
+                            if (pg.js_rt) |*js_rt| {
+                                _ = events.dispatchEvent(js_rt.ctx, focused_input_node.?, "input");
+                                js_rt.executePending();
+                            }
+                        }
+                    }
                 } else if (url_input.focused) {
                     url_input.insertText(committed);
                 }
@@ -1868,6 +1879,7 @@ pub fn main() !void {
                         else
                             null;
                         if (active_pg) |page| {
+                            prev_focused_input_node = focused_input_node;
                             handleClick(
                                 allocator,
                                 mouse_x,
@@ -1889,6 +1901,19 @@ pub fn main() !void {
                                 &focused_input_node,
                                 &form_input,
                             );
+                            // Dispatch focus/blur events when focused element changes
+                            if (focused_input_node != prev_focused_input_node) {
+                                if (page.js_rt) |*js_rt| {
+                                    if (prev_focused_input_node) |prev_node| {
+                                        _ = events.dispatchEvent(js_rt.ctx, prev_node, "blur");
+                                        js_rt.executePending();
+                                    }
+                                    if (focused_input_node) |new_node| {
+                                        _ = events.dispatchEvent(js_rt.ctx, new_node, "focus");
+                                        js_rt.executePending();
+                                    }
+                                }
+                            }
                             // Update tab with new URL and page title
                             if (current_url) |cu| {
                                 tab_mgr.updateActiveUrl(cu);
@@ -1963,6 +1988,16 @@ pub fn main() !void {
                                             } else if (focused_input_node != null) {
                                                 form_input.insertText(composed);
                                                 std.debug.print("[input] XIM text into form: \"{s}\" total=\"{s}\"\n", .{ composed, form_input.getText() });
+                                                // Dispatch "input" event on the focused element
+                                                {
+                                                    const xim_pg2: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                                                    if (xim_pg2) |pg| {
+                                                        if (pg.js_rt) |*js_rt| {
+                                                            _ = events.dispatchEvent(js_rt.ctx, focused_input_node.?, "input");
+                                                            js_rt.executePending();
+                                                        }
+                                                    }
+                                                }
                                             } else if (url_input.focused) {
                                                 url_input.insertText(composed);
                                             }
@@ -2025,6 +2060,16 @@ pub fn main() !void {
 
                     // Handle focused form input
                     if (focused_input_node != null) {
+                        // Dispatch "keydown" event on the focused element
+                        {
+                            const kd_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                            if (kd_pg) |pg| {
+                                if (pg.js_rt) |*js_rt| {
+                                    _ = events.dispatchKeyboardEvent(js_rt.ctx, focused_input_node.?, "keydown", key);
+                                    js_rt.executePending();
+                                }
+                            }
+                        }
                         if (key == nsfb_c.NSFB_KEY_TAB) {
                             // Tab: unfocus form input (TODO: focus next input)
                             focused_input_node = null;
@@ -2083,6 +2128,16 @@ pub fn main() !void {
                                 needs_repaint = true;
                             },
                             .consumed => {
+                                // Dispatch "input" event on the focused element
+                                if (focused_input_node) |fi_node_input| {
+                                    const input_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                                    if (input_pg) |pg| {
+                                        if (pg.js_rt) |*js_rt| {
+                                            _ = events.dispatchEvent(js_rt.ctx, fi_node_input, "input");
+                                            js_rt.executePending();
+                                        }
+                                    }
+                                }
                                 needs_repaint = true;
                             },
                             .ignored => {},
@@ -2226,6 +2281,18 @@ pub fn main() !void {
 
                 nsfb_c.NSFB_EVENT_KEY_UP => {
                     const key = event.value.keycode;
+
+                    // Dispatch "keyup" event on the focused form element
+                    if (focused_input_node) |ku_node| {
+                        const ku_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        if (ku_pg) |pg| {
+                            if (pg.js_rt) |*js_rt| {
+                                _ = events.dispatchKeyboardEvent(js_rt.ctx, ku_node, "keyup", key);
+                                js_rt.executePending();
+                            }
+                        }
+                    }
+
                     if (key == nsfb_c.NSFB_KEY_LSHIFT or key == nsfb_c.NSFB_KEY_RSHIFT) {
                         shift_held = false;
                     }
@@ -2905,6 +2972,16 @@ fn submitForm(
     storage: ?*Storage,
     win_w: i32,
 ) ?[]u8 {
+    // Dispatch "submit" event on the form element (before actual submission)
+    if (page.js_rt) |*js_rt| {
+        const allow = events.dispatchEvent(js_rt.ctx, form_node, "submit");
+        js_rt.executePending();
+        if (!allow) {
+            // preventDefault was called — cancel form submission
+            return null;
+        }
+    }
+
     const form_dn = DomNode{ .lxb_node = form_node };
 
     // Get action URL (default to current page)
