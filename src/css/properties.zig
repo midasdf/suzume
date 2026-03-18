@@ -1,0 +1,839 @@
+const std = @import("std");
+const values = @import("values");
+const ast = @import("ast");
+
+// ── Color Parsing ───────────────────────────────────────────────────
+
+pub fn parseColor(raw: []const u8) ?values.Color {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    if (trimmed[0] == '#') {
+        return parseHexColor(trimmed);
+    }
+
+    if (startsWithIgnoreCase(trimmed, "rgba(")) {
+        return parseRgbaFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "rgb(")) {
+        return parseRgbFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "hsla(")) {
+        return parseHslaFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "hsl(")) {
+        return parseHslFunc(trimmed);
+    }
+
+    return namedColor(trimmed);
+}
+
+fn parseHexColor(hex: []const u8) ?values.Color {
+    const digits = hex[1..];
+    if (digits.len == 3) {
+        const r = hexDigit(digits[0]) orelse return null;
+        const g = hexDigit(digits[1]) orelse return null;
+        const b = hexDigit(digits[2]) orelse return null;
+        return .{ .r = r * 17, .g = g * 17, .b = b * 17, .a = 255 };
+    } else if (digits.len == 4) {
+        const r = hexDigit(digits[0]) orelse return null;
+        const g = hexDigit(digits[1]) orelse return null;
+        const b = hexDigit(digits[2]) orelse return null;
+        const a = hexDigit(digits[3]) orelse return null;
+        return .{ .r = r * 17, .g = g * 17, .b = b * 17, .a = a * 17 };
+    } else if (digits.len == 6) {
+        const r = parseHexByte(digits[0..2]) orelse return null;
+        const g = parseHexByte(digits[2..4]) orelse return null;
+        const b = parseHexByte(digits[4..6]) orelse return null;
+        return .{ .r = r, .g = g, .b = b, .a = 255 };
+    } else if (digits.len == 8) {
+        const r = parseHexByte(digits[0..2]) orelse return null;
+        const g = parseHexByte(digits[2..4]) orelse return null;
+        const b = parseHexByte(digits[4..6]) orelse return null;
+        const a = parseHexByte(digits[6..8]) orelse return null;
+        return .{ .r = r, .g = g, .b = b, .a = a };
+    }
+    return null;
+}
+
+fn hexDigit(c: u8) ?u8 {
+    if (c >= '0' and c <= '9') return c - '0';
+    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+    return null;
+}
+
+fn parseHexByte(s: *const [2]u8) ?u8 {
+    const hi = hexDigit(s[0]) orelse return null;
+    const lo = hexDigit(s[1]) orelse return null;
+    return hi * 16 + lo;
+}
+
+fn extractFuncArgs(text: []const u8) ?[]const u8 {
+    const start = std.mem.indexOf(u8, text, "(") orelse return null;
+    const end = std.mem.lastIndexOf(u8, text, ")") orelse return null;
+    if (start >= end) return null;
+    return text[start + 1 .. end];
+}
+
+fn parseRgbFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var nums: [3]f32 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 3) break;
+        if (tok.len > 0 and tok[tok.len - 1] == '%') {
+            const pct = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return null;
+            nums[count] = pct * 255.0 / 100.0;
+        } else {
+            nums[count] = std.fmt.parseFloat(f32, tok) catch return null;
+        }
+        count += 1;
+    }
+    if (count < 3) return null;
+    return .{
+        .r = clampToU8(nums[0]),
+        .g = clampToU8(nums[1]),
+        .b = clampToU8(nums[2]),
+        .a = 255,
+    };
+}
+
+fn parseRgbaFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var nums: [4]f32 = undefined;
+    var count: usize = 0;
+    var has_pct: [4]bool = .{ false, false, false, false };
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        if (tok.len > 0 and tok[tok.len - 1] == '%') {
+            has_pct[count] = true;
+            nums[count] = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return null;
+        } else {
+            nums[count] = std.fmt.parseFloat(f32, tok) catch return null;
+        }
+        count += 1;
+    }
+    if (count < 4) return null;
+    const r = if (has_pct[0]) nums[0] * 255.0 / 100.0 else nums[0];
+    const g = if (has_pct[1]) nums[1] * 255.0 / 100.0 else nums[1];
+    const b = if (has_pct[2]) nums[2] * 255.0 / 100.0 else nums[2];
+    // Alpha: percentage means /100, otherwise 0.0-1.0
+    const a = if (has_pct[3]) nums[3] * 255.0 / 100.0 else nums[3] * 255.0;
+    return .{
+        .r = clampToU8(r),
+        .g = clampToU8(g),
+        .b = clampToU8(b),
+        .a = clampToU8(a),
+    };
+}
+
+fn hslToRgb(h_deg: f32, s_pct: f32, l_pct: f32) struct { r: u8, g: u8, b: u8 } {
+    const s = std.math.clamp(s_pct / 100.0, 0.0, 1.0);
+    const l = std.math.clamp(l_pct / 100.0, 0.0, 1.0);
+    var h = @mod(h_deg, 360.0);
+    if (h < 0) h += 360.0;
+
+    const c = (1.0 - @abs(2.0 * l - 1.0)) * s;
+    const h_prime = h / 60.0;
+    const x = c * (1.0 - @abs(@mod(h_prime, 2.0) - 1.0));
+    const m = l - c / 2.0;
+
+    var r1: f32 = 0;
+    var g1: f32 = 0;
+    var b1: f32 = 0;
+
+    if (h_prime < 1.0) {
+        r1 = c;
+        g1 = x;
+    } else if (h_prime < 2.0) {
+        r1 = x;
+        g1 = c;
+    } else if (h_prime < 3.0) {
+        g1 = c;
+        b1 = x;
+    } else if (h_prime < 4.0) {
+        g1 = x;
+        b1 = c;
+    } else if (h_prime < 5.0) {
+        r1 = x;
+        b1 = c;
+    } else {
+        r1 = c;
+        b1 = x;
+    }
+
+    return .{
+        .r = @intFromFloat(std.math.clamp((r1 + m) * 255.0 + 0.5, 0.0, 255.0)),
+        .g = @intFromFloat(std.math.clamp((g1 + m) * 255.0 + 0.5, 0.0, 255.0)),
+        .b = @intFromFloat(std.math.clamp((b1 + m) * 255.0 + 0.5, 0.0, 255.0)),
+    };
+}
+
+fn parseHslFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var vals: [3]f32 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", \t");
+    while (iter.next()) |tok| {
+        if (count >= 3) break;
+        const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
+        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
+        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        count += 1;
+    }
+    if (count < 3) return null;
+    const rgb = hslToRgb(vals[0], vals[1], vals[2]);
+    return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b, .a = 255 };
+}
+
+fn parseHslaFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var vals: [4]f32 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
+        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
+        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        count += 1;
+    }
+    if (count < 4) return null;
+    const rgb = hslToRgb(vals[0], vals[1], vals[2]);
+    const alpha_f = if (vals[3] <= 1.0) vals[3] * 255.0 else vals[3];
+    return .{
+        .r = rgb.r,
+        .g = rgb.g,
+        .b = rgb.b,
+        .a = @intFromFloat(std.math.clamp(alpha_f, 0.0, 255.0)),
+    };
+}
+
+fn clampToU8(v: f32) u8 {
+    return @intFromFloat(std.math.clamp(v, 0.0, 255.0));
+}
+
+fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    if (haystack.len < needle.len) return false;
+    for (haystack[0..needle.len], needle) |h, n| {
+        if (toLower(h) != toLower(n)) return false;
+    }
+    return true;
+}
+
+fn toLower(c: u8) u8 {
+    return if (c >= 'A' and c <= 'Z') c + 32 else c;
+}
+
+fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        if (toLower(ca) != toLower(cb)) return false;
+    }
+    return true;
+}
+
+const NamedColorEntry = struct { []const u8, u32 };
+
+const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
+    .{ "transparent", values.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } },
+    .{ "black", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
+    .{ "white", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    .{ "red", values.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } },
+    .{ "green", values.Color{ .r = 0, .g = 128, .b = 0, .a = 255 } },
+    .{ "blue", values.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } },
+    .{ "yellow", values.Color{ .r = 255, .g = 255, .b = 0, .a = 255 } },
+    .{ "orange", values.Color{ .r = 255, .g = 165, .b = 0, .a = 255 } },
+    .{ "purple", values.Color{ .r = 128, .g = 0, .b = 128, .a = 255 } },
+    .{ "pink", values.Color{ .r = 255, .g = 192, .b = 203, .a = 255 } },
+    .{ "cyan", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },
+    .{ "magenta", values.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } },
+    .{ "gray", values.Color{ .r = 128, .g = 128, .b = 128, .a = 255 } },
+    .{ "grey", values.Color{ .r = 128, .g = 128, .b = 128, .a = 255 } },
+    .{ "darkgray", values.Color{ .r = 169, .g = 169, .b = 169, .a = 255 } },
+    .{ "darkgrey", values.Color{ .r = 169, .g = 169, .b = 169, .a = 255 } },
+    .{ "lightgray", values.Color{ .r = 211, .g = 211, .b = 211, .a = 255 } },
+    .{ "lightgrey", values.Color{ .r = 211, .g = 211, .b = 211, .a = 255 } },
+    .{ "navy", values.Color{ .r = 0, .g = 0, .b = 128, .a = 255 } },
+    .{ "teal", values.Color{ .r = 0, .g = 128, .b = 128, .a = 255 } },
+    .{ "olive", values.Color{ .r = 128, .g = 128, .b = 0, .a = 255 } },
+    .{ "maroon", values.Color{ .r = 128, .g = 0, .b = 0, .a = 255 } },
+    .{ "aqua", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },
+    .{ "fuchsia", values.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } },
+    .{ "lime", values.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } },
+    .{ "silver", values.Color{ .r = 192, .g = 192, .b = 192, .a = 255 } },
+    .{ "currentcolor", values.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } }, // sentinel
+});
+
+fn namedColor(name: []const u8) ?values.Color {
+    // StaticStringMap is case-sensitive, so lowercase for lookup
+    var buf: [32]u8 = undefined;
+    if (name.len > buf.len) return null;
+    for (name, 0..) |c, i| {
+        buf[i] = toLower(c);
+    }
+    return named_color_table.get(buf[0..name.len]);
+}
+
+// ── Length Parsing ──────────────────────────────────────────────────
+
+pub fn parseLength(raw: []const u8) ?values.Length {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    // Unitless zero
+    if (std.mem.eql(u8, trimmed, "0")) {
+        return .{ .value = 0, .unit = .px };
+    }
+
+    // Find where the number ends and unit begins
+    var num_end: usize = 0;
+    for (trimmed, 0..) |c, i| {
+        if (c == '-' or c == '+' or c == '.' or (c >= '0' and c <= '9')) {
+            num_end = i + 1;
+        } else {
+            break;
+        }
+    }
+    if (num_end == 0) return null;
+
+    const num_str = trimmed[0..num_end];
+    const unit_str = trimmed[num_end..];
+
+    const number = std.fmt.parseFloat(f32, num_str) catch return null;
+    const unit = parseUnit(unit_str) orelse return null;
+
+    return .{ .value = number, .unit = unit };
+}
+
+fn parseUnit(unit_str: []const u8) ?values.Unit {
+    if (unit_str.len == 0) return null;
+
+    const unit_map = std.StaticStringMap(values.Unit).initComptime(.{
+        .{ "px", .px },
+        .{ "em", .em },
+        .{ "rem", .rem },
+        .{ "vh", .vh },
+        .{ "vw", .vw },
+        .{ "vmin", .vmin },
+        .{ "vmax", .vmax },
+        .{ "pt", .pt },
+        .{ "cm", .cm },
+        .{ "mm", .mm },
+        .{ "in", .in_ },
+        .{ "ch", .ch },
+        .{ "ex", .ex },
+        .{ "%", .percent },
+        .{ "fr", .fr },
+        .{ "deg", .deg },
+        .{ "rad", .rad },
+        .{ "s", .s },
+        .{ "ms", .ms },
+    });
+
+    // Lowercase for lookup
+    var buf: [8]u8 = undefined;
+    if (unit_str.len > buf.len) return null;
+    for (unit_str, 0..) |c, i| {
+        buf[i] = toLower(c);
+    }
+    return unit_map.get(buf[0..unit_str.len]);
+}
+
+// ── var() Parsing ───────────────────────────────────────────────────
+
+pub fn parseVarRef(raw: []const u8) ?values.VarRef {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (!startsWithIgnoreCase(trimmed, "var(")) return null;
+    if (trimmed.len < 5) return null; // var() minimum
+    if (trimmed[trimmed.len - 1] != ')') return null;
+
+    const inner = std.mem.trim(u8, trimmed[4 .. trimmed.len - 1], " \t");
+
+    // Must start with --
+    if (!std.mem.startsWith(u8, inner, "--")) return null;
+
+    // Find comma for fallback
+    // Need to handle nested parens in fallback
+    var paren_depth: usize = 0;
+    var comma_pos: ?usize = null;
+    for (inner, 0..) |c, i| {
+        if (c == '(') {
+            paren_depth += 1;
+        } else if (c == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        } else if (c == ',' and paren_depth == 0) {
+            comma_pos = i;
+            break;
+        }
+    }
+
+    if (comma_pos) |cp| {
+        const name = std.mem.trim(u8, inner[0..cp], " \t");
+        const fallback = std.mem.trim(u8, inner[cp + 1 ..], " \t");
+        return .{ .name = name, .fallback = if (fallback.len > 0) fallback else null };
+    } else {
+        return .{ .name = std.mem.trim(u8, inner, " \t"), .fallback = null };
+    }
+}
+
+// ── Shorthand Expansion ─────────────────────────────────────────────
+
+pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    const trimmed = std.mem.trim(u8, value_raw, " \t\r\n");
+    if (trimmed.len == 0) return null;
+
+    if (std.mem.eql(u8, property_name, "margin")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .margin_top, .name = "margin-top" },
+            .{ .id = .margin_right, .name = "margin-right" },
+            .{ .id = .margin_bottom, .name = "margin-bottom" },
+            .{ .id = .margin_left, .name = "margin-left" },
+        }, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "padding")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .padding_top, .name = "padding-top" },
+            .{ .id = .padding_right, .name = "padding-right" },
+            .{ .id = .padding_bottom, .name = "padding-bottom" },
+            .{ .id = .padding_left, .name = "padding-left" },
+        }, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "border-radius")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .border_radius_top_left, .name = "border-radius-top-left" },
+            .{ .id = .border_radius_top_right, .name = "border-radius-top-right" },
+            .{ .id = .border_radius_bottom_right, .name = "border-radius-bottom-right" },
+            .{ .id = .border_radius_bottom_left, .name = "border-radius-bottom-left" },
+        }, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "border")) {
+        return expandBorder(trimmed, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "background")) {
+        return expandBackground(trimmed, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "flex")) {
+        return expandFlex(trimmed, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "overflow")) {
+        return expandOverflow(trimmed, allocator);
+    }
+    return null;
+}
+
+const PropInfo = struct {
+    id: ast.PropertyId,
+    name: []const u8,
+};
+
+fn expandBoxShorthand(
+    value: []const u8,
+    props: *const [4]PropInfo,
+    allocator: std.mem.Allocator,
+) ?[]ast.Declaration {
+    // Check for CSS-wide keywords
+    if (isCssWideKeyword(value)) {
+        return makeFourDecls(props, value, value, value, value, allocator);
+    }
+
+    var parts: [4][]const u8 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        parts[count] = tok;
+        count += 1;
+    }
+    if (count == 0) return null;
+
+    const top = parts[0];
+    const right_val = if (count >= 2) parts[1] else top;
+    const bottom = if (count >= 3) parts[2] else top;
+    const left_val = if (count >= 4) parts[3] else right_val;
+
+    return makeFourDecls(props, top, right_val, bottom, left_val, allocator);
+}
+
+fn makeFourDecls(
+    props: *const [4]PropInfo,
+    v0: []const u8,
+    v1: []const u8,
+    v2: []const u8,
+    v3: []const u8,
+    allocator: std.mem.Allocator,
+) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 4) catch return null;
+    const vals = [4][]const u8{ v0, v1, v2, v3 };
+    for (props, 0..) |p, i| {
+        decls[i] = .{
+            .property = p.id,
+            .property_name = p.name,
+            .value_raw = vals[i],
+            .important = false,
+        };
+    }
+    return decls;
+}
+
+fn expandBorder(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    if (isCssWideKeyword(value)) {
+        // 12 declarations: width/style/color for all 4 sides
+        const decls = allocator.alloc(ast.Declaration, 12) catch return null;
+        const sides = [4]struct { w: ast.PropertyId, s: ast.PropertyId, c: ast.PropertyId, wn: []const u8, sn: []const u8, cn: []const u8 }{
+            .{ .w = .border_top_width, .s = .border_top_style, .c = .border_top_color, .wn = "border-top-width", .sn = "border-top-style", .cn = "border-top-color" },
+            .{ .w = .border_right_width, .s = .border_right_style, .c = .border_right_color, .wn = "border-right-width", .sn = "border-right-style", .cn = "border-right-color" },
+            .{ .w = .border_bottom_width, .s = .border_bottom_style, .c = .border_bottom_color, .wn = "border-bottom-width", .sn = "border-bottom-style", .cn = "border-bottom-color" },
+            .{ .w = .border_left_width, .s = .border_left_style, .c = .border_left_color, .wn = "border-left-width", .sn = "border-left-style", .cn = "border-left-color" },
+        };
+        for (sides, 0..) |side, i| {
+            decls[i * 3] = .{ .property = side.w, .property_name = side.wn, .value_raw = value, .important = false };
+            decls[i * 3 + 1] = .{ .property = side.s, .property_name = side.sn, .value_raw = value, .important = false };
+            decls[i * 3 + 2] = .{ .property = side.c, .property_name = side.cn, .value_raw = value, .important = false };
+        }
+        return decls;
+    }
+
+    // Parse "width style color" — each part is optional
+    var width: []const u8 = "medium";
+    var style: []const u8 = "none";
+    var color_val: []const u8 = "currentcolor";
+
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (isBorderStyle(tok)) {
+            style = tok;
+        } else if (parseLength(tok) != null) {
+            width = tok;
+        } else {
+            // Assume it's a color
+            color_val = tok;
+        }
+    }
+
+    const decls = allocator.alloc(ast.Declaration, 12) catch return null;
+    const side_names = [4]struct {
+        wid: ast.PropertyId,
+        sty: ast.PropertyId,
+        col: ast.PropertyId,
+        wn: []const u8,
+        sn: []const u8,
+        cn: []const u8,
+    }{
+        .{ .wid = .border_top_width, .sty = .border_top_style, .col = .border_top_color, .wn = "border-top-width", .sn = "border-top-style", .cn = "border-top-color" },
+        .{ .wid = .border_right_width, .sty = .border_right_style, .col = .border_right_color, .wn = "border-right-width", .sn = "border-right-style", .cn = "border-right-color" },
+        .{ .wid = .border_bottom_width, .sty = .border_bottom_style, .col = .border_bottom_color, .wn = "border-bottom-width", .sn = "border-bottom-style", .cn = "border-bottom-color" },
+        .{ .wid = .border_left_width, .sty = .border_left_style, .col = .border_left_color, .wn = "border-left-width", .sn = "border-left-style", .cn = "border-left-color" },
+    };
+
+    for (side_names, 0..) |side, i| {
+        decls[i * 3] = .{ .property = side.wid, .property_name = side.wn, .value_raw = width, .important = false };
+        decls[i * 3 + 1] = .{ .property = side.sty, .property_name = side.sn, .value_raw = style, .important = false };
+        decls[i * 3 + 2] = .{ .property = side.col, .property_name = side.cn, .value_raw = color_val, .important = false };
+    }
+    return decls;
+}
+
+fn isBorderStyle(tok: []const u8) bool {
+    const styles = [_][]const u8{
+        "none", "hidden", "dotted", "dashed", "solid",
+        "double", "groove", "ridge", "inset", "outset",
+    };
+    for (styles) |s| {
+        if (eqlIgnoreCase(tok, s)) return true;
+    }
+    return false;
+}
+
+fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    if (isCssWideKeyword(value)) {
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .background_color, .property_name = "background-color", .value_raw = value, .important = false };
+        return decls;
+    }
+
+    // Try to extract a color from the background shorthand
+    var color_val: []const u8 = value; // fallback: the whole value
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        // Skip url(...) tokens
+        if (startsWithIgnoreCase(tok, "url(")) continue;
+        // Skip known background keywords
+        if (isBackgroundKeyword(tok)) continue;
+        // Try parsing as color
+        if (parseColor(tok) != null) {
+            color_val = tok;
+            break;
+        }
+        // Try parsing as length (could be background-position)
+        if (parseLength(tok) != null) continue;
+    }
+
+    const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+    decls[0] = .{ .property = .background_color, .property_name = "background-color", .value_raw = color_val, .important = false };
+    return decls;
+}
+
+fn isBackgroundKeyword(tok: []const u8) bool {
+    const keywords = [_][]const u8{
+        "no-repeat", "repeat",  "repeat-x", "repeat-y",
+        "cover",     "contain", "center",   "top",
+        "bottom",    "left",    "right",    "fixed",
+        "scroll",    "local",
+    };
+    for (keywords) |kw| {
+        if (eqlIgnoreCase(tok, kw)) return true;
+    }
+    return false;
+}
+
+fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 3) catch return null;
+
+    if (isCssWideKeyword(value)) {
+        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = value, .important = false };
+        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = value, .important = false };
+        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = value, .important = false };
+        return decls;
+    }
+
+    // flex: none → 0 0 auto
+    if (eqlIgnoreCase(value, "none")) {
+        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = "0", .important = false };
+        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "0", .important = false };
+        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "auto", .important = false };
+        return decls;
+    }
+
+    // flex: auto → 1 1 auto
+    if (eqlIgnoreCase(value, "auto")) {
+        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = "1", .important = false };
+        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
+        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "auto", .important = false };
+        return decls;
+    }
+
+    var parts: [3][]const u8 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (count >= 3) break;
+        parts[count] = tok;
+        count += 1;
+    }
+
+    if (count == 1) {
+        // flex: <number> → grow=number, shrink=1, basis=0%
+        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
+        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
+    } else if (count == 2) {
+        // flex: grow shrink
+        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
+        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
+    } else {
+        // flex: grow shrink basis
+        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
+        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[2], .important = false };
+    }
+    return decls;
+}
+
+fn expandOverflow(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+
+    var parts: [2][]const u8 = undefined;
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (count >= 2) break;
+        parts[count] = tok;
+        count += 1;
+    }
+    if (count == 0) return null;
+
+    const x_val = parts[0];
+    const y_val = if (count >= 2) parts[1] else x_val;
+
+    decls[0] = .{ .property = .overflow_x, .property_name = "overflow-x", .value_raw = x_val, .important = false };
+    decls[1] = .{ .property = .overflow_y, .property_name = "overflow-y", .value_raw = y_val, .important = false };
+    return decls;
+}
+
+fn isCssWideKeyword(value: []const u8) bool {
+    return eqlIgnoreCase(value, "inherit") or
+        eqlIgnoreCase(value, "initial") or
+        eqlIgnoreCase(value, "unset") or
+        eqlIgnoreCase(value, "revert");
+}
+
+// ── General Value Parsing ───────────────────────────────────────────
+
+pub fn parseValue(property: ast.PropertyId, raw: []const u8) values.Value {
+    const trimmed = std.mem.trim(u8, raw, " \t\r\n");
+    if (trimmed.len == 0) return .{ .raw = raw };
+
+    // Check for CSS-wide keywords first
+    if (parseCssWideKeyword(trimmed)) |kw| {
+        return .{ .keyword = kw };
+    }
+
+    // Check for var()
+    if (parseVarRef(trimmed)) |vr| {
+        return .{ .var_ref = vr };
+    }
+
+    // Property-specific parsing
+    return switch (property) {
+        // Color properties
+        .color, .background_color, .border_top_color, .border_right_color, .border_bottom_color, .border_left_color => {
+            if (parseColor(trimmed)) |c| return .{ .color = c };
+            if (parseKeyword(trimmed)) |kw| return .{ .keyword = kw };
+            return .{ .raw = trimmed };
+        },
+        // Length properties
+        .width, .height, .min_width, .max_width, .min_height, .max_height, .margin_top, .margin_right, .margin_bottom, .margin_left, .padding_top, .padding_right, .padding_bottom, .padding_left, .border_top_width, .border_right_width, .border_bottom_width, .border_left_width, .border_radius_top_left, .border_radius_top_right, .border_radius_bottom_left, .border_radius_bottom_right, .font_size, .line_height, .letter_spacing, .word_spacing, .text_indent, .top, .right, .bottom, .left, .gap, .row_gap, .column_gap, .flex_basis => {
+            if (parseLength(trimmed)) |l| return .{ .length = l };
+            if (parseKeyword(trimmed)) |kw| return .{ .keyword = kw };
+            if (std.fmt.parseFloat(f32, trimmed)) |n| return .{ .number = n } else |_| {}
+            return .{ .raw = trimmed };
+        },
+        // Numeric properties
+        .flex_grow, .flex_shrink, .opacity, .z_index => {
+            if (std.fmt.parseInt(i32, trimmed, 10)) |n| return .{ .integer = n } else |_| {}
+            if (std.fmt.parseFloat(f32, trimmed)) |n| return .{ .number = n } else |_| {}
+            if (parseKeyword(trimmed)) |kw| return .{ .keyword = kw };
+            return .{ .raw = trimmed };
+        },
+        // Keyword properties
+        .display, .position, .float_, .clear, .box_sizing, .visibility, .text_align, .text_decoration, .text_transform, .white_space, .word_break, .overflow_wrap, .text_overflow, .overflow_x, .overflow_y, .flex_direction, .flex_wrap, .justify_content, .align_items, .align_self, .font_style, .list_style_type, .vertical_align, .border_top_style, .border_right_style, .border_bottom_style, .border_left_style, .background_repeat, .background_size => {
+            if (parseKeyword(trimmed)) |kw| return .{ .keyword = kw };
+            return .{ .raw = trimmed };
+        },
+        // Font weight: number or keyword
+        .font_weight => {
+            if (std.fmt.parseInt(i32, trimmed, 10)) |n| return .{ .integer = n } else |_| {}
+            if (parseKeyword(trimmed)) |kw| return .{ .keyword = kw };
+            return .{ .raw = trimmed };
+        },
+        else => .{ .raw = trimmed },
+    };
+}
+
+fn parseCssWideKeyword(s: []const u8) ?values.Keyword {
+    if (eqlIgnoreCase(s, "inherit")) return .inherit;
+    if (eqlIgnoreCase(s, "initial")) return .initial;
+    if (eqlIgnoreCase(s, "unset")) return .unset;
+    if (eqlIgnoreCase(s, "revert")) return .revert;
+    return null;
+}
+
+fn parseKeyword(s: []const u8) ?values.Keyword {
+    // Check CSS-wide first
+    if (parseCssWideKeyword(s)) |kw| return kw;
+
+    const keyword_map = std.StaticStringMap(values.Keyword).initComptime(.{
+        .{ "none", .none },
+        .{ "auto", .auto },
+        .{ "block", .block },
+        .{ "inline", .inline_ },
+        .{ "inline-block", .inline_block },
+        .{ "flex", .flex },
+        .{ "inline-flex", .inline_flex },
+        .{ "grid", .grid },
+        .{ "inline-grid", .inline_grid },
+        .{ "table", .table },
+        .{ "list-item", .list_item },
+        .{ "table-row", .table_row },
+        .{ "table-cell", .table_cell },
+        .{ "table-row-group", .table_row_group },
+        .{ "table-header-group", .table_header_group },
+        .{ "table-footer-group", .table_footer_group },
+        .{ "table-column", .table_column },
+        .{ "table-column-group", .table_column_group },
+        .{ "table-caption", .table_caption },
+        .{ "hidden", .hidden },
+        .{ "visible", .visible },
+        .{ "collapse", .collapse },
+        .{ "static", .static_ },
+        .{ "relative", .relative },
+        .{ "absolute", .absolute },
+        .{ "fixed", .fixed },
+        .{ "sticky", .sticky },
+        .{ "left", .left },
+        .{ "right", .right },
+        .{ "center", .center },
+        .{ "justify", .justify },
+        .{ "start", .start },
+        .{ "end", .end },
+        .{ "normal", .normal },
+        .{ "nowrap", .nowrap },
+        .{ "pre", .pre },
+        .{ "pre-wrap", .pre_wrap },
+        .{ "pre-line", .pre_line },
+        .{ "break-all", .break_all },
+        .{ "keep-all", .keep_all },
+        .{ "bold", .bold },
+        .{ "bolder", .bolder },
+        .{ "lighter", .lighter },
+        .{ "italic", .italic },
+        .{ "oblique", .oblique },
+        .{ "underline", .underline },
+        .{ "line-through", .line_through },
+        .{ "overline", .overline },
+        .{ "scroll", .scroll },
+        .{ "content-box", .content_box },
+        .{ "border-box", .border_box },
+        .{ "row", .row },
+        .{ "row-reverse", .row_reverse },
+        .{ "column", .column },
+        .{ "column-reverse", .column_reverse },
+        .{ "wrap", .wrap },
+        .{ "wrap-reverse", .wrap_reverse },
+        .{ "flex-start", .flex_start },
+        .{ "flex-end", .flex_end },
+        .{ "space-between", .space_between },
+        .{ "space-around", .space_around },
+        .{ "space-evenly", .space_evenly },
+        .{ "stretch", .stretch },
+        .{ "baseline", .baseline },
+        .{ "solid", .solid },
+        .{ "dashed", .dashed },
+        .{ "dotted", .dotted },
+        .{ "double", .double },
+        .{ "groove", .groove },
+        .{ "ridge", .ridge },
+        .{ "inset", .inset },
+        .{ "outset", .outset },
+        .{ "transparent", .transparent_kw },
+        .{ "currentcolor", .currentcolor },
+        .{ "disc", .disc },
+        .{ "circle", .circle },
+        .{ "square", .square },
+        .{ "decimal", .decimal },
+        .{ "lower-alpha", .lower_alpha },
+        .{ "upper-alpha", .upper_alpha },
+        .{ "lower-roman", .lower_roman },
+        .{ "upper-roman", .upper_roman },
+        .{ "break-word", .break_word },
+        .{ "anywhere", .anywhere },
+        .{ "clip", .clip },
+        .{ "ellipsis", .ellipsis },
+        .{ "uppercase", .uppercase },
+        .{ "lowercase", .lowercase },
+        .{ "capitalize", .capitalize },
+    });
+
+    // Lowercase for lookup
+    var buf: [32]u8 = undefined;
+    if (s.len > buf.len) return null;
+    for (s, 0..) |c, i| {
+        buf[i] = toLower(c);
+    }
+    return keyword_map.get(buf[0..s.len]);
+}
