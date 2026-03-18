@@ -116,25 +116,65 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
     const sw: i32 = @intFromFloat(@max(bbox.width, 0));
     const sh: i32 = @intFromFloat(@max(bbox.height, 0));
 
-    // Top border
-    if (style.border_top_width > 0) {
-        const bw: i32 = @intFromFloat(style.border_top_width);
-        surface.fillRect(sx, sy, sw, bw, Surface.argbToColour(style.border_top_color));
-    }
-    // Bottom border
-    if (style.border_bottom_width > 0) {
-        const bw: i32 = @intFromFloat(style.border_bottom_width);
-        surface.fillRect(sx, sy + sh - bw, sw, bw, Surface.argbToColour(style.border_bottom_color));
-    }
-    // Left border
-    if (style.border_left_width > 0) {
-        const bw: i32 = @intFromFloat(style.border_left_width);
-        surface.fillRect(sx, sy, bw, sh, Surface.argbToColour(style.border_left_color));
-    }
-    // Right border
-    if (style.border_right_width > 0) {
-        const bw: i32 = @intFromFloat(style.border_right_width);
-        surface.fillRect(sx + sw - bw, sy, bw, sh, Surface.argbToColour(style.border_right_color));
+    const has_radius = style.border_radius_tl > 0.5 or style.border_radius_tr > 0.5 or
+        style.border_radius_bl > 0.5 or style.border_radius_br > 0.5;
+
+    if (has_radius) {
+        // For rounded borders: draw a filled rounded rect for border, then a slightly
+        // smaller filled rounded rect for background on top (creating a border effect).
+        // Use the most prominent border color.
+        const border_color = if ((style.border_top_color >> 24) > 0) style.border_top_color
+            else if ((style.border_left_color >> 24) > 0) style.border_left_color
+            else if ((style.border_bottom_color >> 24) > 0) style.border_bottom_color
+            else style.border_right_color;
+        const bw_top: i32 = @intFromFloat(style.border_top_width);
+        const bw_right: i32 = @intFromFloat(style.border_right_width);
+        const bw_bottom: i32 = @intFromFloat(style.border_bottom_width);
+        const bw_left: i32 = @intFromFloat(style.border_left_width);
+
+        if (bw_top > 0 or bw_right > 0 or bw_bottom > 0 or bw_left > 0) {
+            // Outer rounded rect (border)
+            surface.fillRoundedRectPerCorner(sx, sy, sw, sh,
+                @intFromFloat(style.border_radius_tl),
+                @intFromFloat(style.border_radius_tr),
+                @intFromFloat(style.border_radius_bl),
+                @intFromFloat(style.border_radius_br),
+                Surface.argbToColour(border_color));
+            // Inner rounded rect (punch out interior with background or parent color)
+            const inner_x = sx + bw_left;
+            const inner_y = sy + bw_top;
+            const inner_w = sw - bw_left - bw_right;
+            const inner_h = sh - bw_top - bw_bottom;
+            if (inner_w > 0 and inner_h > 0) {
+                const inner_r_tl = @max(@as(i32, @intFromFloat(style.border_radius_tl)) - bw_left, 0);
+                const inner_r_tr = @max(@as(i32, @intFromFloat(style.border_radius_tr)) - bw_right, 0);
+                const inner_r_bl = @max(@as(i32, @intFromFloat(style.border_radius_bl)) - bw_left, 0);
+                const inner_r_br = @max(@as(i32, @intFromFloat(style.border_radius_br)) - bw_right, 0);
+                // Use background color for inner fill (or transparent/dark for the "hole")
+                const bg = if ((style.background_color >> 24) > 0) style.background_color else 0xFF1e1e2e;
+                surface.fillRoundedRectPerCorner(inner_x, inner_y, inner_w, inner_h,
+                    inner_r_tl, inner_r_tr, inner_r_bl, inner_r_br,
+                    Surface.argbToColour(bg));
+            }
+        }
+    } else {
+        // Straight borders (no radius)
+        if (style.border_top_width > 0) {
+            const bw: i32 = @intFromFloat(style.border_top_width);
+            surface.fillRect(sx, sy, sw, bw, Surface.argbToColour(style.border_top_color));
+        }
+        if (style.border_bottom_width > 0) {
+            const bw: i32 = @intFromFloat(style.border_bottom_width);
+            surface.fillRect(sx, sy + sh - bw, sw, bw, Surface.argbToColour(style.border_bottom_color));
+        }
+        if (style.border_left_width > 0) {
+            const bw: i32 = @intFromFloat(style.border_left_width);
+            surface.fillRect(sx, sy, bw, sh, Surface.argbToColour(style.border_left_color));
+        }
+        if (style.border_right_width > 0) {
+            const bw: i32 = @intFromFloat(style.border_right_width);
+            surface.fillRect(sx + sw - bw, sy, bw, sh, Surface.argbToColour(style.border_right_color));
+        }
     }
 }
 
