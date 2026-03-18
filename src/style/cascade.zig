@@ -853,7 +853,6 @@ const CssPropertyRule = struct {
     overflow_wrap: ?ComputedStyle.OverflowWrap = null,
     text_overflow: ?ComputedStyle.TextOverflow = null,
     visibility: ?ComputedStyle.Visibility = null,
-    opacity: ?f32 = null,
 };
 
 /// Parse a CSS color value from text.
@@ -1392,19 +1391,6 @@ fn extractPropertiesFromBody(body: []const u8, rule: *CssPropertyRule, has_any: 
         if (extractPropertyValue(body, to_idx + "text-overflow".len)) |val| {
             rule.text_overflow = parseTextOverflow(val);
             if (rule.text_overflow != null) has_any.* = true;
-        }
-    }
-
-    // opacity
-    if (std.mem.indexOf(u8, body, "opacity")) |op_idx| {
-        const is_plain = (op_idx == 0 or (body[op_idx - 1] != '-' and body[op_idx - 1] != '_'));
-        if (is_plain) {
-            if (extractPropertyValue(body, op_idx + "opacity".len)) |val| {
-                if (std.fmt.parseFloat(f32, std.mem.trim(u8, val, " \t\r\n"))) |op| {
-                    rule.opacity = std.math.clamp(op, 0.0, 1.0);
-                    has_any.* = true;
-                } else |_| {}
-            }
         }
     }
 
@@ -2186,11 +2172,6 @@ fn walkAndSelect(
                             // visibility from CSS rules — always apply (last rule wins)
                             if (rule.visibility) |vis| {
                                 style.visibility = vis;
-                            }
-
-                            // opacity from CSS rules — always apply (last rule wins)
-                            if (rule.opacity) |op| {
-                                style.opacity = op;
                             }
 
                             // text-overflow from CSS rules
