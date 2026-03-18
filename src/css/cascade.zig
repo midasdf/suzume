@@ -200,23 +200,8 @@ pub fn cascade(
     var author_rules: std.ArrayList(FlatRule) = .empty;
     try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena);
 
-    // 6. Extract CSS variables from author rules
-    // TODO(css-variables): Currently all --custom-property definitions are collected into a
-    // single global VarMap (root_vars), regardless of the selector they appear under. This
-    // means element-level scoping (e.g. `.foo { --color: red }` only applying to descendants
-    // of .foo) is not implemented. Proper fix requires propagating a per-element VarMap through
-    // walkAndCompute, merging inherited vars with any new definitions on each element. This is
-    // a fundamental architectural change deferred to a later phase.
+    // 6. Root VarMap (empty — per-element scoping builds VarMaps during walk)
     var root_vars = VarMap.init(arena);
-    for (author_rules.items) |rule| {
-        for (rule.declarations) |decl| {
-            if (decl.property == .custom and decl.property_name.len >= 2 and
-                decl.property_name[0] == '-' and decl.property_name[1] == '-')
-            {
-                root_vars.set(decl.property_name, decl.value_raw) catch {};
-            }
-        }
-    }
 
     // 7. Build rule indices
     var ua_index = try buildFlatRuleIndex(ua_rules.items, arena);
@@ -453,35 +438,61 @@ fn walkAndCompute(
         // Sort by cascade priority
         std.mem.sort(CascadeEntry, entries.items, {}, cascadeEntryLessThan);
 
+        // Build per-element VarMap: collect --* declarations from matching rules.
+        // If this element declares custom properties, create a child VarMap inheriting
+        // from parent. Otherwise, reuse parent VarMap (zero allocation).
+        var element_var_map = var_map;
+        var has_custom_props = false;
+        for (entries.items) |entry| {
+            if (entry.decl.property == .custom and entry.decl.property_name.len >= 2 and
+                entry.decl.property_name[0] == '-' and entry.decl.property_name[1] == '-')
+            {
+                has_custom_props = true;
+                break;
+            }
+        }
+        var child_var_map_storage: VarMap = undefined;
+        if (has_custom_props) {
+            child_var_map_storage = VarMap.init(arena);
+            child_var_map_storage.parent = var_map;
+            for (entries.items) |entry| {
+                if (entry.decl.property == .custom and entry.decl.property_name.len >= 2 and
+                    entry.decl.property_name[0] == '-' and entry.decl.property_name[1] == '-')
+                {
+                    child_var_map_storage.set(entry.decl.property_name, entry.decl.value_raw) catch {};
+                }
+            }
+            element_var_map = &child_var_map_storage;
+        }
+
         // Apply in order (lowest priority first, last write wins for same property)
         const parent_fs = if (parent_style) |ps| ps.font_size_px else 16.0;
         for (entries.items) |entry| {
-            applyDeclaration(&style, entry.decl, var_map, parent_style, parent_fs, vw, vh, arena);
+            applyDeclaration(&style, entry.decl, element_var_map, parent_style, parent_fs, vw, vh, arena);
         }
 
         // Compute ::before pseudo-element style
-        if (computePseudoContent(node, &style, ua_index, author_index, var_map, .before, vw, vh, arena)) |ps| {
+        if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .before, vw, vh, arena)) |ps| {
             style.before_content = ps.content;
             style.before_display = ps.display;
         }
         // Compute ::after pseudo-element style
-        if (computePseudoContent(node, &style, ua_index, author_index, var_map, .after, vw, vh, arena)) |ps| {
+        if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .after, vw, vh, arena)) |ps| {
             style.after_content = ps.content;
             style.after_display = ps.display;
         }
 
         try styles.put(@intFromPtr(node.lxb_node), style);
 
-        // Recurse into children with this node's style as parent.
+        // Recurse into children with this element's VarMap (scoped inheritance).
         // IMPORTANT: pass style by value (stack copy), NOT by HashMap pointer.
-        // HashMap.put() during child processing can rehash and invalidate pointers.
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, &style, styles, ua_index, author_index, var_map, vw, vh, arena);
+            try walkAndCompute(c, &style, styles, ua_index, author_index, element_var_map, vw, vh, arena);
             child = c.nextSibling();
         }
     } else {
-        // Non-element nodes (text, etc.) — recurse
+        // Non-element nodes (text, etc.) — recurse with parent's VarMap
         var child = node.firstChild();
         while (child) |c| {
             try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena);
