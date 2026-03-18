@@ -104,7 +104,7 @@ pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f3
         .left = -9999,
         .right = 99999,
     };
-    paintBox(box, surface, fonts, scroll_y, scroll_x, clip, image_cache);
+    paintBox(box, surface, fonts, scroll_y, scroll_x, clip, image_cache, 1.0);
 }
 
 /// Paint borders around a box.
@@ -200,8 +200,13 @@ fn paintBoxShadow(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f
     }
 }
 
-fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip: ClipRect, image_cache: ?*ImageCache) void {
+fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip: ClipRect, image_cache: ?*ImageCache, accumulated_opacity: f32) void {
     if (clip.isEmpty()) return;
+
+    // Accumulate opacity through the tree (CSS compositing group behavior).
+    // When parent has opacity:0, entire subtree becomes invisible.
+    const effective_opacity = accumulated_opacity * box.style.opacity;
+    if (effective_opacity < 0.01) return; // Skip entire subtree
 
     // Skip painting for visibility: hidden (but still recurse for children
     // which may have visibility: visible)
@@ -256,7 +261,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
                     const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
                     const raw_colour = Surface.argbToColour(bg);
-                    const bg_colour = Surface.applyOpacity(raw_colour, box.style.opacity);
+                    const bg_colour = Surface.applyOpacity(raw_colour, effective_opacity);
 
                     // Use rounded rect if any border-radius is set (per-corner)
                     const has_radius = box.style.border_radius_tl > 0.5 or
@@ -324,19 +329,19 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             if (has_nonzero_z) {
                 // Pass 1: negative z-index
                 for (box.children.items) |child| {
-                    if (child.style.z_index < 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                    if (child.style.z_index < 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
                 }
                 // Pass 2: zero z-index (normal flow)
                 for (box.children.items) |child| {
-                    if (child.style.z_index == 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                    if (child.style.z_index == 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
                 }
                 // Pass 3: positive z-index
                 for (box.children.items) |child| {
-                    if (child.style.z_index > 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                    if (child.style.z_index > 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
                 }
             } else {
                 for (box.children.items) |child| {
-                    paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache);
+                    paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
                 }
             }
         },
@@ -399,7 +404,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             const ibg = box.style.background_color;
             const ialpha = (ibg >> 24) & 0xFF;
             if (ialpha > 0) {
-                const ibg_colour = Surface.applyOpacity(Surface.argbToColour(ibg), box.style.opacity);
+                const ibg_colour = Surface.applyOpacity(Surface.argbToColour(ibg), effective_opacity);
                 for (box.lines.items) |line| {
                     const lx: i32 = @as(i32, @intFromFloat(line.x)) - sx_i;
                     const ly: i32 = @intFromFloat(line.y - scroll_y);
