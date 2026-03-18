@@ -756,9 +756,27 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "collapse")) style.visibility = .collapse;
         },
         .font_size => {
-            if (parseLengthValue(trimmed, parent_fs, vw, vh)) |px| {
-                style.font_size_px = px;
-            }
+            // Handle font-size keywords
+            if (eqlIgnoreCase(trimmed, "xx-small")) { style.font_size_px = 9; }
+            else if (eqlIgnoreCase(trimmed, "x-small")) { style.font_size_px = 10; }
+            else if (eqlIgnoreCase(trimmed, "small")) { style.font_size_px = 13; }
+            else if (eqlIgnoreCase(trimmed, "medium")) { style.font_size_px = 16; }
+            else if (eqlIgnoreCase(trimmed, "large")) { style.font_size_px = 18; }
+            else if (eqlIgnoreCase(trimmed, "x-large")) { style.font_size_px = 24; }
+            else if (eqlIgnoreCase(trimmed, "xx-large")) { style.font_size_px = 32; }
+            else if (eqlIgnoreCase(trimmed, "xxx-large")) { style.font_size_px = 48; }
+            else if (eqlIgnoreCase(trimmed, "smaller")) { style.font_size_px = parent_fs * 0.833; }
+            else if (eqlIgnoreCase(trimmed, "larger")) { style.font_size_px = parent_fs * 1.2; }
+            else if (properties.parseLength(trimmed)) |len| {
+                // Percentage font-size is relative to parent font-size
+                if (len.unit == .percent) {
+                    style.font_size_px = parent_fs * len.value / 100.0;
+                } else {
+                    style.font_size_px = resolveLengthToPx(len.value, len.unit, parent_fs, vw, vh);
+                }
+            } else if (std.fmt.parseFloat(f32, trimmed)) |v| {
+                style.font_size_px = v;
+            } else |_| {}
         },
         .font_weight => {
             if (std.fmt.parseInt(u16, trimmed, 10)) |w| {
