@@ -163,4 +163,93 @@ pub fn build(b: *std.Build) void {
     run_test_dom.addArg("--test-dom");
     const test_dom_step = b.step("test-dom-style", "Run DOM + Style integration test");
     test_dom_step.dependOn(&run_test_dom.step);
+
+    // ── CSS engine tests ──────────────────────────────────────
+    // Individual CSS source modules (needed as named imports by test files)
+    const css_string_pool_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/string_pool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const css_tokenizer_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/tokenizer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const css_ast_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/ast.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const css_values_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/values.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const css_parser_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    css_parser_mod.addImport("tokenizer", css_tokenizer_mod);
+    css_parser_mod.addImport("ast", css_ast_mod);
+
+    const css_properties_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/properties.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    css_properties_mod.addImport("values", css_values_mod);
+    css_properties_mod.addImport("ast", css_ast_mod);
+    css_properties_mod.addImport("string_pool", css_string_pool_mod);
+
+    // Individual test modules (imported by name in test_css_all.zig)
+    const test_string_pool_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_string_pool.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_string_pool_mod.addImport("string_pool", css_string_pool_mod);
+
+    const test_tokenizer_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_tokenizer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_tokenizer_mod.addImport("tokenizer", css_tokenizer_mod);
+
+    const test_parser_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_parser_mod.addImport("parser", css_parser_mod);
+    test_parser_mod.addImport("ast", css_ast_mod);
+
+    const test_properties_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_properties.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_properties_mod.addImport("properties", css_properties_mod);
+    test_properties_mod.addImport("values", css_values_mod);
+    test_properties_mod.addImport("ast", css_ast_mod);
+
+    // Root test module that pulls in all CSS test modules
+    const css_all_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_css_all.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    css_all_test_mod.addImport("test_string_pool", test_string_pool_mod);
+    css_all_test_mod.addImport("test_tokenizer", test_tokenizer_mod);
+    css_all_test_mod.addImport("test_parser", test_parser_mod);
+    css_all_test_mod.addImport("test_properties", test_properties_mod);
+
+    const css_tests = b.addTest(.{
+        .root_module = css_all_test_mod,
+    });
+    const run_css_tests = b.addRunArtifact(css_tests);
+    const test_css_step = b.step("test-css", "Run CSS engine tests");
+    test_css_step.dependOn(&run_css_tests.step);
 }
