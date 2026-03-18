@@ -5,4 +5,5 @@ comptime {
     _ = @import("test_tokenizer");
     _ = @import("test_parser");
     _ = @import("test_properties");
+    _ = @import("test_selectors");
 }
