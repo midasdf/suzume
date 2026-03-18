@@ -354,15 +354,14 @@ pub const Tokenizer = struct {
         if (c == '#') {
             self.advance();
             if (isIdentChar(self.peek()) or self.peek() == '\\') {
-                // consume the ident chars
-                while (isIdentChar(self.peek())) {
-                    self.advance();
-                }
-                // handle escapes in hash
-                if (self.peek() == '\\' and self.peekAt(1) != '\n' and self.peekAt(1) != 0) {
-                    self.consumeEscape();
-                    while (isIdentChar(self.peek())) {
+                // consume ident chars and escapes in a loop (like consumeIdent)
+                while (true) {
+                    if (isIdentChar(self.peek())) {
                         self.advance();
+                    } else if (self.peek() == '\\' and self.peekAt(1) != '\n' and self.peekAt(1) != 0) {
+                        self.consumeEscape();
+                    } else {
+                        break;
                     }
                 }
                 return .{ .type = .hash, .start = start, .len = self.pos - start };

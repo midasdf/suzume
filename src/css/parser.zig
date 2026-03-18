@@ -54,9 +54,9 @@ pub const Parser = struct {
 
     /// Get the source text slice from start position to end position.
     fn sourceSlice(self: *Parser, start: u32, end: u32) []const u8 {
-        const s = @as(usize, start);
-        const e = @as(usize, end);
-        if (e > self.source.len) return self.source[s..];
+        const s = @min(@as(usize, start), self.source.len);
+        const e = @min(@as(usize, end), self.source.len);
+        if (s >= e) return "";
         return self.source[s..e];
     }
 
@@ -242,16 +242,31 @@ pub const Parser = struct {
 
         if (tokens_slice.len >= 2) {
             const last = tokens_slice[tokens_slice.len - 1];
-            const second_last = tokens_slice[tokens_slice.len - 2];
 
-            if (second_last.type == .delim and last.type == .ident) {
-                const bang_text = second_last.text(self.source);
+            // Find the ! token by scanning backwards, skipping whitespace between ! and important
+            if (last.type == .ident) {
                 const imp_text = last.text(self.source);
-                if (std.mem.eql(u8, bang_text, "!") and eqlIgnoreCase(imp_text, "important")) {
-                    important = true;
-                    tokens_slice = tokens_slice[0 .. tokens_slice.len - 2];
-                    while (tokens_slice.len > 0 and tokens_slice[tokens_slice.len - 1].type == .whitespace) {
-                        tokens_slice = tokens_slice[0 .. tokens_slice.len - 1];
+                if (eqlIgnoreCase(imp_text, "important")) {
+                    // Search backwards for the ! delim, skipping whitespace
+                    var bang_idx: ?usize = null;
+                    var j: usize = tokens_slice.len - 2;
+                    while (true) {
+                        if (tokens_slice[j].type == .whitespace) {
+                            if (j == 0) break;
+                            j -= 1;
+                            continue;
+                        }
+                        if (tokens_slice[j].type == .delim and std.mem.eql(u8, tokens_slice[j].text(self.source), "!")) {
+                            bang_idx = j;
+                        }
+                        break;
+                    }
+                    if (bang_idx) |bi| {
+                        important = true;
+                        tokens_slice = tokens_slice[0..bi];
+                        while (tokens_slice.len > 0 and tokens_slice[tokens_slice.len - 1].type == .whitespace) {
+                            tokens_slice = tokens_slice[0 .. tokens_slice.len - 1];
+                        }
                     }
                 }
             }

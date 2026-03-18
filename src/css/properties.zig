@@ -193,17 +193,20 @@ fn parseHslaFunc(text: []const u8) ?values.Color {
     const inner = extractFuncArgs(text) orelse return null;
     var vals: [4]f32 = undefined;
     var count: usize = 0;
+    var alpha_is_percentage = false;
     var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
     while (iter.next()) |tok| {
         if (count >= 4) break;
-        const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
+        const is_pct = tok.len > 0 and tok[tok.len - 1] == '%';
+        if (count == 3 and is_pct) alpha_is_percentage = true;
+        const clean = if (is_pct) tok[0 .. tok.len - 1] else tok;
         const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
         vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
         count += 1;
     }
     if (count < 4) return null;
     const rgb = hslToRgb(vals[0], vals[1], vals[2]);
-    const alpha_f = if (vals[3] <= 1.0) vals[3] * 255.0 else vals[3];
+    const alpha_f = if (alpha_is_percentage) vals[3] * 255.0 / 100.0 else vals[3] * 255.0;
     return .{
         .r = rgb.r,
         .g = rgb.g,
@@ -292,7 +295,9 @@ pub fn parseLength(raw: []const u8) ?values.Length {
     // Find where the number ends and unit begins
     var num_end: usize = 0;
     for (trimmed, 0..) |c, i| {
-        if (c == '-' or c == '+' or c == '.' or (c >= '0' and c <= '9')) {
+        if ((c == '-' or c == '+') and i == 0) {
+            num_end = i + 1;
+        } else if (c == '.' or (c >= '0' and c <= '9')) {
             num_end = i + 1;
         } else {
             break;
@@ -404,10 +409,10 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     }
     if (std.mem.eql(u8, property_name, "border-radius")) {
         return expandBoxShorthand(trimmed, &.{
-            .{ .id = .border_radius_top_left, .name = "border-radius-top-left" },
-            .{ .id = .border_radius_top_right, .name = "border-radius-top-right" },
-            .{ .id = .border_radius_bottom_right, .name = "border-radius-bottom-right" },
-            .{ .id = .border_radius_bottom_left, .name = "border-radius-bottom-left" },
+            .{ .id = .border_radius_top_left, .name = "border-top-left-radius" },
+            .{ .id = .border_radius_top_right, .name = "border-top-right-radius" },
+            .{ .id = .border_radius_bottom_right, .name = "border-bottom-right-radius" },
+            .{ .id = .border_radius_bottom_left, .name = "border-bottom-left-radius" },
         }, allocator);
     }
     if (std.mem.eql(u8, property_name, "border")) {

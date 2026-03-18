@@ -19,7 +19,10 @@ pub const StringPool = struct {
     pub fn intern(self: *StringPool, str: []const u8) []const u8 {
         if (self.strings.getKey(str)) |existing| return existing;
         const owned = self.allocator.dupe(u8, str) catch return str;
-        self.strings.put(self.allocator, owned, {}) catch return str;
+        self.strings.put(self.allocator, owned, {}) catch {
+            self.allocator.free(owned);
+            return str;
+        };
         return owned;
     }
 };
