@@ -485,6 +485,20 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     }
 }
 
+/// Returns true if this element's style creates a new Block Formatting Context.
+/// BFC creators: float != none, position absolute/fixed, certain display values,
+/// overflow != visible.
+fn createsBfc(style: ComputedStyle) bool {
+    if (style.float_ != .none) return true;
+    if (style.position == .absolute or style.position == .fixed) return true;
+    if (style.display == .inline_block or style.display == .flex or
+        style.display == .inline_flex or style.display == .grid or
+        style.display == .inline_grid or style.display == .table or
+        style.display == .table_cell or style.display == .table_caption) return true;
+    if (style.overflow_x != .visible or style.overflow_y != .visible) return true;
+    return false;
+}
+
 /// Layout children in block formatting context (all children are block-level).
 fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
     var child_y: f32 = 0;
@@ -522,8 +536,12 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                     continue;
                 }
 
-                // Margin collapsing: use max of adjacent margins
-                const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
+                // Margin collapsing: BFC elements do not participate in margin collapsing
+                // with their siblings — they use their full margin instead.
+                const collapsed_margin = if (createsBfc(child.style))
+                    prev_margin_bottom + child.margin.top // full margins, no collapsing
+                else
+                    @max(prev_margin_bottom, child.margin.top); // normal collapsing
                 child_y += collapsed_margin;
 
                 // Reset expired float widths — once child_y is past a float's bottom,
@@ -572,7 +590,15 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                     child.content.height +
                     child.padding.bottom + child.border.bottom;
 
-                prev_margin_bottom = child.margin.bottom;
+                // BFC children do not participate in margin collapsing with neighbours.
+                // Emit the bottom margin immediately so it can't collapse with the next
+                // sibling's top margin, then reset the pending margin to zero.
+                if (createsBfc(child.style)) {
+                    child_y += child.margin.bottom;
+                    prev_margin_bottom = 0;
+                } else {
+                    prev_margin_bottom = child.margin.bottom;
+                }
             },
             .inline_text => {
                 // Apply margin collapse for text too
