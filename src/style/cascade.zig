@@ -852,6 +852,7 @@ const CssPropertyRule = struct {
     word_break: ?ComputedStyle.WordBreak = null,
     overflow_wrap: ?ComputedStyle.OverflowWrap = null,
     text_overflow: ?ComputedStyle.TextOverflow = null,
+    visibility: ?ComputedStyle.Visibility = null,
 };
 
 /// Parse a CSS color value from text.
@@ -1424,6 +1425,26 @@ fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !
             }
         }
 
+        // visibility
+        if (std.mem.indexOf(u8, body, "visibility")) |vi_idx| {
+            const is_plain = (vi_idx == 0 or (body[vi_idx - 1] != '-' and body[vi_idx - 1] != '_'));
+            if (is_plain) {
+                if (extractPropertyValue(body, vi_idx + "visibility".len)) |val| {
+                    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+                    if (std.mem.eql(u8, trimmed, "hidden")) {
+                        rule.visibility = .hidden;
+                        has_any = true;
+                    } else if (std.mem.eql(u8, trimmed, "visible")) {
+                        rule.visibility = .visible;
+                        has_any = true;
+                    } else if (std.mem.eql(u8, trimmed, "collapse")) {
+                        rule.visibility = .collapse;
+                        has_any = true;
+                    }
+                }
+            }
+        }
+
         if (has_any) {
             // Store each comma-separated selector
             var sel_iter = std.mem.splitScalar(u8, selector_raw, ',');
@@ -1774,6 +1795,54 @@ fn createInlineSheet(style_text: []const u8) ?*css.css_stylesheet {
 /// to resolve variable references before passing it to LibCSS.
 const CssVarMap = std.StringHashMap([]const u8);
 
+/// Skip CSS comments and string literals when scanning.
+/// Returns the position after the comment/string, or null if not at one.
+fn skipCssCommentOrString(text: []const u8, pos: usize) ?usize {
+    if (pos + 1 < text.len and text[pos] == '/' and text[pos + 1] == '*') {
+        // CSS comment: /* ... */
+        var i = pos + 2;
+        while (i + 1 < text.len) : (i += 1) {
+            if (text[i] == '*' and text[i + 1] == '/') return i + 2;
+        }
+        return text.len; // unterminated comment
+    }
+    if (text[pos] == '"' or text[pos] == '\'') {
+        // CSS string literal
+        const quote = text[pos];
+        var i = pos + 1;
+        while (i < text.len) : (i += 1) {
+            if (text[i] == '\\' and i + 1 < text.len) {
+                i += 1; // skip escaped char
+                continue;
+            }
+            if (text[i] == quote) return i + 1;
+        }
+        return text.len; // unterminated string
+    }
+    return null;
+}
+
+/// Find matching '}' for a '{' at brace_open, handling nested braces,
+/// CSS comments, and string literals correctly.
+fn findMatchingBrace(text: []const u8, brace_open: usize) ?usize {
+    var depth: usize = 1;
+    var i: usize = brace_open + 1;
+    while (i < text.len and depth > 0) {
+        // Skip comments and strings
+        if (skipCssCommentOrString(text, i)) |after| {
+            i = after;
+            continue;
+        }
+        if (text[i] == '{') depth += 1;
+        if (text[i] == '}') {
+            depth -= 1;
+            if (depth == 0) return i;
+        }
+        i += 1;
+    }
+    return null; // unmatched
+}
+
 /// Extract CSS custom property declarations (--name: value) from CSS text.
 /// Focuses on :root, html, *, body blocks (global scope) which covers ~80% of real usage.
 fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssVarMap {
@@ -1789,18 +1858,15 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
 
     var pos: usize = 0;
     while (pos < css_text.len) {
+        // Skip comments between rules
+        if (skipCssCommentOrString(css_text, pos)) |after| {
+            pos = after;
+            continue;
+        }
         // Find next '{'
         const brace_open = std.mem.indexOfScalarPos(u8, css_text, pos, '{') orelse break;
-        // Find matching '}' — handle nested braces (e.g. @media blocks)
-        var depth: usize = 1;
-        var brace_close: usize = brace_open + 1;
-        while (brace_close < css_text.len and depth > 0) : (brace_close += 1) {
-            if (css_text[brace_close] == '{') depth += 1;
-            if (css_text[brace_close] == '}') depth -= 1;
-        }
-        if (depth != 0) break;
-        // brace_close now points one past the '}'
-        brace_close -= 1;
+        // Find matching '}' — handle nested braces, comments, and strings
+        const brace_close = findMatchingBrace(css_text, brace_open) orelse break;
 
         const body = css_text[brace_open + 1 .. brace_close];
 
@@ -1815,6 +1881,12 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
             }
             if (body_pos >= body.len) break;
 
+            // Skip CSS comments inside rule bodies
+            if (skipCssCommentOrString(body, body_pos)) |after| {
+                body_pos = after;
+                continue;
+            }
+
             // Check if this is a custom property declaration (starts with --)
             if (body_pos + 2 < body.len and body[body_pos] == '-' and body[body_pos + 1] == '-') {
                 // Find the property name (up to ':')
@@ -1826,18 +1898,22 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
                 };
                 const name = std.mem.trim(u8, body[name_start..colon], " \t");
 
-                // Find the value (up to ';' or '}')
-                // Handle values with nested parens (e.g. rgb(...), calc(...))
+                // Find the value (up to ';' or '}'), skipping comments and strings
                 const val_start = colon + 1;
                 var val_end = val_start;
                 var paren_depth: usize = 0;
-                while (val_end < body.len) : (val_end += 1) {
+                while (val_end < body.len) {
+                    if (skipCssCommentOrString(body, val_end)) |after| {
+                        val_end = after;
+                        continue;
+                    }
                     if (body[val_end] == '(') paren_depth += 1;
                     if (body[val_end] == ')') {
                         if (paren_depth > 0) paren_depth -= 1;
                     }
                     if (body[val_end] == ';' and paren_depth == 0) break;
                     if (body[val_end] == '}' and paren_depth == 0) break;
+                    val_end += 1;
                 }
                 const value = std.mem.trim(u8, body[val_start..val_end], " \t\r\n");
 
@@ -1853,9 +1929,13 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
 
                 body_pos = if (val_end < body.len and body[val_end] == ';') val_end + 1 else val_end;
             } else {
-                // Skip to next ';' or nested block
+                // Skip to next ';' or nested block, respecting comments/strings
                 var skip_depth: usize = 0;
-                while (body_pos < body.len) : (body_pos += 1) {
+                while (body_pos < body.len) {
+                    if (skipCssCommentOrString(body, body_pos)) |after| {
+                        body_pos = after;
+                        continue;
+                    }
                     if (body[body_pos] == '{') skip_depth += 1;
                     if (body[body_pos] == '}') {
                         if (skip_depth > 0) {
@@ -1866,6 +1946,7 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
                         body_pos += 1;
                         break;
                     }
+                    body_pos += 1;
                 }
             }
         }
@@ -2083,6 +2164,11 @@ fn walkAndSelect(
                                 if (style.overflow_wrap == .normal) style.overflow_wrap = ow;
                             }
 
+                            // visibility from CSS rules
+                            if (rule.visibility) |vis| {
+                                style.visibility = vis;
+                            }
+
                             // text-overflow from CSS rules
                             if (rule.text_overflow) |to| {
                                 if (style.text_overflow == .clip) style.text_overflow = to;
@@ -2215,6 +2301,23 @@ fn walkAndSelect(
                                 }
                             }
                         }
+
+                        // visibility from inline style
+                        if (std.mem.indexOf(u8, style_attr, "visibility")) |vi_idx| {
+                            const is_plain = (vi_idx == 0 or (style_attr[vi_idx - 1] != '-' and style_attr[vi_idx - 1] != '_'));
+                            if (is_plain) {
+                                if (extractPropertyValue(style_attr, vi_idx + "visibility".len)) |val| {
+                                    const trimmed_vis = std.mem.trim(u8, val, " \t\r\n");
+                                    if (std.mem.eql(u8, trimmed_vis, "hidden")) {
+                                        style.visibility = .hidden;
+                                    } else if (std.mem.eql(u8, trimmed_vis, "visible")) {
+                                        style.visibility = .visible;
+                                    } else if (std.mem.eql(u8, trimmed_vis, "collapse")) {
+                                        style.visibility = .collapse;
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     try styles.put(@intFromPtr(node.lxb_node), style);
@@ -2274,17 +2377,7 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
     defer allocator.free(css_text);
 
     // 4.5. Resolve CSS custom properties (var() references)
-    // Skip var() resolution for very large CSS (>512KB) to prevent OOM on low-memory devices
-    // TODO: fix double-free in var() resolution with large CSS
-    // Disabled until memory bug is resolved
-    const max_css_for_var_resolution: usize = 128 * 1024; // 128KB safe limit
-    if (css_text.len > max_css_for_var_resolution) {
-        std.debug.print("[CSS] Skipping var() resolution: CSS too large ({d}KB)\n", .{css_text.len / 1024});
-    }
-    var css_vars = if (css_text.len <= max_css_for_var_resolution)
-        try extractCssVariables(css_text, allocator)
-    else
-        CssVarMap.init(allocator);
+    var css_vars = try extractCssVariables(css_text, allocator);
     defer {
         var vit = css_vars.iterator();
         while (vit.next()) |entry| {
@@ -2294,7 +2387,7 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
         css_vars.deinit();
     }
 
-    const resolved_css = if (std.mem.indexOf(u8, css_text, "var(") != null)
+    const resolved_css = if (css_vars.count() > 0 and std.mem.indexOf(u8, css_text, "var(") != null)
         try resolveCssVariables(css_text, &css_vars, allocator)
     else
         try allocator.dupe(u8, css_text);

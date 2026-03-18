@@ -93,7 +93,9 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     }
 
     // Check if wrapping is enabled
-    const wrapping = style.flex_wrap == .wrap or style.flex_wrap == .wrap_reverse;
+    // Grid→flex fallback always wraps (grid items should wrap to form columns/rows)
+    const wrapping = style.flex_wrap == .wrap or style.flex_wrap == .wrap_reverse or
+        style.display == .grid or style.display == .inline_grid;
 
     if (!wrapping) {
         // === NOWRAP path (original behavior) ===

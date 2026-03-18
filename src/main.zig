@@ -1112,7 +1112,16 @@ fn extractTitle(doc: *Document) ?[]const u8 {
 }
 
 pub fn main() !void {
-    const allocator = std.heap.c_allocator;
+    // Use GeneralPurposeAllocator in debug mode for double-free / use-after-free detection.
+    // In release mode, use c_allocator for performance.
+    var gpa: std.heap.GeneralPurposeAllocator(.{
+        .stack_trace_frames = if (@import("builtin").mode == .Debug) 8 else 0,
+        .safety = (@import("builtin").mode == .Debug),
+    }) = .init;
+    defer if (@import("builtin").mode == .Debug) {
+        _ = gpa.deinit();
+    };
+    const allocator = if (@import("builtin").mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
     // Parse arguments
     var args = std.process.args();

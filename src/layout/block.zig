@@ -267,8 +267,11 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 
 /// Layout a block box with viewport height for resolving percent heights.
 pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, viewport_height: f32) void {
-    // Delegate to flex layout if display is flex
-    if (box.style.display == .flex or box.style.display == .inline_flex) {
+    // Delegate to flex layout if display is flex or grid
+    // Grid falls back to flex row with wrap — gives reasonable multi-column layout
+    if (box.style.display == .flex or box.style.display == .inline_flex or
+        box.style.display == .grid or box.style.display == .inline_grid)
+    {
         flex.layoutFlex(box, containing_width, cursor_y, fonts);
         return;
     }
@@ -513,11 +516,19 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
                 child_y += collapsed_margin;
 
-                // Available width considering floats
-                const avail_width = if (child_y < float_left_bottom or child_y < float_right_bottom)
-                    @max(box.content.width - float_left_width - float_right_width, 0)
-                else
-                    box.content.width;
+                // Reset expired float widths — once child_y is past a float's bottom,
+                // that float no longer constrains subsequent content
+                if (child_y >= float_left_bottom) {
+                    float_left_width = 0;
+                }
+                if (child_y >= float_right_bottom) {
+                    float_right_width = 0;
+                }
+
+                // Available width considering active floats
+                const active_left_w = if (child_y < float_left_bottom) float_left_width else 0;
+                const active_right_w = if (child_y < float_right_bottom) float_right_width else 0;
+                const avail_width = @max(box.content.width - active_left_w - active_right_w, 0);
 
                 layoutBlock(child, avail_width, box.content.y + child_y, fonts);
 
