@@ -208,9 +208,13 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                 var type_len: usize = 0;
                 const type_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
                 if (type_ptr != null and type_len > 0) {
-                    if (std.mem.eql(u8, type_ptr.?[0..type_len], "module")) {
-                        return;
-                    }
+                    const script_type = type_ptr.?[0..type_len];
+                    // Only execute scripts with type="" (default), "text/javascript",
+                    // or "application/javascript". Skip everything else (module, json, etc.)
+                    const is_js = script_type.len == 0 or
+                        std.mem.eql(u8, script_type, "text/javascript") or
+                        std.mem.eql(u8, script_type, "application/javascript");
+                    if (!is_js) return;
                 }
 
                 // Skip scripts with nomodule attribute

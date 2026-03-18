@@ -319,6 +319,27 @@ fn jsPerformanceNow(
     return qjs.JS_NewFloat64(c, elapsed);
 }
 
+/// No-op stub for unimplemented Web APIs that should silently succeed.
+fn jsNoOp(
+    _: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return quickjs.JS_UNDEFINED();
+}
+
+/// Return an empty JS array (for performance.getEntriesByName etc.)
+fn jsReturnEmptyArray(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewArray(c);
+}
+
 // ── atob() / btoa() ─────────────────────────────────────────────────
 
 const b64_encode_table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -586,9 +607,15 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "requestAnimationFrame", qjs.JS_NewCFunction(ctx, &jsRequestAnimationFrame, "requestAnimationFrame", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "cancelAnimationFrame", qjs.JS_NewCFunction(ctx, &jsClearTimeout, "cancelAnimationFrame", 1));
 
-    // -- performance.now() --
+    // -- performance object --
     const perf_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "now", qjs.JS_NewCFunction(ctx, &jsPerformanceNow, "now", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "mark", qjs.JS_NewCFunction(ctx, &jsNoOp, "mark", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "measure", qjs.JS_NewCFunction(ctx, &jsNoOp, "measure", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "clearMarks", qjs.JS_NewCFunction(ctx, &jsNoOp, "clearMarks", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "clearMeasures", qjs.JS_NewCFunction(ctx, &jsNoOp, "clearMeasures", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "getEntriesByName", qjs.JS_NewCFunction(ctx, &jsReturnEmptyArray, "getEntriesByName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "getEntriesByType", qjs.JS_NewCFunction(ctx, &jsReturnEmptyArray, "getEntriesByType", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "performance", perf_obj);
 
     // -- atob() / btoa() --
@@ -600,4 +627,21 @@ pub fn registerWebApis(js_rt: anytype) void {
 
     // -- queueMicrotask, structuredClone (JS-based) --
     evalInitScript(ctx, utility_apis_js, utility_apis_js.len);
+
+    // -- Stub Web APIs for compatibility --
+    const compat_stubs =
+        \\function Image(w,h){this.width=w||0;this.height=h||0;this.src='';this.onload=null;this.onerror=null;}
+        \\if(typeof customElements==='undefined'){
+        \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
+        \\}
+        \\if(typeof HTMLElement==='undefined'){globalThis.HTMLElement=function(){};}
+        \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(){this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
+        \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(){this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
+        \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(){this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
+        \\if(typeof matchMedia==='undefined'){globalThis.matchMedia=function(q){return{matches:false,media:q,addEventListener:function(){},removeEventListener:function(){}};};}
+        \\if(typeof getComputedStyle==='undefined'){globalThis.getComputedStyle=function(el){return new Proxy({},{get:function(_,p){return'';}});};}
+        \\if(typeof requestIdleCallback==='undefined'){globalThis.requestIdleCallback=function(cb){return setTimeout(cb,1);};}
+        \\if(typeof cancelIdleCallback==='undefined'){globalThis.cancelIdleCallback=function(id){clearTimeout(id);};}
+    ;
+    evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
