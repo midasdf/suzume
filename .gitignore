@@ -5,3 +5,6 @@ zig-cache/
 *.a
 .DS_Store
 /main
+
+sysroot-aarch64/
+suzume-sysroot/

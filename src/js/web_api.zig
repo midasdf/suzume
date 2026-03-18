@@ -448,23 +448,29 @@ fn jsAtob(
 const url_class_js =
     \\globalThis.URL = function URL(url, base) {
     \\  if (!(this instanceof URL)) throw new TypeError("Constructor URL requires 'new'");
+    \\  if (typeof url !== "string") url = String(url);
     \\  if (base !== undefined) {
-    \\    // Resolve relative URL against base
-    \\    var b = new URL(base);
-    \\    if (url.indexOf("://") !== -1) {
-    \\      // url is absolute, ignore base
-    \\    } else if (url.charAt(0) === "/") {
-    \\      url = b.origin + url;
-    \\    } else {
-    \\      var path = b.pathname;
-    \\      var lastSlash = path.lastIndexOf("/");
-    \\      url = b.origin + path.substring(0, lastSlash + 1) + url;
+    \\    if (typeof base !== "string") base = String(base);
+    \\    if (url.indexOf("://") === -1) {
+    \\      var protoE = base.indexOf("://");
+    \\      if (protoE !== -1) {
+    \\        var baseRest = base.substring(protoE + 3);
+    \\        var basePathI = baseRest.indexOf("/");
+    \\        var baseOrigin = base.substring(0, protoE + 3) + (basePathI !== -1 ? baseRest.substring(0, basePathI) : baseRest);
+    \\        if (url.charAt(0) === "/") {
+    \\          url = baseOrigin + url;
+    \\        } else {
+    \\          var basePath = basePathI !== -1 ? baseRest.substring(basePathI) : "/";
+    \\          var lastSlash = basePath.lastIndexOf("/");
+    \\          url = baseOrigin + basePath.substring(0, lastSlash + 1) + url;
+    \\        }
+    \\      }
     \\    }
     \\  }
     \\  this.href = url;
     \\  // Parse protocol
     \\  var protoEnd = url.indexOf("://");
-    \\  if (protoEnd === -1) throw new TypeError("Invalid URL: " + url);
+    \\  if (protoEnd === -1) { this.protocol = ""; this.hostname = ""; this.host = ""; this.port = ""; this.pathname = url; this.search = ""; this.hash = ""; this.origin = ""; this.searchParams = {get:function(){return null;},has:function(){return false;},toString:function(){return "";}}; return; }
     \\  this.protocol = url.substring(0, protoEnd + 1);
     \\  var rest = url.substring(protoEnd + 3);
     \\  // Parse hash
