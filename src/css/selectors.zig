@@ -279,11 +279,15 @@ const SelectorParser = struct {
                 continue;
             }
 
-            // Pseudo-class
+            // Pseudo-class or pseudo-element
             if (c == ':') {
                 self.advance();
-                // Skip :: for pseudo-elements (treat as pseudo-class for now)
-                if (self.peek() == ':') self.advance();
+                // :: pseudo-elements: don't match against regular elements
+                if (self.peek() == ':') {
+                    // Pseudo-element selector — return null to skip this rule entirely
+                    // (::before, ::after, ::-webkit-scrollbar, etc.)
+                    return null;
+                }
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
                 if (PseudoClass.fromString(name)) |pc| {
