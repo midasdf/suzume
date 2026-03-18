@@ -1326,9 +1326,13 @@ fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
         parts[2] = std.mem.trim(u8, inner[part_start..], " \t");
     } else return null;
 
-    const min_val = parseLengthValue(parts[0], font_size, vw, vh) orelse return null;
-    const pref_val = parseLengthValue(parts[1], font_size, vw, vh) orelse return null;
-    const max_val = parseLengthValue(parts[2], font_size, vw, vh) orelse return null;
+    // Use parseCalcExpr for each part to handle expressions like "1.08rem + 3.92vw"
+    const min_val = parseCalcExpr(parts[0], font_size, vw, vh) orelse
+        (parseLengthValue(parts[0], font_size, vw, vh) orelse return null);
+    const pref_val = parseCalcExpr(parts[1], font_size, vw, vh) orelse
+        (parseLengthValue(parts[1], font_size, vw, vh) orelse return null);
+    const max_val = parseCalcExpr(parts[2], font_size, vw, vh) orelse
+        (parseLengthValue(parts[2], font_size, vw, vh) orelse return null);
 
     return std.math.clamp(pref_val, min_val, max_val);
 }
@@ -1354,45 +1358,72 @@ fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool) ?f
     if (split_pos) |sp| {
         const a_str = std.mem.trim(u8, inner[0..sp], " \t");
         const b_str = std.mem.trim(u8, inner[sp + 1 ..], " \t");
-        const a = parseLengthValue(a_str, font_size, vw, vh) orelse return null;
-        const b = parseLengthValue(b_str, font_size, vw, vh) orelse return null;
+        const a = parseCalcExpr(a_str, font_size, vw, vh) orelse
+            (parseLengthValue(a_str, font_size, vw, vh) orelse return null);
+        const b = parseCalcExpr(b_str, font_size, vw, vh) orelse
+            (parseLengthValue(b_str, font_size, vw, vh) orelse return null);
         return if (is_min) @min(a, b) else @max(a, b);
     }
-    return parseLengthValue(inner, font_size, vw, vh);
+    return parseCalcExpr(inner, font_size, vw, vh) orelse
+        parseLengthValue(inner, font_size, vw, vh);
 }
 
 fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
-    // Simple calc: calc(100vh - 300px), calc(50% + 10px)
     const start = 5; // "calc(".len
     var end = s.len;
     if (end > 0 and s[end - 1] == ')') end -= 1;
     const inner = std.mem.trim(u8, s[start..end], " \t");
+    return parseCalcExpr(inner, font_size, vw, vh);
+}
 
-    // Look for + or - operator (with spaces around it)
-    if (std.mem.indexOf(u8, inner, " + ")) |op_pos| {
-        const left_s = std.mem.trim(u8, inner[0..op_pos], " \t");
-        const right_s = std.mem.trim(u8, inner[op_pos + 3 ..], " \t");
-        const l = parseLengthValue(left_s, font_size, vw, vh) orelse return null;
-        const r = parseLengthValue(right_s, font_size, vw, vh) orelse return null;
-        return l + r;
+/// Parse a calc expression with correct operator precedence.
+/// + and - are lowest priority (split last), * and / are higher.
+fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+    // Find the LAST + or - at top level (not inside parens)
+    // This gives correct left-to-right associativity for same-priority ops
+    // and ensures * / bind tighter than + -
+    var paren_depth: usize = 0;
+    var last_add_sub: ?usize = null;
+    var last_mul_div: ?usize = null;
+
+    var i: usize = 0;
+    while (i < expr.len) {
+        const c = expr[i];
+        if (c == '(') { paren_depth += 1; i += 1; continue; }
+        if (c == ')') { if (paren_depth > 0) paren_depth -= 1; i += 1; continue; }
+        if (paren_depth == 0) {
+            // CSS calc requires spaces around + and -
+            if (i > 0 and i + 1 < expr.len and expr[i - 1] == ' ' and expr[i + 1] == ' ') {
+                if (c == '+' or c == '-') last_add_sub = i;
+            }
+            // * and / don't require spaces in CSS calc
+            if (c == '*' or c == '/') {
+                if (i > 0 and i + 1 < expr.len) last_mul_div = i;
+            }
+        }
+        i += 1;
     }
-    if (std.mem.indexOf(u8, inner, " - ")) |op_pos| {
-        const left_s = std.mem.trim(u8, inner[0..op_pos], " \t");
-        const right_s = std.mem.trim(u8, inner[op_pos + 3 ..], " \t");
-        const l = parseLengthValue(left_s, font_size, vw, vh) orelse return null;
-        const r = parseLengthValue(right_s, font_size, vw, vh) orelse return null;
-        return l - r;
+
+    // Split at lowest-priority operator first (+ or -)
+    if (last_add_sub) |pos| {
+        const left = std.mem.trim(u8, expr[0 .. pos - 1], " \t");
+        const right = std.mem.trim(u8, expr[pos + 2 ..], " \t");
+        const l = parseCalcExpr(left, font_size, vw, vh) orelse return null;
+        const r = parseCalcExpr(right, font_size, vw, vh) orelse return null;
+        return if (expr[pos] == '+') l + r else l - r;
     }
-    // Look for * operator
-    if (std.mem.indexOf(u8, inner, " * ")) |op_pos| {
-        const left_s = std.mem.trim(u8, inner[0..op_pos], " \t");
-        const right_s = std.mem.trim(u8, inner[op_pos + 3 ..], " \t");
-        const l = parseLengthValue(left_s, font_size, vw, vh) orelse return null;
-        const r = parseLengthValue(right_s, font_size, vw, vh) orelse return null;
-        return l * r;
+
+    // Then * or /
+    if (last_mul_div) |pos| {
+        const left = std.mem.trim(u8, expr[0..pos], " \t");
+        const right = std.mem.trim(u8, expr[pos + 1 ..], " \t");
+        const l = parseCalcExpr(left, font_size, vw, vh) orelse return null;
+        const r = parseCalcExpr(right, font_size, vw, vh) orelse return null;
+        return if (expr[pos] == '*') l * r else if (r != 0) l / r else null;
     }
-    // No operator -- just a single value
-    return parseLengthValue(inner, font_size, vw, vh);
+
+    // No operator — single value (or nested function like clamp/min/max)
+    return parseLengthValue(expr, font_size, vw, vh);
 }
 
 fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh: f32) f32 {
@@ -1485,6 +1516,26 @@ fn parseGridTemplate(s: []const u8, alloc: std.mem.Allocator) ?[]const ComputedS
 fn parseOneTrack(t: []const u8) ?ComputedStyle.GridTrackSize {
     if (eqlIgnoreCase(t, "auto")) return .auto;
     if (eqlIgnoreCase(t, "min-content") or eqlIgnoreCase(t, "max-content")) return .auto;
+    // Handle minmax(min, max) — use max value for sizing
+    if (std.mem.startsWith(u8, t, "minmax(")) {
+        const start = 7;
+        var end = t.len;
+        if (end > 0 and t[end - 1] == ')') end -= 1;
+        const inner = t[start..end];
+        // Find comma separating min and max (respect nested parens)
+        var pdepth: usize = 0;
+        var comma: ?usize = null;
+        for (inner, 0..) |c, i| {
+            if (c == '(') pdepth += 1;
+            if (c == ')') { if (pdepth > 0) pdepth -= 1; }
+            if (c == ',' and pdepth == 0) { comma = i; break; }
+        }
+        if (comma) |cp| {
+            const max_str = std.mem.trim(u8, inner[cp + 1 ..], " \t");
+            return parseOneTrack(max_str); // recurse to parse the max value
+        }
+        return .auto;
+    }
     if (std.mem.endsWith(u8, t, "fr")) {
         if (std.fmt.parseFloat(f32, t[0 .. t.len - 2])) |v| return .{ .fr = v } else |_| {}
     }
