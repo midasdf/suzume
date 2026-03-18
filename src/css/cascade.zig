@@ -1113,12 +1113,53 @@ fn applyDeclaration(
                 style.content = trimmed;
             }
         },
+        .transform => {
+            parseTransform(trimmed, &style.transform_translate_x, &style.transform_translate_y, fs, vw, vh);
+        },
         // Skip border-style — we don't track it but it's needed for border-width to display
         .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},
         // Skip custom properties (already extracted)
         .custom => {},
         // Skip unknown
         else => {},
+    }
+}
+
+fn parseTransform(s: []const u8, tx: *f32, ty: *f32, font_size: f32, vw: f32, vh: f32) void {
+    if (eqlIgnoreCase(s, "none")) {
+        tx.* = 0;
+        ty.* = 0;
+        return;
+    }
+    var pos: usize = 0;
+    while (pos < s.len) {
+        if (std.mem.indexOfPos(u8, s, pos, "translateX(")) |idx| {
+            const start = idx + "translateX(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t");
+            if (parseLengthValue(val, font_size, vw, vh)) |px| tx.* = px;
+            pos = end + 1;
+        } else if (std.mem.indexOfPos(u8, s, pos, "translateY(")) |idx| {
+            const start = idx + "translateY(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t");
+            if (parseLengthValue(val, font_size, vw, vh)) |px| ty.* = px;
+            pos = end + 1;
+        } else if (std.mem.indexOfPos(u8, s, pos, "translate(")) |idx| {
+            const start = idx + "translate(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const inner = std.mem.trim(u8, s[start..end], " \t");
+            if (std.mem.indexOfScalar(u8, inner, ',')) |comma| {
+                const x_str = std.mem.trim(u8, inner[0..comma], " \t");
+                const y_str = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+                if (parseLengthValue(x_str, font_size, vw, vh)) |px| tx.* = px;
+                if (parseLengthValue(y_str, font_size, vw, vh)) |px| ty.* = px;
+            } else {
+                // Single value — translateX only
+                if (parseLengthValue(inner, font_size, vw, vh)) |px| tx.* = px;
+            }
+            pos = end + 1;
+        } else break;
     }
 }
 

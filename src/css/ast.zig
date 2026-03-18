@@ -98,6 +98,8 @@ pub const PropertyId = enum(u16) {
     // Shadows
     box_shadow,
     text_shadow,
+    // Transforms
+    transform,
     // Content
     content,
     // Custom property
@@ -194,6 +196,7 @@ pub const PropertyId = enum(u16) {
         .{ "grid-row-end", .grid_row_end },
         .{ "box-shadow", .box_shadow },
         .{ "text-shadow", .text_shadow },
+        .{ "transform", .transform },
         .{ "content", .content },
     });
 
