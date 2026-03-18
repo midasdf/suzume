@@ -27,8 +27,8 @@ pub const VarMap = struct {
         self.vars.deinit(self.allocator);
     }
 
-    pub fn set(self: *VarMap, name: []const u8, value: []const u8) void {
-        self.vars.put(self.allocator, name, value) catch {};
+    pub fn set(self: *VarMap, name: []const u8, value: []const u8) !void {
+        try self.vars.put(self.allocator, name, value);
     }
 
     /// Look up a variable by name, walking the parent chain.

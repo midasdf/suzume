@@ -201,7 +201,7 @@ pub fn cascade(
             if (decl.property == .custom and decl.property_name.len >= 2 and
                 decl.property_name[0] == '-' and decl.property_name[1] == '-')
             {
-                root_vars.set(decl.property_name, decl.value_raw);
+                root_vars.set(decl.property_name, decl.value_raw) catch {};
             }
         }
     }

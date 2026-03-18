@@ -143,8 +143,9 @@ fn evaluateCondition(cond: []const u8, vw: f32, vh: f32) bool {
     if (eqlIgnoreCase(prop, "max-width")) return vw <= px_val;
     if (eqlIgnoreCase(prop, "min-height")) return vh >= px_val;
     if (eqlIgnoreCase(prop, "max-height")) return vh <= px_val;
-    if (eqlIgnoreCase(prop, "width")) return vw == px_val;
-    if (eqlIgnoreCase(prop, "height")) return vh == px_val;
+    const eps: f32 = 0.5; // half pixel is close enough for exact viewport queries
+    if (eqlIgnoreCase(prop, "width")) return @abs(vw - px_val) < eps;
+    if (eqlIgnoreCase(prop, "height")) return @abs(vh - px_val) < eps;
 
     // Unknown condition — fail-open
     return true;

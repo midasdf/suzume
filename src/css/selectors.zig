@@ -88,7 +88,7 @@ pub const Specificity = struct {
     c: u16 = 0, // type selectors, pseudo-elements
 
     pub fn toU32(self: Specificity) u32 {
-        return (@as(u32, self.a) << 16) | (@as(u32, self.b) << 8) | @as(u32, self.c);
+        return (@as(u32, self.a) << 20) | (@as(u32, self.b & 0x3FF) << 10) | @as(u32, self.c & 0x3FF);
     }
 
     pub fn order(a_spec: Specificity, b_spec: Specificity) std.math.Order {
@@ -413,7 +413,7 @@ pub fn parseSelector(source: []const u8, allocator: std.mem.Allocator) ?ParsedSe
 
 pub fn parseSelectorList(source: []const u8, allocator: std.mem.Allocator) []ParsedSelector {
     var selectors = std.ArrayList(ParsedSelector).init(allocator);
-    defer selectors.deinit();
+    errdefer selectors.deinit();
 
     // Split by comma
     var start: usize = 0;
