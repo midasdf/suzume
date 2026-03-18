@@ -2188,9 +2188,9 @@ fn walkAndSelect(
                                 style.visibility = vis;
                             }
 
-                            // opacity from CSS rules
+                            // opacity from CSS rules — always apply (last rule wins)
                             if (rule.opacity) |op| {
-                                if (style.opacity == 1.0) style.opacity = op;
+                                style.opacity = op;
                             }
 
                             // text-overflow from CSS rules
