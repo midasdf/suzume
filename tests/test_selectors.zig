@@ -1,5 +1,5 @@
 const std = @import("std");
-const selectors = @import("selectors");
+const selectors = @import("css").selectors;
 
 const SimpleSelector = selectors.SimpleSelector;
 const Combinator = selectors.Combinator;

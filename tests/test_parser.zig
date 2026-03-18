@@ -1,6 +1,7 @@
 const std = @import("std");
-const Parser = @import("parser").Parser;
-const ast = @import("ast");
+const css_engine = @import("css");
+const Parser = css_engine.parser.Parser;
+const ast = css_engine.ast;
 
 test "parse simple rule" {
     const css = "div { color: red; }";

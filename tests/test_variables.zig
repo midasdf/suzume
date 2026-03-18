@@ -1,5 +1,5 @@
 const std = @import("std");
-const variables = @import("variables");
+const variables = @import("css").variables;
 
 const VarMap = variables.VarMap;
 

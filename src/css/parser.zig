@@ -1,9 +1,9 @@
 const std = @import("std");
-const tokenizer_mod = @import("tokenizer");
+const tokenizer_mod = @import("tokenizer.zig");
 const Tokenizer = tokenizer_mod.Tokenizer;
 const TokenType = tokenizer_mod.TokenType;
 const Token = tokenizer_mod.Token;
-const ast = @import("ast");
+const ast = @import("ast.zig");
 
 pub const Parser = struct {
     source: []const u8,

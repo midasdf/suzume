@@ -1,5 +1,5 @@
 const std = @import("std");
-const media = @import("media");
+const media = @import("css").media;
 
 test "empty query returns true" {
     try std.testing.expect(media.evaluateMediaQuery("", 1024, 768));

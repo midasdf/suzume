@@ -1,7 +1,7 @@
 const std = @import("std");
 const DomNode = @import("dom/node.zig").DomNode;
 const Document = @import("dom/tree.zig").Document;
-const cascade_mod = @import("style/cascade.zig");
+const cascade_mod = @import("css/cascade.zig");
 const ComputedStyle = @import("style/computed.zig").ComputedStyle;
 
 const styled_html =

@@ -707,7 +707,7 @@ fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
 
 // ── Rule Index ───────────────────────────────────────────────────────
 
-const ast = @import("ast");
+const ast = @import("ast.zig");
 
 pub const IndexedRule = struct {
     selector: ParsedSelector,

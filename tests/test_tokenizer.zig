@@ -1,5 +1,5 @@
 const std = @import("std");
-const css_tok = @import("tokenizer");
+const css_tok = @import("css").tokenizer;
 const TokenType = css_tok.TokenType;
 const Tokenizer = css_tok.Tokenizer;
 

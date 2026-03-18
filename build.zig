@@ -1,5 +1,6 @@
 const std = @import("std");
-const build_libcss = @import("build_libcss.zig");
+// LibCSS replaced by native Zig CSS engine
+// const build_libcss = @import("build_libcss.zig");
 const build_libnsfb = @import("build_libnsfb.zig");
 
 pub fn build(b: *std.Build) void {
@@ -25,7 +26,8 @@ pub fn build(b: *std.Build) void {
     const harfbuzz_lib = harfbuzz_dep.artifact("harfbuzz");
 
     // ── C library builds (netsurf) ────────────────────────────────
-    const libcss = build_libcss.buildLibCss(b, target, optimize);
+    // LibCSS replaced by native Zig CSS engine (src/css/)
+    // const libcss = build_libcss.buildLibCss(b, target, optimize);
     const libnsfb = build_libnsfb.buildLibNsfb(b, target, optimize);
 
     // ── Main executable ───────────────────────────────────────────
@@ -44,7 +46,7 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(lexbor_lib);
     exe.linkLibrary(freetype_lib);
     exe.linkLibrary(harfbuzz_lib);
-    exe.linkLibrary(libcss);
+    // exe.linkLibrary(libcss);  // Replaced by native Zig CSS engine
     exe.linkLibrary(libnsfb);
 
     // LibNSFB surface registration shim (constructors don't work
@@ -58,10 +60,10 @@ pub fn build(b: *std.Build) void {
     // Lexbor headers (from the package)
     exe.addIncludePath(lexbor_dep.path("lib"));
 
-    // LibCSS / LibParserUtils / LibWapcaplet headers
-    exe.addIncludePath(b.path("deps/libcss/include"));
-    exe.addIncludePath(b.path("deps/libparserutils/include"));
-    exe.addIncludePath(b.path("deps/libwapcaplet/include"));
+    // LibCSS / LibParserUtils / LibWapcaplet headers (no longer needed)
+    // exe.addIncludePath(b.path("deps/libcss/include"));
+    // exe.addIncludePath(b.path("deps/libparserutils/include"));
+    // exe.addIncludePath(b.path("deps/libwapcaplet/include"));
 
     // LibNSFB headers
     exe.addIncludePath(b.path("deps/libnsfb/include"));
@@ -165,59 +167,9 @@ pub fn build(b: *std.Build) void {
     test_dom_step.dependOn(&run_test_dom.step);
 
     // ── CSS engine tests ──────────────────────────────────────
-    // Individual CSS source modules (needed as named imports by test files)
-    const css_string_pool_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/string_pool.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const css_tokenizer_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/tokenizer.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const css_ast_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/ast.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const css_values_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/values.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const css_parser_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/parser.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    css_parser_mod.addImport("tokenizer", css_tokenizer_mod);
-    css_parser_mod.addImport("ast", css_ast_mod);
-
-    const css_properties_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/properties.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    css_properties_mod.addImport("values", css_values_mod);
-    css_properties_mod.addImport("ast", css_ast_mod);
-    css_properties_mod.addImport("string_pool", css_string_pool_mod);
-
-    const css_selectors_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/selectors.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    css_selectors_mod.addImport("ast", css_ast_mod);
-
-    const css_media_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/media.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const css_variables_mod = b.createModule(.{
-        .root_source_file = b.path("src/css/variables.zig"),
+    // Single CSS module (uses relative .zig imports internally)
+    const css_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/css.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -228,52 +180,49 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    test_string_pool_mod.addImport("string_pool", css_string_pool_mod);
+    test_string_pool_mod.addImport("css", css_mod);
 
     const test_tokenizer_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_tokenizer.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_tokenizer_mod.addImport("tokenizer", css_tokenizer_mod);
+    test_tokenizer_mod.addImport("css", css_mod);
 
     const test_parser_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_parser.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_parser_mod.addImport("parser", css_parser_mod);
-    test_parser_mod.addImport("ast", css_ast_mod);
+    test_parser_mod.addImport("css", css_mod);
 
     const test_properties_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_properties.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_properties_mod.addImport("properties", css_properties_mod);
-    test_properties_mod.addImport("values", css_values_mod);
-    test_properties_mod.addImport("ast", css_ast_mod);
+    test_properties_mod.addImport("css", css_mod);
 
     const test_selectors_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_selectors.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_selectors_mod.addImport("selectors", css_selectors_mod);
+    test_selectors_mod.addImport("css", css_mod);
 
     const test_media_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_media.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_media_mod.addImport("media", css_media_mod);
+    test_media_mod.addImport("css", css_mod);
 
     const test_variables_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_variables.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_variables_mod.addImport("variables", css_variables_mod);
+    test_variables_mod.addImport("css", css_mod);
 
     // Root test module that pulls in all CSS test modules
     const css_all_test_mod = b.createModule(.{
