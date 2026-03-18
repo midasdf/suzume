@@ -2290,7 +2290,7 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
 
     // 4.5. Resolve CSS custom properties (var() references)
     // Skip var() resolution for very large CSS (>512KB) to prevent OOM on low-memory devices
-    const max_css_for_var_resolution: usize = 512 * 1024;
+    const max_css_for_var_resolution: usize = 2 * 1024 * 1024; // 2MB
     if (css_text.len > max_css_for_var_resolution) {
         std.debug.print("[CSS] Skipping var() resolution: CSS too large ({d}KB)\n", .{css_text.len / 1024});
     }
