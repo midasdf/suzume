@@ -126,12 +126,19 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     block_layout.adjustXPositions(new_root_box, new_root_box.margin.left);
     block_layout.adjustYPositions(new_root_box, new_root_box.margin.top);
 
-    // Replace old styles and box tree
+    // Replace old styles and box tree (order matters: box tree refs styles)
+    // Note: old root_box is arena-allocated by buildBoxTree and not individually freed.
+    // Old styles must be freed after the old box tree is no longer referenced.
     if (page.styles) |*s| s.deinit();
     page.styles = new_styles;
     page.root_box = new_root_box;
     page.total_height = painter_mod.contentHeight(new_root_box);
     page.total_width = painter_mod.contentWidth(new_root_box);
+
+    // Re-collect pending images from new box tree
+    page.pending_images.clearRetainingCapacity();
+    page.pending_images_idx = 0;
+    collectImageUrls(new_root_box, &page.pending_images, allocator);
 
     // Update global root box pointer for JS layout queries
     dom_api.setRootBox(new_root_box);
