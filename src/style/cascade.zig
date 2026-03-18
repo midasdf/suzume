@@ -73,6 +73,11 @@ fn mapFontWeight(val: u8) u16 {
 /// Extract a length value in px from css_fixed + css_unit.
 /// Only handles px and simple units; others fall back to default.
 fn lengthToPx(length: css.css_fixed, unit: css.css_unit, default_font_size: f32) f32 {
+    return lengthToPxVp(length, unit, default_font_size, 0, 0);
+}
+
+/// Extract a length value in px, with viewport dimensions for vw/vh units.
+fn lengthToPxVp(length: css.css_fixed, unit: css.css_unit, default_font_size: f32, vw: f32, vh: f32) f32 {
     const val = fixedToF32(length);
     return switch (unit) {
         css.CSS_UNIT_PX => val,
@@ -83,6 +88,8 @@ fn lengthToPx(length: css.css_fixed, unit: css.css_unit, default_font_size: f32)
         css.CSS_UNIT_CM => val * (96.0 / 2.54),
         css.CSS_UNIT_MM => val * (96.0 / 25.4),
         css.CSS_UNIT_IN => val * 96.0,
+        css.CSS_UNIT_VW => val * vw / 100.0,
+        css.CSS_UNIT_VH => val * vh / 100.0,
         else => val,
     };
 }
@@ -93,6 +100,14 @@ fn lengthToPxPct(length: css.css_fixed, unit: css.css_unit, default_font_size: f
         return fixedToF32(length) * containing_width / 100.0;
     }
     return lengthToPx(length, unit, default_font_size);
+}
+
+/// Convert length to px, using containing_width for percentage resolution and viewport dims for vw/vh.
+fn lengthToPxPctVp(length: css.css_fixed, unit: css.css_unit, default_font_size: f32, containing_width: f32, vw: f32, vh: f32) f32 {
+    if (unit == css.CSS_UNIT_PCT) {
+        return fixedToF32(length) * containing_width / 100.0;
+    }
+    return lengthToPxVp(length, unit, default_font_size, vw, vh);
 }
 
 /// Check if a border style should be rendered (anything other than none/hidden/inherit).
@@ -115,6 +130,11 @@ fn borderWidthValue(bw_type: u8, length: css.css_fixed, unit: css.css_unit, defa
 
 /// Extract a ComputedStyle from a LibCSS css_computed_style.
 fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedStyle {
+    return extractStyleVp(style, is_root, 0, 0);
+}
+
+/// Extract a ComputedStyle with viewport dimensions for vw/vh unit resolution.
+fn extractStyleVp(style: *const css.css_computed_style, is_root: bool, vw: f32, vh: f32) ComputedStyle {
     var result = ComputedStyle{};
     const default_font_size: f32 = 16.0;
 
@@ -258,7 +278,7 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.width = if (w_unit == css.CSS_UNIT_PCT)
             .{ .percent = fixedToF32(w_len) }
         else
-            .{ .px = lengthToPx(w_len, w_unit, default_font_size) };
+            .{ .px = lengthToPxVp(w_len, w_unit, default_font_size, vw, vh) };
     }
 
     // Height
@@ -269,7 +289,7 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.height = if (h_unit == css.CSS_UNIT_PCT)
             .{ .percent = fixedToF32(h_len) }
         else
-            .{ .px = lengthToPx(h_len, h_unit, default_font_size) };
+            .{ .px = lengthToPxVp(h_len, h_unit, default_font_size, vw, vh) };
     }
 
     // Min/max width
@@ -279,13 +299,13 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.min_width = if (mw_unit == css.CSS_UNIT_PCT)
             .{ .percent = fixedToF32(mw_len) }
         else
-            .{ .px = lengthToPx(mw_len, mw_unit, default_font_size) };
+            .{ .px = lengthToPxVp(mw_len, mw_unit, default_font_size, vw, vh) };
     }
     if (css.css_computed_max_width(style, &mw_len, &mw_unit) == css.CSS_MAX_WIDTH_SET) {
         result.max_width = if (mw_unit == css.CSS_UNIT_PCT)
             .{ .percent = fixedToF32(mw_len) }
         else
-            .{ .px = lengthToPx(mw_len, mw_unit, default_font_size) };
+            .{ .px = lengthToPxVp(mw_len, mw_unit, default_font_size, vw, vh) };
     }
 
     // Min/max height
@@ -295,13 +315,13 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         result.min_height = if (mh_unit == css.CSS_UNIT_PCT)
             .{ .percent = fixedToF32(mh_len) }
         else
-            .{ .px = lengthToPx(mh_len, mh_unit, default_font_size) };
+            .{ .px = lengthToPxVp(mh_len, mh_unit, default_font_size, vw, vh) };
     }
     if (css.css_computed_max_height(style, &mh_len, &mh_unit) == css.CSS_MAX_HEIGHT_SET) {
         result.max_height = if (mh_unit == css.CSS_UNIT_PCT)
             .{ .percent = fixedToF32(mh_len) }
         else
-            .{ .px = lengthToPx(mh_len, mh_unit, default_font_size) };
+            .{ .px = lengthToPxVp(mh_len, mh_unit, default_font_size, vw, vh) };
     }
 
     // Overflow
@@ -1572,6 +1592,8 @@ fn walkAndSelect(
     handler: *css.css_select_handler,
     styles: *StyleMap,
     property_rules: []const CssPropertyRule,
+    vw: f32,
+    vh: f32,
 ) !void {
     if (node.nodeType() == .element) {
         // Determine if this is the root element
@@ -1595,7 +1617,7 @@ fn walkAndSelect(
             if (results) |res| {
                 defer _ = css.css_select_results_destroy(res);
                 if (res.styles[css.CSS_PSEUDO_ELEMENT_NONE]) |computed| {
-                    var style = extractStyle(computed, is_root);
+                    var style = extractStyleVp(computed, is_root, vw, vh);
 
                     // Parse border-radius from inline style (LibCSS doesn't support it)
                     if (node.getAttribute("style")) |style_attr| {
@@ -1821,14 +1843,14 @@ fn walkAndSelect(
     // Recurse into children
     var child = node.firstChild();
     while (child) |c| {
-        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, property_rules);
+        try walkAndSelect(c, ctx, unit_ctx, media, handler, styles, property_rules, vw, vh);
         child = c.nextSibling();
     }
 }
 
 /// Run the full style cascade on a parsed document.
 /// Extracts <style> elements, parses CSS, and selects styles for all elements.
-pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[]const u8, viewport_width: u32) !CascadeResult {
+pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[]const u8, viewport_width: u32, viewport_height: u32) !CascadeResult {
     var result = CascadeResult{
         .styles = StyleMap.init(allocator),
         .sheet = null,
@@ -1891,7 +1913,7 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
 
     var unit_ctx = std.mem.zeroes(css.css_unit_ctx);
     unit_ctx.viewport_width = intToFixed(@intCast(viewport_width));
-    unit_ctx.viewport_height = intToFixed(720);
+    unit_ctx.viewport_height = intToFixed(@intCast(viewport_height));
     unit_ctx.font_size_default = intToFixed(16);
     unit_ctx.font_size_minimum = intToFixed(6);
     unit_ctx.device_dpi = intToFixed(96);
@@ -1907,7 +1929,9 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
     defer property_rules.deinit(allocator);
 
     // 9. Walk DOM and select styles
-    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, property_rules.items);
+    const vw_f: f32 = @floatFromInt(viewport_width);
+    const vh_f: f32 = @floatFromInt(viewport_height);
+    try walkAndSelect(doc_root, ctx.?, &unit_ctx, &media, &handler, &result.styles, property_rules.items, vw_f, vh_f);
 
     return result;
 }

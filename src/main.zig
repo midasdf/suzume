@@ -99,14 +99,14 @@ fn testHttp(allocator: std.mem.Allocator) !void {
 
 /// Re-style and re-layout a page after JS DOM mutation.
 /// Rebuilds the style cascade, box tree, and layout from the current DOM state.
-fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32) void {
+fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32, layout_height: i32) void {
     const doc = &(page.doc orelse return);
 
     const root_node = doc.root() orelse return;
     const body_node = doc.body() orelse return;
 
     // Re-cascade styles from the current DOM (includes any <style> tags JS may have added)
-    var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css, @intCast(layout_width)) catch return;
+    var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css, @intCast(layout_width), @intCast(layout_height)) catch return;
 
     // Build new box tree
     const new_root_box = box_tree.buildBoxTree(body_node, &new_styles, allocator) catch {
@@ -122,7 +122,7 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     // Layout
     const content_w: f32 = @floatFromInt(layout_width);
     const root_containing_width = content_w - new_root_box.margin.left - new_root_box.margin.right;
-    block_layout.layoutBlock(new_root_box, root_containing_width, 0, fonts);
+    block_layout.layoutBlockVp(new_root_box, root_containing_width, 0, fonts, @floatFromInt(layout_height));
     block_layout.adjustXPositions(new_root_box, new_root_box.margin.left);
     block_layout.adjustYPositions(new_root_box, new_root_box.margin.top);
 
@@ -184,30 +184,117 @@ const PageState = struct {
 };
 
 /// Find <script> tags in the DOM and execute their content.
-fn executeScripts(doc: *Document, js_rt: *JsRuntime) void {
+fn executeScripts(doc: *Document, js_rt: *JsRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
     const doc_node = doc.documentNode();
-    collectAndExecScripts(doc_node.lxb_node, js_rt);
+    var ext_count: usize = 0;
+    collectAndExecScripts(doc_node.lxb_node, js_rt, allocator, loader, base_url, &ext_count);
 }
 
-fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime) void {
+/// Maximum size for a fetched external script (500 KB).
+const max_external_script_size = 512 * 1024;
+/// Maximum number of external scripts to fetch per page.
+const max_external_script_count = 10;
+/// Timeout in seconds for fetching an external script.
+const external_script_timeout = 5;
+
+fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, ext_count: *usize) void {
     if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
         const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
         var name_len: usize = 0;
         const name_ptr: ?[*]const u8 = lxb.lxb_dom_element_local_name(elem, &name_len);
         if (name_ptr != null and name_len == 6) {
             if (std.mem.eql(u8, name_ptr.?[0..6], "script")) {
-                // Get text content of <script> tag
-                var content_len: usize = 0;
-                const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
-                if (content_ptr != null and content_len > 0) {
-                    const code = content_ptr.?[0..content_len];
-                    std.debug.print("[JS] Executing <script> ({d} bytes)\n", .{content_len});
+                // Skip type="module" scripts (ES modules not supported)
+                var type_len: usize = 0;
+                const type_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+                if (type_ptr != null and type_len > 0) {
+                    if (std.mem.eql(u8, type_ptr.?[0..type_len], "module")) {
+                        return;
+                    }
+                }
+
+                // Skip scripts with nomodule attribute
+                var nomod_len: usize = 0;
+                const nomod_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "nomodule", 8, &nomod_len);
+                if (nomod_ptr != null) {
+                    return;
+                }
+
+                // Check for src attribute (external script)
+                var src_len: usize = 0;
+                const src_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
+                if (src_ptr != null and src_len > 0) {
+                    // External script
+                    const src = src_ptr.?[0..src_len];
+
+                    // Only fetch http:// or https:// URLs
+                    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://"))
+                        blk: {
+                            const u = allocator.allocSentinel(u8, src.len, 0) catch return;
+                            @memcpy(u, src);
+                            break :blk u;
+                        }
+                    else if (base_url) |bu|
+                        resolveUrl(allocator, bu, src) catch return
+                    else
+                        return;
+                    defer allocator.free(resolved_url);
+
+                    // Verify resolved URL is http(s)
+                    if (!std.mem.startsWith(u8, resolved_url, "http://") and !std.mem.startsWith(u8, resolved_url, "https://")) {
+                        return;
+                    }
+
+                    // Check count limit
+                    if (ext_count.* >= max_external_script_count) {
+                        std.debug.print("[JS] External script limit reached ({d}), skipping: {s}\n", .{ max_external_script_count, resolved_url });
+                        return;
+                    }
+
+                    const ld = loader orelse return;
+
+                    std.debug.print("[JS] Fetching external script: {s}\n", .{resolved_url});
+
+                    var response = ld.loadBytesWithTimeout(resolved_url, external_script_timeout) catch |err| {
+                        std.debug.print("[JS] Failed to fetch external script {s}: {}\n", .{ resolved_url, err });
+                        return;
+                    };
+                    defer response.deinit();
+
+                    if (response.status_code != 200) {
+                        std.debug.print("[JS] External script returned status {d}: {s}\n", .{ response.status_code, resolved_url });
+                        return;
+                    }
+
+                    // Check size limit
+                    if (response.body.len > max_external_script_size) {
+                        std.debug.print("[JS] External script too large ({d} bytes, max {d}): {s}\n", .{ response.body.len, max_external_script_size, resolved_url });
+                        return;
+                    }
+
+                    ext_count.* += 1;
+                    const code = response.body;
+                    std.debug.print("[JS] Executing external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code.len });
                     const result = js_rt.eval(code);
                     defer result.deinit();
                     if (!result.isOk()) {
                         std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
                     }
                     js_rt.executePending();
+                } else {
+                    // Inline script: get text content of <script> tag
+                    var content_len: usize = 0;
+                    const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
+                    if (content_ptr != null and content_len > 0) {
+                        const code = content_ptr.?[0..content_len];
+                        std.debug.print("[JS] Executing <script> ({d} bytes)\n", .{content_len});
+                        const result = js_rt.eval(code);
+                        defer result.deinit();
+                        if (!result.isOk()) {
+                            std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
+                        }
+                        js_rt.executePending();
+                    }
                 }
                 return; // Don't recurse into script content
             }
@@ -216,13 +303,13 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime) void {
     // Recurse into children
     var child: ?*lxb.lxb_dom_node_t = node.first_child;
     while (child) |ch| {
-        collectAndExecScripts(ch, js_rt);
+        collectAndExecScripts(ch, js_rt, allocator, loader, base_url, ext_count);
         child = ch.next;
     }
 }
 
 /// Initialize JavaScript for a loaded page: set up DOM APIs, execute scripts, fire events.
-fn initPageJs(doc: *Document, page: *PageState) void {
+fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
     var js_rt = JsRuntime.init() catch {
         std.debug.print("[JS] Failed to init JS runtime\n", .{});
         return;
@@ -236,8 +323,8 @@ fn initPageJs(doc: *Document, page: *PageState) void {
     events.injectElementEventMethods(js_rt.ctx, events.getElementClassId());
     events.injectElementEventMethods(js_rt.ctx, events.getTextClassId());
 
-    // Execute <script> tags
-    executeScripts(doc, &js_rt);
+    // Execute <script> tags (including external scripts via src attribute)
+    executeScripts(doc, &js_rt, allocator, loader, base_url);
 
     // Fire DOMContentLoaded
     events.dispatchDocumentEvent(js_rt.ctx, "DOMContentLoaded");
@@ -321,6 +408,7 @@ fn navigateTo(
     page: *PageState,
     storage: ?*Storage,
     layout_width: i32,
+    layout_height: i32,
 ) bool {
     // Clean up old page
     page.deinit();
@@ -351,7 +439,7 @@ fn navigateTo(
             return false;
         };
 
-        var styles = cascade_mod.cascade(root_node, allocator, null, @intCast(layout_width)) catch {
+        var styles = cascade_mod.cascade(root_node, allocator, null, @intCast(layout_width), @intCast(layout_height)) catch {
             doc.deinit();
             allocator.free(html_owned);
             return false;
@@ -370,7 +458,7 @@ fn navigateTo(
 
         const content_w: f32 = @floatFromInt(layout_width);
         const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
-        block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
+        block_layout.layoutBlockVp(root_box, root_containing_width, 0, fonts, @floatFromInt(layout_height));
         block_layout.adjustXPositions(root_box, root_box.margin.left);
         block_layout.adjustYPositions(root_box, root_box.margin.top);
 
@@ -422,7 +510,7 @@ fn navigateTo(
 
     // Style (pass external CSS from loader — includes <link> stylesheets)
     const ext_css: ?[]const u8 = if (content.css.len > 0) content.css else null;
-    var styles = cascade_mod.cascade(root_node, allocator, ext_css, @intCast(layout_width)) catch {
+    var styles = cascade_mod.cascade(root_node, allocator, ext_css, @intCast(layout_width), @intCast(layout_height)) catch {
         doc.deinit();
         return false;
     };
@@ -442,7 +530,7 @@ fn navigateTo(
     // Layout
     const content_w: f32 = @floatFromInt(layout_width);
     const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
-    block_layout.layoutBlock(root_box, root_containing_width, 0, fonts);
+    block_layout.layoutBlockVp(root_box, root_containing_width, 0, fonts, @floatFromInt(layout_height));
     block_layout.adjustXPositions(root_box, root_box.margin.left);
     block_layout.adjustYPositions(root_box, root_box.margin.top);
 
@@ -489,12 +577,12 @@ fn navigateTo(
     dom_api.setRootBox(page.root_box);
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
-    initPageJs(&page.doc.?, page);
+    initPageJs(&page.doc.?, page, allocator, loader, base_url_copy);
 
     // Re-style if JS mutated the DOM during script execution
     if (dom_api.dom_dirty) {
         dom_api.dom_dirty = false;
-        restylePage(page, allocator, fonts, layout_width);
+        restylePage(page, allocator, fonts, layout_width, layout_height);
     }
 
     // Execute user scripts after page load
@@ -717,8 +805,8 @@ fn testDomJs() void {
     events.injectElementEventMethods(js_rt.ctx, events.getElementClassId());
     events.injectElementEventMethods(js_rt.ctx, events.getTextClassId());
 
-    // Execute scripts
-    executeScripts(&doc, &js_rt);
+    // Execute scripts (test mode: no loader/base_url for external scripts)
+    executeScripts(&doc, &js_rt, std.heap.c_allocator, null, null);
 
     // Fire DOMContentLoaded and load
     events.dispatchDocumentEvent(js_rt.ctx, "DOMContentLoaded");
@@ -1192,7 +1280,7 @@ pub fn main() !void {
                             url_input.setText(tab.url);
                             url_input.focused = false;
                             status_text = "Loading...";
-                            if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width)) {
+                            if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1224,7 +1312,7 @@ pub fn main() !void {
             status_text = "Loading...";
 
             if (page_states.items.len > 0) {
-                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null, surface.width)) {
+                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                     status_text = "Done";
                     scroll_y = 0;
                     scroll_x = 0;
@@ -1349,7 +1437,7 @@ pub fn main() !void {
                     js_rt.executePending();
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
-                        restylePage(pg, allocator, &fonts, surface.width);
+                        restylePage(pg, allocator, &fonts, surface.width, surface.height);
                         needs_repaint = true;
                     }
                 }
@@ -1621,7 +1709,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1643,7 +1731,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1666,7 +1754,7 @@ pub fn main() !void {
                         defer allocator.free(url_z);
                         @memcpy(url_z, hist_url);
                         const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                             status_text = "Done";
                             scroll_y = 0;
                             scroll_x = 0;
@@ -1740,7 +1828,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1772,7 +1860,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1855,7 +1943,7 @@ pub fn main() !void {
                                                     defer allocator.free(uz);
                                                     @memcpy(uz, tab.url);
                                                     status_text = "Loading...";
-                                                    if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                                                    if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                                         status_text = "Done";
                                                         scroll_y = 0;
                                                         scroll_x = 0;
@@ -2168,7 +2256,7 @@ pub fn main() !void {
                                     needs_repaint = true;
 
                                     const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
-                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) {
+                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                         status_text = "Done";
                                         scroll_y = 0;
                                         scroll_x = 0;
@@ -2536,7 +2624,7 @@ fn handleClick(
                 // Re-style and re-layout if DOM was mutated by the event handler
                 if (dom_api.dom_dirty) {
                     dom_api.dom_dirty = false;
-                    restylePage(page, allocator, fonts, win_w);
+                    restylePage(page, allocator, fonts, win_w, win_h);
                     needs_repaint.* = true;
                 }
             }
@@ -2687,7 +2775,7 @@ fn handleClick(
             status_text.* = "Loading...";
             needs_repaint.* = true;
 
-            if (navigateTo(allocator, loader, resolved, fonts, page, storage, win_w)) {
+            if (navigateTo(allocator, loader, resolved, fonts, page, storage, win_w, win_h)) {
                 status_text.* = "Done";
                 scroll_y.* = 0;
                 scroll_x.* = 0;
@@ -2971,6 +3059,7 @@ fn submitForm(
     page: *PageState,
     storage: ?*Storage,
     win_w: i32,
+    win_h: i32,
 ) ?[]u8 {
     // Dispatch "submit" event on the form element (before actual submission)
     if (page.js_rt) |*js_rt| {
@@ -3038,7 +3127,7 @@ fn submitForm(
 
     std.debug.print("[form] Navigating to: {s}\n", .{final_url});
 
-    if (navigateTo(allocator, loader, url_z, fonts, page, storage, win_w)) {
+    if (navigateTo(allocator, loader, url_z, fonts, page, storage, win_w, win_h)) {
         allocator.free(url_z);
         return final_url;
     } else {

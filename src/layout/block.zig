@@ -262,6 +262,11 @@ fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_s
 /// Lay out a block box and all its children within the given containing width.
 /// Sets content x, y, width, height for each box.
 pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
+    layoutBlockVp(box, containing_width, cursor_y, fonts, 0);
+}
+
+/// Layout a block box with viewport height for resolving percent heights.
+pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, viewport_height: f32) void {
     // Delegate to flex layout if display is flex
     if (box.style.display == .flex or box.style.display == .inline_flex) {
         flex.layoutFlex(box, containing_width, cursor_y, fonts);
@@ -391,6 +396,12 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         .px => |h| {
             box.content.height = h;
         },
+        .percent => |pct| {
+            // Resolve percent height against viewport height as fallback
+            if (viewport_height > 0) {
+                box.content.height = pct * viewport_height / 100.0;
+            }
+        },
         else => {},
     }
 
@@ -399,11 +410,23 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         .px => |mh| {
             if (box.content.height < mh) box.content.height = mh;
         },
+        .percent => |pct| {
+            if (viewport_height > 0) {
+                const mh = pct * viewport_height / 100.0;
+                if (box.content.height < mh) box.content.height = mh;
+            }
+        },
         else => {},
     }
     switch (box.style.max_height) {
         .px => |mh| {
             if (box.content.height > mh) box.content.height = mh;
+        },
+        .percent => |pct| {
+            if (viewport_height > 0) {
+                const mh = pct * viewport_height / 100.0;
+                if (box.content.height > mh) box.content.height = mh;
+            }
         },
         else => {},
     }
@@ -466,7 +489,7 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
         // Layout them at (0,0) relative to parent content area but don't advance child_y.
         if (child.style.position == .absolute or child.style.position == .fixed) {
             layoutBlock(child, box.content.width, box.content.y, fonts);
-            adjustXPositions(child, box.content.x);
+            applyAbsolutePositionOffsets(child, box);
             continue;
         }
 
@@ -615,7 +638,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
         // Skip absolute/fixed positioned children in inline context too
         if (child.style.position == .absolute or child.style.position == .fixed) {
             layoutBlock(child, container_width, base_y, fonts);
-            adjustXPositions(child, base_x);
+            applyAbsolutePositionOffsets(child, box);
             continue;
         }
 
@@ -952,6 +975,75 @@ pub fn adjustYPositions(box: *Box, offset_y: f32) void {
             },
         }
     }
+}
+
+/// Apply CSS position offsets (top/left/right/bottom) to an absolutely positioned child.
+/// The child has already been laid out via layoutBlock. This computes the desired absolute
+/// position based on the containing block (parent) and adjusts the child's position tree.
+pub fn applyAbsolutePositionOffsets(child: *Box, parent: *Box) void {
+    // Compute desired absolute position
+    var abs_x: f32 = parent.content.x;
+    var abs_y: f32 = parent.content.y;
+
+    // Horizontal: left takes priority over right
+    switch (child.style.left) {
+        .px => |v| {
+            abs_x = parent.content.x + v;
+        },
+        .percent => |p| {
+            abs_x = parent.content.x + p * parent.content.width / 100.0;
+        },
+        else => {
+            // No left specified, check right
+            switch (child.style.right) {
+                .px => |v| {
+                    const child_w = child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right;
+                    abs_x = parent.content.x + parent.content.width - child_w - v;
+                },
+                .percent => |p| {
+                    const child_w = child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right;
+                    abs_x = parent.content.x + parent.content.width - child_w - p * parent.content.width / 100.0;
+                },
+                else => {},
+            }
+        },
+    }
+
+    // Vertical: top takes priority over bottom
+    switch (child.style.top) {
+        .px => |v| {
+            abs_y = parent.content.y + v;
+        },
+        .percent => |p| {
+            abs_y = parent.content.y + p * parent.content.height / 100.0;
+        },
+        else => {
+            // No top specified, check bottom
+            switch (child.style.bottom) {
+                .px => |v| {
+                    const child_h = child.content.height + child.padding.top + child.padding.bottom + child.border.top + child.border.bottom;
+                    abs_y = parent.content.y + parent.content.height - child_h - v;
+                },
+                .percent => |p| {
+                    const child_h = child.content.height + child.padding.top + child.padding.bottom + child.border.top + child.border.bottom;
+                    abs_y = parent.content.y + parent.content.height - child_h - p * parent.content.height / 100.0;
+                },
+                else => {},
+            }
+        },
+    }
+
+    // Adjust from current position to desired position.
+    // After layoutBlock, child.content.x/y already have some values.
+    // We need to shift by the difference to reach the desired abs_x/abs_y.
+    // abs_x is where the content box left edge should be (after padding+border).
+    const desired_content_x = abs_x + child.padding.left + child.border.left;
+    const desired_content_y = abs_y + child.padding.top + child.border.top;
+    const dx = desired_content_x - child.content.x;
+    const dy = desired_content_y - child.content.y;
+
+    if (dx != 0) adjustXPositions(child, dx);
+    if (dy != 0) adjustYPositions(child, dy);
 }
 
 /// Break text into lines and compute line boxes (for standalone text in block context).

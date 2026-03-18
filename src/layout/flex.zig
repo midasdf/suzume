@@ -53,7 +53,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) {
             block.layoutBlock(child, container_width, box.content.y, fonts);
-            block.adjustXPositions(child, box.content.x);
+            block.applyAbsolutePositionOffsets(child, box);
         }
     }
 
@@ -596,7 +596,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) {
             block.layoutBlock(child, container_width, box.content.y, fonts);
-            block.adjustXPositions(child, box.content.x);
+            block.applyAbsolutePositionOffsets(child, box);
             continue;
         }
     }
