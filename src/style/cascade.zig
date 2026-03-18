@@ -2164,9 +2164,9 @@ fn walkAndSelect(
                                 if (style.overflow_wrap == .normal) style.overflow_wrap = ow;
                             }
 
-                            // visibility from CSS rules
+                            // visibility from CSS rules (only override default visible)
                             if (rule.visibility) |vis| {
-                                style.visibility = vis;
+                                if (style.visibility == .visible) style.visibility = vis;
                             }
 
                             // text-overflow from CSS rules
