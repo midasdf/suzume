@@ -195,6 +195,12 @@ pub fn cascade(
     try flattenRules(author_sheet.rules, vw, vh, &author_rules, arena);
 
     // 6. Extract CSS variables from author rules
+    // TODO(css-variables): Currently all --custom-property definitions are collected into a
+    // single global VarMap (root_vars), regardless of the selector they appear under. This
+    // means element-level scoping (e.g. `.foo { --color: red }` only applying to descendants
+    // of .foo) is not implemented. Proper fix requires propagating a per-element VarMap through
+    // walkAndCompute, merging inherited vars with any new definitions on each element. This is
+    // a fundamental architectural change deferred to a later phase.
     var root_vars = VarMap.init(arena);
     for (author_rules.items) |rule| {
         for (rule.declarations) |decl| {
@@ -1257,25 +1263,30 @@ fn parseTransform(s: []const u8, tx: *f32, ty: *f32, font_size: f32, vw: f32, vh
 // ── Value parsing helpers ─────────────────────────────────────────────
 
 fn parseLengthValue(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+    return parseLengthValueDepth(s, font_size, vw, vh, 0);
+}
+
+fn parseLengthValueDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
     if (s.len == 0) return null;
     if (std.mem.eql(u8, s, "0")) return 0;
 
     // Handle clamp(min, preferred, max)
     if (startsWithIgnoreCase(s, "clamp(")) {
-        return parseClamp(s, font_size, vw, vh);
+        return parseClamp(s, font_size, vw, vh, depth);
     }
 
     // Handle calc(expression)
     if (startsWithIgnoreCase(s, "calc(")) {
-        return parseCalcSimple(s, font_size, vw, vh);
+        return parseCalcSimple(s, font_size, vw, vh, depth);
     }
 
     // Handle min(a, b) and max(a, b)
     if (startsWithIgnoreCase(s, "min(")) {
-        return parseMinMax(s, font_size, vw, vh, true);
+        return parseMinMax(s, font_size, vw, vh, true, depth);
     }
     if (startsWithIgnoreCase(s, "max(")) {
-        return parseMinMax(s, font_size, vw, vh, false);
+        return parseMinMax(s, font_size, vw, vh, false, depth);
     }
 
     if (properties.parseLength(s)) |len| {
@@ -1294,16 +1305,16 @@ fn startsWithIgnoreCase(haystack: []const u8, needle: []const u8) bool {
     return true;
 }
 
-fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
     const start = 6; // "clamp(".len
     // Find matching closing paren
-    var depth: usize = 1;
+    var pdepth: usize = 1;
     var end: usize = start;
-    while (end < s.len and depth > 0) : (end += 1) {
-        if (s[end] == '(') depth += 1;
-        if (s[end] == ')') depth -= 1;
+    while (end < s.len and pdepth > 0) : (end += 1) {
+        if (s[end] == '(') pdepth += 1;
+        if (s[end] == ')') pdepth -= 1;
     }
-    if (depth != 0) return null;
+    if (pdepth != 0) return null;
     const inner = s[start .. end - 1];
 
     // Split by commas (respecting nested parens)
@@ -1327,17 +1338,17 @@ fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
     } else return null;
 
     // Use parseCalcExpr for each part to handle expressions like "1.08rem + 3.92vw"
-    const min_val = parseCalcExpr(parts[0], font_size, vw, vh) orelse
-        (parseLengthValue(parts[0], font_size, vw, vh) orelse return null);
-    const pref_val = parseCalcExpr(parts[1], font_size, vw, vh) orelse
-        (parseLengthValue(parts[1], font_size, vw, vh) orelse return null);
-    const max_val = parseCalcExpr(parts[2], font_size, vw, vh) orelse
-        (parseLengthValue(parts[2], font_size, vw, vh) orelse return null);
+    const min_val = parseCalcExpr(parts[0], font_size, vw, vh, depth + 1) orelse
+        (parseLengthValueDepth(parts[0], font_size, vw, vh, depth + 1) orelse return null);
+    const pref_val = parseCalcExpr(parts[1], font_size, vw, vh, depth + 1) orelse
+        (parseLengthValueDepth(parts[1], font_size, vw, vh, depth + 1) orelse return null);
+    const max_val = parseCalcExpr(parts[2], font_size, vw, vh, depth + 1) orelse
+        (parseLengthValueDepth(parts[2], font_size, vw, vh, depth + 1) orelse return null);
 
     return std.math.clamp(pref_val, min_val, max_val);
 }
 
-fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool) ?f32 {
+fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool, depth: u32) ?f32 {
     const prefix_len: usize = 4; // "min(" or "max("
     var end = s.len;
     if (end > 0 and s[end - 1] == ')') end -= 1;
@@ -1358,27 +1369,30 @@ fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool) ?f
     if (split_pos) |sp| {
         const a_str = std.mem.trim(u8, inner[0..sp], " \t");
         const b_str = std.mem.trim(u8, inner[sp + 1 ..], " \t");
-        const a = parseCalcExpr(a_str, font_size, vw, vh) orelse
-            (parseLengthValue(a_str, font_size, vw, vh) orelse return null);
-        const b = parseCalcExpr(b_str, font_size, vw, vh) orelse
-            (parseLengthValue(b_str, font_size, vw, vh) orelse return null);
+        const a = parseCalcExpr(a_str, font_size, vw, vh, depth + 1) orelse
+            (parseLengthValueDepth(a_str, font_size, vw, vh, depth + 1) orelse return null);
+        const b = parseCalcExpr(b_str, font_size, vw, vh, depth + 1) orelse
+            (parseLengthValueDepth(b_str, font_size, vw, vh, depth + 1) orelse return null);
         return if (is_min) @min(a, b) else @max(a, b);
     }
-    return parseCalcExpr(inner, font_size, vw, vh) orelse
-        parseLengthValue(inner, font_size, vw, vh);
+    return parseCalcExpr(inner, font_size, vw, vh, depth + 1) orelse
+        parseLengthValueDepth(inner, font_size, vw, vh, depth + 1);
 }
 
-fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
     const start = 5; // "calc(".len
     var end = s.len;
     if (end > 0 and s[end - 1] == ')') end -= 1;
     const inner = std.mem.trim(u8, s[start..end], " \t");
-    return parseCalcExpr(inner, font_size, vw, vh);
+    return parseCalcExpr(inner, font_size, vw, vh, depth);
 }
 
 /// Parse a calc expression with correct operator precedence.
 /// + and - are lowest priority (split last), * and / are higher.
-fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
+/// depth guards against stack overflow from deeply nested calc(calc(calc(...))) inputs.
+fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+
     // Find the LAST + or - at top level (not inside parens)
     // This gives correct left-to-right associativity for same-priority ops
     // and ensures * / bind tighter than + -
@@ -1408,8 +1422,8 @@ fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
     if (last_add_sub) |pos| {
         const left = std.mem.trim(u8, expr[0 .. pos - 1], " \t");
         const right = std.mem.trim(u8, expr[pos + 2 ..], " \t");
-        const l = parseCalcExpr(left, font_size, vw, vh) orelse return null;
-        const r = parseCalcExpr(right, font_size, vw, vh) orelse return null;
+        const l = parseCalcExpr(left, font_size, vw, vh, depth + 1) orelse return null;
+        const r = parseCalcExpr(right, font_size, vw, vh, depth + 1) orelse return null;
         return if (expr[pos] == '+') l + r else l - r;
     }
 
@@ -1417,13 +1431,13 @@ fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
     if (last_mul_div) |pos| {
         const left = std.mem.trim(u8, expr[0..pos], " \t");
         const right = std.mem.trim(u8, expr[pos + 1 ..], " \t");
-        const l = parseCalcExpr(left, font_size, vw, vh) orelse return null;
-        const r = parseCalcExpr(right, font_size, vw, vh) orelse return null;
+        const l = parseCalcExpr(left, font_size, vw, vh, depth + 1) orelse return null;
+        const r = parseCalcExpr(right, font_size, vw, vh, depth + 1) orelse return null;
         return if (expr[pos] == '*') l * r else if (r != 0) l / r else null;
     }
 
     // No operator — single value (or nested function like clamp/min/max)
-    return parseLengthValue(expr, font_size, vw, vh);
+    return parseLengthValueDepth(expr, font_size, vw, vh, depth + 1);
 }
 
 fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh: f32) f32 {

@@ -239,6 +239,13 @@ fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
     return true;
 }
 
+/// Lowercase s into buf. Returns null if s is longer than buf.
+fn toLowerBuf(s: []const u8, buf: []u8) ?[]u8 {
+    if (s.len > buf.len) return null;
+    for (s, 0..) |c, i| buf[i] = toLower(c);
+    return buf[0..s.len];
+}
+
 const NamedColorEntry = struct { []const u8, u32 };
 
 const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
@@ -397,7 +404,11 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     const trimmed = std.mem.trim(u8, value_raw, " \t\r\n");
     if (trimmed.len == 0) return null;
 
-    if (std.mem.eql(u8, property_name, "margin")) {
+    // CSS property names are case-insensitive; normalise before comparing.
+    var name_buf: [64]u8 = undefined;
+    const name = toLowerBuf(property_name, &name_buf) orelse return null;
+
+    if (std.mem.eql(u8, name, "margin")) {
         return expandBoxShorthand(trimmed, &.{
             .{ .id = .margin_top, .name = "margin-top" },
             .{ .id = .margin_right, .name = "margin-right" },
@@ -405,7 +416,7 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
             .{ .id = .margin_left, .name = "margin-left" },
         }, allocator);
     }
-    if (std.mem.eql(u8, property_name, "padding")) {
+    if (std.mem.eql(u8, name, "padding")) {
         return expandBoxShorthand(trimmed, &.{
             .{ .id = .padding_top, .name = "padding-top" },
             .{ .id = .padding_right, .name = "padding-right" },
@@ -413,7 +424,7 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
             .{ .id = .padding_left, .name = "padding-left" },
         }, allocator);
     }
-    if (std.mem.eql(u8, property_name, "border-radius")) {
+    if (std.mem.eql(u8, name, "border-radius")) {
         return expandBoxShorthand(trimmed, &.{
             .{ .id = .border_radius_top_left, .name = "border-top-left-radius" },
             .{ .id = .border_radius_top_right, .name = "border-top-right-radius" },
@@ -421,50 +432,50 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
             .{ .id = .border_radius_bottom_left, .name = "border-bottom-left-radius" },
         }, allocator);
     }
-    if (std.mem.eql(u8, property_name, "border")) {
+    if (std.mem.eql(u8, name, "border")) {
         return expandBorder(trimmed, allocator);
     }
-    if (std.mem.eql(u8, property_name, "background")) {
+    if (std.mem.eql(u8, name, "background")) {
         return expandBackground(trimmed, allocator);
     }
-    if (std.mem.eql(u8, property_name, "flex")) {
+    if (std.mem.eql(u8, name, "flex")) {
         return expandFlex(trimmed, allocator);
     }
-    if (std.mem.eql(u8, property_name, "flex-flow")) {
+    if (std.mem.eql(u8, name, "flex-flow")) {
         return expandFlexFlow(trimmed, allocator);
     }
-    if (std.mem.eql(u8, property_name, "overflow")) {
+    if (std.mem.eql(u8, name, "overflow")) {
         return expandOverflow(trimmed, allocator);
     }
     // Grid shorthands
-    if (std.mem.eql(u8, property_name, "grid-column")) {
+    if (std.mem.eql(u8, name, "grid-column")) {
         return expandGridSlash(trimmed, .grid_column_start, "grid-column-start", .grid_column_end, "grid-column-end", allocator);
     }
-    if (std.mem.eql(u8, property_name, "grid-row")) {
+    if (std.mem.eql(u8, name, "grid-row")) {
         return expandGridSlash(trimmed, .grid_row_start, "grid-row-start", .grid_row_end, "grid-row-end", allocator);
     }
-    if (std.mem.eql(u8, property_name, "grid-gap")) {
+    if (std.mem.eql(u8, name, "grid-gap")) {
         const decls = allocator.alloc(ast.Declaration, 1) catch return null;
         decls[0] = .{ .property = .gap, .property_name = "gap", .value_raw = trimmed, .important = false };
         return decls;
     }
-    if (std.mem.eql(u8, property_name, "grid-column-gap")) {
+    if (std.mem.eql(u8, name, "grid-column-gap")) {
         const decls = allocator.alloc(ast.Declaration, 1) catch return null;
         decls[0] = .{ .property = .column_gap, .property_name = "column-gap", .value_raw = trimmed, .important = false };
         return decls;
     }
-    if (std.mem.eql(u8, property_name, "grid-row-gap")) {
+    if (std.mem.eql(u8, name, "grid-row-gap")) {
         const decls = allocator.alloc(ast.Declaration, 1) catch return null;
         decls[0] = .{ .property = .row_gap, .property_name = "row-gap", .value_raw = trimmed, .important = false };
         return decls;
     }
-    if (std.mem.eql(u8, property_name, "transition")) {
+    if (std.mem.eql(u8, name, "transition")) {
         return expandTransition(trimmed, allocator);
     }
-    if (std.mem.eql(u8, property_name, "animation")) {
+    if (std.mem.eql(u8, name, "animation")) {
         return expandAnimation(trimmed, allocator);
     }
-    if (std.mem.eql(u8, property_name, "outline")) {
+    if (std.mem.eql(u8, name, "outline")) {
         return expandOutline(trimmed, allocator);
     }
     return null;
