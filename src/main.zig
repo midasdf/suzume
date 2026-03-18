@@ -1435,6 +1435,7 @@ pub fn main() !void {
         }
 
         // Tick JS timers (setTimeout/setInterval) and check for DOM mutations
+        // Limit timer execution to prevent blocking the event loop
         {
             const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
                 &page_states.items[tab_mgr.active_index]
