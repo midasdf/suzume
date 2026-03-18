@@ -477,6 +477,12 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         if (dx != 0) adjustXPositions(box, dx);
         if (dy != 0) adjustYPositions(box, dy);
     }
+
+    // Apply CSS transforms (translate only)
+    if (box.style.transform_translate_x != 0 or box.style.transform_translate_y != 0) {
+        box.content.x += box.style.transform_translate_x;
+        box.content.y += box.style.transform_translate_y;
+    }
 }
 
 /// Layout children in block formatting context (all children are block-level).

@@ -93,6 +93,10 @@ pub const ComputedStyle = struct {
     grid_row_start: i16 = 0,
     grid_row_end: i16 = 0,
 
+    // Transforms
+    transform_translate_x: f32 = 0,
+    transform_translate_y: f32 = 0,
+
     // Opacity
     opacity: f32 = 1.0,
 
