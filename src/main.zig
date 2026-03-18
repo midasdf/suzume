@@ -1519,7 +1519,7 @@ pub fn main() !void {
                                                                 // Re-layout to apply new aspect ratios
                                                                 const cw: f32 = @floatFromInt(surface.width);
                                                                 const rcw = cw - rb.margin.left - rb.margin.right;
-                                                                block_layout.layoutBlock(rb, rcw, 0, &fonts);
+                                                                block_layout.layoutBlockVp(rb, rcw, 0, &fonts, @floatFromInt(surface.height));
                                                                 block_layout.adjustXPositions(rb, rb.margin.left);
                                                                 block_layout.adjustYPositions(rb, rb.margin.top);
                                                                 pg.total_height = painter_mod.contentHeight(rb);
@@ -2171,7 +2171,7 @@ pub fn main() !void {
                                 const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
                                 const fi_node = focused_input_node.?;
                                 const fi_form = findParentForm(fi_node) orelse continue;
-                                if (submitForm(allocator, fi_form, fi_node, &form_input, current_url, &loader, &fonts, pg, if (storage_inst) |*s| s else null, surface.width)) |nav_url| {
+                                if (submitForm(allocator, fi_form, fi_node, &form_input, current_url, &loader, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) |nav_url| {
                                     defer allocator.free(nav_url);
                                     url_input.setText(nav_url);
                                     url_input.focused = false;
@@ -2685,7 +2685,7 @@ fn handleClick(
                         // Submit button clicked — submit the form
                         std.debug.print("[form] Submit button clicked\n", .{});
                         const btn_form = findParentForm(fnode) orelse return;
-                        if (submitForm(allocator, btn_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w)) |nav_url| {
+                        if (submitForm(allocator, btn_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w, win_h)) |nav_url| {
                             defer allocator.free(nav_url);
                             url_input.setText(nav_url);
                             url_input.focused = false;
@@ -2726,7 +2726,7 @@ fn handleClick(
                     // <button> click — submit the form
                     std.debug.print("[form] <button> clicked\n", .{});
                     const button_form = findParentForm(fnode) orelse return;
-                    if (submitForm(allocator, button_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w)) |nav_url| {
+                    if (submitForm(allocator, button_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w, win_h)) |nav_url| {
                         defer allocator.free(nav_url);
                         url_input.setText(nav_url);
                         url_input.focused = false;
