@@ -28,6 +28,8 @@ src/css/
 └── computed.zig     -- ComputedStyle struct (migrated from style/computed.zig)
 ```
 
+String interning via a dedicated StringPool (replacing libwapcaplet). Class names, property names, and selector components are interned for O(1) comparison and reduced memory.
+
 Existing files removed after migration:
 - `src/style/cascade.zig` (LibCSS cascade + supplementary layer)
 - `src/style/select.zig` (LibCSS select handler)
@@ -78,7 +80,7 @@ const TokenType = enum {
 const Token = struct {
     type: TokenType,
     start: u32,      // byte offset in source
-    len: u16,        // byte length
+    len: u32,        // byte length
     // Numeric value for number/percentage/dimension tokens
     numeric_value: f32 = 0,
     // Unit for dimension tokens (px, em, rem, vh, vw, %)
@@ -92,7 +94,7 @@ const Token = struct {
 - Handles CSS escapes (`\XX`), unicode ranges, URL tokens
 - Comment skipping built into tokenizer (no separate pass)
 
-**Memory:** ~32 bytes per token. For 500KB CSS with ~25K tokens = ~800KB token stream. Acceptable on 512MB device if we stream instead of materializing all tokens.
+**Memory:** ~36 bytes per token. For 500KB CSS with ~25K tokens = ~900KB token stream. Acceptable on 512MB device if we stream instead of materializing all tokens.
 
 ### 1.2 Parser (`parser.zig`)
 
@@ -138,6 +140,10 @@ const Declaration = struct {
 - `margin: 10px 20px` → margin-top: 10px, margin-right: 20px, margin-bottom: 10px, margin-left: 20px
 - `background: red url(...) no-repeat` → background-color, background-image, background-repeat
 - `border: 1px solid black` → border-width, border-style, border-color (all sides)
+
+CSS-wide keywords (inherit, initial, unset, revert) are preserved during shorthand expansion: `margin: inherit` expands to four `margin-*: inherit` declarations.
+
+**@import handling:** @import rules resolved during loading (fetched and inlined by the network loader before CSS reaches the parser). The parser does not fetch resources. ImportRule is preserved in the AST for source mapping but its contents are already inlined.
 
 ### 1.3 Selectors (`selectors.zig`)
 
@@ -238,12 +244,15 @@ Then test each candidate's full selector. This reduces work from O(all_rules) to
 **Cascade ordering** (CSS Cascading Level 5):
 ```
 Priority (low → high):
-1. UA stylesheet (default styles)
-2. Author normal declarations (by specificity, then source order)
-3. Author !important declarations
-4. Inline style normal
-5. Inline style !important
+1. UA normal
+2. Author normal (specificity, then source order)
+3. Inline normal
+4. Author !important (reversed specificity order)
+5. Inline !important
+6. UA !important
 ```
+
+> Note: @layer ordering deferred to Phase 3. LayerRule is parsed and preserved in AST but cascade ignores layer order until then.
 
 **Process per element:**
 ```zig
@@ -253,10 +262,13 @@ fn computeStyle(element: DomNode, parent_style: ?*const ComputedStyle,
     // 1. Start with inherited properties from parent (or initial values for root)
     var style = if (parent_style) |p| inheritFrom(p) else initialStyle();
 
-    // 2. Collect all matching declarations
+    // 2. Collect all matching declarations (including inline style with inline origin)
     var declarations = collectMatchingDeclarations(element, rule_index, stylesheets);
+    if (element.getAttribute("style")) |inline_style| {
+        appendInlineDeclarations(&declarations, inline_style); // origin = inline
+    }
 
-    // 3. Sort by cascade priority
+    // 3. Sort by cascade priority (origin, importance, specificity, source order)
     sort(declarations, cascadeOrder);
 
     // 4. Apply declarations in order (last wins within same priority)
@@ -264,19 +276,30 @@ fn computeStyle(element: DomNode, parent_style: ?*const ComputedStyle,
         applyDeclaration(&style, decl);
     }
 
-    // 5. Apply inline style (highest non-!important priority)
-    if (element.getAttribute("style")) |inline_style| {
-        applyInlineStyle(&style, inline_style);
-    }
-
-    // 6. Resolve var() references
+    // 5. Resolve var() references
     resolveVariables(&style, variables);
 
-    // 7. Resolve calc(), relative units (em → px, % → px)
+    // 6. Resolve calc(), relative units (em → px, % → px)
     resolveComputedValues(&style, parent_style);
 
     return style;
 }
+```
+
+### CascadeResult Contract
+
+The new CascadeResult replaces the existing LibCSS-based version:
+
+```zig
+struct CascadeResult {
+    styles: StyleMap,           // node pointer → ComputedStyle
+    ast: *Stylesheet,          // owns parsed stylesheet AST (for incremental re-style)
+    rule_index: *RuleIndex,    // owns rule index (for hover/focus re-matching)
+    var_maps: VarMapPool,      // owns variable maps
+
+    fn deinit(self: *CascadeResult) void { ... }
+    fn getStyle(self: *const CascadeResult, node: DomNode) ?ComputedStyle { ... }
+};
 ```
 
 ### 1.5 Properties (`properties.zig`)
@@ -365,12 +388,18 @@ const Unit = enum {
     none,  // unitless number
 };
 
-const CalcExpr = union(enum) {
-    value: Value,
-    add: struct { left: *CalcExpr, right: *CalcExpr },
-    sub: struct { left: *CalcExpr, right: *CalcExpr },
-    mul: struct { left: *CalcExpr, right: *CalcExpr },
-    div: struct { left: *CalcExpr, right: *CalcExpr },
+// Flat postfix representation — avoids recursive pointers and heap chasing.
+// Example: calc(100% - 20px) → [percentage(100), length(20px), sub]
+const CalcExpr = struct {
+    ops: []const CalcOp,
+};
+
+const CalcOp = union(enum) {
+    value: Value,     // push operand
+    add,              // pop two, push sum
+    sub,              // pop two, push difference
+    mul,              // pop two, push product
+    div,              // pop two, push quotient
 };
 ```
 
@@ -398,6 +427,8 @@ const VarMap = struct {
 };
 ```
 
+VarMap instances are created during cascade (one per element that declares custom properties). Elements without custom property declarations share their parent's VarMap pointer — no allocation. Variables from @media blocks are included only when the media query matches (evaluated during cascade).
+
 ### 1.8 Media Queries (`media.zig`)
 
 ```zig
@@ -419,6 +450,10 @@ fn evaluateMediaQuery(query: MediaQuery, context: MediaContext) bool {
 }
 ```
 
+@supports evaluation: check whether a given property name is in the PropertyId enum (known property) and whether the value parses successfully. Unknown properties or unparseable values → false.
+
+Phase 1 must handle all properties currently in the supplementary CssPropertyRule system: border-radius, box-shadow, text-shadow, linear-gradient, word-break, overflow-wrap, text-overflow, visibility. These are required to avoid visual regression when LibCSS is removed.
+
 ## Phase 2: Layout Properties
 
 ### Grid Layout
@@ -429,6 +464,8 @@ fn evaluateMediaQuery(query: MediaQuery, context: MediaContext) bool {
 - `fr` unit support
 - `repeat()`, `minmax()`, `auto-fill`, `auto-fit`
 - Implementation in `src/layout/grid.zig` (new file)
+
+ComputedStyle fields added for Grid: grid_template_columns, grid_template_rows, grid_column_start, grid_column_end, grid_row_start, grid_row_end, grid_auto_flow, row_gap, column_gap.
 
 ### Transforms
 - `transform: translate(), scale(), rotate(), skew()`
@@ -442,8 +479,7 @@ fn evaluateMediaQuery(query: MediaQuery, context: MediaContext) bool {
 - Generated during box tree construction (`src/layout/tree.zig`)
 
 ### :has() selector
-- Subject-based matching (expensive — only evaluate when needed)
-- Cache results per cascade run
+:has() requires forward-looking matching. Implementation strategy: two-pass cascade — first pass builds the full box tree, second pass evaluates :has() selectors against the completed tree. Depth limit of 32 levels to prevent pathological cases. Results cached per cascade run.
 
 ## Phase 3: Visual Effects
 
@@ -479,7 +515,7 @@ Target: CSS engine total < 20MB on typical sites.
 |-----------|----------|
 | Stylesheet AST (500KB CSS) | ~2MB |
 | Rule index (hash maps) | ~1MB |
-| Token stream (if materialized) | ~800KB |
+| Token stream (if materialized) | ~900KB |
 | ComputedStyle per element (~200B × 5000 elements) | ~1MB |
 | Variable maps | ~200KB |
 | Total | ~5MB typical |
@@ -487,6 +523,8 @@ Target: CSS engine total < 20MB on typical sites.
 For GitHub (2.3MB CSS, ~10K elements): ~15MB. Within 512MB budget.
 
 Streaming tokenizer avoids materializing all tokens. Parse → discard tokens → keep AST only.
+
+Arena allocator used for stylesheet AST — entire stylesheet allocated and freed as a unit. Reduces per-allocation overhead and improves cache locality on Cortex-A53.
 
 ## Migration Strategy
 
