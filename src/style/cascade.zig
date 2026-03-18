@@ -1882,7 +1882,8 @@ fn extractCssVariables(css_text: []const u8, allocator: std.mem.Allocator) !CssV
 /// Handles nested var() in values and fallback values: var(--name, fallback).
 /// max_depth prevents infinite recursion from circular variable references.
 fn resolveCssVariables(css_text: []const u8, vars: *const CssVarMap, allocator: std.mem.Allocator) ![]const u8 {
-    return resolveCssVariablesDepth(css_text, vars, allocator, 0);
+    // Single-pass resolution (no recursive var-in-var resolution to avoid memory issues)
+    return resolveCssVariablesDepth(css_text, vars, allocator, 9);
 }
 
 fn resolveCssVariablesDepth(css_text: []const u8, vars: *const CssVarMap, allocator: std.mem.Allocator, depth: usize) ![]const u8 {
@@ -1935,25 +1936,11 @@ fn resolveCssVariablesDepth(css_text: []const u8, vars: *const CssVarMap, alloca
             const var_name = std.mem.trim(u8, if (comma_pos) |c| inner[0..c] else inner, " \t");
             const fallback = if (comma_pos) |c| std.mem.trim(u8, inner[c + 1 ..], " \t") else null;
 
-            // Look up variable value
+            // Look up variable value (no recursive resolution to avoid memory issues)
             if (vars.get(var_name)) |value| {
-                // Recursively resolve if the value itself contains var()
-                if (std.mem.indexOf(u8, value, "var(") != null) {
-                    const resolved = try resolveCssVariablesDepth(value, vars, allocator, depth + 1);
-                    defer allocator.free(resolved);
-                    try result.appendSlice(allocator, resolved);
-                } else {
-                    try result.appendSlice(allocator, value);
-                }
+                try result.appendSlice(allocator, value);
             } else if (fallback) |fb| {
-                // Use fallback value
-                if (std.mem.indexOf(u8, fb, "var(") != null) {
-                    const resolved = try resolveCssVariablesDepth(fb, vars, allocator, depth + 1);
-                    defer allocator.free(resolved);
-                    try result.appendSlice(allocator, resolved);
-                } else {
-                    try result.appendSlice(allocator, fb);
-                }
+                try result.appendSlice(allocator, fb);
             }
             // else: no value and no fallback — output nothing (property becomes invalid per CSS spec)
 
@@ -2290,7 +2277,7 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
 
     // 4.5. Resolve CSS custom properties (var() references)
     // Skip var() resolution for very large CSS (>512KB) to prevent OOM on low-memory devices
-    const max_css_for_var_resolution: usize = 256 * 1024; // 256KB - safe for RPi memory
+    const max_css_for_var_resolution: usize = 2 * 1024 * 1024; // 2MB
     if (css_text.len > max_css_for_var_resolution) {
         std.debug.print("[CSS] Skipping var() resolution: CSS too large ({d}KB)\n", .{css_text.len / 1024});
     }
