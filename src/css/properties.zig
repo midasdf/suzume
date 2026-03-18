@@ -636,10 +636,26 @@ fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaratio
         decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
         decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
     } else if (count == 2) {
-        // flex: grow shrink
-        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
-        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
-        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
+        // flex: <grow> <shrink|basis>
+        // If parts[1] contains a letter or '%', treat as basis (grow=parts[0], shrink=1, basis=parts[1])
+        // If parts[1] is purely numeric, treat as shrink (grow=parts[0], shrink=parts[1], basis=0%)
+        const second_is_basis = blk: {
+            for (parts[1]) |c| {
+                if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '%') break :blk true;
+            }
+            break :blk false;
+        };
+        if (second_is_basis) {
+            // flex: grow basis
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[1], .important = false };
+        } else {
+            // flex: grow shrink
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
+        }
     } else {
         // flex: grow shrink basis
         decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };

@@ -186,7 +186,13 @@ pub const PropertyId = enum(u16) {
         if (name.len >= 2 and name[0] == '-' and name[1] == '-') {
             return .custom;
         }
-        return property_map.get(name) orelse .unknown;
+        // Lowercase for case-insensitive lookup
+        var buf: [64]u8 = undefined;
+        if (name.len > buf.len) return .unknown;
+        for (name, 0..) |c, i| {
+            buf[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
+        }
+        return property_map.get(buf[0..name.len]) orelse .unknown;
     }
 };
 
