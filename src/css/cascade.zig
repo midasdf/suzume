@@ -472,6 +472,9 @@ fn walkAndCompute(
             applyDeclaration(&style, entry.decl, element_var_map, parent_style, parent_fs, vw, vh, arena);
         }
 
+        // Apply HTML presentational attributes as fallback (lowest priority)
+        applyHtmlAttributes(node, &style);
+
         // Compute ::before pseudo-element style
         if (computePseudoContent(node, &style, ua_index, author_index, element_var_map, .before, vw, vh, arena)) |ps| {
             style.before_content = ps.content;
@@ -1749,6 +1752,56 @@ fn walkForStyles(node: DomNode, buf: *std.ArrayListUnmanaged(u8), allocator: std
 }
 
 // ── String utilities ──────────────────────────────────────────────────
+
+// ── HTML presentational attributes ────────────────────────────────
+
+fn applyHtmlAttributes(node: DomNode, style: *ComputedStyle) void {
+    // HTML align attribute → text-align (only if text-align not already set by CSS)
+    if (node.getAttribute("align")) |align_val| {
+        if (style.text_align == .left) { // default = not set by CSS
+            if (eqlIgnoreCase(align_val, "center")) style.text_align = .center
+            else if (eqlIgnoreCase(align_val, "right")) style.text_align = .right
+            else if (eqlIgnoreCase(align_val, "justify")) style.text_align = .justify;
+        }
+    }
+    // HTML width attribute → width (for td, img, table)
+    if (node.getAttribute("width")) |width_val| {
+        if (style.width == .auto) {
+            if (std.fmt.parseFloat(f32, width_val)) |w| {
+                style.width = .{ .px = w };
+            } else |_| {
+                // Check for percentage: "25%"
+                if (width_val.len > 0 and width_val[width_val.len - 1] == '%') {
+                    if (std.fmt.parseFloat(f32, width_val[0 .. width_val.len - 1])) |pct| {
+                        style.width = .{ .percent = pct };
+                    } else |_| {}
+                }
+            }
+        }
+    }
+    // HTML height attribute → height
+    if (node.getAttribute("height")) |height_val| {
+        if (style.height == .auto) {
+            if (std.fmt.parseFloat(f32, height_val)) |h| {
+                style.height = .{ .px = h };
+            } else |_| {}
+        }
+    }
+    // HTML bgcolor attribute → background-color
+    if (node.getAttribute("bgcolor")) |bg_val| {
+        if (style.background_color == 0x00000000) {
+            if (properties.parseColor(bg_val)) |c| {
+                style.background_color = c.toArgb();
+            }
+        }
+    }
+    // HTML valign → vertical-align
+    if (node.getAttribute("valign")) |valign_val| {
+        if (eqlIgnoreCase(valign_val, "middle")) style.vertical_align = .middle
+        else if (eqlIgnoreCase(valign_val, "top")) style.vertical_align = .top
+        else if (eqlIgnoreCase(valign_val, "bottom")) style.vertical_align = .bottom;
+    }
+}
 
 const eqlIgnoreCase = util.eqlIgnoreCase;
 
