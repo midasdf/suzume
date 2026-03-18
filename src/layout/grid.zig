@@ -19,7 +19,8 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
     };
     box.content.width = if (explicit_w) |w| @min(w, @max(containing_width - h_space, 0)) else @max(containing_width - h_space, 0);
 
-    const gap = style.gap;
+    const gap = style.gap; // column gap
+    const row_gap_val = if (style.row_gap > 0) style.row_gap else style.gap; // row gap falls back to gap
 
     // Resolve column track sizes
     // If grid-template-columns is set, use it. Otherwise, if grid-auto-columns
@@ -112,7 +113,7 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
         col += span;
         if (col >= num_cols) {
             col = 0;
-            row_y += row_height + gap;
+            row_y += row_height + row_gap_val;
             row_height = 0;
         }
     }

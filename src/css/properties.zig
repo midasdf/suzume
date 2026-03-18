@@ -611,25 +611,52 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         return decls;
     }
 
-    // Try to extract a color from the background shorthand
-    var color_val: []const u8 = value; // fallback: the whole value
+    // Try to extract color, image (url), and repeat from the background shorthand
+    var color_val: []const u8 = "transparent";
+    var image_val: ?[]const u8 = null;
+    var repeat_val: ?[]const u8 = null;
     var iter = std.mem.tokenizeAny(u8, value, " \t");
     while (iter.next()) |tok| {
-        // Skip url(...) tokens
-        if (startsWithIgnoreCase(tok, "url(")) continue;
-        // Skip known background keywords
+        // Extract url(...) as background-image
+        if (startsWithIgnoreCase(tok, "url(")) {
+            image_val = tok;
+            continue;
+        }
+        // Extract repeat keywords as background-repeat
+        if (eqlIgnoreCase(tok, "no-repeat") or eqlIgnoreCase(tok, "repeat") or
+            eqlIgnoreCase(tok, "repeat-x") or eqlIgnoreCase(tok, "repeat-y"))
+        {
+            repeat_val = tok;
+            continue;
+        }
+        // Skip other background keywords (position, size, attachment)
         if (isBackgroundKeyword(tok)) continue;
         // Try parsing as color
         if (parseColor(tok) != null) {
             color_val = tok;
-            break;
+            continue;
         }
         // Try parsing as length (could be background-position)
         if (parseLength(tok) != null) continue;
     }
 
-    const decls = allocator.alloc(ast.Declaration, 1) catch return null;
-    decls[0] = .{ .property = .background_color, .property_name = "background-color", .value_raw = color_val, .important = false };
+    // Count how many declarations we need
+    var n: usize = 1; // always emit background-color
+    if (image_val != null) n += 1;
+    if (repeat_val != null) n += 1;
+
+    const decls = allocator.alloc(ast.Declaration, n) catch return null;
+    var idx: usize = 0;
+    decls[idx] = .{ .property = .background_color, .property_name = "background-color", .value_raw = color_val, .important = false };
+    idx += 1;
+    if (image_val) |img| {
+        decls[idx] = .{ .property = .background_image, .property_name = "background-image", .value_raw = img, .important = false };
+        idx += 1;
+    }
+    if (repeat_val) |rep| {
+        decls[idx] = .{ .property = .background_repeat, .property_name = "background-repeat", .value_raw = rep, .important = false };
+        idx += 1;
+    }
     return decls;
 }
 

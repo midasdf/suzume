@@ -65,6 +65,8 @@ pub const ComputedStyle = struct {
     box_sizing: BoxSizing = .content_box,
 
     // Margin auto flags (for centering)
+    margin_top_auto: bool = false,
+    margin_bottom_auto: bool = false,
     margin_left_auto: bool = false,
     margin_right_auto: bool = false,
 
@@ -84,6 +86,7 @@ pub const ComputedStyle = struct {
     flex_shrink: f32 = 1,
     flex_basis: Dimension = .auto,
     gap: f32 = 0, // column-gap, used for both row and column in flex
+    row_gap: f32 = 0, // row-gap, separate from column gap
 
     // Grid properties
     grid_template_columns: []const GridTrackSize = &.{},

@@ -126,12 +126,18 @@ const CascadeEntry = struct {
 
     fn priority(self: CascadeEntry) u64 {
         // Sort key: important bit (63), origin (56-62), specificity (24-55), source_order (0-23)
+        // Per CSS Cascading Level 5: for !important declarations, specificity order is REVERSED
+        // (lower specificity wins, so we invert the specificity bits to make lower spec sort higher).
         var p: u64 = 0;
         if (self.decl.important) {
             p |= @as(u64, 1) << 63;
+            p |= @as(u64, @intFromEnum(self.origin)) << 56;
+            // Inverted specificity: lower specificity → higher sort position → wins
+            p |= @as(u64, 0xFFFFFFFF - self.specificity) << 24;
+        } else {
+            p |= @as(u64, @intFromEnum(self.origin)) << 56;
+            p |= @as(u64, self.specificity) << 24;
         }
-        p |= @as(u64, @intFromEnum(self.origin)) << 56;
-        p |= @as(u64, self.specificity) << 24;
         p |= @as(u64, @min(self.source_order, 0xFFFFFF));
         return p;
     }
@@ -948,6 +954,7 @@ fn applyDeclaration(
         .margin_top => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
             style.margin_top = md.value;
+            style.margin_top_auto = md.is_auto;
         },
         .margin_right => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
@@ -957,6 +964,7 @@ fn applyDeclaration(
         .margin_bottom => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
             style.margin_bottom = md.value;
+            style.margin_bottom_auto = md.is_auto;
         },
         .margin_left => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
@@ -1091,6 +1099,9 @@ fn applyDeclaration(
         },
         .gap, .column_gap => {
             if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.gap = px;
+        },
+        .row_gap => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.row_gap = px;
         },
         .box_shadow => {
             parseShadow(trimmed, fs, &style.box_shadow_x, &style.box_shadow_y, &style.box_shadow_blur, &style.box_shadow_color);
