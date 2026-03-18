@@ -120,6 +120,20 @@ fn buildChildren(
                 const style = styles.getStyle(child) orelse ComputedStyle{};
                 if (style.display == .none) continue;
 
+                // Skip elements with HTML hidden attribute
+                if (child.getAttribute("hidden") != null) continue;
+
+                // Skip closed <details> children (except <summary>)
+                if (child.tagName()) |tag| {
+                    if (std.mem.eql(u8, tag, "details")) {
+                        // Check if open attribute is set
+                        if (child.getAttribute("open") == null) {
+                            // Closed details: only show <summary>, hide rest
+                            // We handle this by skipping the details content below
+                        }
+                    }
+                }
+
                 const child_box = try allocator.create(Box);
                 child_box.* = .{};
                 child_box.dom_node = child;
@@ -457,7 +471,39 @@ fn buildChildren(
                         }
                         break :blk list_counter;
                     } else list_counter;
-                    try buildChildren(child_box, child, styles, allocator, link_url, sub_counter);
+
+                    // Closed <details>: only build <summary> children
+                    const is_closed_details = if (child.tagName()) |tag|
+                        std.mem.eql(u8, tag, "details") and child.getAttribute("open") == null
+                    else
+                        false;
+
+                    if (is_closed_details) {
+                        // Only add <summary> child, skip everything else
+                        var detail_child = child.firstChild();
+                        while (detail_child) |dc| {
+                            defer detail_child = dc.nextSibling();
+                            if (dc.nodeType() == .element) {
+                                if (dc.tagName()) |dtag| {
+                                    if (std.mem.eql(u8, dtag, "summary")) {
+                                        const summary_style = styles.getStyle(dc) orelse ComputedStyle{};
+                                        const summary_box = try allocator.create(Box);
+                                        summary_box.* = .{};
+                                        summary_box.dom_node = dc;
+                                        summary_box.style = summary_style;
+                                        summary_box.box_type = .block;
+                                        summary_box.parent = child_box;
+                                        summary_box.link_url = link_url;
+                                        try buildChildren(summary_box, dc, styles, allocator, link_url, 0);
+                                        try child_box.children.append(allocator, summary_box);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        try buildChildren(child_box, child, styles, allocator, link_url, sub_counter);
+                    }
                 }
 
                 try parent_box.children.append(allocator, child_box);

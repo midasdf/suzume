@@ -1601,6 +1601,10 @@ const ua_stylesheet_text =
     \\abbr { text-decoration: underline; }
     \\center { display: block; text-align: center; }
     \\noscript { display: none; }
+    \\details { display: block; }
+    \\summary { display: block; }
+    \\dialog { display: none; }
+    \\template { display: none; }
 ;
 
 /// Walk the DOM tree recursively and collect <style> element text content.
