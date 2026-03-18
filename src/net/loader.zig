@@ -54,50 +54,12 @@ pub const Loader = struct {
         var css_parts: std.ArrayListUnmanaged(u8) = .empty;
         errdefer css_parts.deinit(self.allocator);
 
-        // Walk <head> children for <link rel="stylesheet"> and <style>
-        if (doc.head()) |head_node| {
-            var child = head_node.firstChild();
-            while (child) |node| {
-                defer child = node.nextSibling();
-
-                if (node.nodeType() != .element) continue;
-                const tag = node.tagName() orelse continue;
-
-                if (std.mem.eql(u8, tag, "link")) {
-                    // Check rel="stylesheet"
-                    const rel = node.getAttribute("rel") orelse continue;
-                    if (!std.mem.eql(u8, rel, "stylesheet")) continue;
-
-                    const href = node.getAttribute("href") orelse continue;
-
-                    // Resolve URL
-                    const resolved = try resolveUrl(self.allocator, url, href);
-                    defer self.allocator.free(resolved);
-
-                    // Ad block check
-                    if (self.adblock_enabled and adblock.shouldBlock(resolved)) {
-                        std.debug.print("[AdBlock] Blocked: {s}\n", .{resolved});
-                        continue;
-                    }
-
-                    // Fetch CSS
-                    var css_resp = self.client.get(self.allocator, resolved) catch continue;
-                    defer css_resp.deinit();
-
-                    if (css_resp.status_code == 200) {
-                        try css_parts.appendSlice(self.allocator, css_resp.body);
-                        try css_parts.append(self.allocator, '\n');
-                    }
-                } else if (std.mem.eql(u8, tag, "style")) {
-                    // Inline <style> — get text content
-                    if (node.firstChild()) |text_node| {
-                        if (text_node.textContent()) |text| {
-                            try css_parts.appendSlice(self.allocator, text);
-                            try css_parts.append(self.allocator, '\n');
-                        }
-                    }
-                }
-            }
+        // Walk entire document for <link rel="stylesheet"> and <style>
+        // (not just <head> — many sites put CSS links in <body>)
+        var css_link_count: usize = 0;
+        const max_css_links: usize = 20; // Limit to prevent slow loads
+        if (doc.root()) |root_node| {
+            try self.walkForCssLinks(root_node, url, &css_parts, &css_link_count, max_css_links);
         }
 
         const css = try css_parts.toOwnedSlice(self.allocator);
@@ -126,6 +88,53 @@ pub const Loader = struct {
             return error.AdBlocked;
         }
         return try self.client.getWithTimeout(self.allocator, url, timeout_secs);
+    }
+
+    /// Recursively walk DOM to find <link rel="stylesheet"> and <style> tags.
+    fn walkForCssLinks(self: *Loader, node: DomNode, base_url: [:0]const u8, css_parts: *std.ArrayListUnmanaged(u8), link_count: *usize, max_links: usize) !void {
+        if (node.nodeType() == .element) {
+            const tag = node.tagName() orelse "";
+
+            if (std.mem.eql(u8, tag, "link")) {
+                const rel = node.getAttribute("rel") orelse "";
+                if (std.mem.eql(u8, rel, "stylesheet") and link_count.* < max_links) {
+                    const href = node.getAttribute("href") orelse "";
+                    if (href.len > 0) {
+                        const resolved = resolveUrl(self.allocator, base_url, href) catch return;
+                        defer self.allocator.free(resolved);
+
+                        if (self.adblock_enabled and adblock.shouldBlock(resolved)) return;
+
+                        var css_resp = self.client.getWithTimeout(self.allocator, resolved, 5) catch return;
+                        defer css_resp.deinit();
+
+                        if (css_resp.status_code == 200 and css_resp.body.len > 0) {
+                            css_parts.appendSlice(self.allocator, css_resp.body) catch return;
+                            css_parts.append(self.allocator, '\n') catch return;
+                            link_count.* += 1;
+                        }
+                    }
+                }
+                return; // <link> has no children
+            } else if (std.mem.eql(u8, tag, "style")) {
+                if (node.firstChild()) |text_node| {
+                    if (text_node.textContent()) |text| {
+                        css_parts.appendSlice(self.allocator, text) catch return;
+                        css_parts.append(self.allocator, '\n') catch return;
+                    }
+                }
+                return; // Don't recurse into <style>
+            } else if (std.mem.eql(u8, tag, "script")) {
+                return; // Skip script content
+            }
+        }
+
+        // Recurse into children
+        var child = node.firstChild();
+        while (child) |c| {
+            try self.walkForCssLinks(c, base_url, css_parts, link_count, max_links);
+            child = c.nextSibling();
+        }
     }
 
     /// Check if a response should be downloaded (non-renderable content type).
