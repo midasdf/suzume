@@ -1270,6 +1270,14 @@ fn parseLengthValue(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
         return parseCalcSimple(s, font_size, vw, vh);
     }
 
+    // Handle min(a, b) and max(a, b)
+    if (startsWithIgnoreCase(s, "min(")) {
+        return parseMinMax(s, font_size, vw, vh, true);
+    }
+    if (startsWithIgnoreCase(s, "max(")) {
+        return parseMinMax(s, font_size, vw, vh, false);
+    }
+
     if (properties.parseLength(s)) |len| {
         return resolveLengthToPx(len.value, len.unit, font_size, vw, vh);
     }
@@ -1323,6 +1331,34 @@ fn parseClamp(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
     const max_val = parseLengthValue(parts[2], font_size, vw, vh) orelse return null;
 
     return std.math.clamp(pref_val, min_val, max_val);
+}
+
+fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool) ?f32 {
+    const prefix_len: usize = 4; // "min(" or "max("
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[prefix_len..end], " \t");
+
+    // Split by comma (respecting nested parens)
+    var paren_depth: usize = 0;
+    var split_pos: ?usize = null;
+    for (inner, 0..) |c, i| {
+        if (c == '(') paren_depth += 1;
+        if (c == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (c == ',' and paren_depth == 0) {
+            split_pos = i;
+            break;
+        }
+    }
+
+    if (split_pos) |sp| {
+        const a_str = std.mem.trim(u8, inner[0..sp], " \t");
+        const b_str = std.mem.trim(u8, inner[sp + 1 ..], " \t");
+        const a = parseLengthValue(a_str, font_size, vw, vh) orelse return null;
+        const b = parseLengthValue(b_str, font_size, vw, vh) orelse return null;
+        return if (is_min) @min(a, b) else @max(a, b);
+    }
+    return parseLengthValue(inner, font_size, vw, vh);
 }
 
 fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
