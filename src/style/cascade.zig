@@ -853,6 +853,7 @@ const CssPropertyRule = struct {
     overflow_wrap: ?ComputedStyle.OverflowWrap = null,
     text_overflow: ?ComputedStyle.TextOverflow = null,
     visibility: ?ComputedStyle.Visibility = null,
+    opacity: ?f32 = null,
 };
 
 /// Parse a CSS color value from text.
@@ -1235,6 +1236,199 @@ fn parseTextOverflow(val: []const u8) ?ComputedStyle.TextOverflow {
     return null;
 }
 
+/// Extract properties of interest from a CSS rule body into a CssPropertyRule.
+fn extractPropertiesFromBody(body: []const u8, rule: *CssPropertyRule, has_any: *bool) void {
+    // border-radius
+    if (std.mem.indexOf(u8, body, "border-radius")) |br_idx| {
+        const prop_start = br_idx + "border-radius".len;
+        if (extractPropertyValue(body, prop_start)) |val| {
+            if (parseCssLength(val, 16.0)) |px| {
+                rule.border_radius = px;
+                has_any.* = true;
+            }
+        }
+    }
+
+    // background-color (explicit property)
+    if (std.mem.indexOf(u8, body, "background-color")) |bc_idx| {
+        const prop_start = bc_idx + "background-color".len;
+        if (extractPropertyValue(body, prop_start)) |val| {
+            if (parseCssColor(val)) |c| {
+                rule.background_color = c;
+                has_any.* = true;
+            }
+        }
+    }
+
+    // background shorthand — extract color if present (only if background-color wasn't already found)
+    if (rule.background_color == null) {
+        if (std.mem.indexOf(u8, body, "background")) |bg_idx| {
+            const after_pos = bg_idx + "background".len;
+            const is_shorthand = after_pos >= body.len or
+                body[after_pos] == ':' or body[after_pos] == ' ' or body[after_pos] == '\t';
+            if (is_shorthand) {
+                if (extractPropertyValue(body, after_pos)) |val| {
+                    if (extractBgShorthandColor(val)) |c| {
+                        rule.background_color = c;
+                        has_any.* = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // color (foreground)
+    {
+        var search_pos: usize = 0;
+        while (search_pos < body.len) {
+            const ci = std.mem.indexOfPos(u8, body, search_pos, "color") orelse break;
+            const is_standalone = (ci == 0 or (body[ci - 1] != '-' and body[ci - 1] != '_'));
+            if (is_standalone) {
+                const prop_start = ci + "color".len;
+                if (extractPropertyValue(body, prop_start)) |val| {
+                    if (parseCssColor(val)) |c| {
+                        rule.color = c;
+                        has_any.* = true;
+                    }
+                }
+                break;
+            }
+            search_pos = ci + 1;
+        }
+    }
+
+    // height
+    if (std.mem.indexOf(u8, body, "height")) |h_idx| {
+        const is_plain_height = (h_idx == 0 or (body[h_idx - 1] != '-' and body[h_idx - 1] != '_'));
+        if (is_plain_height) {
+            const prop_start = h_idx + "height".len;
+            if (extractPropertyValue(body, prop_start)) |val| {
+                if (parseCssLength(val, 16.0)) |px| {
+                    rule.height = px;
+                    has_any.* = true;
+                }
+            }
+        }
+    }
+
+    // box-shadow
+    if (std.mem.indexOf(u8, body, "box-shadow")) |bs_idx| {
+        const is_plain = (bs_idx == 0 or (body[bs_idx - 1] != '-' and body[bs_idx - 1] != '_'));
+        if (is_plain) {
+            if (extractPropertyValue(body, bs_idx + "box-shadow".len)) |val| {
+                if (parseShadowValue(val)) |s| {
+                    rule.box_shadow = .{ .x = s.x, .y = s.y, .blur = s.blur, .color = s.color };
+                    has_any.* = true;
+                }
+            }
+        }
+    }
+
+    // text-shadow
+    if (std.mem.indexOf(u8, body, "text-shadow")) |ts_idx| {
+        const is_plain = (ts_idx == 0 or (body[ts_idx - 1] != '-' and body[ts_idx - 1] != '_'));
+        if (is_plain) {
+            if (extractPropertyValue(body, ts_idx + "text-shadow".len)) |val| {
+                if (parseShadowValue(val)) |s| {
+                    rule.text_shadow = .{ .x = s.x, .y = s.y, .blur = s.blur, .color = s.color };
+                    has_any.* = true;
+                }
+            }
+        }
+    }
+
+    // linear-gradient in background/background-image
+    if (std.mem.indexOf(u8, body, "linear-gradient")) |_| {
+        if (std.mem.indexOf(u8, body, "background")) |bg_idx| {
+            const after_pos = bg_idx + "background".len;
+            if (after_pos < body.len and (body[after_pos] == ':' or body[after_pos] == '-')) {
+                var val_start = after_pos;
+                while (val_start < body.len and body[val_start] != ':') val_start += 1;
+                if (val_start < body.len) {
+                    if (extractPropertyValue(body, val_start)) |_| {
+                        var dummy_style = ComputedStyle{};
+                        parseLinearGradient(body, &dummy_style);
+                        if ((dummy_style.gradient_color_start >> 24) > 0 or (dummy_style.gradient_color_end >> 24) > 0) {
+                            rule.gradient_start = dummy_style.gradient_color_start;
+                            rule.gradient_end = dummy_style.gradient_color_end;
+                            rule.gradient_direction = dummy_style.gradient_direction;
+                            has_any.* = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // word-break
+    if (std.mem.indexOf(u8, body, "word-break")) |wb_idx| {
+        const is_plain = (wb_idx == 0 or (body[wb_idx - 1] != '-' and body[wb_idx - 1] != '_'));
+        if (is_plain) {
+            if (extractPropertyValue(body, wb_idx + "word-break".len)) |val| {
+                rule.word_break = parseWordBreak(val);
+                if (rule.word_break != null) has_any.* = true;
+            }
+        }
+    }
+
+    // overflow-wrap (also handles legacy word-wrap)
+    if (std.mem.indexOf(u8, body, "overflow-wrap")) |ow_idx| {
+        if (extractPropertyValue(body, ow_idx + "overflow-wrap".len)) |val| {
+            rule.overflow_wrap = parseOverflowWrap(val);
+            if (rule.overflow_wrap != null) has_any.* = true;
+        }
+    } else if (std.mem.indexOf(u8, body, "word-wrap")) |ww_idx| {
+        const is_plain = (ww_idx == 0 or (body[ww_idx - 1] != '-' and body[ww_idx - 1] != '_'));
+        if (is_plain) {
+            if (extractPropertyValue(body, ww_idx + "word-wrap".len)) |val| {
+                rule.overflow_wrap = parseOverflowWrap(val);
+                if (rule.overflow_wrap != null) has_any.* = true;
+            }
+        }
+    }
+
+    // text-overflow
+    if (std.mem.indexOf(u8, body, "text-overflow")) |to_idx| {
+        if (extractPropertyValue(body, to_idx + "text-overflow".len)) |val| {
+            rule.text_overflow = parseTextOverflow(val);
+            if (rule.text_overflow != null) has_any.* = true;
+        }
+    }
+
+    // opacity
+    if (std.mem.indexOf(u8, body, "opacity")) |op_idx| {
+        const is_plain = (op_idx == 0 or (body[op_idx - 1] != '-' and body[op_idx - 1] != '_'));
+        if (is_plain) {
+            if (extractPropertyValue(body, op_idx + "opacity".len)) |val| {
+                if (std.fmt.parseFloat(f32, std.mem.trim(u8, val, " \t\r\n"))) |op| {
+                    rule.opacity = std.math.clamp(op, 0.0, 1.0);
+                    has_any.* = true;
+                } else |_| {}
+            }
+        }
+    }
+
+    // visibility
+    if (std.mem.indexOf(u8, body, "visibility")) |vi_idx| {
+        const is_plain = (vi_idx == 0 or (body[vi_idx - 1] != '-' and body[vi_idx - 1] != '_'));
+        if (is_plain) {
+            if (extractPropertyValue(body, vi_idx + "visibility".len)) |val| {
+                const trimmed = std.mem.trim(u8, val, " \t\r\n");
+                if (std.mem.eql(u8, trimmed, "hidden")) {
+                    rule.visibility = .hidden;
+                    has_any.* = true;
+                } else if (std.mem.eql(u8, trimmed, "visible")) {
+                    rule.visibility = .visible;
+                    has_any.* = true;
+                } else if (std.mem.eql(u8, trimmed, "collapse")) {
+                    rule.visibility = .collapse;
+                    has_any.* = true;
+                }
+            }
+        }
+    }
+}
+
 /// Parse raw CSS text to extract property rules for properties LibCSS doesn't handle well.
 /// Returns a list of selector -> property mappings.
 fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !std.ArrayListUnmanaged(CssPropertyRule) {
@@ -1243,207 +1437,32 @@ fn extractCssPropertyRules(css_text: []const u8, allocator: std.mem.Allocator) !
 
     var pos: usize = 0;
     while (pos < css_text.len) {
+        // Skip comments between rules
+        if (skipCssCommentOrString(css_text, pos)) |after| {
+            pos = after;
+            continue;
+        }
         // Find the next '{' — everything before it is the selector
         const brace_open = std.mem.indexOfScalarPos(u8, css_text, pos, '{') orelse break;
 
-        // Find matching '}'
-        const brace_close = std.mem.indexOfScalarPos(u8, css_text, brace_open + 1, '}') orelse break;
+        // Find matching '}' — handle nested braces, comments, and strings
+        const brace_close = findMatchingBrace(css_text, brace_open) orelse break;
 
         const selector_raw = std.mem.trim(u8, css_text[pos..brace_open], " \t\r\n");
         const body = css_text[brace_open + 1 .. brace_close];
 
+        // Skip at-rules (@media, @keyframes, etc.) — their bodies contain
+        // nested rules that would need recursive parsing. For now, skip
+        // the entire block and rely on LibCSS for at-rule handling.
+        if (selector_raw.len > 0 and selector_raw[0] == '@') {
+            pos = brace_close + 1;
+            continue;
+        }
+
         // Extract all properties of interest from this rule body
         var rule = CssPropertyRule{ .selector = undefined };
         var has_any = false;
-
-        // border-radius
-        if (std.mem.indexOf(u8, body, "border-radius")) |br_idx| {
-            const prop_start = br_idx + "border-radius".len;
-            if (extractPropertyValue(body, prop_start)) |val| {
-                if (parseCssLength(val, 16.0)) |px| {
-                    rule.border_radius = px;
-                    has_any = true;
-                }
-            }
-        }
-
-        // background-color (explicit property)
-        if (std.mem.indexOf(u8, body, "background-color")) |bc_idx| {
-            const prop_start = bc_idx + "background-color".len;
-            if (extractPropertyValue(body, prop_start)) |val| {
-                if (parseCssColor(val)) |c| {
-                    rule.background_color = c;
-                    has_any = true;
-                }
-            }
-        }
-
-        // background shorthand — extract color if present (only if background-color wasn't already found)
-        if (rule.background_color == null) {
-            if (std.mem.indexOf(u8, body, "background")) |bg_idx| {
-                // Make sure this isn't "background-color" or "background-image" etc.
-                const after_pos = bg_idx + "background".len;
-                const is_shorthand = after_pos >= body.len or
-                    body[after_pos] == ':' or body[after_pos] == ' ' or body[after_pos] == '\t';
-                if (is_shorthand) {
-                    if (extractPropertyValue(body, after_pos)) |val| {
-                        if (extractBgShorthandColor(val)) |c| {
-                            rule.background_color = c;
-                            has_any = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        // color (foreground)
-        // Be careful not to match "background-color" or "border-color" etc.
-        {
-            var search_pos: usize = 0;
-            while (search_pos < body.len) {
-                const ci = std.mem.indexOfPos(u8, body, search_pos, "color") orelse break;
-                // Ensure "color" is not preceded by '-' (which would make it part of another property)
-                const is_standalone = (ci == 0 or (body[ci - 1] != '-' and body[ci - 1] != '_'));
-                if (is_standalone) {
-                    const prop_start = ci + "color".len;
-                    if (extractPropertyValue(body, prop_start)) |val| {
-                        if (parseCssColor(val)) |c| {
-                            rule.color = c;
-                            has_any = true;
-                        }
-                    }
-                    break;
-                }
-                search_pos = ci + 1;
-            }
-        }
-
-        // height
-        if (std.mem.indexOf(u8, body, "height")) |h_idx| {
-            // Ensure it's not "min-height" or "max-height" or "line-height"
-            const is_plain_height = (h_idx == 0 or (body[h_idx - 1] != '-' and body[h_idx - 1] != '_'));
-            if (is_plain_height) {
-                const prop_start = h_idx + "height".len;
-                if (extractPropertyValue(body, prop_start)) |val| {
-                    if (parseCssLength(val, 16.0)) |px| {
-                        rule.height = px;
-                        has_any = true;
-                    }
-                }
-            }
-        }
-
-        // box-shadow
-        if (std.mem.indexOf(u8, body, "box-shadow")) |bs_idx| {
-            // Make sure it's not "-box-shadow"
-            const is_plain = (bs_idx == 0 or (body[bs_idx - 1] != '-' and body[bs_idx - 1] != '_'));
-            if (is_plain) {
-                if (extractPropertyValue(body, bs_idx + "box-shadow".len)) |val| {
-                    if (parseShadowValue(val)) |s| {
-                        rule.box_shadow = .{ .x = s.x, .y = s.y, .blur = s.blur, .color = s.color };
-                        has_any = true;
-                    }
-                }
-            }
-        }
-
-        // text-shadow
-        if (std.mem.indexOf(u8, body, "text-shadow")) |ts_idx| {
-            const is_plain = (ts_idx == 0 or (body[ts_idx - 1] != '-' and body[ts_idx - 1] != '_'));
-            if (is_plain) {
-                if (extractPropertyValue(body, ts_idx + "text-shadow".len)) |val| {
-                    if (parseShadowValue(val)) |s| {
-                        rule.text_shadow = .{ .x = s.x, .y = s.y, .blur = s.blur, .color = s.color };
-                        has_any = true;
-                    }
-                }
-            }
-        }
-
-        // linear-gradient in background/background-image
-        if (std.mem.indexOf(u8, body, "linear-gradient")) |_| {
-            // Find the full property value containing the gradient
-            if (std.mem.indexOf(u8, body, "background")) |bg_idx| {
-                const after_pos = bg_idx + "background".len;
-                // Skip "background-color", "background-image" prefix — get the value
-                if (after_pos < body.len and (body[after_pos] == ':' or body[after_pos] == '-')) {
-                    // If it's "background-image:" or "background:", both work
-                    var val_start = after_pos;
-                    // Skip to ':' if we're at '-image' etc.
-                    while (val_start < body.len and body[val_start] != ':') val_start += 1;
-                    if (val_start < body.len) {
-                        if (extractPropertyValue(body, val_start)) |_| {
-                            // We need the full value including "linear-gradient(...)"
-                            // Re-extract from the body directly
-                            var dummy_style = ComputedStyle{};
-                            parseLinearGradient(body, &dummy_style);
-                            if ((dummy_style.gradient_color_start >> 24) > 0 or (dummy_style.gradient_color_end >> 24) > 0) {
-                                rule.gradient_start = dummy_style.gradient_color_start;
-                                rule.gradient_end = dummy_style.gradient_color_end;
-                                rule.gradient_direction = dummy_style.gradient_direction;
-                                has_any = true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // word-break
-        if (std.mem.indexOf(u8, body, "word-break")) |wb_idx| {
-            const is_plain = (wb_idx == 0 or (body[wb_idx - 1] != '-' and body[wb_idx - 1] != '_'));
-            if (is_plain) {
-                if (extractPropertyValue(body, wb_idx + "word-break".len)) |val| {
-                    rule.word_break = parseWordBreak(val);
-                    if (rule.word_break != null) has_any = true;
-                }
-            }
-        }
-
-        // overflow-wrap (also handles legacy word-wrap)
-        if (std.mem.indexOf(u8, body, "overflow-wrap")) |ow_idx| {
-            if (extractPropertyValue(body, ow_idx + "overflow-wrap".len)) |val| {
-                rule.overflow_wrap = parseOverflowWrap(val);
-                if (rule.overflow_wrap != null) has_any = true;
-            }
-        } else if (std.mem.indexOf(u8, body, "word-wrap")) |ww_idx| {
-            // Legacy alias
-            const is_plain = (ww_idx == 0 or (body[ww_idx - 1] != '-' and body[ww_idx - 1] != '_'));
-            if (is_plain) {
-                if (extractPropertyValue(body, ww_idx + "word-wrap".len)) |val| {
-                    rule.overflow_wrap = parseOverflowWrap(val);
-                    if (rule.overflow_wrap != null) has_any = true;
-                }
-            }
-        }
-
-        // text-overflow
-        if (std.mem.indexOf(u8, body, "text-overflow")) |to_idx| {
-            if (extractPropertyValue(body, to_idx + "text-overflow".len)) |val| {
-                rule.text_overflow = parseTextOverflow(val);
-                if (rule.text_overflow != null) has_any = true;
-            }
-        }
-
-        // visibility
-        if (std.mem.indexOf(u8, body, "visibility")) |vi_idx| {
-            const is_plain = (vi_idx == 0 or (body[vi_idx - 1] != '-' and body[vi_idx - 1] != '_'));
-            if (is_plain) {
-                if (extractPropertyValue(body, vi_idx + "visibility".len)) |val| {
-                    const trimmed = std.mem.trim(u8, val, " \t\r\n");
-                    if (std.mem.eql(u8, trimmed, "hidden")) {
-                        rule.visibility = .hidden;
-                        has_any = true;
-                    } else if (std.mem.eql(u8, trimmed, "visible")) {
-                        rule.visibility = .visible;
-                        has_any = true;
-                    } else if (std.mem.eql(u8, trimmed, "collapse")) {
-                        rule.visibility = .collapse;
-                        has_any = true;
-                    }
-                }
-            }
-        }
+        extractPropertiesFromBody(body, &rule, &has_any);
 
         if (has_any) {
             // Store each comma-separated selector
@@ -2164,9 +2183,14 @@ fn walkAndSelect(
                                 if (style.overflow_wrap == .normal) style.overflow_wrap = ow;
                             }
 
-                            // visibility from CSS rules (only override default visible)
+                            // visibility from CSS rules — always apply (last rule wins)
                             if (rule.visibility) |vis| {
-                                if (style.visibility == .visible) style.visibility = vis;
+                                style.visibility = vis;
+                            }
+
+                            // opacity from CSS rules
+                            if (rule.opacity) |op| {
+                                if (style.opacity == 1.0) style.opacity = op;
                             }
 
                             // text-overflow from CSS rules
@@ -2377,7 +2401,14 @@ pub fn cascade(doc_root: DomNode, allocator: std.mem.Allocator, external_css: ?[
     defer allocator.free(css_text);
 
     // 4.5. Resolve CSS custom properties (var() references)
-    var css_vars = try extractCssVariables(css_text, allocator);
+    // Skip var() resolution for very large CSS (>512KB) — LibCSS may crash on
+    // resolved output. The brace/comment-aware parser is safe, but the downstream
+    // C library (LibCSS) can corrupt memory with very large inputs.
+    const max_css_for_var_resolution: usize = 512 * 1024;
+    var css_vars = if (css_text.len <= max_css_for_var_resolution)
+        try extractCssVariables(css_text, allocator)
+    else
+        CssVarMap.init(allocator);
     defer {
         var vit = css_vars.iterator();
         while (vit.next()) |entry| {

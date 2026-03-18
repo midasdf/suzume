@@ -267,13 +267,27 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 
 /// Layout a block box with viewport height for resolving percent heights.
 pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, viewport_height: f32) void {
-    // Delegate to flex layout if display is flex or grid
-    // Grid falls back to flex row with wrap — gives reasonable multi-column layout
-    if (box.style.display == .flex or box.style.display == .inline_flex or
-        box.style.display == .grid or box.style.display == .inline_grid)
-    {
+    // Delegate to flex layout if display is flex
+    if (box.style.display == .flex or box.style.display == .inline_flex) {
         flex.layoutFlex(box, containing_width, cursor_y, fonts);
         return;
+    }
+
+    // Grid→flex fallback: only use flex when children have explicit widths,
+    // otherwise block stacking is more predictable
+    if (box.style.display == .grid or box.style.display == .inline_grid) {
+        var has_sized_children = false;
+        for (box.children.items) |child| {
+            if (child.style.width != .auto) {
+                has_sized_children = true;
+                break;
+            }
+        }
+        if (has_sized_children) {
+            flex.layoutFlex(box, containing_width, cursor_y, fonts);
+            return;
+        }
+        // else: fall through to block layout
     }
 
     // Delegate to table layout if display is table
