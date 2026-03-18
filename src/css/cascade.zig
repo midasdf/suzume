@@ -1116,12 +1116,90 @@ fn applyDeclaration(
         .transform => {
             parseTransform(trimmed, &style.transform_translate_x, &style.transform_translate_y, fs, vw, vh);
         },
+        .counter_reset => style.counter_reset = arena.dupe(u8, trimmed) catch null,
+        .counter_increment => style.counter_increment = arena.dupe(u8, trimmed) catch null,
+        .transition_duration => {
+            if (properties.parseLength(trimmed)) |len| {
+                if (len.unit == .s) style.transition_duration = len.value
+                else if (len.unit == .ms) style.transition_duration = len.value / 1000.0;
+            }
+        },
+        .transition_delay => {
+            if (properties.parseLength(trimmed)) |len| {
+                if (len.unit == .s) style.transition_delay = len.value
+                else if (len.unit == .ms) style.transition_delay = len.value / 1000.0;
+            }
+        },
+        .animation_name => style.animation_name = arena.dupe(u8, trimmed) catch null,
+        .animation_duration => {
+            if (properties.parseLength(trimmed)) |len| {
+                if (len.unit == .s) style.animation_duration = len.value
+                else if (len.unit == .ms) style.animation_duration = len.value / 1000.0;
+            }
+        },
+        .filter => parseFilter(trimmed, style, fs, vw, vh),
+        .object_fit => {
+            if (eqlIgnoreCase(trimmed, "contain")) style.object_fit = .contain
+            else if (eqlIgnoreCase(trimmed, "cover")) style.object_fit = .cover
+            else if (eqlIgnoreCase(trimmed, "fill")) style.object_fit = .fill
+            else if (eqlIgnoreCase(trimmed, "none")) style.object_fit = .none
+            else if (eqlIgnoreCase(trimmed, "scale-down")) style.object_fit = .scale_down;
+        },
+        .outline_width => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.outline_width = px;
+        },
+        .outline_color => {
+            if (properties.parseColor(trimmed)) |c| style.outline_color = c.toArgb();
+        },
+        // Skip these — just parse to avoid unknown property warnings
+        .transition_property, .transition_timing_function,
+        .animation_timing_function, .animation_delay,
+        .animation_iteration_count, .animation_direction,
+        .animation_fill_mode, .animation_play_state,
+        .backdrop_filter, .outline_style => {},
         // Skip border-style — we don't track it but it's needed for border-width to display
         .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},
         // Skip custom properties (already extracted)
         .custom => {},
         // Skip unknown
         else => {},
+    }
+}
+
+fn parseFilter(s: []const u8, style: *ComputedStyle, font_size: f32, vw: f32, vh: f32) void {
+    if (eqlIgnoreCase(s, "none")) {
+        style.filter_grayscale = 0;
+        style.filter_brightness = 1;
+        style.filter_blur = 0;
+        return;
+    }
+    var pos: usize = 0;
+    while (pos < s.len) {
+        if (std.mem.indexOfPos(u8, s, pos, "grayscale(")) |idx| {
+            const start = idx + "grayscale(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t%");
+            if (std.fmt.parseFloat(f32, val)) |v| {
+                style.filter_grayscale = if (v > 1) v / 100.0 else v;
+            } else |_| {}
+            pos = end + 1;
+        } else if (std.mem.indexOfPos(u8, s, pos, "brightness(")) |idx| {
+            const start = idx + "brightness(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t%");
+            if (std.fmt.parseFloat(f32, val)) |v| {
+                style.filter_brightness = if (v > 2) v / 100.0 else v;
+            } else |_| {}
+            pos = end + 1;
+        } else if (std.mem.indexOfPos(u8, s, pos, "blur(")) |idx| {
+            const start = idx + "blur(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t");
+            if (parseLengthValue(val, font_size, vw, vh)) |px| {
+                style.filter_blur = px;
+            }
+            pos = end + 1;
+        } else break;
     }
 }
 
