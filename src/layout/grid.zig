@@ -22,9 +22,42 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
     const gap = style.gap;
 
     // Resolve column track sizes
-    const col_widths = resolveTrackSizes(style.grid_template_columns, box.content.width, gap, fonts.allocator);
-    defer if (col_widths.len > 0 and style.grid_template_columns.len > 0) fonts.allocator.free(col_widths);
-    const num_cols: usize = if (col_widths.len > 0) col_widths.len else 1;
+    // If grid-template-columns is set, use it. Otherwise, if grid-auto-columns
+    // is set (e.g., minmax(0,1fr)), create equal columns based on child count.
+    var col_widths: []f32 = &.{};
+    var col_widths_owned = false;
+    var num_cols: usize = 1;
+
+    if (style.grid_template_columns.len > 0) {
+        col_widths = resolveTrackSizes(style.grid_template_columns, box.content.width, gap, fonts.allocator);
+        col_widths_owned = col_widths.len > 0;
+        num_cols = if (col_widths.len > 0) col_widths.len else 1;
+    } else {
+        // No explicit template — check children for grid-column spans to determine column count
+        var max_col: usize = 0;
+        var auto_children: usize = 0;
+        for (box.children.items) |child| {
+            if (child.style.position == .absolute or child.style.position == .fixed or child.style.display == .none) continue;
+            const span_val = @max(@as(usize, child.style.grid_column_span), 1);
+            max_col += span_val;
+            auto_children += 1;
+        }
+        // Use the larger of max span total and 1
+        num_cols = if (max_col > 0) max_col else 1;
+        // Cap at reasonable number to avoid excessive columns
+        if (num_cols > 12) num_cols = 12;
+        if (num_cols > 1) {
+            // Create equal-width columns
+            const total_gap = gap * @as(f32, @floatFromInt(num_cols - 1));
+            const col_w = @max((box.content.width - total_gap) / @as(f32, @floatFromInt(num_cols)), 0);
+            col_widths = fonts.allocator.alloc(f32, num_cols) catch &.{};
+            if (col_widths.len > 0) {
+                col_widths_owned = true;
+                for (col_widths) |*w| w.* = col_w;
+            }
+        }
+    }
+    defer if (col_widths_owned) fonts.allocator.free(col_widths);
 
     // Place children in grid cells
     var col: usize = 0;
@@ -39,10 +72,17 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
         }
         if (child.style.display == .none) continue;
 
-        // Get column width
-        const col_width = if (col < col_widths.len) col_widths[col] else box.content.width;
+        // Get column width (accounting for grid-column span)
+        const span = @max(@as(usize, child.style.grid_column_span), 1);
+        var col_width: f32 = 0;
+        for (0..span) |s| {
+            const c = col + s;
+            col_width += if (c < col_widths.len) col_widths[c] else 0;
+            if (s > 0) col_width += gap; // add gap between spanned columns
+        }
+        if (col_width == 0) col_width = box.content.width;
 
-        // Layout child with column width as containing width
+        // Layout child with spanned column width as containing width
         block.layoutBlock(child, col_width, box.content.y + row_y, fonts);
 
         // Compute x position for this column
@@ -62,7 +102,7 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
             child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
         row_height = @max(row_height, child_h);
 
-        col += 1;
+        col += span;
         if (col >= num_cols) {
             col = 0;
             row_y += row_height + gap;

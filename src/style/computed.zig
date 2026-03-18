@@ -88,10 +88,13 @@ pub const ComputedStyle = struct {
     grid_template_columns: []const GridTrackSize = &.{},
     grid_template_rows: []const GridTrackSize = &.{},
     grid_auto_flow: GridAutoFlow = .row,
+    grid_auto_columns: GridTrackSize = .auto,
     grid_column_start: i16 = 0, // 0 = auto
     grid_column_end: i16 = 0,
     grid_row_start: i16 = 0,
     grid_row_end: i16 = 0,
+    grid_column_span: u16 = 1,
+    grid_row_span: u16 = 1,
 
     // Transforms
     transform_translate_x: f32 = 0,

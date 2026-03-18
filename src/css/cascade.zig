@@ -1095,10 +1095,23 @@ fn applyDeclaration(
             if (eqlIgnoreCase(trimmed, "row")) style.grid_auto_flow = .row
             else if (eqlIgnoreCase(trimmed, "column")) style.grid_auto_flow = .column;
         },
+        .grid_auto_columns => {
+            if (parseOneTrack(trimmed)) |t| style.grid_auto_columns = t;
+        },
         .grid_column_start => style.grid_column_start = parseGridLine(trimmed),
-        .grid_column_end => style.grid_column_end = parseGridLine(trimmed),
+        .grid_column_end => {
+            if (std.mem.startsWith(u8, trimmed, "span")) {
+                const num = std.mem.trim(u8, trimmed[4..], " \t");
+                style.grid_column_span = std.fmt.parseInt(u16, num, 10) catch 1;
+            } else style.grid_column_end = parseGridLine(trimmed);
+        },
         .grid_row_start => style.grid_row_start = parseGridLine(trimmed),
-        .grid_row_end => style.grid_row_end = parseGridLine(trimmed),
+        .grid_row_end => {
+            if (std.mem.startsWith(u8, trimmed, "span")) {
+                const num = std.mem.trim(u8, trimmed[4..], " \t");
+                style.grid_row_span = std.fmt.parseInt(u16, num, 10) catch 1;
+            } else style.grid_row_end = parseGridLine(trimmed);
+        },
         .content => {
             // Parse CSS content property value (for ::before/::after)
             if (trimmed.len >= 2 and (trimmed[0] == '"' or trimmed[0] == '\'')) {
