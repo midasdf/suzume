@@ -1453,6 +1453,9 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .px => value,
         .em => value * font_size,
         .rem => value * 16.0,
+        .ch => value * font_size * 0.5, // approximate: 0 width ≈ 50% of font-size
+        .ex => value * font_size * 0.5, // approximate: x-height ≈ 50% of font-size
+        .lh => value * font_size * 1.2, // approximate: line-height ≈ 120% of font-size
         .percent => value, // percentage stored as-is, resolved at layout
         .vh, .svh, .dvh, .lvh => value * vh / 100.0,
         .vw, .svw, .dvw, .lvw => value * vw / 100.0,
