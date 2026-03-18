@@ -337,6 +337,12 @@ fn parseUnit(unit_str: []const u8) ?values.Unit {
         .{ "rad", .rad },
         .{ "s", .s },
         .{ "ms", .ms },
+        .{ "svh", .svh },
+        .{ "dvh", .dvh },
+        .{ "lvh", .lvh },
+        .{ "svw", .svw },
+        .{ "dvw", .dvw },
+        .{ "lvw", .lvw },
     });
 
     // Lowercase for lookup
@@ -423,6 +429,9 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     }
     if (std.mem.eql(u8, property_name, "flex")) {
         return expandFlex(trimmed, allocator);
+    }
+    if (std.mem.eql(u8, property_name, "flex-flow")) {
+        return expandFlexFlow(trimmed, allocator);
     }
     if (std.mem.eql(u8, property_name, "overflow")) {
         return expandOverflow(trimmed, allocator);
@@ -692,6 +701,26 @@ fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaratio
         decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
         decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
         decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[2], .important = false };
+    }
+    return decls;
+}
+
+fn expandFlexFlow(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+    decls[0] = .{ .property = .flex_direction, .property_name = "flex-direction", .value_raw = "row", .important = false };
+    decls[1] = .{ .property = .flex_wrap, .property_name = "flex-wrap", .value_raw = "nowrap", .important = false };
+
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |token| {
+        if (eqlIgnoreCase(token, "row") or eqlIgnoreCase(token, "column") or
+            eqlIgnoreCase(token, "row-reverse") or eqlIgnoreCase(token, "column-reverse"))
+        {
+            decls[0].value_raw = token;
+        } else if (eqlIgnoreCase(token, "wrap") or eqlIgnoreCase(token, "nowrap") or
+            eqlIgnoreCase(token, "wrap-reverse"))
+        {
+            decls[1].value_raw = token;
+        }
     }
     return decls;
 }

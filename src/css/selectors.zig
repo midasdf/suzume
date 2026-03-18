@@ -312,6 +312,51 @@ const SelectorParser = struct {
                 if (PseudoClass.fromString(name)) |pc| {
                     try self.components.append(self.allocator,.{ .simple = .{ .pseudo_class = pc } });
                     self.specificity.b += 1;
+                } else if (self.peek() == '(' and (eqlIgnoreCase(name, "where") or eqlIgnoreCase(name, "is"))) {
+                    // Handle :where() and :is() — parse inner selector classes/ids
+                    self.advance(); // skip '('
+                    const inner_start = self.pos;
+                    var paren_depth_inner: u32 = 1;
+                    while (self.pos < self.source.len and paren_depth_inner > 0) {
+                        if (self.source[self.pos] == '(') paren_depth_inner += 1;
+                        if (self.source[self.pos] == ')') paren_depth_inner -= 1;
+                        if (paren_depth_inner > 0) self.pos += 1;
+                    }
+                    const inner = self.source[inner_start..self.pos];
+                    if (self.pos < self.source.len) self.advance(); // skip ')'
+
+                    // Parse class/id selectors from inner content
+                    const is_where = eqlIgnoreCase(name, "where");
+                    var inner_pos: usize = 0;
+                    while (inner_pos < inner.len) {
+                        const ic = inner[inner_pos];
+                        if (ic == '.') {
+                            inner_pos += 1;
+                            const cls_start = inner_pos;
+                            while (inner_pos < inner.len and isIdentChar(inner[inner_pos])) inner_pos += 1;
+                            if (inner_pos > cls_start) {
+                                try self.components.append(self.allocator, .{ .simple = .{ .class = inner[cls_start..inner_pos] } });
+                                if (!is_where) self.specificity.b += 1; // :where has zero specificity
+                            }
+                        } else if (ic == '#') {
+                            inner_pos += 1;
+                            const id_start = inner_pos;
+                            while (inner_pos < inner.len and isIdentChar(inner[inner_pos])) inner_pos += 1;
+                            if (inner_pos > id_start) {
+                                try self.components.append(self.allocator, .{ .simple = .{ .id = inner[id_start..inner_pos] } });
+                                if (!is_where) self.specificity.a += 1;
+                            }
+                        } else if (isIdentStart(ic)) {
+                            const tag_start = inner_pos;
+                            while (inner_pos < inner.len and isIdentChar(inner[inner_pos])) inner_pos += 1;
+                            if (inner_pos > tag_start) {
+                                try self.components.append(self.allocator, .{ .simple = .{ .type_sel = inner[tag_start..inner_pos] } });
+                                if (!is_where) self.specificity.c += 1;
+                            }
+                        } else {
+                            inner_pos += 1;
+                        }
+                    }
                 } else {
                     // Unknown pseudo-class, skip including any parenthesized args
                     if (self.peek() == '(') {
