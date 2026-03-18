@@ -46,6 +46,10 @@ pub const ComputedStyle = struct {
 
     // Position
     position: Position = .static_,
+    top: Dimension = .auto,
+    left: Dimension = .auto,
+    right: Dimension = .auto,
+    bottom: Dimension = .auto,
 
     // List
     list_style_type: ListStyleType = .disc,

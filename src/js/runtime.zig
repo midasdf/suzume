@@ -50,6 +50,17 @@ pub const JsRuntime = struct {
             const exc = qjs.JS_GetException(self.ctx);
             defer qjs.JS_FreeValue(self.ctx, exc);
 
+            // Try to get stack trace for better debugging
+            const stack_val = qjs.JS_GetPropertyStr(self.ctx, exc, "stack");
+            if (!quickjs.JS_IsUndefined(stack_val)) {
+                defer qjs.JS_FreeValue(self.ctx, stack_val);
+                const stack_str = qjs.JS_ToCString(self.ctx, stack_val);
+                if (stack_str) |ss| {
+                    defer qjs.JS_FreeCString(self.ctx, ss);
+                    std.debug.print("[JS:STACK] {s}\n", .{std.mem.span(ss)});
+                }
+            }
+
             const exc_str = qjs.JS_ToCString(self.ctx, exc);
             if (exc_str) |s| {
                 defer qjs.JS_FreeCString(self.ctx, s);

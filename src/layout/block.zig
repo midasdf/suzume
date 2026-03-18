@@ -359,6 +359,35 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
             }
         }
     }
+
+    // Apply position:relative offset (after normal flow layout)
+    if (box.style.position == .relative) {
+        var dx: f32 = 0;
+        var dy: f32 = 0;
+        switch (box.style.left) {
+            .px => |v| { dx = v; },
+            .percent => |p| { dx = p * containing_width / 100.0; },
+            else => {
+                // If left is auto, check right
+                switch (box.style.right) {
+                    .px => |v| { dx = -v; },
+                    .percent => |p| { dx = -p * containing_width / 100.0; },
+                    else => {},
+                }
+            },
+        }
+        switch (box.style.top) {
+            .px => |v| { dy = v; },
+            else => {
+                switch (box.style.bottom) {
+                    .px => |v| { dy = -v; },
+                    else => {},
+                }
+            },
+        }
+        if (dx != 0) adjustXPositions(box, dx);
+        if (dy != 0) adjustYPositions(box, dy);
+    }
 }
 
 /// Layout children in block formatting context (all children are block-level).

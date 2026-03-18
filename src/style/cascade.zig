@@ -330,6 +330,22 @@ fn extractStyle(style: *const css.css_computed_style, is_root: bool) ComputedSty
         else => .static_,
     };
 
+    // Position offsets (top, left, right, bottom)
+    var pos_len: css.css_fixed = 0;
+    var pos_unit: css.css_unit = css.CSS_UNIT_PX;
+    if (css.css_computed_top(style, &pos_len, &pos_unit) == css.CSS_TOP_SET) {
+        result.top = if (pos_unit == css.CSS_UNIT_PCT) .{ .percent = fixedToF32(pos_len) } else .{ .px = lengthToPx(pos_len, pos_unit, default_font_size) };
+    }
+    if (css.css_computed_left(style, &pos_len, &pos_unit) == css.CSS_LEFT_SET) {
+        result.left = if (pos_unit == css.CSS_UNIT_PCT) .{ .percent = fixedToF32(pos_len) } else .{ .px = lengthToPx(pos_len, pos_unit, default_font_size) };
+    }
+    if (css.css_computed_right(style, &pos_len, &pos_unit) == css.CSS_RIGHT_SET) {
+        result.right = if (pos_unit == css.CSS_UNIT_PCT) .{ .percent = fixedToF32(pos_len) } else .{ .px = lengthToPx(pos_len, pos_unit, default_font_size) };
+    }
+    if (css.css_computed_bottom(style, &pos_len, &pos_unit) == css.CSS_BOTTOM_SET) {
+        result.bottom = if (pos_unit == css.CSS_UNIT_PCT) .{ .percent = fixedToF32(pos_len) } else .{ .px = lengthToPx(pos_len, pos_unit, default_font_size) };
+    }
+
     // List style type
     const lst_val = css.css_computed_list_style_type(style);
     result.list_style_type = switch (lst_val) {
