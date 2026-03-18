@@ -241,7 +241,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     const bg_y = screen_y;
                     const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
                     const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
-                    const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
+                    const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
                     const horizontal = (box.style.gradient_direction == ComputedStyle.GradientDirection.to_right or
                         box.style.gradient_direction == ComputedStyle.GradientDirection.to_left);
                     var start_color = Surface.argbToColour(box.style.gradient_color_start);

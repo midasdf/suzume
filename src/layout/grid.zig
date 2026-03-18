@@ -1,6 +1,6 @@
 const std = @import("std");
 const Box = @import("box.zig").Box;
-const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const block = @import("block.zig");
 

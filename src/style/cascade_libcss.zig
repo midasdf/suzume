@@ -2,7 +2,7 @@ const std = @import("std");
 const css = @import("../bindings/css.zig").c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const DomNode = @import("../dom/node.zig").DomNode;
-const ComputedStyle = @import("computed.zig").ComputedStyle;
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 const select_handler = @import("select.zig");
 
 /// CSS fixed-point (22:10) to f32.

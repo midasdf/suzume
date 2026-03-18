@@ -115,7 +115,7 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     };
 
     // Apply body margin
-    const body_style = new_styles.getStyle(body_node) orelse @import("style/computed.zig").ComputedStyle{};
+    const body_style = new_styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
     const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
     new_root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
 
@@ -452,7 +452,7 @@ fn navigateTo(
             return false;
         };
 
-        const body_style = styles.getStyle(body_node) orelse @import("style/computed.zig").ComputedStyle{};
+        const body_style = styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
         const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
         root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
 
@@ -523,7 +523,7 @@ fn navigateTo(
     };
 
     // Apply body margin
-    const body_style = styles.getStyle(body_node) orelse @import("style/computed.zig").ComputedStyle{};
+    const body_style = styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
     const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
     root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
 
@@ -3153,7 +3153,7 @@ pub const dom = struct {
 };
 
 pub const style = struct {
-    pub const computed = @import("style/computed.zig");
+    pub const computed = @import("css/computed.zig");
     pub const cascade = @import("css/cascade.zig");
 };
 

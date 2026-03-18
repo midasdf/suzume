@@ -2,7 +2,7 @@ const std = @import("std");
 const Box = @import("box.zig").Box;
 const BoxType = @import("box.zig").BoxType;
 const LineBox = @import("box.zig").LineBox;
-const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const flex = @import("flex.zig");
 const grid = @import("grid.zig");
@@ -946,7 +946,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 }
 
 /// Apply text-align for inline text that starts at a given x offset within a line.
-fn applyTextAlignInline(base_x: f32, text_width: f32, container_width: f32, cursor_x: f32, text_align: @import("../style/computed.zig").ComputedStyle.TextAlign) f32 {
+fn applyTextAlignInline(base_x: f32, text_width: f32, container_width: f32, cursor_x: f32, text_align: @import("../css/computed.zig").ComputedStyle.TextAlign) f32 {
     _ = cursor_x;
     return switch (text_align) {
         .center => base_x + @max((container_width - text_width) / 2, 0) - base_x + base_x,
@@ -1215,7 +1215,7 @@ fn layoutPreText(box: *Box, text: []const u8, base_x: f32, base_y: f32, containe
 }
 
 /// Apply text-align to compute line x position.
-fn applyTextAlign(base_x: f32, text_width: f32, container_width: f32, text_align: @import("../style/computed.zig").ComputedStyle.TextAlign) f32 {
+fn applyTextAlign(base_x: f32, text_width: f32, container_width: f32, text_align: @import("../css/computed.zig").ComputedStyle.TextAlign) f32 {
     return switch (text_align) {
         .center => base_x + @max((container_width - text_width) / 2, 0),
         .right => base_x + @max(container_width - text_width, 0),

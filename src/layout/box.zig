@@ -1,5 +1,5 @@
 const std = @import("std");
-const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 const DomNode = @import("../dom/node.zig").DomNode;
 
 pub const Rect = struct {

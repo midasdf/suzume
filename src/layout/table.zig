@@ -3,7 +3,7 @@ const Box = @import("box.zig").Box;
 const BoxType = @import("box.zig").BoxType;
 const block = @import("block.zig");
 const FontCache = @import("../paint/painter.zig").FontCache;
-const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 
 /// Lay out a table element and its children.
 /// Assumes the table box has children that are table-row boxes,
