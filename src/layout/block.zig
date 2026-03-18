@@ -5,6 +5,7 @@ const LineBox = @import("box.zig").LineBox;
 const ComputedStyle = @import("../style/computed.zig").ComputedStyle;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const flex = @import("flex.zig");
+const grid = @import("grid.zig");
 const table = @import("table.zig");
 
 /// Check if a Unicode codepoint is in a CJK range where line breaks are allowed
@@ -273,21 +274,10 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         return;
     }
 
-    // Grid→flex fallback: only use flex when children have explicit widths,
-    // otherwise block stacking is more predictable
+    // Grid layout
     if (box.style.display == .grid or box.style.display == .inline_grid) {
-        var has_sized_children = false;
-        for (box.children.items) |child| {
-            if (child.style.width != .auto) {
-                has_sized_children = true;
-                break;
-            }
-        }
-        if (has_sized_children) {
-            flex.layoutFlex(box, containing_width, cursor_y, fonts);
-            return;
-        }
-        // else: fall through to block layout
+        grid.layoutGrid(box, containing_width, cursor_y, fonts);
+        return;
     }
 
     // Delegate to table layout if display is table

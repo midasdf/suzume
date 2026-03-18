@@ -1023,6 +1023,21 @@ fn applyDeclaration(
         .text_shadow => {
             parseShadow(trimmed, fs, &style.text_shadow_x, &style.text_shadow_y, &style.text_shadow_blur, &style.text_shadow_color);
         },
+        // Grid properties
+        .grid_template_columns => {
+            style.grid_template_columns = parseGridTemplate(trimmed, arena) orelse &.{};
+        },
+        .grid_template_rows => {
+            style.grid_template_rows = parseGridTemplate(trimmed, arena) orelse &.{};
+        },
+        .grid_auto_flow => {
+            if (eqlIgnoreCase(trimmed, "row")) style.grid_auto_flow = .row
+            else if (eqlIgnoreCase(trimmed, "column")) style.grid_auto_flow = .column;
+        },
+        .grid_column_start => style.grid_column_start = parseGridLine(trimmed),
+        .grid_column_end => style.grid_column_end = parseGridLine(trimmed),
+        .grid_row_start => style.grid_row_start = parseGridLine(trimmed),
+        .grid_row_end => style.grid_row_end = parseGridLine(trimmed),
         // Skip border-style — we don't track it but it's needed for border-width to display
         .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},
         // Skip custom properties (already extracted)
@@ -1060,6 +1075,94 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .in_ => value * 96.0,
         else => value,
     };
+}
+
+fn parseGridTemplate(s: []const u8, alloc: std.mem.Allocator) ?[]const ComputedStyle.GridTrackSize {
+    var tracks: std.ArrayListUnmanaged(ComputedStyle.GridTrackSize) = .empty;
+    // We need to handle repeat() and minmax() which contain parens, so we can't just tokenize by space.
+    // Instead, scan through and handle paren-groups specially.
+    var pos: usize = 0;
+    while (pos < s.len) {
+        // Skip whitespace
+        while (pos < s.len and (s[pos] == ' ' or s[pos] == '\t')) pos += 1;
+        if (pos >= s.len) break;
+
+        // Check for repeat( or minmax(
+        if (pos + 7 <= s.len and std.mem.startsWith(u8, s[pos..], "repeat(")) {
+            // Find matching closing paren
+            const start = pos + 7;
+            var depth: usize = 1;
+            var end = start;
+            while (end < s.len and depth > 0) : (end += 1) {
+                if (s[end] == '(') depth += 1;
+                if (s[end] == ')') depth -= 1;
+            }
+            const inner = s[start..if (end > start and s[end - 1] == ')') end - 1 else end];
+            // Parse repeat(N, size)
+            if (std.mem.indexOfScalar(u8, inner, ',')) |comma| {
+                const count_str = std.mem.trim(u8, inner[0..comma], " \t");
+                const count = std.fmt.parseInt(usize, count_str, 10) catch {
+                    pos = end;
+                    continue;
+                };
+                const size_str = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+                const track = parseOneTrack(size_str) orelse {
+                    pos = end;
+                    continue;
+                };
+                for (0..count) |_| {
+                    tracks.append(alloc, track) catch return null;
+                }
+            }
+            pos = end;
+            continue;
+        }
+        if (pos + 7 <= s.len and std.mem.startsWith(u8, s[pos..], "minmax(")) {
+            const start = pos + 7;
+            var depth: usize = 1;
+            var end = start;
+            while (end < s.len and depth > 0) : (end += 1) {
+                if (s[end] == '(') depth += 1;
+                if (s[end] == ')') depth -= 1;
+            }
+            const inner = s[start..if (end > start and s[end - 1] == ')') end - 1 else end];
+            // Simplify minmax(min, max) to max
+            if (std.mem.indexOfScalar(u8, inner, ',')) |comma| {
+                const max_str = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+                const track = parseOneTrack(max_str) orelse ComputedStyle.GridTrackSize.auto;
+                tracks.append(alloc, track) catch return null;
+            }
+            pos = end;
+            continue;
+        }
+
+        // Regular token: read until space
+        const token_start = pos;
+        while (pos < s.len and s[pos] != ' ' and s[pos] != '\t') pos += 1;
+        const t = s[token_start..pos];
+        if (parseOneTrack(t)) |track| {
+            tracks.append(alloc, track) catch return null;
+        }
+    }
+    if (tracks.items.len == 0) return null;
+    return tracks.toOwnedSlice(alloc) catch return null;
+}
+
+fn parseOneTrack(t: []const u8) ?ComputedStyle.GridTrackSize {
+    if (eqlIgnoreCase(t, "auto")) return .auto;
+    if (eqlIgnoreCase(t, "min-content") or eqlIgnoreCase(t, "max-content")) return .auto;
+    if (std.mem.endsWith(u8, t, "fr")) {
+        if (std.fmt.parseFloat(f32, t[0 .. t.len - 2])) |v| return .{ .fr = v } else |_| {}
+    }
+    if (properties.parseLength(t)) |len| {
+        if (len.unit == .percent) return .{ .percent = len.value };
+        return .{ .px = resolveLengthToPx(len.value, len.unit, 16.0, 0, 0) };
+    }
+    return null;
+}
+
+fn parseGridLine(s: []const u8) i16 {
+    return std.fmt.parseInt(i16, s, 10) catch 0;
 }
 
 fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle.Dimension {

@@ -84,6 +84,15 @@ pub const ComputedStyle = struct {
     flex_basis: Dimension = .auto,
     gap: f32 = 0, // column-gap, used for both row and column in flex
 
+    // Grid properties
+    grid_template_columns: []const GridTrackSize = &.{},
+    grid_template_rows: []const GridTrackSize = &.{},
+    grid_auto_flow: GridAutoFlow = .row,
+    grid_column_start: i16 = 0, // 0 = auto
+    grid_column_end: i16 = 0,
+    grid_row_start: i16 = 0,
+    grid_row_end: i16 = 0,
+
     // Opacity
     opacity: f32 = 1.0,
 
@@ -284,5 +293,17 @@ pub const ComputedStyle = struct {
         to_right,
         to_top,
         to_left,
+    };
+
+    pub const GridTrackSize = union(enum) {
+        px: f32,
+        fr: f32,
+        percent: f32,
+        auto,
+    };
+
+    pub const GridAutoFlow = enum {
+        row,
+        column,
     };
 };

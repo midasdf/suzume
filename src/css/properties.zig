@@ -427,6 +427,28 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     if (std.mem.eql(u8, property_name, "overflow")) {
         return expandOverflow(trimmed, allocator);
     }
+    // Grid shorthands
+    if (std.mem.eql(u8, property_name, "grid-column")) {
+        return expandGridSlash(trimmed, .grid_column_start, "grid-column-start", .grid_column_end, "grid-column-end", allocator);
+    }
+    if (std.mem.eql(u8, property_name, "grid-row")) {
+        return expandGridSlash(trimmed, .grid_row_start, "grid-row-start", .grid_row_end, "grid-row-end", allocator);
+    }
+    if (std.mem.eql(u8, property_name, "grid-gap")) {
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .gap, .property_name = "gap", .value_raw = trimmed, .important = false };
+        return decls;
+    }
+    if (std.mem.eql(u8, property_name, "grid-column-gap")) {
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .column_gap, .property_name = "column-gap", .value_raw = trimmed, .important = false };
+        return decls;
+    }
+    if (std.mem.eql(u8, property_name, "grid-row-gap")) {
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .row_gap, .property_name = "row-gap", .value_raw = trimmed, .important = false };
+        return decls;
+    }
     return null;
 }
 
@@ -683,6 +705,29 @@ fn expandOverflow(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declar
 
     decls[0] = .{ .property = .overflow_x, .property_name = "overflow-x", .value_raw = x_val, .important = false };
     decls[1] = .{ .property = .overflow_y, .property_name = "overflow-y", .value_raw = y_val, .important = false };
+    return decls;
+}
+
+fn expandGridSlash(
+    value: []const u8,
+    start_id: ast.PropertyId,
+    start_name: []const u8,
+    end_id: ast.PropertyId,
+    end_name: []const u8,
+    allocator: std.mem.Allocator,
+) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+    // Split by " / "
+    if (std.mem.indexOf(u8, value, "/")) |slash_pos| {
+        const start_val = std.mem.trim(u8, value[0..slash_pos], " \t");
+        const end_val = std.mem.trim(u8, value[slash_pos + 1 ..], " \t");
+        decls[0] = .{ .property = start_id, .property_name = start_name, .value_raw = start_val, .important = false };
+        decls[1] = .{ .property = end_id, .property_name = end_name, .value_raw = end_val, .important = false };
+    } else {
+        // No slash: start = value, end = auto (0)
+        decls[0] = .{ .property = start_id, .property_name = start_name, .value_raw = value, .important = false };
+        decls[1] = .{ .property = end_id, .property_name = end_name, .value_raw = "auto", .important = false };
+    }
     return decls;
 }
 
