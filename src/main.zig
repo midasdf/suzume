@@ -1412,10 +1412,20 @@ pub fn main() !void {
                                                             mimg.deinit();
                                                         };
                                                         pg.pending_images_loaded += 1;
-                                                        // Update dimensions and repaint
+                                                        // Update intrinsic dimensions from actual image
                                                         if (pg.root_box) |rb| {
                                                             var updated = false;
                                                             updateImageDimensions(rb, ic, &updated);
+                                                            if (updated) {
+                                                                // Re-layout to apply new aspect ratios
+                                                                const cw: f32 = @floatFromInt(surface.width);
+                                                                const rcw = cw - rb.margin.left - rb.margin.right;
+                                                                block_layout.layoutBlock(rb, rcw, 0, &fonts);
+                                                                block_layout.adjustXPositions(rb, rb.margin.left);
+                                                                block_layout.adjustYPositions(rb, rb.margin.top);
+                                                                pg.total_height = painter_mod.contentHeight(rb);
+                                                                pg.total_width = painter_mod.contentWidth(rb);
+                                                            }
                                                         }
                                                         needs_repaint = true;
                                                     }
