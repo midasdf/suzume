@@ -1286,6 +1286,22 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "space-evenly"))
                 style.justify_content = .space_evenly;
         },
+        .align_content => {
+            if (eqlIgnoreCase(trimmed, "stretch"))
+                style.align_content = .stretch
+            else if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
+                style.align_content = .flex_start
+            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end"))
+                style.align_content = .flex_end
+            else if (eqlIgnoreCase(trimmed, "center"))
+                style.align_content = .center
+            else if (eqlIgnoreCase(trimmed, "space-between"))
+                style.align_content = .space_between
+            else if (eqlIgnoreCase(trimmed, "space-around"))
+                style.align_content = .space_around
+            else if (eqlIgnoreCase(trimmed, "space-evenly"))
+                style.align_content = .space_evenly;
+        },
         .align_items => {
             if (eqlIgnoreCase(trimmed, "stretch"))
                 style.align_items = .stretch

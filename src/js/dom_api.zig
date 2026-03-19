@@ -49,11 +49,21 @@ fn setDomDirty() void {
 /// Global root box pointer — set from main after layout, used for offset/rect queries.
 const Box = @import("../layout/box.zig").Box;
 const DomNode = @import("../dom/node.zig").DomNode;
+const cascade_mod = @import("../css/cascade.zig");
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 var g_root_box: ?*const Box = null;
 
 /// Set the root box pointer (called from main after layout).
 pub fn setRootBox(root: ?*const Box) void {
     g_root_box = root;
+}
+
+/// Global styles pointer — set from main after cascade, used for getComputedStyle.
+var g_styles: ?*const cascade_mod.StyleMap = null;
+
+/// Set the styles pointer (called from main after cascade/restyle).
+pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
+    g_styles = styles;
 }
 
 /// Find the Box in the tree that corresponds to a given DOM node pointer.
@@ -809,6 +819,72 @@ fn elementSetInnerHTML(
     // Destroy the fragment container itself
     _ = lxb_dom_node_destroy(frag);
 
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── insertAdjacentHTML ──────────────────────────────────────────────
+
+fn elementInsertAdjacentHTML(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 2) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+
+    const pos_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, pos_s.ptr);
+    const position = pos_s.ptr[0..pos_s.len];
+
+    const html_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, html_s.ptr);
+
+    if (html_s.len == 0) return quickjs.JS_UNDEFINED();
+
+    // Parse fragment
+    const doc = g_document orelse return quickjs.JS_UNDEFINED();
+    const frag = lxb_html_document_parse_fragment(doc, elem, html_s.ptr, html_s.len) orelse return quickjs.JS_UNDEFINED();
+
+    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        // Insert before this element (as previous sibling)
+        while (frag.first_child) |child| {
+            lxb_dom_node_remove(child);
+            lxb_dom_node_insert_before(node, child);
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+        // Insert as first child of this element
+        // Insert in reverse order to maintain document order
+        const last_inserted: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (frag.first_child) |child| {
+            lxb_dom_node_remove(child);
+            if (last_inserted) |ref| {
+                lxb_dom_node_insert_before(ref, child);
+            } else {
+                lxb_dom_node_insert_child(node, child);
+            }
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+        // Append as last child (same as innerHTML append)
+        while (frag.first_child) |child| {
+            lxb_dom_node_remove(child);
+            lxb_dom_node_insert_child(node, child);
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        // Insert after this element (as next sibling)
+        var insert_after: *lxb.lxb_dom_node_t = node;
+        while (frag.first_child) |child| {
+            lxb_dom_node_remove(child);
+            lxb_dom_node_insert_after(insert_after, child);
+            insert_after = child;
+        }
+    }
+
+    _ = lxb_dom_node_destroy(frag);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -2621,6 +2697,45 @@ fn elementGetChildElementCount(
     return qjs.JS_NewInt32(c, count);
 }
 
+// ── HTMLElement.hidden getter/setter ─────────────────────────────────
+
+fn elementGetHidden(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "hidden", 6, &attr_len);
+    // hidden attribute exists = true (even if empty string)
+    return quickjs.JS_NewBool(attr_ptr != null);
+}
+
+fn elementSetHidden(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const val = qjs.JS_ToBool(c, args[0]);
+    if (val > 0) {
+        // Set hidden attribute
+        _ = lxb.lxb_dom_element_set_attribute(elem, "hidden", 6, "", 0);
+    } else {
+        // Remove hidden attribute
+        _ = lxb.lxb_dom_element_remove_attribute(elem, "hidden", 6);
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 // ── getComputedStyle() ──────────────────────────────────────────────
 
 fn computedStyleGetPropertyValue(
@@ -2635,19 +2750,214 @@ fn computedStyleGetPropertyValue(
 
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
-    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
 
     const prop_s = jsStringToSlice(c, args[0]) orelse return qjs.JS_NewStringLen(c, "", 0);
     defer qjs.JS_FreeCString(c, prop_s.ptr);
+    const prop = prop_s.ptr[0..prop_s.len];
 
+    // Try cascade computed style first
+    const node = getNode(c, elem_val);
+    if (node != null and g_styles != null) {
+        if (g_styles.?.get(@intFromPtr(node.?))) |style| {
+            return computedStyleToString(c, &style, prop);
+        }
+    }
+
+    // Fallback: read from inline style attribute
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
-    if (style_ptr == null or style_len == 0) return qjs.JS_NewStringLen(c, "", 0);
-
-    if (getStyleProperty(style_ptr.?[0..style_len], prop_s.ptr[0..prop_s.len])) |val| {
-        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    if (style_ptr != null and style_len > 0) {
+        if (getStyleProperty(style_ptr.?[0..style_len], prop)) |val| {
+            return qjs.JS_NewStringLen(c, val.ptr, val.len);
+        }
     }
     return qjs.JS_NewStringLen(c, "", 0);
+}
+
+/// Convert a ComputedStyle field to a CSS string for getComputedStyle.
+fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: []const u8) qjs.JSValue {
+    // Format buffer for numeric values
+    var buf: [128]u8 = undefined;
+
+    if (std.mem.eql(u8, prop, "display")) {
+        const s = switch (style.display) {
+            .block => "block",
+            .inline_ => "inline",
+            .none => "none",
+            .flex => "flex",
+            .inline_block => "inline-block",
+            .inline_flex => "inline-flex",
+            .grid => "grid",
+            .inline_grid => "inline-grid",
+            .table => "table",
+            .table_row => "table-row",
+            .table_cell => "table-cell",
+            .list_item => "list-item",
+            else => "block",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "position")) {
+        const s = switch (style.position) {
+            .static_ => "static",
+            .relative => "relative",
+            .absolute => "absolute",
+            .fixed => "fixed",
+            .sticky => "sticky",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "visibility")) {
+        const s = switch (style.visibility) {
+            .visible => "visible",
+            .hidden => "hidden",
+            .collapse => "collapse",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "color")) {
+        return argbToCssColor(c, style.color, &buf);
+    } else if (std.mem.eql(u8, prop, "background-color")) {
+        return argbToCssColor(c, style.background_color, &buf);
+    } else if (std.mem.eql(u8, prop, "font-size")) {
+        return fmtPx(c, style.font_size_px, &buf);
+    } else if (std.mem.eql(u8, prop, "font-weight")) {
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.font_weight}) catch return qjs.JS_NewStringLen(c, "400", 3);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "font-family")) {
+        const s = switch (style.font_family) {
+            .sans_serif => "sans-serif",
+            .serif => "serif",
+            .monospace => "monospace",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "text-align")) {
+        const s = switch (style.text_align) {
+            .left => "left",
+            .right => "right",
+            .center => "center",
+            .justify => "justify",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "width")) {
+        return dimensionToString(c, style.width, &buf);
+    } else if (std.mem.eql(u8, prop, "height")) {
+        return dimensionToString(c, style.height, &buf);
+    } else if (std.mem.eql(u8, prop, "margin-top")) {
+        return fmtPx(c, style.margin_top, &buf);
+    } else if (std.mem.eql(u8, prop, "margin-right")) {
+        return fmtPx(c, style.margin_right, &buf);
+    } else if (std.mem.eql(u8, prop, "margin-bottom")) {
+        return fmtPx(c, style.margin_bottom, &buf);
+    } else if (std.mem.eql(u8, prop, "margin-left")) {
+        return fmtPx(c, style.margin_left, &buf);
+    } else if (std.mem.eql(u8, prop, "padding-top")) {
+        return fmtPx(c, style.padding_top, &buf);
+    } else if (std.mem.eql(u8, prop, "padding-right")) {
+        return fmtPx(c, style.padding_right, &buf);
+    } else if (std.mem.eql(u8, prop, "padding-bottom")) {
+        return fmtPx(c, style.padding_bottom, &buf);
+    } else if (std.mem.eql(u8, prop, "padding-left")) {
+        return fmtPx(c, style.padding_left, &buf);
+    } else if (std.mem.eql(u8, prop, "border-top-width")) {
+        return fmtPx(c, style.border_top_width, &buf);
+    } else if (std.mem.eql(u8, prop, "border-right-width")) {
+        return fmtPx(c, style.border_right_width, &buf);
+    } else if (std.mem.eql(u8, prop, "border-bottom-width")) {
+        return fmtPx(c, style.border_bottom_width, &buf);
+    } else if (std.mem.eql(u8, prop, "border-left-width")) {
+        return fmtPx(c, style.border_left_width, &buf);
+    } else if (std.mem.eql(u8, prop, "opacity")) {
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.opacity}) catch return qjs.JS_NewStringLen(c, "1", 1);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "z-index")) {
+        if (style.z_index == 0 and style.position == .static_) {
+            return qjs.JS_NewStringLen(c, "auto", 4);
+        }
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.z_index}) catch return qjs.JS_NewStringLen(c, "0", 1);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "overflow-x")) {
+        return overflowToString(c, style.overflow_x);
+    } else if (std.mem.eql(u8, prop, "overflow-y")) {
+        return overflowToString(c, style.overflow_y);
+    } else if (std.mem.eql(u8, prop, "flex-direction")) {
+        const s = switch (style.flex_direction) {
+            .row => "row",
+            .row_reverse => "row-reverse",
+            .column => "column",
+            .column_reverse => "column-reverse",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "flex-grow")) {
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.flex_grow}) catch return qjs.JS_NewStringLen(c, "0", 1);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "flex-shrink")) {
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.flex_shrink}) catch return qjs.JS_NewStringLen(c, "1", 1);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "box-sizing")) {
+        const s = switch (style.box_sizing) {
+            .content_box => "content-box",
+            .border_box => "border-box",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "float")) {
+        const s = switch (style.float_) {
+            .none => "none",
+            .left => "left",
+            .right => "right",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    }
+
+    // Unknown property
+    return qjs.JS_NewStringLen(c, "", 0);
+}
+
+/// Format an ARGB u32 as "rgb(r, g, b)" or "rgba(r, g, b, a)" string.
+fn argbToCssColor(c: *qjs.JSContext, argb: u32, buf: *[128]u8) qjs.JSValue {
+    const a = (argb >> 24) & 0xFF;
+    const r = (argb >> 16) & 0xFF;
+    const g_val = (argb >> 8) & 0xFF;
+    const b_val = argb & 0xFF;
+    if (a == 255) {
+        const result = std.fmt.bufPrint(buf, "rgb({d}, {d}, {d})", .{ r, g_val, b_val }) catch return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (a == 0 and r == 0 and g_val == 0 and b_val == 0) {
+        const s = "rgba(0, 0, 0, 0)";
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else {
+        const alpha: f32 = @as(f32, @floatFromInt(a)) / 255.0;
+        const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.2})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    }
+}
+
+/// Format a px value as "Npx" string.
+fn fmtPx(c: *qjs.JSContext, val: f32, buf: *[128]u8) qjs.JSValue {
+    const result = std.fmt.bufPrint(buf, "{d}px", .{val}) catch return qjs.JS_NewStringLen(c, "0px", 3);
+    return qjs.JS_NewStringLen(c, result.ptr, result.len);
+}
+
+/// Format a Dimension value.
+fn dimensionToString(c: *qjs.JSContext, dim: ComputedStyle.Dimension, buf: *[128]u8) qjs.JSValue {
+    return switch (dim) {
+        .auto => qjs.JS_NewStringLen(c, "auto", 4),
+        .none => qjs.JS_NewStringLen(c, "none", 4),
+        .px => |v| fmtPx(c, v, buf),
+        .percent => |v| blk: {
+            const pct = std.fmt.bufPrint(buf, "{d}%", .{v}) catch break :blk qjs.JS_NewStringLen(c, "0%", 2);
+            break :blk qjs.JS_NewStringLen(c, pct.ptr, pct.len);
+        },
+    };
+}
+
+/// Format Overflow enum.
+fn overflowToString(c: *qjs.JSContext, overflow: ComputedStyle.Overflow) qjs.JSValue {
+    const s = switch (overflow) {
+        .visible => "visible",
+        .hidden => "hidden",
+        .scroll => "scroll",
+        .auto_ => "auto",
+    };
+    return qjs.JS_NewStringLen(c, s.ptr, s.len);
 }
 
 fn windowGetComputedStyle(
@@ -3041,6 +3351,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, childrenAtom);
     }
 
+    // insertAdjacentHTML
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentHTML", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentHTML, "insertAdjacentHTML", 2));
+
     // ── HTMLElement.prototype (inherits Element.prototype) ──────────
     const html_element_proto = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPrototype(ctx, html_element_proto, elem_proto);
@@ -3085,6 +3398,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const scrollLeftAtom = qjs.JS_NewAtom(ctx, "scrollLeft");
         _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollLeft, "get scrollLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, scrollLeftAtom);
+    }
+    {
+        const hiddenAtom = qjs.JS_NewAtom(ctx, "hidden");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, hiddenAtom, qjs.JS_NewCFunction(ctx, &elementGetHidden, "get hidden", 0), qjs.JS_NewCFunction(ctx, &elementSetHidden, "set hidden", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, hiddenAtom);
     }
 
     // Set HTMLElement.prototype as the class prototype (elements get this as their __proto__)

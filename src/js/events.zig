@@ -432,7 +432,7 @@ fn jsElementDispatchEvent(
     defer qjs.JS_FreeCString(c, type_str.ptr);
     // W3C: returns false if preventDefault() was called, true otherwise
     const not_cancelled = dispatchEvent(c, node, type_str.ptr[0..type_str.len]);
-    return if (not_cancelled) qjs.JS_TRUE else qjs.JS_FALSE;
+    return quickjs.JS_NewBool(not_cancelled);
 }
 
 /// Expose the element_class_id for the event system to inject methods.

@@ -1093,7 +1093,7 @@ pub fn parseValue(property: ast.PropertyId, raw: []const u8) values.Value {
             return .{ .raw = trimmed };
         },
         // Keyword properties
-        .display, .position, .float_, .clear, .box_sizing, .visibility, .text_align, .text_decoration, .text_transform, .white_space, .word_break, .overflow_wrap, .text_overflow, .overflow_x, .overflow_y, .flex_direction, .flex_wrap, .justify_content, .align_items, .align_self, .font_style, .list_style_type, .vertical_align, .border_top_style, .border_right_style, .border_bottom_style, .border_left_style, .background_repeat, .background_size => {
+        .display, .position, .float_, .clear, .box_sizing, .visibility, .text_align, .text_decoration, .text_transform, .white_space, .word_break, .overflow_wrap, .text_overflow, .overflow_x, .overflow_y, .flex_direction, .flex_wrap, .justify_content, .align_content, .align_items, .align_self, .font_style, .list_style_type, .vertical_align, .border_top_style, .border_right_style, .border_bottom_style, .border_left_style, .background_repeat, .background_size => {
             if (parseKeyword(trimmed)) |kw| return .{ .keyword = kw };
             return .{ .raw = trimmed };
         },

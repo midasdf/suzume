@@ -137,8 +137,9 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     page.pending_images_idx = 0;
     collectImageUrls(new_root_box, &page.pending_images, allocator);
 
-    // Update global root box pointer for JS layout queries
+    // Update global root box and styles pointers for JS layout/style queries
     dom_api.setRootBox(new_root_box);
+    dom_api.setStyles(&page.styles.?.styles);
 
     std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
         page.total_height, page.total_width, new_root_box.children.items.len,
@@ -396,6 +397,9 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Register event APIs (addEventListener on window/document/elements)
     events.registerEventApis(js_rt.ctx);
 
+    // Inject click/dispatchEvent/addEventListener into Element prototype
+    events.injectElementEventMethods(js_rt.ctx, dom_api.element_class_id);
+
     // readyState = "loading" during script execution
     dom_api.setReadyState(.loading);
 
@@ -651,8 +655,9 @@ fn navigateTo(
         .base_url = base_url_copy,
     };
 
-    // Set root box pointer for JS layout queries (offsetWidth, getBoundingClientRect, etc.)
+    // Set root box and styles pointers for JS layout/style queries
     dom_api.setRootBox(page.root_box);
+    dom_api.setStyles(if (page.styles) |*s| &s.styles else null);
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page, allocator, loader, base_url_copy);
@@ -900,6 +905,7 @@ fn testDomJs() void {
     // Register DOM APIs
     dom_api.registerDomApis(js_rt.rt, js_rt.ctx, @ptrCast(@alignCast(doc.html_doc)));
     events.registerEventApis(js_rt.ctx);
+    events.injectElementEventMethods(js_rt.ctx, dom_api.element_class_id);
 
     // Execute scripts (test mode: no loader/base_url for external scripts)
     executeScripts(&doc, &js_rt, std.heap.c_allocator, null, null);

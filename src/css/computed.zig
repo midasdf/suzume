@@ -111,6 +111,7 @@ pub const ComputedStyle = struct {
     flex_direction: FlexDirection = .row,
     flex_wrap: FlexWrap = .nowrap,
     justify_content: JustifyContent = .flex_start,
+    align_content: AlignContent = .stretch,
     align_items: AlignItems = .stretch,
     align_self: AlignItems = .stretch,
     flex_grow: f32 = 0,
@@ -309,6 +310,16 @@ pub const ComputedStyle = struct {
         flex_end,
         center,
         baseline,
+    };
+
+    pub const AlignContent = enum {
+        stretch,
+        flex_start,
+        flex_end,
+        center,
+        space_between,
+        space_around,
+        space_evenly,
     };
 
     pub const Float = enum {

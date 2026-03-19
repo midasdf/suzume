@@ -488,8 +488,53 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
     };
     const container_cross = explicit_h orelse total_cross;
 
+    // align-content: distribute free cross-axis space among lines
+    const free_cross = container_cross - total_cross;
+    var ac_offset: f32 = 0; // initial offset before first line
+    var ac_line_gap: f32 = gap; // gap between lines
+
+    if (free_cross > 0 and line_count > 0) {
+        switch (style.align_content) {
+            .stretch => {
+                // Distribute extra space equally among lines
+                if (line_count > 0) {
+                    const extra_per_line = free_cross / @as(f32, @floatFromInt(line_count));
+                    for (0..line_count) |li| {
+                        line_heights[li] += extra_per_line;
+                    }
+                }
+            },
+            .flex_start => {}, // lines at start, no change
+            .flex_end => {
+                ac_offset = free_cross;
+            },
+            .center => {
+                ac_offset = free_cross / 2;
+            },
+            .space_between => {
+                if (line_count > 1) {
+                    ac_line_gap = gap + free_cross / @as(f32, @floatFromInt(line_count - 1));
+                }
+            },
+            .space_around => {
+                if (line_count > 0) {
+                    const space = free_cross / @as(f32, @floatFromInt(line_count));
+                    ac_offset = space / 2;
+                    ac_line_gap = gap + space;
+                }
+            },
+            .space_evenly => {
+                if (line_count > 0) {
+                    const space = free_cross / @as(f32, @floatFromInt(line_count + 1));
+                    ac_offset = space;
+                    ac_line_gap = gap + space;
+                }
+            },
+        }
+    }
+
     // Position children line by line
-    var cross_cursor: f32 = 0;
+    var cross_cursor: f32 = ac_offset;
 
     for (0..line_count) |raw_line_idx| {
         const line_idx = if (is_wrap_reverse) line_count - 1 - raw_line_idx else raw_line_idx;
@@ -595,7 +640,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         }
 
         cross_cursor += line_height;
-        if (raw_line_idx + 1 < line_count) cross_cursor += gap;
+        if (raw_line_idx + 1 < line_count) cross_cursor += ac_line_gap;
     }
 
     box.content.height = container_cross;

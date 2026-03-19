@@ -22,6 +22,7 @@ const TimerEntry = struct {
     callback: qjs.JSValue,
     delay_ms: u32,
     interval: bool,
+    is_raf: bool, // requestAnimationFrame: pass timestamp arg
     next_fire: i64, // milliseconds since epoch
     cleared: bool,
 };
@@ -157,6 +158,7 @@ fn addTimer(
         .callback = qjs.JS_DupValue(c, callback),
         .delay_ms = delay_ms,
         .interval = interval,
+        .is_raf = false,
         .next_fire = currentTimeMs() + @as(i64, delay_ms),
         .cleared = false,
     };
@@ -221,14 +223,23 @@ pub fn tickTimers(ctx: *qjs.JSContext) bool {
         }
         if (now >= entry.next_fire) {
             // Save callback and id before JS_Call (which may invalidate entry pointer via realloc)
-            const saved_callback = entry.callback;
+            const saved_callback = qjs.JS_DupValue(ctx, entry.callback);
             const saved_id = entry.id;
             const saved_interval = entry.interval;
             const saved_delay = entry.delay_ms;
+            const saved_is_raf = entry.is_raf;
 
             // Fire the callback (may trigger timer_list append/realloc)
-            const ret = qjs.JS_Call(ctx, saved_callback, quickjs.JS_UNDEFINED(), 0, null);
+            // DupValue above protects the callback from being freed if clearInterval
+            // is called from within the callback itself.
+            const ret = if (saved_is_raf) blk: {
+                // requestAnimationFrame: pass DOMHighResTimeStamp (performance.now())
+                const timestamp = getPerformanceNow();
+                var raf_argv = [_]qjs.JSValue{qjs.JS_NewFloat64(ctx, timestamp)};
+                break :blk qjs.JS_Call(ctx, saved_callback, quickjs.JS_UNDEFINED(), 1, &raf_argv);
+            } else qjs.JS_Call(ctx, saved_callback, quickjs.JS_UNDEFINED(), 0, null);
             qjs.JS_FreeValue(ctx, ret);
+            qjs.JS_FreeValue(ctx, saved_callback);
 
             // Re-find entry by id (pointer may have been invalidated by JS_Call)
             var found = false;
@@ -304,6 +315,7 @@ fn jsRequestAnimationFrame(
         .callback = qjs.JS_DupValue(c, callback),
         .delay_ms = 16, // ~60fps
         .interval = false,
+        .is_raf = true,
         .next_fire = currentTimeMs() + 16,
         .cleared = false,
     };
@@ -320,6 +332,12 @@ fn jsRequestAnimationFrame(
 
 var perf_origin: i64 = 0;
 
+/// Get elapsed ms since origin (for performance.now and rAF timestamp).
+fn getPerformanceNow() f64 {
+    if (perf_origin == 0) perf_origin = currentTimeMs();
+    return @floatFromInt(currentTimeMs() - perf_origin);
+}
+
 fn jsPerformanceNow(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
@@ -327,9 +345,7 @@ fn jsPerformanceNow(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (perf_origin == 0) perf_origin = currentTimeMs();
-    const elapsed: f64 = @floatFromInt(currentTimeMs() - perf_origin);
-    return qjs.JS_NewFloat64(c, elapsed);
+    return qjs.JS_NewFloat64(c, getPerformanceNow());
 }
 
 /// No-op stub for unimplemented Web APIs that should silently succeed.
