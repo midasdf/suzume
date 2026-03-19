@@ -1229,6 +1229,9 @@ pub fn main() !void {
     };
     defer surface.deinit();
 
+    // Refresh geometry to get actual window size from WM (may differ from requested)
+    surface.refreshGeometry();
+
     // Initialize XIM (X Input Method) for fcitx5/mozc Japanese input
     if (surface.initXim()) {
         std.debug.print("[XIM] Input method initialized\n", .{});
