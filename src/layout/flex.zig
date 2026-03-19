@@ -245,18 +245,40 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         },
     }
 
-    // Assign positions
+    // Build order-sorted index array for flex item positioning
+    var order_indices: [256]usize = undefined;
+    var order_count: usize = 0;
+    for (children, 0..) |child, ci| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        if (order_count < order_indices.len) {
+            order_indices[order_count] = ci;
+            order_count += 1;
+        }
+    }
+    // Sort by CSS order property (stable sort: equal orders keep source order)
+    const indices = order_indices[0..order_count];
+    for (0..indices.len) |pass| {
+        var swapped = false;
+        for (0..indices.len - 1 - pass) |j| {
+            if (children[indices[j]].style.order > children[indices[j + 1]].style.order) {
+                const tmp = indices[j];
+                indices[j] = indices[j + 1];
+                indices[j + 1] = tmp;
+                swapped = true;
+            }
+        }
+        if (!swapped) break;
+    }
+
+    // Assign positions using order-sorted indices
     var cursor_x = main_offset;
     var flex_pos_idx: usize = 0;
     var i: usize = 0;
-    while (i < children.len) : (i += 1) {
-        const idx = if (is_reverse) children.len - 1 - i else i;
-        const child = children[idx];
+    while (i < indices.len) : (i += 1) {
+        const sorted_i = if (is_reverse) indices.len - 1 - i else i;
+        const child = children[indices[sorted_i]];
 
-        // Skip absolute/fixed positioned children
-        if (child.style.position == .absolute or child.style.position == .fixed) continue;
-
-        // Cross axis alignment
+        // Cross axis alignment (absolute/fixed already filtered in order_indices)
         const child_cross = child.content.height + child.padding.top + child.padding.bottom +
             child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
         var cross_offset: f32 = 0;

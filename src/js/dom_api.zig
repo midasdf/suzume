@@ -529,6 +529,25 @@ fn elementInsertBefore(
     return qjs.JS_DupValue(c, args[0]);
 }
 
+fn elementReplaceChild(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': 2 arguments required");
+    const args = argv orelse return quickjs.JS_NULL();
+    _ = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const new_node = getNode(c, args[0]) orelse return quickjs.JS_NULL();
+    const old_node = getNode(c, args[1]) orelse return quickjs.JS_NULL();
+    // Insert new before old, then remove old
+    lxb_dom_node_insert_before(old_node, new_node);
+    lxb_dom_node_remove(old_node);
+    setDomDirty();
+    return qjs.JS_DupValue(c, args[1]); // returns the removed (old) node
+}
+
 // ── classList helper ────────────────────────────────────────────────
 
 fn classListAdd(
@@ -1733,23 +1752,27 @@ fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return null;
 
-    // Parse compound selector (space = descendant combinator, max 16 parts)
-    var parts: [16][]const u8 = undefined;
-    var part_count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, trimmed, " \t");
-    while (iter.next()) |part| {
-        if (part_count >= parts.len) return null; // selector too complex
-        parts[part_count] = part;
-        part_count += 1;
+    // Handle comma-separated selectors (e.g. ".foo, .bar")
+    if (std.mem.indexOfScalar(u8, trimmed, ',')) |_| {
+        var comma_iter = std.mem.splitScalar(u8, trimmed, ',');
+        while (comma_iter.next()) |sub_sel| {
+            const sub = std.mem.trim(u8, sub_sel, " \t");
+            if (sub.len > 0) {
+                if (walkTreeBySelector(node, sub)) |found| return found;
+            }
+        }
+        return null;
     }
-    if (part_count == 0) return null;
 
-    // Walk the entire tree and return the first node matching the compound selector.
-    // Uses ancestor chain matching (same as querySelectorAll) to avoid the greedy
-    // sequential match bug where the first match of an early part doesn't contain later parts.
+    // Parse selector with combinators (>, +, ~, space)
+    var parts_buf: [16]SelectorPart = undefined;
+    const part_count = parseSelectorParts(trimmed, &parts_buf);
+    if (part_count == 0) return null;
+    const parts = parts_buf[0..part_count];
+
     var current: ?*lxb.lxb_dom_node_t = node;
     while (current) |n| {
-        if (nodeMatchesCompound(n, parts[0..part_count])) return n;
+        if (nodeMatchesCompound(n, parts)) return n;
         current = nextDfsNode(n, node);
     }
     return null;
@@ -1939,45 +1962,160 @@ fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     }
 }
 
-/// Check if a node matches a full compound selector (space-separated descendant combinator)
-fn nodeMatchesCompound(node: *lxb.lxb_dom_node_t, parts: []const []const u8) bool {
-    if (parts.len == 0) return false;
-    // Last part must match the node itself
-    if (!nodeMatchesSimple(node, parts[parts.len - 1])) return false;
-    if (parts.len == 1) return true;
-    // Each preceding part must match some ancestor
-    var ancestor: ?*lxb.lxb_dom_node_t = node.parent;
-    var pi: usize = parts.len - 2;
-    while (true) {
-        const cur_ancestor = ancestor orelse return false;
-        if (nodeMatchesSimple(cur_ancestor, parts[pi])) {
-            if (pi == 0) return true;
-            pi -= 1;
+/// Combinator type between selector parts
+const Combinator = enum { descendant, child, adjacent_sibling, general_sibling };
+
+/// A parsed selector segment: simple selector + combinator to the next part
+const SelectorPart = struct {
+    selector: []const u8,
+    combinator: Combinator, // combinator BEFORE this part (from the previous part to this one)
+};
+
+/// Parse a full CSS selector string into parts with combinators.
+/// "div > .class + span ~ p" → [{div, descendant}, {.class, child}, {span, adjacent_sibling}, {p, general_sibling}]
+fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    var next_combinator: Combinator = .descendant;
+
+    while (i < trimmed.len and count < out.len) {
+        // Skip whitespace
+        while (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t')) i += 1;
+        if (i >= trimmed.len) break;
+
+        // Check for combinator tokens
+        if (trimmed[i] == '>') {
+            next_combinator = .child;
+            i += 1;
+            continue;
+        } else if (trimmed[i] == '+') {
+            next_combinator = .adjacent_sibling;
+            i += 1;
+            continue;
+        } else if (trimmed[i] == '~') {
+            next_combinator = .general_sibling;
+            i += 1;
+            continue;
         }
-        ancestor = cur_ancestor.parent;
+
+        // Read selector token (until space or combinator)
+        const start = i;
+        while (i < trimmed.len) {
+            const c = trimmed[i];
+            if (c == ' ' or c == '\t' or c == '>' or c == '+' or c == '~') break;
+            if (c == '[') {
+                // Skip attribute selector brackets
+                while (i < trimmed.len and trimmed[i] != ']') i += 1;
+                if (i < trimmed.len) i += 1;
+            } else {
+                i += 1;
+            }
+        }
+
+        if (i > start) {
+            out[count] = .{ .selector = trimmed[start..i], .combinator = next_combinator };
+            count += 1;
+            next_combinator = .descendant; // default combinator is descendant (space)
+        }
     }
+    return count;
 }
 
-/// Iterative querySelectorAll collector — supports compound selectors
+/// Check if a node matches a full compound selector with combinators (>, +, ~, space)
+fn nodeMatchesCompound(node: *lxb.lxb_dom_node_t, parts: []const SelectorPart) bool {
+    if (parts.len == 0) return false;
+    // Last part must match the node itself
+    if (!nodeMatchesSimple(node, parts[parts.len - 1].selector)) return false;
+    if (parts.len == 1) return true;
+
+    // Walk backwards through parts, checking relationships
+    var current: *lxb.lxb_dom_node_t = node;
+    var pi: usize = parts.len - 1;
+    while (pi > 0) {
+        pi -= 1;
+        const part = parts[pi];
+        const combinator = parts[pi + 1].combinator;
+
+        switch (combinator) {
+            .descendant => {
+                // Any ancestor must match
+                var ancestor: ?*lxb.lxb_dom_node_t = current.parent;
+                var found = false;
+                while (ancestor) |a| {
+                    if (nodeMatchesSimple(a, part.selector)) {
+                        current = a;
+                        found = true;
+                        break;
+                    }
+                    ancestor = a.parent;
+                }
+                if (!found) return false;
+            },
+            .child => {
+                // Direct parent must match
+                const parent = current.parent orelse return false;
+                if (!nodeMatchesSimple(parent, part.selector)) return false;
+                current = parent;
+            },
+            .adjacent_sibling => {
+                // Previous element sibling must match
+                const prev = prevElementSibling(current) orelse return false;
+                if (!nodeMatchesSimple(prev, part.selector)) return false;
+                current = prev;
+            },
+            .general_sibling => {
+                // Any preceding element sibling must match
+                var sib: ?*lxb.lxb_dom_node_t = prevElementSibling(current);
+                var found = false;
+                while (sib) |s| {
+                    if (nodeMatchesSimple(s, part.selector)) {
+                        current = s;
+                        found = true;
+                        break;
+                    }
+                    sib = prevElementSibling(s);
+                }
+                if (!found) return false;
+            },
+        }
+    }
+    return true;
+}
+
+/// Get previous element sibling (skip text/comment nodes)
+fn prevElementSibling(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    var cur: ?*lxb.lxb_dom_node_t = node.prev;
+    while (cur) |c| {
+        if (c.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return c;
+        cur = c.prev;
+    }
+    return null;
+}
+
+/// Iterative querySelectorAll collector — supports compound selectors with combinators
 fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector: []const u8, arr: qjs.JSValue, idx: *u32) void {
     if (selector.len == 0) return;
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return;
 
-    // Parse compound selector (max 16 parts)
-    var parts: [16][]const u8 = undefined;
-    var part_count: usize = 0;
-    var part_iter = std.mem.tokenizeAny(u8, trimmed, " \t");
-    while (part_iter.next()) |part| {
-        if (part_count >= parts.len) return; // selector too complex, return empty
-        parts[part_count] = part;
-        part_count += 1;
+    // Handle comma-separated selectors
+    if (std.mem.indexOfScalar(u8, trimmed, ',')) |_| {
+        var comma_iter = std.mem.splitScalar(u8, trimmed, ',');
+        while (comma_iter.next()) |sub_sel| {
+            const sub = std.mem.trim(u8, sub_sel, " \t");
+            if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
+        }
+        return;
     }
+
+    var parts_buf: [16]SelectorPart = undefined;
+    const part_count = parseSelectorParts(trimmed, &parts_buf);
     if (part_count == 0) return;
+    const parts = parts_buf[0..part_count];
 
     var current: ?*lxb.lxb_dom_node_t = root;
     while (current) |node| {
-        if (nodeMatchesCompound(node, parts[0..part_count])) {
+        if (nodeMatchesCompound(node, parts)) {
             _ = qjs.JS_SetPropertyUint32(ctx, arr, idx.*, wrapNode(ctx, node));
             idx.* += 1;
         }
@@ -2757,6 +2895,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "contains", qjs.JS_NewCFunction(ctx, &elementContains, "contains", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "cloneNode", qjs.JS_NewCFunction(ctx, &elementCloneNode, "cloneNode", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "replaceWith", qjs.JS_NewCFunction(ctx, &elementReplaceWith, "replaceWith", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "replaceChild", qjs.JS_NewCFunction(ctx, &elementReplaceChild, "replaceChild", 2));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "before", qjs.JS_NewCFunction(ctx, &elementBefore, "before", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "after", qjs.JS_NewCFunction(ctx, &elementAfter, "after", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "remove", qjs.JS_NewCFunction(ctx, &elementRemove, "remove", 0));

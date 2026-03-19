@@ -1312,6 +1312,9 @@ fn applyDeclaration(
         .flex_shrink => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_shrink = v else |_| {}
         },
+        .order => {
+            if (std.fmt.parseInt(i32, trimmed, 10)) |v| style.order = v else |_| {}
+        },
         .flex_basis => {
             style.flex_basis = parseDimension(trimmed, fs, vw, vh);
         },

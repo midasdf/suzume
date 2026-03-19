@@ -116,6 +116,7 @@ pub const ComputedStyle = struct {
     flex_grow: f32 = 0,
     flex_shrink: f32 = 1,
     flex_basis: Dimension = .auto,
+    order: i32 = 0, // flex/grid item order (default 0)
     gap: f32 = 0, // column-gap, used for both row and column in flex
     row_gap: f32 = 0, // row-gap, separate from column gap
 
