@@ -6,8 +6,6 @@ const FontCache = @import("../paint/painter.zig").FontCache;
 const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 
 /// Lay out a table element and its children.
-/// Assumes the table box has children that are table-row boxes,
-/// each containing table-cell boxes.
 pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
     const content_x = box.padding.left + box.border.left;
     box.content.x = content_x;
@@ -23,8 +21,7 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
     };
     box.content.width = if (explicit_w) |w| @min(w, @max(containing_width - h_space, 0)) else @max(containing_width - h_space, 0);
 
-    // Collect rows: direct children that are table-row or table-row-group descendants
-    // For simplicity, flatten: gather all rows (including those in tbody/thead/tfoot)
+    // Collect rows
     var rows_buf: [128]*Box = undefined;
     var num_rows: usize = 0;
     collectRows(box, &rows_buf, &num_rows);
@@ -46,29 +43,91 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         return;
     }
 
-    // Calculate column widths: distribute evenly
+    // ── Calculate column widths respecting td width attributes/CSS ──
     const table_width = box.content.width;
-    const col_width = table_width / @as(f32, @floatFromInt(num_cols));
+    var col_widths: [64]f32 = undefined;
+    const effective_cols = @min(num_cols, 64);
+
+    // Initialize all to 0 (unspecified)
+    for (col_widths[0..effective_cols]) |*w| w.* = 0;
+
+    // First pass: collect explicit widths from first row's cells
+    if (num_rows > 0) {
+        var col_idx: usize = 0;
+        for (rows_buf[0].children.items) |cell| {
+            if (!isTableCell(cell)) continue;
+            if (col_idx >= effective_cols) break;
+
+            // Check CSS width
+            switch (cell.style.width) {
+                .px => |w| {
+                    col_widths[col_idx] = w;
+                },
+                .percent => |pct| {
+                    // width:100% in a table cell means "take remaining space" (auto-like)
+                    // Only apply percentages < 100 as fixed proportions
+                    if (pct < 100) {
+                        col_widths[col_idx] = pct * table_width / 100.0;
+                    }
+                    // else: leave as 0 (auto) — will get remaining space
+                },
+                else => {},
+            }
+            col_idx += 1;
+        }
+    }
+
+    // Second pass: distribute remaining width to unspecified columns
+    var specified_total: f32 = 0;
+    var unspecified_count: usize = 0;
+    for (col_widths[0..effective_cols]) |w| {
+        if (w > 0) {
+            specified_total += w;
+        } else {
+            unspecified_count += 1;
+        }
+    }
+
+    const remaining = @max(table_width - specified_total, 0);
+    const auto_width = if (unspecified_count > 0)
+        remaining / @as(f32, @floatFromInt(unspecified_count))
+    else
+        0;
+
+    for (col_widths[0..effective_cols]) |*w| {
+        if (w.* == 0) w.* = auto_width;
+    }
+
+    // If total exceeds table width, scale down proportionally
+    var total_col_width: f32 = 0;
+    for (col_widths[0..effective_cols]) |w| total_col_width += w;
+    if (total_col_width > table_width and total_col_width > 0) {
+        const scale = table_width / total_col_width;
+        for (col_widths[0..effective_cols]) |*w| w.* *= scale;
+    }
 
     // Layout each row
     var row_y: f32 = 0;
 
     for (rows_buf[0..num_rows]) |row| {
-        // Layout each cell in this row with the column width
         var col_idx: usize = 0;
         var max_row_height: f32 = 0;
 
         for (row.children.items) |cell| {
             if (!isTableCell(cell)) continue;
-            if (col_idx >= num_cols) break;
+            if (col_idx >= effective_cols) break;
 
-            // Layout cell as a block with column width
-            const cell_containing = col_width;
-            block.layoutBlock(cell, cell_containing, box.content.y + row_y, fonts);
+            // Layout cell with its column width
+            const cell_w = col_widths[col_idx];
+            block.layoutBlock(cell, cell_w, box.content.y + row_y, fonts);
 
-            // Position cell at the correct column
-            const cell_x = box.content.x + @as(f32, @floatFromInt(col_idx)) * col_width;
-            const dx = cell_x - cell.content.x + cell.padding.left + cell.border.left + cell.margin.left;
+            // Position cell at correct column x
+            var col_x: f32 = 0;
+            for (0..col_idx) |c| {
+                col_x += if (c < effective_cols) col_widths[c] else 0;
+            }
+            const target_x = box.content.x + col_x + cell.padding.left + cell.border.left + cell.margin.left;
+            const dx = target_x - cell.content.x;
             block.adjustXPositions(cell, dx);
 
             const cell_height = cell.content.height + cell.padding.top + cell.padding.bottom +
@@ -87,7 +146,7 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         row_y += max_row_height;
     }
 
-    // Position table-row-group wrappers (tbody etc) if present
+    // Position table-row-group wrappers (tbody etc)
     for (box.children.items) |child| {
         if (isRowGroup(child)) {
             child.content.x = box.content.x;
@@ -109,7 +168,6 @@ fn collectRows(parent: *Box, buf: []*Box, count: *usize) void {
                 count.* += 1;
             }
         } else if (isRowGroup(child)) {
-            // Recurse into tbody/thead/tfoot
             collectRows(child, buf, count);
         }
     }
