@@ -25,11 +25,25 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
     const h_space = box.margin.left + box.margin.right +
         box.padding.left + box.padding.right +
         box.border.left + box.border.right;
-    const explicit_w = switch (box.style.width) {
+    // Check CSS width first, then HTML width attribute on <table>
+    var explicit_w: ?f32 = switch (box.style.width) {
         .px => |w| w,
         .percent => |pct| pct * containing_width / 100.0,
         else => null,
     };
+    if (explicit_w == null) {
+        if (box.dom_node) |dn| {
+            if (dn.getAttribute("width")) |w_str| {
+                if (std.mem.endsWith(u8, w_str, "%")) {
+                    if (std.fmt.parseFloat(f32, w_str[0 .. w_str.len - 1]) catch null) |pct| {
+                        explicit_w = pct * containing_width / 100.0;
+                    }
+                } else {
+                    explicit_w = std.fmt.parseFloat(f32, w_str) catch null;
+                }
+            }
+        }
+    }
     box.content.width = if (explicit_w) |w| @min(w, @max(containing_width - h_space, 0)) else @max(containing_width - h_space, 0);
 
     // Collect rows (flatten through row-groups)
@@ -200,6 +214,14 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
             col_idx += cs;
         }
 
+        // Apply row height style (e.g. spacer rows with style="height:5px")
+        const row_min_h: f32 = switch (row.style.height) {
+            .px => |h| h,
+            .percent => |pct| pct * box.content.height / 100.0,
+            else => 0,
+        };
+        if (row_min_h > max_row_height) max_row_height = row_min_h;
+
         // Set row dimensions
         row.content.x = box.content.x;
         row.content.y = box.content.y + row_y;
@@ -223,21 +245,39 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 }
 
 /// Estimate cell content width from text length without full layout.
-/// Recursively finds the longest text node in the cell's subtree.
+/// Sums all inline text in the cell's subtree to estimate the width needed
+/// for a single line (handles cells with many short text nodes across spans).
 fn estimateCellContentWidth(cell: *Box, font_size: f32) f32 {
-    var max_text_len: usize = 0;
-    findMaxTextLen(cell, &max_text_len, 0);
+    var total_len: usize = 0;
+    var max_block_len: usize = 0;
+    sumInlineTextLen(cell, &total_len, &max_block_len, 0);
+    // Use the longer of: total inline text or longest block-level line
+    const effective_len = @max(total_len, max_block_len);
     const char_width = font_size * 0.6;
-    return @as(f32, @floatFromInt(max_text_len)) * char_width;
+    return @as(f32, @floatFromInt(effective_len)) * char_width;
 }
 
-fn findMaxTextLen(box: *Box, max_len: *usize, depth: u32) void {
-    if (depth > 6) return;
+/// Sum text lengths for inline content estimation.
+/// total_len accumulates text within the current inline context.
+/// max_block_len tracks the longest inline run when block elements split the flow.
+fn sumInlineTextLen(box: *Box, total_len: *usize, max_block_len: *usize, depth: u32) void {
+    if (depth > 8) return;
     if (box.text) |text| {
-        if (text.len > max_len.*) max_len.* = text.len;
+        total_len.* += text.len;
     }
     for (box.children.items) |child| {
-        findMaxTextLen(child, max_len, depth + 1);
+        const is_block = child.style.display == .block or
+            child.style.display == .table or
+            child.style.display == .table_row;
+        if (is_block) {
+            // Current inline run ends; start a new one for the block's content
+            if (total_len.* > max_block_len.*) max_block_len.* = total_len.*;
+            var block_len: usize = 0;
+            sumInlineTextLen(child, &block_len, max_block_len, depth + 1);
+            if (block_len > max_block_len.*) max_block_len.* = block_len;
+        } else {
+            sumInlineTextLen(child, total_len, max_block_len, depth + 1);
+        }
     }
 }
 

@@ -709,6 +709,33 @@ fn layoutFloat(child: *Box, parent: *Box, child_y: *f32, float_left_bottom: *f32
     }
 }
 
+/// Compute the shrink-to-fit width for an inline-block box by finding
+/// the rightmost edge of all laid-out children relative to content origin.
+/// This correctly handles inline formatting contexts where multiple children
+/// sit on the same visual line (e.g. spans within a span).
+fn computeShrinkToFitWidth(box: *Box) f32 {
+    const origin_x = box.content.x;
+    var max_right: f32 = 0;
+    for (box.children.items) |child| {
+        switch (child.box_type) {
+            .inline_text => {
+                // Check all line boxes for the rightmost edge
+                for (child.lines.items) |line| {
+                    const r = line.x + line.width - origin_x;
+                    if (r > max_right) max_right = r;
+                }
+            },
+            else => {
+                // Use the margin box right edge
+                const r = child.content.x + child.content.width +
+                    child.padding.right + child.border.right + child.margin.right - origin_x;
+                if (r > max_right) max_right = r;
+            },
+        }
+    }
+    return max_right;
+}
+
 /// Layout children in inline formatting context.
 /// Multiple inline children flow horizontally, wrapping to next line when needed.
 fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
@@ -871,35 +898,11 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
                 // If width is auto, shrink to content (inline-block shrink-to-fit)
                 if (!has_explicit_width) {
-                    var max_child_w: f32 = 0;
-                    for (child.children.items) |grandchild| {
-                        switch (grandchild.box_type) {
-                            .inline_text => {
-                                // Use the width of text lines
-                                for (grandchild.lines.items) |line| {
-                                    if (line.width > max_child_w) max_child_w = line.width;
-                                }
-                                // Also check content width
-                                if (grandchild.content.width > max_child_w) max_child_w = grandchild.content.width;
-                            },
-                            .inline_box, .block, .anonymous_block => {
-                                const gc_w = grandchild.content.width + grandchild.padding.left +
-                                    grandchild.padding.right + grandchild.border.left +
-                                    grandchild.border.right + grandchild.margin.left +
-                                    grandchild.margin.right;
-                                if (gc_w > max_child_w) max_child_w = gc_w;
-                            },
-                            .replaced => {
-                                const gc_w = grandchild.content.width + grandchild.padding.left +
-                                    grandchild.padding.right + grandchild.border.left +
-                                    grandchild.border.right + grandchild.margin.left +
-                                    grandchild.margin.right;
-                                if (gc_w > max_child_w) max_child_w = gc_w;
-                            },
-                        }
-                    }
-                    if (max_child_w > 0 and max_child_w < child.content.width) {
-                        child.content.width = max_child_w;
+                    const fit_w = computeShrinkToFitWidth(child);
+                    if (child.children.items.len == 0) {
+                        child.content.width = 0;
+                    } else if (fit_w > 0 and fit_w < child.content.width) {
+                        child.content.width = fit_w;
                     }
                 }
 
@@ -922,33 +925,11 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
                 // Re-apply shrink-to-fit after second layout
                 if (!has_explicit_width) {
-                    var max_child_w: f32 = 0;
-                    for (child.children.items) |grandchild| {
-                        switch (grandchild.box_type) {
-                            .inline_text => {
-                                for (grandchild.lines.items) |line| {
-                                    if (line.width > max_child_w) max_child_w = line.width;
-                                }
-                                if (grandchild.content.width > max_child_w) max_child_w = grandchild.content.width;
-                            },
-                            .inline_box, .block, .anonymous_block => {
-                                const gc_w = grandchild.content.width + grandchild.padding.left +
-                                    grandchild.padding.right + grandchild.border.left +
-                                    grandchild.border.right + grandchild.margin.left +
-                                    grandchild.margin.right;
-                                if (gc_w > max_child_w) max_child_w = gc_w;
-                            },
-                            .replaced => {
-                                const gc_w = grandchild.content.width + grandchild.padding.left +
-                                    grandchild.padding.right + grandchild.border.left +
-                                    grandchild.border.right + grandchild.margin.left +
-                                    grandchild.margin.right;
-                                if (gc_w > max_child_w) max_child_w = gc_w;
-                            },
-                        }
-                    }
-                    if (max_child_w > 0 and max_child_w < child.content.width) {
-                        child.content.width = max_child_w;
+                    const fit_w = computeShrinkToFitWidth(child);
+                    if (child.children.items.len == 0) {
+                        child.content.width = 0;
+                    } else if (fit_w > 0 and fit_w < child.content.width) {
+                        child.content.width = fit_w;
                     }
                 }
 

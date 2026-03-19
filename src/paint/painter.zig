@@ -588,7 +588,7 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
     // Determine marker text
     var marker_buf: [16]u8 = undefined;
     const marker_text: []const u8 = switch (style.list_style_type) {
-        .disc => "\xe2\x80\xa2", // bullet: U+2022
+        .disc => "\xe2\x97\x8f", // black circle: U+25CF (closer to Firefox's disc)
         .circle => "\xe2\x97\x8b", // white circle: U+25CB
         .square => "\xe2\x96\xaa", // small black square: U+25AA
         .decimal => blk: {

@@ -126,7 +126,8 @@ const ua_stylesheet_text =
     \\b, strong { font-weight: bold; display: inline; }
     \\em, i { font-style: italic; display: inline; }
     \\a { color: #0000EE; text-decoration: underline; display: inline; }
-    \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp { display: inline; }
+    \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp, time, mark,
+    \\data, output, wbr, ruby, rt, rp, bdi, bdo, label { display: inline; }
     \\pre, code { white-space: pre; }
     \\code { font-family: monospace; }
     \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
