@@ -235,7 +235,7 @@ const NamedColorEntry = struct { []const u8, u32 };
 const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
     // CSS Color Level 4 — full 148 named colors + grey aliases
     .{ "transparent", values.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } },
-    .{ "currentcolor", values.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } }, // sentinel
+    // currentcolor is NOT in this table — handled at cascade level in cascade.zig
     .{ "aliceblue", values.Color{ .r = 240, .g = 248, .b = 255, .a = 255 } },
     .{ "antiquewhite", values.Color{ .r = 250, .g = 235, .b = 215, .a = 255 } },
     .{ "aqua", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },

@@ -984,7 +984,11 @@ fn applyDeclaration(
             }
         },
         .background_color => {
-            if (properties.parseColor(trimmed)) |c| style.background_color = c.toArgb();
+            if (eqlIgnoreCase(trimmed, "currentcolor") or eqlIgnoreCase(trimmed, "currentColor")) {
+                style.background_color = style.color;
+            } else if (properties.parseColor(trimmed)) |c| {
+                style.background_color = c.toArgb();
+            }
         },
         .opacity => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| {
@@ -1202,16 +1206,24 @@ fn applyDeclaration(
             if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_left_width = px;
         },
         .border_top_color => {
-            if (properties.parseColor(trimmed)) |c| style.border_top_color = c.toArgb();
+            if (eqlIgnoreCase(trimmed, "currentcolor")) {
+                style.border_top_color = style.color;
+            } else if (properties.parseColor(trimmed)) |c| style.border_top_color = c.toArgb();
         },
         .border_right_color => {
-            if (properties.parseColor(trimmed)) |c| style.border_right_color = c.toArgb();
+            if (eqlIgnoreCase(trimmed, "currentcolor")) {
+                style.border_right_color = style.color;
+            } else if (properties.parseColor(trimmed)) |c| style.border_right_color = c.toArgb();
         },
         .border_bottom_color => {
-            if (properties.parseColor(trimmed)) |c| style.border_bottom_color = c.toArgb();
+            if (eqlIgnoreCase(trimmed, "currentcolor")) {
+                style.border_bottom_color = style.color;
+            } else if (properties.parseColor(trimmed)) |c| style.border_bottom_color = c.toArgb();
         },
         .border_left_color => {
-            if (properties.parseColor(trimmed)) |c| style.border_left_color = c.toArgb();
+            if (eqlIgnoreCase(trimmed, "currentcolor")) {
+                style.border_left_color = style.color;
+            } else if (properties.parseColor(trimmed)) |c| style.border_left_color = c.toArgb();
         },
         .border_radius_top_left => {
             if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.border_radius_tl = px;

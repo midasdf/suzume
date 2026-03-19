@@ -416,17 +416,23 @@ fn jsElementDispatchEvent(
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    const c = ctx orelse return qjs.JS_FALSE;
-    if (argc < 1) return qjs.JS_FALSE;
-    const args = argv orelse return qjs.JS_FALSE;
-    const node = dom_api.getNodePublic(c, this_val) orelse return qjs.JS_FALSE;
+    const c = ctx orelse return quickjs.JS_EXCEPTION();
+    if (argc < 1) {
+        // W3C: TypeError if no event argument
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': 1 argument required");
+    }
+    const args = argv orelse return quickjs.JS_EXCEPTION();
+    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_EXCEPTION();
     // Get event type from event object's .type property
     const type_val = qjs.JS_GetPropertyStr(c, args[0], "type");
     defer qjs.JS_FreeValue(c, type_val);
-    const type_str = dom_api.jsStringToSlice(c, type_val) orelse return qjs.JS_FALSE;
+    const type_str = dom_api.jsStringToSlice(c, type_val) orelse {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'");
+    };
     defer qjs.JS_FreeCString(c, type_str.ptr);
-    const result = dispatchEvent(c, node, type_str.ptr[0..type_str.len]);
-    return if (result) qjs.JS_TRUE else qjs.JS_FALSE;
+    // W3C: returns false if preventDefault() was called, true otherwise
+    const not_cancelled = dispatchEvent(c, node, type_str.ptr[0..type_str.len]);
+    return if (not_cancelled) qjs.JS_TRUE else qjs.JS_FALSE;
 }
 
 /// Expose the element_class_id for the event system to inject methods.

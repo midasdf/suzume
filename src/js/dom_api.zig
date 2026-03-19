@@ -1733,12 +1733,12 @@ fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return null;
 
-    // Parse compound selector (space = descendant combinator)
-    var parts: [8][]const u8 = undefined;
+    // Parse compound selector (space = descendant combinator, max 16 parts)
+    var parts: [16][]const u8 = undefined;
     var part_count: usize = 0;
     var iter = std.mem.tokenizeAny(u8, trimmed, " \t");
     while (iter.next()) |part| {
-        if (part_count >= parts.len) break;
+        if (part_count >= parts.len) return null; // selector too complex
         parts[part_count] = part;
         part_count += 1;
     }
@@ -1964,12 +1964,12 @@ fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector: []c
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return;
 
-    // Parse compound selector
-    var parts: [8][]const u8 = undefined;
+    // Parse compound selector (max 16 parts)
+    var parts: [16][]const u8 = undefined;
     var part_count: usize = 0;
     var part_iter = std.mem.tokenizeAny(u8, trimmed, " \t");
     while (part_iter.next()) |part| {
-        if (part_count >= parts.len) break;
+        if (part_count >= parts.len) return; // selector too complex, return empty
         parts[part_count] = part;
         part_count += 1;
     }
