@@ -809,6 +809,29 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof XMLHttpRequest==='undefined'){globalThis.XMLHttpRequest=function(){this.open=function(){};this.send=function(){};this.setRequestHeader=function(){};this.addEventListener=function(){};};}
         \\if(typeof DOMParser==='undefined'){globalThis.DOMParser=function(){this.parseFromString=function(){return null;};};}
         \\if(typeof history==='undefined'){globalThis.history={pushState:function(){},replaceState:function(){},back:function(){},forward:function(){},go:function(){},get length(){return 1;},get state(){return null;}};}
+        \\if(typeof dispatchEvent==='undefined'){globalThis.dispatchEvent=function(e){return true;};}
+        \\if(typeof FormData==='undefined'){globalThis.FormData=function(form){this._data=[];};FormData.prototype.append=function(k,v){this._data.push([k,v]);};FormData.prototype.get=function(k){for(var i=0;i<this._data.length;i++)if(this._data[i][0]===k)return this._data[i][1];return null;};FormData.prototype.has=function(k){return this._data.some(function(p){return p[0]===k;});};}
+        \\if(typeof URLSearchParams==='undefined'){
+        \\  globalThis.URLSearchParams=function(init){
+        \\    this._params=[];
+        \\    if(typeof init==='string'){
+        \\      var s=init.replace(/^\?/,'');
+        \\      if(s)s.split('&').forEach(function(p){var kv=p.split('=');this._params.push([decodeURIComponent(kv[0]),decodeURIComponent(kv[1]||'')]);}.bind(this));
+        \\    }
+        \\  };
+        \\  var USPp=URLSearchParams.prototype;
+        \\  USPp.get=function(n){for(var i=0;i<this._params.length;i++)if(this._params[i][0]===n)return this._params[i][1];return null;};
+        \\  USPp.has=function(n){for(var i=0;i<this._params.length;i++)if(this._params[i][0]===n)return true;return false;};
+        \\  USPp.set=function(n,v){for(var i=0;i<this._params.length;i++)if(this._params[i][0]===n){this._params[i][1]=String(v);return;}this._params.push([n,String(v)]);};
+        \\  USPp.append=function(n,v){this._params.push([n,String(v)]);};
+        \\  USPp.delete=function(n){this._params=this._params.filter(function(p){return p[0]!==n;});};
+        \\  USPp.toString=function(){return this._params.map(function(p){return encodeURIComponent(p[0])+'='+encodeURIComponent(p[1]);}).join('&');};
+        \\  USPp.forEach=function(cb){this._params.forEach(function(p){cb(p[1],p[0]);});};
+        \\  USPp.entries=function(){return this._params[Symbol.iterator]?this._params[Symbol.iterator]():this._params;};
+        \\  USPp.keys=function(){return this._params.map(function(p){return p[0];});};
+        \\  USPp.values=function(){return this._params.map(function(p){return p[1];});};
+        \\  USPp.getAll=function(n){return this._params.filter(function(p){return p[0]===n;}).map(function(p){return p[1];});};
+        \\}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }

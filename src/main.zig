@@ -217,7 +217,7 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
 /// Maximum size for a fetched external script (500 KB).
 const max_external_script_size = 512 * 1024;
 /// Maximum number of external scripts to fetch per page.
-const max_external_script_count = 10;
+const max_external_script_count = 20;
 /// Timeout in seconds for fetching an external script.
 const external_script_timeout = 5;
 
