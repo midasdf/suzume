@@ -139,25 +139,60 @@ fn serializeCallback(data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(
 // ── Helpers ─────────────────────────────────────────────────────────
 
 /// Wrap a lxb_dom_node_t pointer into a JS Element object.
-fn wrapNode(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
-    const node_type = node.type;
-    if (node_type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-        return wrapElement(ctx, node);
-    } else if (node_type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
-        return wrapText(ctx, node);
+// ── Node identity cache ─────────────────────────────────────────────
+// Maps DOM node pointer → JSValue to ensure the same DOM node always
+// returns the same JS wrapper object (identity preservation for ===).
+const NodeCache = std.AutoHashMap(usize, qjs.JSValue);
+var node_cache: ?NodeCache = null;
+
+fn initNodeCache() void {
+    if (node_cache == null) {
+        node_cache = NodeCache.init(std.heap.c_allocator);
     }
-    // For other node types, return a generic Element wrapper
-    return wrapElement(ctx, node);
 }
 
-fn wrapElement(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
+/// Clear the node identity cache (called on page navigation).
+pub fn clearNodeCache(ctx: *qjs.JSContext) void {
+    if (node_cache) |*cache| {
+        var iter = cache.iterator();
+        while (iter.next()) |entry| {
+            qjs.JS_FreeValue(ctx, entry.value_ptr.*);
+        }
+        cache.clearRetainingCapacity();
+    }
+}
+
+fn wrapNode(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
+    initNodeCache();
+    const key = @intFromPtr(node);
+
+    // Return cached wrapper if it exists
+    if (node_cache.?.get(key)) |cached| {
+        return qjs.JS_DupValue(ctx, cached);
+    }
+
+    // Create new wrapper
+    const node_type = node.type;
+    const obj = if (node_type == lxb.LXB_DOM_NODE_TYPE_TEXT)
+        wrapTextNew(ctx, node)
+    else
+        wrapElementNew(ctx, node);
+
+    if (!quickjs.JS_IsException(obj)) {
+        // Cache with a dup'd reference
+        node_cache.?.put(key, qjs.JS_DupValue(ctx, obj)) catch {};
+    }
+    return obj;
+}
+
+fn wrapElementNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     const obj = qjs.JS_NewObjectClass(ctx, @intCast(element_class_id));
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));
     return obj;
 }
 
-fn wrapText(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
+fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     const obj = qjs.JS_NewObjectClass(ctx, @intCast(text_class_id));
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));

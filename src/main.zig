@@ -169,6 +169,7 @@ const PageState = struct {
 
     fn deinit(self: *PageState) void {
         if (self.js_rt) |*jrt| {
+            dom_api.clearNodeCache(jrt.ctx);
             events.deinitEvents(jrt.ctx);
             jrt.deinit();
         }

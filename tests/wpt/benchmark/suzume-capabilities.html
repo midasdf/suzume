@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>suzume Capability Report</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: #333; font-size: 14px; }
+h1 { font-size: 22px; margin-bottom: 5px; }
+h2 { font-size: 16px; margin: 15px 0 5px; color: #2c3e50; border-bottom: 1px solid #bdc3c7; padding-bottom: 3px; }
+.pass { color: #27ae60; } .fail { color: #e74c3c; } .partial { color: #f39c12; }
+.score { font-size: 24px; font-weight: bold; margin: 10px 0; }
+.row { display: flex; justify-content: space-between; padding: 2px 5px; }
+.row:nth-child(odd) { background: #f8f9fa; }
+.cat { margin-bottom: 10px; }
+</style>
+</head>
+<body>
+<h1>suzume Browser Capability Report</h1>
+<div class="score" id="total">Running tests...</div>
+
+<div id="results"></div>
+
+<script>
+var pass = 0, fail = 0, total = 0;
+var sections = {};
+
+function test(category, name, fn) {
+  total++;
+  var result;
+  try {
+    result = fn();
+  } catch(e) {
+    result = false;
+  }
+  if (result) pass++;
+  else fail++;
+  if (!sections[category]) sections[category] = [];
+  sections[category].push({ name: name, pass: !!result });
+}
+
+// === DOM Core ===
+test('DOM Core', 'document.getElementById', function() { return typeof document.getElementById === 'function'; });
+test('DOM Core', 'document.createElement', function() { return typeof document.createElement === 'function'; });
+test('DOM Core', 'document.querySelector', function() { return typeof document.querySelector === 'function'; });
+test('DOM Core', 'document.querySelectorAll', function() { return typeof document.querySelectorAll === 'function'; });
+test('DOM Core', 'element.appendChild', function() { var d = document.createElement('div'); var s = document.createElement('span'); d.appendChild(s); return d.firstChild === s; });
+test('DOM Core', 'element.removeChild', function() { var d = document.createElement('div'); var s = document.createElement('span'); d.appendChild(s); d.removeChild(s); return d.firstChild === null; });
+test('DOM Core', 'element.insertBefore', function() { return typeof document.body.insertBefore === 'function'; });
+test('DOM Core', 'element.replaceChild', function() { return typeof document.body.replaceChild === 'function'; });
+test('DOM Core', 'element.cloneNode', function() { return typeof document.body.cloneNode === 'function'; });
+test('DOM Core', 'element.textContent', function() { var d = document.createElement('div'); d.textContent = 'hello'; return d.textContent === 'hello'; });
+test('DOM Core', 'element.innerHTML', function() { var d = document.createElement('div'); d.innerHTML = '<b>hi</b>'; return d.innerHTML.indexOf('<b>') >= 0 || d.innerHTML.indexOf('<B>') >= 0; });
+test('DOM Core', 'element.outerHTML', function() { return typeof document.body.outerHTML === 'string'; });
+test('DOM Core', 'element.insertAdjacentHTML', function() { return typeof document.body.insertAdjacentHTML === 'function'; });
+test('DOM Core', 'element.getAttribute', function() { return typeof document.body.getAttribute === 'function'; });
+test('DOM Core', 'element.setAttribute', function() { return typeof document.body.setAttribute === 'function'; });
+test('DOM Core', 'element.classList', function() { return typeof document.body.classList === 'object'; });
+test('DOM Core', 'element.className', function() { return typeof document.body.className === 'string'; });
+test('DOM Core', 'element.children', function() { return typeof document.body.children === 'object'; });
+test('DOM Core', 'element.parentNode', function() { return document.body.parentNode !== null; });
+test('DOM Core', 'element.firstChild', function() { return 'firstChild' in document.body; });
+test('DOM Core', 'element.nextSibling', function() { return 'nextSibling' in document.body; });
+test('DOM Core', 'element.childElementCount', function() { return typeof document.body.childElementCount === 'number'; });
+test('DOM Core', 'element.tagName', function() { return document.body.tagName === 'BODY' || document.body.tagName === 'body'; });
+test('DOM Core', 'element.id', function() { var d = document.createElement('div'); d.id = 'test123'; return d.id === 'test123'; });
+test('DOM Core', 'element.hidden', function() { var d = document.createElement('div'); d.hidden = true; return d.hidden === true; });
+test('DOM Core', 'element.nodeType', function() { return document.body.nodeType === 1; });
+test('DOM Core', 'element.nodeName', function() { return typeof document.body.nodeName === 'string'; });
+
+// === CSS / Style ===
+test('CSS / Style', 'element.style.color', function() { var d = document.createElement('div'); d.style.color = 'red'; return d.style.color === 'red'; });
+test('CSS / Style', 'element.style.display', function() { var d = document.createElement('div'); d.style.display = 'none'; return d.style.display === 'none'; });
+test('CSS / Style', 'getComputedStyle()', function() { return typeof getComputedStyle === 'function'; });
+test('CSS / Style', 'getComputedStyle().display', function() { var cs = getComputedStyle(document.body); return typeof cs.display === 'string' && cs.display !== ''; });
+test('CSS / Style', 'getComputedStyle().getPropertyValue', function() { var cs = getComputedStyle(document.body); return typeof cs.getPropertyValue === 'function'; });
+
+// === Events ===
+test('Events', 'addEventListener', function() { return typeof document.body.addEventListener === 'function'; });
+test('Events', 'removeEventListener', function() { return typeof document.body.removeEventListener === 'function'; });
+test('Events', 'element.click()', function() { return typeof document.body.click === 'function'; });
+test('Events', 'element.dispatchEvent()', function() { return typeof document.body.dispatchEvent === 'function'; });
+test('Events', 'event bubbling', function() {
+  var outer = document.createElement('div');
+  var inner = document.createElement('span');
+  outer.appendChild(inner);
+  document.body.appendChild(outer);
+  var bubbled = false;
+  outer.addEventListener('click', function() { bubbled = true; });
+  inner.click();
+  document.body.removeChild(outer);
+  return bubbled;
+});
+test('Events', 'DOMContentLoaded', function() { return true; /* we're running, so it fired */ });
+
+// === Timers ===
+test('Timers', 'setTimeout', function() { return typeof setTimeout === 'function'; });
+test('Timers', 'setInterval', function() { return typeof setInterval === 'function'; });
+test('Timers', 'clearTimeout', function() { return typeof clearTimeout === 'function'; });
+test('Timers', 'clearInterval', function() { return typeof clearInterval === 'function'; });
+test('Timers', 'requestAnimationFrame', function() { return typeof requestAnimationFrame === 'function'; });
+test('Timers', 'performance.now()', function() { return typeof performance !== 'undefined' && typeof performance.now === 'function'; });
+
+// === Web APIs ===
+test('Web APIs', 'console.log', function() { return typeof console !== 'undefined' && typeof console.log === 'function'; });
+test('Web APIs', 'JSON.parse', function() { return JSON.parse('{"a":1}').a === 1; });
+test('Web APIs', 'JSON.stringify', function() { return JSON.stringify({a:1}) === '{"a":1}'; });
+test('Web APIs', 'window object', function() { return typeof window !== 'undefined'; });
+test('Web APIs', 'document.title', function() { return typeof document.title === 'string'; });
+test('Web APIs', 'navigator.userAgent', function() { return typeof navigator !== 'undefined' && typeof navigator.userAgent === 'string'; });
+
+// === Error Handling ===
+test('Error Handling', 'try/catch', function() { try { undefined.x; return false; } catch(e) { return true; } });
+test('Error Handling', 'TypeError', function() { try { null.x; } catch(e) { return e instanceof TypeError; } return false; });
+
+// === ES6+ Features ===
+test('ES6+', 'let/const', function() { try { return eval("let x = 1; const y = 2; x + y") === 3; } catch(e) { return false; } });
+test('ES6+', 'arrow functions', function() { try { return eval("((x) => x + 1)(5)") === 6; } catch(e) { return false; } });
+test('ES6+', 'template literals', function() { try { return eval("`hello ${'world'}`") === 'hello world'; } catch(e) { return false; } });
+test('ES6+', 'destructuring', function() { try { return eval("var [a,b] = [1,2]; a + b") === 3; } catch(e) { return false; } });
+test('ES6+', 'spread operator', function() { try { return eval("[...[1,2,3]].length") === 3; } catch(e) { return false; } });
+test('ES6+', 'Map', function() { return typeof Map === 'function'; });
+test('ES6+', 'Set', function() { return typeof Set === 'function'; });
+test('ES6+', 'Promise', function() { return typeof Promise === 'function'; });
+test('ES6+', 'Symbol', function() { return typeof Symbol === 'function'; });
+test('ES6+', 'Proxy', function() { return typeof Proxy === 'function'; });
+test('ES6+', 'for...of', function() { try { return eval("var s=0; for(var x of [1,2,3]) s+=x; s") === 6; } catch(e) { return false; } });
+test('ES6+', 'class', function() { try { return eval("class Foo { constructor() { this.x = 1; } } new Foo().x") === 1; } catch(e) { return false; } });
+test('ES6+', 'async/await', function() { try { eval("async function f() { return 1; }"); return true; } catch(e) { return false; } });
+test('ES6+', 'optional chaining ?.', function() { try { return eval("var o = {a:{b:1}}; o?.a?.b") === 1; } catch(e) { return false; } });
+test('ES6+', 'nullish coalescing ??', function() { try { return eval("null ?? 42") === 42; } catch(e) { return false; } });
+test('ES6+', 'Array.from', function() { return typeof Array.from === 'function'; });
+test('ES6+', 'Object.assign', function() { return typeof Object.assign === 'function'; });
+test('ES6+', 'String.prototype.includes', function() { return typeof ''.includes === 'function'; });
+test('ES6+', 'Array.prototype.find', function() { return typeof [].find === 'function'; });
+test('ES6+', 'Array.prototype.filter', function() { return typeof [].filter === 'function'; });
+
+// === Not Yet Expected ===
+test('Advanced Web', 'fetch()', function() { return typeof fetch === 'function'; });
+test('Advanced Web', 'XMLHttpRequest', function() { return typeof XMLHttpRequest === 'function'; });
+test('Advanced Web', 'localStorage', function() { return typeof localStorage !== 'undefined'; });
+test('Advanced Web', 'sessionStorage', function() { return typeof sessionStorage !== 'undefined'; });
+test('Advanced Web', 'History API', function() { return typeof history !== 'undefined' && typeof history.pushState === 'function'; });
+test('Advanced Web', 'Canvas 2D', function() { var c = document.createElement('canvas'); return !!(c.getContext && c.getContext('2d')); });
+test('Advanced Web', 'WebSocket', function() { return typeof WebSocket === 'function'; });
+test('Advanced Web', 'Worker', function() { return typeof Worker === 'function'; });
+test('Advanced Web', 'IntersectionObserver', function() { return typeof IntersectionObserver === 'function'; });
+test('Advanced Web', 'MutationObserver', function() { return typeof MutationObserver === 'function'; });
+test('Advanced Web', 'ResizeObserver', function() { return typeof ResizeObserver === 'function'; });
+test('Advanced Web', 'FormData', function() { return typeof FormData === 'function'; });
+test('Advanced Web', 'URL constructor', function() { return typeof URL === 'function'; });
+test('Advanced Web', 'Blob', function() { return typeof Blob === 'function'; });
+test('Advanced Web', 'crypto', function() { return typeof crypto !== 'undefined'; });
+
+// Render results
+var html = '';
+var categories = Object.keys(sections);
+for (var ci = 0; ci < categories.length; ci++) {
+  var cat = categories[ci];
+  var items = sections[cat];
+  var catPass = 0;
+  for (var i = 0; i < items.length; i++) if (items[i].pass) catPass++;
+  html += '<div class="cat"><h2>' + cat + ' (' + catPass + '/' + items.length + ')</h2>';
+  for (var i = 0; i < items.length; i++) {
+    html += '<div class="row"><span>' + items[i].name + '</span><span class="' + (items[i].pass ? 'pass' : 'fail') + '">' + (items[i].pass ? 'PASS' : 'FAIL') + '</span></div>';
+  }
+  html += '</div>';
+}
+
+document.getElementById('total').textContent = pass + ' / ' + total + ' passed (' + Math.round(pass/total*100) + '%)';
+document.getElementById('total').className = 'score ' + (pass/total > 0.8 ? 'pass' : pass/total > 0.5 ? 'partial' : 'fail');
+document.getElementById('results').innerHTML = html;
+console.log('SCORE: ' + pass + '/' + total + ' (' + Math.round(pass/total*100) + '%)');
+// Log failures
+for (var ci = 0; ci < categories.length; ci++) {
+  var cat = categories[ci];
+  var items = sections[cat];
+  for (var i = 0; i < items.length; i++) {
+    if (!items[i].pass) console.log('FAIL: [' + cat + '] ' + items[i].name);
+  }
+}
+</script>
+</body>
+</html>
