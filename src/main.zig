@@ -1581,7 +1581,6 @@ pub fn main() !void {
         }
 
         // Tick JS timers (setTimeout/setInterval) and check for DOM mutations
-        // Limit timer execution to prevent blocking the event loop
         {
             const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
                 &page_states.items[tab_mgr.active_index]
@@ -1589,8 +1588,12 @@ pub fn main() !void {
                 null;
             if (active_pg) |pg| {
                 if (pg.js_rt) |*js_rt| {
-                    _ = web_api.tickTimers(js_rt.ctx);
-                    js_rt.executePending();
+                    // Tick multiple times to allow chained timers (e.g. setInterval)
+                    var tick_rounds: u32 = 0;
+                    while (tick_rounds < 5) : (tick_rounds += 1) {
+                        if (!web_api.tickTimers(js_rt.ctx)) break;
+                        js_rt.executePending();
+                    }
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
                         restylePage(pg, allocator, &fonts, surface.width, surface.height);
@@ -1599,6 +1602,9 @@ pub fn main() !void {
                 }
             }
         }
+
+        // If timer/JS caused a repaint need, paint immediately before blocking on pollEvent
+        if (needs_repaint) continue;
 
         // Poll XIM for asynchronously committed text (Mozc confirmed input)
         if (surface.xim_initialized) {

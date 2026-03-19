@@ -102,7 +102,7 @@ setTimeout(function() {
   document.getElementById('t5-outer').addEventListener('click', function() { order.push('outer'); });
   setTimeout(function() {
     document.getElementById('t5-inner').click();
-    result.textContent = 'Bubble order: ' + order.join(' → ');
+    result.textContent = 'Bubble order: ' + order.join(' ->');
     result.className = (order[0] === 'inner' && order[1] === 'outer') ? 'pass' : 'fail';
   }, 70);
 })();
