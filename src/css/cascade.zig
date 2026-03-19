@@ -990,6 +990,12 @@ fn applyDeclaration(
                 style.background_color = c.toArgb();
             }
         },
+        .background_image => {
+            // Parse linear-gradient(direction, color1, color2)
+            if (parseLinearGradient(trimmed, style)) {
+                // gradient_color_start, gradient_color_end, gradient_direction set
+            }
+        },
         .opacity => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| {
                 style.opacity = std.math.clamp(v, 0.0, 1.0);
@@ -2045,4 +2051,126 @@ fn toLowerBuf(s: []const u8, buf: *[64]u8) ?[]const u8 {
         buf[i] = util.toLower(c);
     }
     return buf[0..s.len];
+}
+
+/// Parse linear-gradient(direction, color1, color2) and set gradient fields on style.
+/// Returns true if successfully parsed.
+fn parseLinearGradient(value: []const u8, style: *ComputedStyle) bool {
+    // Match linear-gradient(...) or -webkit-linear-gradient(...)
+    var inner: []const u8 = undefined;
+    if (std.mem.indexOf(u8, value, "linear-gradient(")) |idx| {
+        const start = idx + "linear-gradient(".len;
+        // Find matching closing paren (handle nested parens for rgb())
+        var depth: u32 = 1;
+        var end = start;
+        while (end < value.len and depth > 0) {
+            if (value[end] == '(') depth += 1;
+            if (value[end] == ')') depth -= 1;
+            if (depth > 0) end += 1;
+        }
+        if (depth != 0) return false;
+        inner = value[start..end];
+    } else return false;
+
+    // Split by commas at depth 0 (respecting parentheses like rgb())
+    var parts: [8][]const u8 = undefined;
+    var part_count: usize = 0;
+    {
+        var depth_: u32 = 0;
+        var seg_start: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth_ += 1;
+            if (ch == ')') {
+                if (depth_ > 0) depth_ -= 1;
+            }
+            if (ch == ',' and depth_ == 0) {
+                if (part_count < parts.len) {
+                    parts[part_count] = std.mem.trim(u8, inner[seg_start..i], " \t");
+                    part_count += 1;
+                }
+                seg_start = i + 1;
+            }
+        }
+        if (seg_start < inner.len and part_count < parts.len) {
+            parts[part_count] = std.mem.trim(u8, inner[seg_start..], " \t");
+            part_count += 1;
+        }
+    }
+
+    if (part_count < 2) return false;
+
+    // Determine direction and color indices
+    var dir = ComputedStyle.GradientDirection.to_bottom;
+    var color1_idx: usize = 0;
+    var color2_idx: usize = 1;
+
+    const first = parts[0];
+    if (eqlIgnoreCase(first, "to right")) {
+        dir = .to_right;
+        color1_idx = 1;
+        color2_idx = if (part_count > 2) 2 else 1;
+    } else if (eqlIgnoreCase(first, "to left")) {
+        dir = .to_left;
+        color1_idx = 1;
+        color2_idx = if (part_count > 2) 2 else 1;
+    } else if (eqlIgnoreCase(first, "to bottom")) {
+        dir = .to_bottom;
+        color1_idx = 1;
+        color2_idx = if (part_count > 2) 2 else 1;
+    } else if (eqlIgnoreCase(first, "to top")) {
+        dir = .to_top;
+        color1_idx = 1;
+        color2_idx = if (part_count > 2) 2 else 1;
+    } else if (std.mem.endsWith(u8, first, "deg")) {
+        // Parse angle: 0deg=to top, 90deg=to right, 180deg=to bottom, 270deg=to left
+        const deg_str = first[0 .. first.len - 3];
+        if (std.fmt.parseFloat(f32, deg_str)) |deg| {
+            const normalized = @mod(deg, 360.0);
+            if (normalized < 45 or normalized >= 315) dir = .to_top
+            else if (normalized >= 45 and normalized < 135) dir = .to_right
+            else if (normalized >= 135 and normalized < 225) dir = .to_bottom
+            else dir = .to_left;
+        } else |_| {}
+        color1_idx = 1;
+        color2_idx = if (part_count > 2) 2 else 1;
+    }
+    // else: first part is a color, no direction specified
+
+    if (color2_idx >= part_count) return false;
+
+    // Parse colors (strip percentage/position suffixes like "red 0%" → "red")
+    const c1_raw = stripColorStop(parts[color1_idx]);
+    const c2_raw = stripColorStop(parts[color2_idx]);
+
+    const c1 = properties.parseColor(c1_raw) orelse return false;
+    const c2 = properties.parseColor(c2_raw) orelse return false;
+
+    style.gradient_color_start = c1.toArgb();
+    style.gradient_color_end = c2.toArgb();
+    style.gradient_direction = dir;
+    return true;
+}
+
+/// Strip color-stop position suffix (e.g., "red 50%" → "red", "#fff 0%" → "#fff")
+/// Does NOT strip inside function calls like rgb(), hsl().
+fn stripColorStop(raw: []const u8) []const u8 {
+    // Don't strip from function values (rgb(...), hsl(...), etc.)
+    if (std.mem.indexOf(u8, raw, "(") != null) return raw;
+
+    // Find last space that precedes a number/percentage
+    var i = raw.len;
+    while (i > 0) {
+        i -= 1;
+        if (raw[i] == ' ') {
+            // Check if the rest looks like a stop position
+            const rest = std.mem.trim(u8, raw[i + 1 ..], " ");
+            if (rest.len > 0 and (rest[rest.len - 1] == '%' or
+                (rest[0] >= '0' and rest[0] <= '9')))
+            {
+                return std.mem.trim(u8, raw[0..i], " ");
+            }
+            break;
+        }
+    }
+    return raw;
 }

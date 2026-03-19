@@ -761,8 +761,15 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
     }
 
     for (tokens[0..token_count]) |tok| {
-        // Extract url(...) as background-image
+        // Extract url(...) or linear-gradient(...) as background-image
         if (startsWithIgnoreCase(tok, "url(")) {
+            image_val = tok;
+            continue;
+        }
+        if (startsWithIgnoreCase(tok, "linear-gradient(") or
+            startsWithIgnoreCase(tok, "-webkit-linear-gradient(") or
+            startsWithIgnoreCase(tok, "-moz-linear-gradient("))
+        {
             image_val = tok;
             continue;
         }

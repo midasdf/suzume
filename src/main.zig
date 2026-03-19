@@ -215,6 +215,103 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
     }
 }
 
+/// Parse a data: URI and return the decoded content.
+/// Supports: data:text/javascript,<url-encoded-code>
+///           data:text/javascript;base64,<base64-encoded-code>
+fn parseDataUri(uri: []const u8, allocator: std.mem.Allocator) ?[]u8 {
+    // data:[<mediatype>][;base64],<data>
+    if (!std.mem.startsWith(u8, uri, "data:")) return null;
+    const after_scheme = uri[5..]; // skip "data:"
+
+    // Find the comma separating metadata from data
+    const comma_idx = std.mem.indexOf(u8, after_scheme, ",") orelse return null;
+    const metadata = after_scheme[0..comma_idx];
+    const data = after_scheme[comma_idx + 1 ..];
+
+    const is_base64 = std.mem.indexOf(u8, metadata, ";base64") != null;
+
+    if (is_base64) {
+        // URL-decode first (data URI may have %XX encoding on the base64 part)
+        var url_decoded = allocator.alloc(u8, data.len) catch return null;
+        var ud_len: usize = 0;
+        {
+            var i: usize = 0;
+            while (i < data.len) {
+                if (data[i] == '%' and i + 2 < data.len) {
+                    const high = hexDigit(data[i + 1]);
+                    const low = hexDigit(data[i + 2]);
+                    if (high != null and low != null) {
+                        url_decoded[ud_len] = (@as(u8, high.?) << 4) | @as(u8, low.?);
+                        ud_len += 1;
+                        i += 3;
+                        continue;
+                    }
+                }
+                url_decoded[ud_len] = data[i];
+                ud_len += 1;
+                i += 1;
+            }
+        }
+
+        // Filter out whitespace (RFC 2045 allows folding)
+        var clean_len: usize = 0;
+        for (url_decoded[0..ud_len]) |ch| {
+            if (ch != ' ' and ch != '\t' and ch != '\r' and ch != '\n') {
+                url_decoded[clean_len] = ch;
+                clean_len += 1;
+            }
+        }
+
+        // Base64 decode
+        const decoder = std.base64.standard.Decoder;
+        const decoded_len = decoder.calcSizeForSlice(url_decoded[0..clean_len]) catch {
+            allocator.free(url_decoded);
+            return null;
+        };
+        var decoded = allocator.alloc(u8, decoded_len) catch {
+            allocator.free(url_decoded);
+            return null;
+        };
+        decoder.decode(decoded[0..decoded_len], url_decoded[0..clean_len]) catch {
+            allocator.free(url_decoded);
+            allocator.free(decoded);
+            return null;
+        };
+        allocator.free(url_decoded);
+        return decoded;
+    } else {
+        // URL-decode the data
+        var result = allocator.alloc(u8, data.len) catch return null;
+        var out_pos: usize = 0;
+        var i: usize = 0;
+        while (i < data.len) {
+            if (data[i] == '%' and i + 2 < data.len) {
+                const high = hexDigit(data[i + 1]);
+                const low = hexDigit(data[i + 2]);
+                if (high != null and low != null) {
+                    result[out_pos] = (@as(u8, high.?) << 4) | @as(u8, low.?);
+                    out_pos += 1;
+                    i += 3;
+                    continue;
+                }
+            }
+            result[out_pos] = data[i];
+            out_pos += 1;
+            i += 1;
+        }
+        // Shrink to actual size
+        const shrunk = allocator.realloc(result, out_pos) catch return result[0..out_pos];
+        return shrunk;
+    }
+}
+
+fn hexDigit(c: u8) ?u4 {
+    if (c >= '0' and c <= '9') return @intCast(c - '0');
+    if (c >= 'a' and c <= 'f') return @intCast(c - 'a' + 10);
+    if (c >= 'A' and c <= 'F') return @intCast(c - 'A' + 10);
+    return null;
+}
+
 /// Maximum size for a fetched external script (500 KB).
 const max_external_script_size = 1024 * 1024;
 /// Maximum number of external scripts to fetch per page.
@@ -263,8 +360,8 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                     // External script
                     const src = src_ptr.?[0..src_len];
 
-                    // Only fetch http:// or https:// URLs
-                    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://"))
+                    // Resolve URL (absolute http/https/data: or relative to base)
+                    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:"))
                         blk: {
                             const u = allocator.allocSentinel(u8, src.len, 0) catch return;
                             @memcpy(u, src);
@@ -275,6 +372,21 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                     else
                         return;
                     defer allocator.free(resolved_url);
+
+                    // Handle data: URIs inline (no HTTP fetch needed)
+                    if (std.mem.startsWith(u8, resolved_url, "data:")) {
+                        if (parseDataUri(resolved_url, allocator)) |code| {
+                            defer allocator.free(code);
+                            std.debug.print("[JS] Executing data: URI script ({d} bytes)\n", .{code.len});
+                            const eval_result = js_rt.eval(code);
+                            if (!eval_result.isOk()) {
+                                std.debug.print("[JS] data: URI script error: {s}\n", .{eval_result.value()});
+                            }
+                            eval_result.deinit();
+                            js_rt.executePending();
+                        }
+                        return;
+                    }
 
                     // Verify resolved URL is http(s)
                     if (!std.mem.startsWith(u8, resolved_url, "http://") and !std.mem.startsWith(u8, resolved_url, "https://")) {
@@ -348,7 +460,7 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                     const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
                     if (content_ptr != null and content_len > 0) {
                         // Skip very large inline scripts (often JSON data blobs that crash)
-                        if (content_len > 100 * 1024) {
+                        if (content_len > 512 * 1024) {
                             std.debug.print("[JS] Skipping large inline script ({d} bytes)\n", .{content_len});
                         } else if (is_defer) {
                             // Defer inline script (note: per spec, defer only applies to
