@@ -10,6 +10,14 @@ const MAX_ROWS = 512;
 
 /// Lay out a table element and its children.
 pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
+    // Apply cellpadding from HTML attribute to all cells
+    const cellpadding: f32 = if (box.dom_node) |dn|
+        if (dn.getAttribute("cellpadding")) |cp|
+            std.fmt.parseFloat(f32, cp) catch 0
+        else
+            0
+    else
+        0;
     const content_x = box.padding.left + box.border.left;
     box.content.x = content_x;
     box.content.y = cursor_y + box.padding.top + box.border.top;
@@ -166,6 +174,17 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
                 cell_width += col_widths[ci];
             }
 
+            // Apply cellpadding to cell if padding wasn't set by CSS
+            if (cellpadding >= 0) {
+                // UA stylesheet sets padding:1px, cellpadding overrides it
+                cell.padding = .{
+                    .top = cellpadding,
+                    .right = cellpadding,
+                    .bottom = cellpadding,
+                    .left = cellpadding,
+                };
+            }
+
             // Layout cell as a block
             block.layoutBlock(cell, cell_width, box.content.y + row_y, fonts);
 
@@ -204,23 +223,22 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 }
 
 /// Estimate cell content width from text length without full layout.
+/// Recursively finds the longest text node in the cell's subtree.
 fn estimateCellContentWidth(cell: *Box, font_size: f32) f32 {
     var max_text_len: usize = 0;
-    // Check direct text children
-    for (cell.children.items) |child| {
-        if (child.text) |text| {
-            if (text.len > max_text_len) max_text_len = text.len;
-        }
-        // Check one level deeper (e.g. <span>text</span>)
-        for (child.children.items) |gc| {
-            if (gc.text) |text| {
-                if (text.len > max_text_len) max_text_len = text.len;
-            }
-        }
-    }
-    // Approximate: each character is ~0.6 * font_size pixels wide
+    findMaxTextLen(cell, &max_text_len, 0);
     const char_width = font_size * 0.6;
     return @as(f32, @floatFromInt(max_text_len)) * char_width;
+}
+
+fn findMaxTextLen(box: *Box, max_len: *usize, depth: u32) void {
+    if (depth > 6) return;
+    if (box.text) |text| {
+        if (text.len > max_len.*) max_len.* = text.len;
+    }
+    for (box.children.items) |child| {
+        findMaxTextLen(child, max_len, depth + 1);
+    }
 }
 
 /// Get colspan attribute from a cell's DOM node.
