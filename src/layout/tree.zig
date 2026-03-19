@@ -588,9 +588,25 @@ fn buildChildren(
                     try parent_box.children.append(allocator, text_box);
                 } else {
                     // Normal mode: collapse whitespace
-                    // 1. Skip whitespace-only text nodes
+                    // 1. Whitespace-only text nodes → single space (for inter-element spacing)
+                    //    but skip if parent is block-level with no inline siblings
                     const trimmed = std.mem.trim(u8, text, " \t\n\r");
-                    if (trimmed.len == 0) continue;
+                    if (trimmed.len == 0) {
+                        // Keep as single space if parent has inline display (inter-element spacing)
+                        if (parent_box.style.display == .inline_ or parent_box.style.display == .inline_block or
+                            parent_box.style.display == .inline_flex or parent_box.style.display == .table_cell)
+                        {
+                            const space_box = try allocator.create(Box);
+                            space_box.* = .{};
+                            space_box.box_type = .inline_text;
+                            space_box.text = " ";
+                            space_box.parent = parent_box;
+                            space_box.style = parent_box.style;
+                            space_box.link_url = inherited_link;
+                            try parent_box.children.append(allocator, space_box);
+                        }
+                        continue;
+                    }
 
                     // 2. Collapse internal whitespace: replace runs of
                     //    whitespace (spaces, tabs, newlines) with single space
