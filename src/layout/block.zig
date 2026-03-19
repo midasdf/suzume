@@ -252,11 +252,13 @@ fn breakFlagsFromStyle(style: ComputedStyle) BreakFlags {
 }
 
 /// Compute effective line height from CSS line-height property and raw font metrics height.
+/// CSS spec: line-height:normal is UA-dependent, typically 1.0-1.2x font metrics.
+/// Using raw_height directly (1.0x) matches Firefox's tight rendering for body text.
 fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_size: f32) f32 {
     return switch (style_lh) {
         .px => |px| @max(px, raw_height),
         .number => |n| font_size * n,
-        .normal => raw_height * 1.2,
+        .normal => raw_height,
     };
 }
 

@@ -10,7 +10,9 @@ const MAX_ROWS = 512;
 
 /// Lay out a table element and its children.
 pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
-    // Apply cellpadding from HTML attribute to all cells
+    // Apply cellpadding from HTML attribute to all cells.
+    // Distinguish "cellpadding=0" (explicit, override UA 1px) from "no attribute" (keep UA default).
+    const has_cellpadding_attr = if (box.dom_node) |dn| dn.getAttribute("cellpadding") != null else false;
     const cellpadding: f32 = if (box.dom_node) |dn|
         if (dn.getAttribute("cellpadding")) |cp|
             std.fmt.parseFloat(f32, cp) catch 0
@@ -188,9 +190,8 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
                 cell_width += col_widths[ci];
             }
 
-            // Apply cellpadding to cell if padding wasn't set by CSS
-            if (cellpadding >= 0) {
-                // UA stylesheet sets padding:1px, cellpadding overrides it
+            // Apply cellpadding from HTML attribute (overrides UA stylesheet padding)
+            if (has_cellpadding_attr) {
                 cell.padding = .{
                     .top = cellpadding,
                     .right = cellpadding,
