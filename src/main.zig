@@ -1313,6 +1313,12 @@ pub fn main() !void {
     // Ensure user scripts directory exists
     userscript.ensureScriptsDir(allocator);
 
+    // Set initial JS viewport dimensions before first navigation
+    web_api.setViewportSize(
+        @intCast(surface.width),
+        @intCast(@max(0, chrome.contentHeight(surface.height))),
+    );
+
     // If initial URL provided, navigate to it
     if (initial_url) |url| {
         url_input.setText(url);
@@ -1570,6 +1576,11 @@ pub fn main() !void {
                     // Window was resized (e.g. by i3 tiling WM)
                     surface.refreshGeometry();
                     std.debug.print("[Resize] New size: {d}x{d}\n", .{ surface.width, surface.height });
+                    // Update JS viewport dimensions
+                    web_api.setViewportSize(
+                        @intCast(surface.width),
+                        @intCast(@max(0, chrome.contentHeight(surface.height))),
+                    );
                     needs_repaint = true;
                 },
 

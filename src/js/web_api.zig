@@ -2,6 +2,19 @@ const std = @import("std");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 
+// ── Viewport dimensions ─────────────────────────────────────────────
+
+/// Viewport (content area) dimensions, updated on resize.
+/// Defaults match the HyperPixel4 720×720 display minus chrome bars.
+var viewport_width: u32 = 720;
+var viewport_height: u32 = 632; // 720 - url_bar(36) - tab_bar(28) - status_bar(24)
+
+/// Call from main.zig after window resize or initial layout.
+pub fn setViewportSize(w: u32, h: u32) void {
+    viewport_width = w;
+    viewport_height = h;
+}
+
 // ── Timer system ────────────────────────────────────────────────────
 
 const TimerEntry = struct {
@@ -580,6 +593,67 @@ fn evalInitScript(ctx: *qjs.JSContext, code: [*:0]const u8, len: usize) void {
     qjs.JS_FreeValue(ctx, result);
 }
 
+// ── window.innerWidth / innerHeight / outerWidth / outerHeight ───────
+
+fn jsGetInnerWidth(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewInt32(c, @intCast(viewport_width));
+}
+
+fn jsGetInnerHeight(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewInt32(c, @intCast(viewport_height));
+}
+
+fn jsGetOuterWidth(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewInt32(c, 720); // full physical screen width
+}
+
+fn jsGetOuterHeight(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewInt32(c, 720); // full physical screen height
+}
+
+fn defineGetter(
+    ctx: *qjs.JSContext,
+    global: qjs.JSValue,
+    name: [*:0]const u8,
+    getter_fn: *const fn (?*qjs.JSContext, qjs.JSValue, c_int, ?[*]qjs.JSValue) callconv(.c) qjs.JSValue,
+) void {
+    const atom = qjs.JS_NewAtom(ctx, name);
+    defer qjs.JS_FreeAtom(ctx, atom);
+    const getter = qjs.JS_NewCFunction(ctx, getter_fn, name, 0);
+    _ = qjs.JS_DefinePropertyGetSet(
+        ctx,
+        global,
+        atom,
+        getter,
+        quickjs.JS_UNDEFINED(),
+        qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE,
+    );
+}
+
 // ── Registration ────────────────────────────────────────────────────
 
 pub fn registerWebApis(js_rt: anytype) void {
@@ -622,6 +696,77 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "btoa", qjs.JS_NewCFunction(ctx, &jsBtoa, "btoa", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "atob", qjs.JS_NewCFunction(ctx, &jsAtob, "atob", 1));
 
+    // -- window.innerWidth / innerHeight / outerWidth / outerHeight (getters) --
+    defineGetter(ctx, global, "innerWidth", &jsGetInnerWidth);
+    defineGetter(ctx, global, "innerHeight", &jsGetInnerHeight);
+    defineGetter(ctx, global, "outerWidth", &jsGetOuterWidth);
+    defineGetter(ctx, global, "outerHeight", &jsGetOuterHeight);
+
+    // -- navigator object --
+    {
+        const nav = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "userAgent", qjs.JS_NewString(ctx,
+            "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) suzume/0.4"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "platform", qjs.JS_NewString(ctx, "Linux aarch64"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "language", qjs.JS_NewString(ctx, "ja"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "vendor", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "appName", qjs.JS_NewString(ctx, "Netscape"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "appVersion", qjs.JS_NewString(ctx, "5.0 (Linux)"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "product", qjs.JS_NewString(ctx, "Gecko"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "onLine", quickjs.JS_NewBool(true));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "cookieEnabled", quickjs.JS_NewBool(true));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "maxTouchPoints", qjs.JS_NewInt32(ctx, 0));
+        // languages array: ["ja", "en"]
+        {
+            const langs = qjs.JS_NewArray(ctx);
+            _ = qjs.JS_SetPropertyUint32(ctx, langs, 0, qjs.JS_NewString(ctx, "ja"));
+            _ = qjs.JS_SetPropertyUint32(ctx, langs, 1, qjs.JS_NewString(ctx, "en"));
+            _ = qjs.JS_SetPropertyStr(ctx, nav, "languages", langs);
+        }
+        // geolocation stub
+        {
+            const geo = qjs.JS_NewObject(ctx);
+            _ = qjs.JS_SetPropertyStr(ctx, geo, "getCurrentPosition",
+                qjs.JS_NewCFunction(ctx, &jsNoOp, "getCurrentPosition", 1));
+            _ = qjs.JS_SetPropertyStr(ctx, nav, "geolocation", geo);
+        }
+        _ = qjs.JS_SetPropertyStr(ctx, global, "navigator", nav);
+    }
+
+    // -- screen object --
+    {
+        const screen = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "width", qjs.JS_NewInt32(ctx, 720));
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "height", qjs.JS_NewInt32(ctx, 720));
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "availWidth", qjs.JS_NewInt32(ctx, 720));
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "availHeight", qjs.JS_NewInt32(ctx, 720));
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "colorDepth", qjs.JS_NewInt32(ctx, 24));
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "pixelDepth", qjs.JS_NewInt32(ctx, 24));
+        _ = qjs.JS_SetPropertyStr(ctx, screen, "orientation", qjs.JS_NewObject(ctx));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "screen", screen);
+    }
+
+    // -- location object --
+    {
+        const loc = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "href", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "protocol", qjs.JS_NewString(ctx, "https:"));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "host", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "hostname", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "port", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "pathname", qjs.JS_NewString(ctx, "/"));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "search", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "hash", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "origin", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "assign",
+            qjs.JS_NewCFunction(ctx, &jsNoOp, "assign", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "replace",
+            qjs.JS_NewCFunction(ctx, &jsNoOp, "replace", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "reload",
+            qjs.JS_NewCFunction(ctx, &jsNoOp, "reload", 0));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "location", loc);
+    }
+
     // -- URL class (JS-based) --
     evalInitScript(ctx, url_class_js, url_class_js.len);
 
@@ -629,6 +774,8 @@ pub fn registerWebApis(js_rt: anytype) void {
     evalInitScript(ctx, utility_apis_js, utility_apis_js.len);
 
     // -- Stub Web APIs for compatibility --
+    // Note: window, navigator, screen, location are defined above in Zig.
+    // matchMedia is improved to evaluate simple width queries using innerWidth.
     const compat_stubs =
         \\function Image(w,h){this.width=w||0;this.height=h||0;this.src='';this.onload=null;this.onerror=null;}
         \\if(typeof self==='undefined'){globalThis.self=globalThis;}
@@ -639,7 +786,15 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
         \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
-        \\if(typeof matchMedia==='undefined'){globalThis.matchMedia=function(q){return{matches:false,media:q,addEventListener:function(){},removeEventListener:function(){},addListener:function(){},removeListener:function(){}};};}
+        \\globalThis.matchMedia=function(q){
+        \\  var w=innerWidth,matches=false,m;
+        \\  m=q.match(/\(max-width:\s*(\d+)px\)/);if(m)matches=(w<=parseInt(m[1]));
+        \\  m=q.match(/\(min-width:\s*(\d+)px\)/);if(m)matches=(w>=parseInt(m[1]));
+        \\  m=q.match(/\(max-height:\s*(\d+)px\)/);if(m)matches=(innerHeight<=parseInt(m[1]));
+        \\  m=q.match(/\(min-height:\s*(\d+)px\)/);if(m)matches=(innerHeight>=parseInt(m[1]));
+        \\  if(q==='(prefers-color-scheme:dark)'||q==='(prefers-color-scheme: dark)')matches=true;
+        \\  return{matches:matches,media:q,addEventListener:function(){},removeEventListener:function(){},addListener:function(){},removeListener:function(){}};
+        \\};
         \\if(typeof getComputedStyle==='undefined'){globalThis.getComputedStyle=function(el){return new Proxy({},{get:function(_,p){return'';}});};}
         \\if(typeof requestIdleCallback==='undefined'){globalThis.requestIdleCallback=function(cb){return setTimeout(cb,1);};}
         \\if(typeof cancelIdleCallback==='undefined'){globalThis.cancelIdleCallback=function(id){clearTimeout(id);};}
@@ -654,7 +809,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof XMLHttpRequest==='undefined'){globalThis.XMLHttpRequest=function(){this.open=function(){};this.send=function(){};this.setRequestHeader=function(){};this.addEventListener=function(){};};}
         \\if(typeof DOMParser==='undefined'){globalThis.DOMParser=function(){this.parseFromString=function(){return null;};};}
         \\if(typeof history==='undefined'){globalThis.history={pushState:function(){},replaceState:function(){},back:function(){},forward:function(){},go:function(){},get length(){return 1;},get state(){return null;}};}
-        \\if(typeof location==='undefined'){globalThis.location={href:'',protocol:'https:',host:'',hostname:'',pathname:'/',search:'',hash:'',origin:'',assign:function(){},replace:function(){},reload:function(){}};}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
