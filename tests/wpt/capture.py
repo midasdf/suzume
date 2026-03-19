@@ -69,7 +69,7 @@ def xdotool(args):
 
 def capture_firefox(url, output_path, wait=12):
     """Capture Firefox screenshot using headless mode (much more reliable)."""
-    kill_procs("firefox")
+    kill_procs("firefox.*ff-headless-profile")
     time.sleep(1)
 
     env = os.environ.copy()
@@ -89,6 +89,8 @@ def capture_suzume(url, output_path, wait=5):
     try:
         env = os.environ.copy()
         env["DISPLAY"] = XEPHYR_DISPLAY
+        env["SUZUME_WIDTH"] = str(WIDTH)
+        env["SUZUME_HEIGHT"] = str(HEIGHT)
 
         sz = subprocess.Popen(
             [SUZUME_BIN, url],

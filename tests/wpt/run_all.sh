@@ -14,8 +14,8 @@ PORT=8765
 
 mkdir -p "$RESULTS_DIR/firefox" "$RESULTS_DIR/suzume" "$RESULTS_DIR/diff"
 
-# Ensure clean state
-pkill -9 -f firefox 2>/dev/null || true
+# Ensure clean state (only kill test-profile Firefox, not user's browser)
+pkill -9 -f "firefox.*ff-wpt-profile" 2>/dev/null || true
 pkill -f "python3.*http.server.*$PORT" 2>/dev/null || true
 sleep 1
 

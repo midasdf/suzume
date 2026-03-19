@@ -1733,8 +1733,7 @@ fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return null;
 
-    // Split compound selector on spaces for descendant combinator
-    // e.g. "#t9 .special" → find #t9, then find .special within it
+    // Parse compound selector (space = descendant combinator)
     var parts: [8][]const u8 = undefined;
     var part_count: usize = 0;
     var iter = std.mem.tokenizeAny(u8, trimmed, " \t");
@@ -1743,22 +1742,17 @@ fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb
         parts[part_count] = part;
         part_count += 1;
     }
-
     if (part_count == 0) return null;
 
-    if (part_count == 1) {
-        // Simple selector
-        return walkTreeBySimpleSelector(node, parts[0]);
+    // Walk the entire tree and return the first node matching the compound selector.
+    // Uses ancestor chain matching (same as querySelectorAll) to avoid the greedy
+    // sequential match bug where the first match of an early part doesn't contain later parts.
+    var current: ?*lxb.lxb_dom_node_t = node;
+    while (current) |n| {
+        if (nodeMatchesCompound(n, parts[0..part_count])) return n;
+        current = nextDfsNode(n, node);
     }
-
-    // Compound selector: find first part in tree, then search within it for remaining parts
-    var search_root: *lxb.lxb_dom_node_t = node;
-    for (0..part_count - 1) |i| {
-        const found = walkTreeBySimpleSelector(search_root, parts[i]) orelse return null;
-        search_root = found;
-    }
-    // Search for the last part within the found ancestor
-    return walkTreeBySimpleSelector(search_root, parts[part_count - 1]);
+    return null;
 }
 
 /// Match a single simple selector: #id, .class, tag, tag.class, tag#id

@@ -1588,12 +1588,8 @@ pub fn main() !void {
                 null;
             if (active_pg) |pg| {
                 if (pg.js_rt) |*js_rt| {
-                    // Tick multiple times to allow chained timers (e.g. setInterval)
-                    var tick_rounds: u32 = 0;
-                    while (tick_rounds < 5) : (tick_rounds += 1) {
-                        if (!web_api.tickTimers(js_rt.ctx)) break;
-                        js_rt.executePending();
-                    }
+                    _ = web_api.tickTimers(js_rt.ctx);
+                    js_rt.executePending();
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
                         restylePage(pg, allocator, &fonts, surface.width, surface.height);
@@ -1602,9 +1598,6 @@ pub fn main() !void {
                 }
             }
         }
-
-        // If timer/JS caused a repaint need, paint immediately before blocking on pollEvent
-        if (needs_repaint) continue;
 
         // Poll XIM for asynchronously committed text (Mozc confirmed input)
         if (surface.xim_initialized) {
@@ -1702,7 +1695,9 @@ pub fn main() !void {
             }
         }
 
-        if (surface.pollEvent(50)) |event| {
+        // Use shorter poll timeout when timers are active or repaint pending
+        const poll_timeout: i32 = if (needs_repaint or web_api.hasTimers()) 0 else 50;
+        if (surface.pollEvent(poll_timeout)) |event| {
             switch (event.type) {
                 nsfb_c.NSFB_EVENT_CONTROL => {
                     if (event.value.controlcode == nsfb_c.NSFB_CONTROL_QUIT) {
