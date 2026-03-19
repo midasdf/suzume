@@ -498,8 +498,8 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                     blitGlyphClipped,
                 );
 
-                // Draw underline for links or text-decoration: underline
-                const draw_underline = box.link_url != null or box.style.text_decoration.underline;
+                // Draw underline based on CSS text-decoration only
+                const draw_underline = box.style.text_decoration.underline;
                 if (draw_underline) {
                     const underline_y = draw_y + 2; // 2px below baseline
                     if (underline_y >= clip_top and underline_y < clip_bottom) {
