@@ -290,14 +290,19 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                     var content_len: usize = 0;
                     const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
                     if (content_ptr != null and content_len > 0) {
-                        const code = content_ptr.?[0..content_len];
-                        std.debug.print("[JS] Executing <script> ({d} bytes)\n", .{content_len});
-                        const result = js_rt.eval(code);
-                        defer result.deinit();
-                        if (!result.isOk()) {
-                            std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
+                        // Skip very large inline scripts (often JSON data blobs that crash)
+                        if (content_len > 100 * 1024) {
+                            std.debug.print("[JS] Skipping large inline script ({d} bytes)\n", .{content_len});
+                        } else {
+                            const code = content_ptr.?[0..content_len];
+                            std.debug.print("[JS] Executing <script> ({d} bytes)\n", .{content_len});
+                            const result = js_rt.eval(code);
+                            defer result.deinit();
+                            if (!result.isOk()) {
+                                std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
+                            }
+                            js_rt.executePending();
                         }
-                        js_rt.executePending();
                     }
                 }
                 return; // Don't recurse into script content
