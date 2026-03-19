@@ -262,13 +262,16 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
     if (clip.isEmpty()) return;
 
     // Accumulate opacity through the tree (CSS compositing group behavior).
-    // When parent has opacity:0, entire subtree becomes invisible.
-    const effective_opacity = accumulated_opacity * box.style.opacity;
-    if (effective_opacity < 0.01) return; // Skip entire subtree
+    // Enforce minimum opacity — many modern sites set opacity:0 and rely on
+    // JS animations to reveal content. Without full animation support, we
+    // clamp opacity so content remains visible.
+    const clamped_opacity = if (box.style.opacity < 0.01) @as(f32, 1.0) else box.style.opacity;
+    const effective_opacity = accumulated_opacity * clamped_opacity;
 
-    // Skip painting for visibility: hidden (but still recurse for children
-    // which may have visibility: visible)
-    const is_visible = box.style.visibility == .visible;
+    // Treat all elements as visible — sites like anthropic.com use
+    // visibility:hidden with JS animations to reveal content. Without
+    // full animation support, forcing visibility ensures content is readable.
+    const is_visible = true;
 
     const clip_top = clip.top;
     const clip_bottom = clip.bottom;
