@@ -68,6 +68,39 @@ fn containsDomain(url: []const u8, domain: []const u8) bool {
     return false;
 }
 
+/// Tracking/analytics script URL patterns to skip for memory savings.
+/// These scripts don't affect page content rendering.
+const tracking_patterns = [_][]const u8{
+    "analytics",
+    "hubspot",
+    "googletagmanager",
+    "google-analytics",
+    "onetrust",
+    "segment.com",
+    "segment.io",
+    "hotjar",
+    "sentry.io",
+    "datadog",
+    "newrelic",
+    "intellimize",
+    "optimizely",
+    "crazyegg",
+    "mouseflow",
+    "gtm.js",
+    "gtag/js",
+    "clarity.ms",
+    "plausible.io",
+    "matomo",
+};
+
+/// Check if a script URL is for tracking/analytics and can be skipped.
+pub fn isTrackingScript(url: []const u8) bool {
+    for (tracking_patterns) |pattern| {
+        if (std.mem.indexOf(u8, url, pattern) != null) return true;
+    }
+    return false;
+}
+
 /// Get the count of blocked domains.
 pub fn blockedDomainCount() usize {
     return blocked_domains.len;

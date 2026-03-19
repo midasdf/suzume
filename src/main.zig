@@ -279,6 +279,12 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         return;
                     }
 
+                    // Skip tracking/analytics scripts to save memory
+                    if (adblock_mod.isTrackingScript(resolved_url)) {
+                        std.debug.print("[JS] Skipping tracking script: {s}\n", .{resolved_url});
+                        return;
+                    }
+
                     // Check limits (count and total bytes)
                     if (ext_count.* >= max_external_script_count) {
                         return; // silently skip — too noisy to log on big sites
