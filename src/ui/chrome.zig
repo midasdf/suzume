@@ -13,8 +13,9 @@ pub const status_bar_height: i32 = 24;
 pub const content_y: i32 = url_bar_height + tab_bar_height;
 
 /// Default initial window size (used at Surface.init time).
-pub const default_window_w: i32 = 720;
-pub const default_window_h: i32 = 720;
+/// Large values let the WM/X server clamp to actual screen size.
+pub const default_window_w: i32 = 4096;
+pub const default_window_h: i32 = 4096;
 
 /// Compute the content area height from the actual window height.
 pub fn contentHeight(window_h: i32) i32 {

@@ -1235,7 +1235,13 @@ pub fn main() !void {
     };
     defer surface.deinit();
 
-    // Refresh geometry to get actual window size from WM (may differ from requested)
+    // Process pending X11 events to pick up WM-assigned geometry
+    // (ConfigureNotify from tiling WM like i3 arrives before event loop)
+    while (surface.pollEvent(0)) |init_event| {
+        if (init_event.type == nsfb_c.NSFB_EVENT_RESIZE) {
+            surface.refreshGeometry();
+        }
+    }
     surface.refreshGeometry();
 
     // Initialize XIM (X Input Method) for fcitx5/mozc Japanese input
