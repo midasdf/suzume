@@ -4,78 +4,80 @@
 
 suzumeブラウザ（Zig製カスタムブラウザエンジン、RPi Zero 2W向け）のCSS/JS/React SPA仕様準拠を改善中。WPTスタイルのvisual regression testをFirefox比較で実施し、差分を修正するサイクルで進めている。
 
-## 今回のセッションで完了したこと (2026-03-20)
+## 今回のセッションで完了したこと (2026-03-20, セッション2-3)
 
-### 7コミット分の修正
+### セッション2: Priority 1-5 修正
+1. **タイマーcrash修正**: `clearInterval`がコールバック実行中に呼ばれるとsegfault → `JS_DupValue`で保護
+2. **element.click()/dispatchEvent修復**: `injectElementEventMethods`未呼び出し → 追加
+3. **rAF timestamp**: `requestAnimationFrame`コールバックにDOMHighResTimeStampを渡す
+4. **getComputedStyle()**: cascade StyleMapから実ComputedStyleを返す実装（30+プロパティ）
+5. **insertAdjacentHTML()**: 4 position全対応
+6. **align-content**: CSS parse + cascade + flexレイアウト全実装（7値）
+7. **HTMLElement.hidden**: getter/setter
+8. **ノードidentity保持**: node→JSValueキャッシュ（`===`比較が正常に動作）
 
-1. **CSS `background` shorthand**: `rgb()/hsl()` がスペースでトークン分割されるバグ修正。カッコ深度追跡トークナイザー導入
-2. **CSS named colors**: 26色→148色（CSS Color Level 4全色）
-3. **SUZUME_WIDTH/HEIGHT env var**: WM無し環境でのウィンドウサイズ制御
-4. **querySelector複合セレクタ**: descendant(空白), child(>), adjacent(+), general(~) combinator + カンマ区切り対応
-5. **element.click() / dispatchEvent()**: W3C準拠（TypeError throw）
-6. **JSタイマー即時repaint**: tickTimers後のDOM変更で即座にrepaint。pollEvent timeout=0（タイマーアクティブ時）
-7. **flex order**: CSSプロパティ→stable sortで配置順制御
-8. **currentcolor**: named_color_tableからsentinel削除、cascadeでstyle.colorに解決
-9. **Node.replaceChild()**: W3C準拠実装
+### セッション3: インフラ + CSS gradient
+9. **大きなスクリプト実行制限緩和**: 100KB→512KB（Acid3の173KBスクリプト実行可能に）
+10. **data: URIスキーム対応**: `<script src="data:...">` のURL-encoded/base64両対応
+11. **CSS linear-gradient()パース+描画**: 方向キーワード、角度、rgb()/hex/named color全対応
+12. **background shorthandのgradient認識**: `linear-gradient()`をbackground-imageとして展開
+13. **stripColorStop修正**: rgb()関数内の数字を色ストップ位置と誤認する問題を修正
 
-### WPTテストスイート
-
-`tests/wpt/` に9テストページ + Firefox参照スクリーンショット + capture.py。
-テスト対象: box-model, flexbox, positioning, text, colors, selectors, DOM manipulation, events/timers, SPA routing。
+### テスト結果
+- **自作ベンチマーク**: 82/87 (94%) — DOM Core/CSS/Events/Timers/ES6+全カテゴリ100%
+- **events-timersテスト**: 10/10 全パス
+- **gradientテスト**: 10/10 全パス（全方向、角度、rgb()、ボタン、ヘッダー）
+- **Example.com**: 完璧に表示
+- **Wikipedia**: コンテンツ読める（横幅問題あり）
+- **Acid3**: data: URI 4/5成功、メインスクリプト実行可能に
 
 ## 次回やるべきこと（優先度順）
 
-### Priority 1: JSタイマーが実際にページ表示に反映されない問題
+### Priority 1: Wikipedia横幅問題（width=3008px）
 
-**症状**: setTimeout/setInterval のコールバックは発火するが、DOM変更後のre-paintが反映されない（events-timersテストで「Waiting...」のまま）。ページロード時のタイマーループ（initPageJs内の100回ループ）で偶然発火するケースのみ動く。
+**症状**: Wikipediaのページレイアウトが横幅3008pxに広がる（ビューポートは1024px）
+**原因候補**:
+- テーブルレイアウトがshrink-to-fit幅を超えて拡張
+- `max-width`が特定のコンテキストで効かない
+- floatレイアウトのcontaining block幅計算ミス
+- Wikipediaの`vector-2022`スキンの複雑なCSS
+**調査方法**: デバッグ出力でどの要素が3008pxの幅を持ってるか特定
 
-**調査ポイント**:
-- メインイベントループのtickTimersは呼ばれている（確認済み）
-- pollEvent timeout=0 にしたのでタイマーアクティブ時はブロックしない
-- events-timersテストで「Waiting...」のままだったのは **テストHTML内のUTF-8矢印（→）がQuickJSでSyntaxError** を起こしてスクリプト全体が失敗していたため（修正済み）
-- 修正後のスクリーンショットが真っ黒だった — re-style後の背景色リセット問題の可能性
-- **次回確認**: 修正済みテストHTMLで再テスト。真っ黒問題の調査
+### Priority 2: flexbox内テキストセンタリング
 
-### Priority 2: getComputedStyle() 実値返却
+**症状**: `display:flex; align-items:center; justify-content:center`でテキストが中央に来ない
+**原因**: flex子要素がテキストノードの場合、anonymous block boxが生成されない可能性
+**確認**: gradient testのbox内テキストが左上寄せになっている
 
-**現状**: 空のProxyオブジェクトを返すスタブ実装。
-**影響**: Bootstrap, Tailwind, 多くのJSライブラリがレイアウト計算に使用。
-**実装方針**:
-- `getComputedStyle(element)` で `cascade.zig` の StyleMap から要素のComputedStyleを取得
-- CSSプロパティ名→ComputedStyleフィールドのマッピング関数を作成
-- 最低限: width, height, display, position, margin-*, padding-*, color, background-color, font-size, font-weight
+### Priority 3: CSS transforms (rotate/scale)
 
-### Priority 3: insertAdjacentHTML()
+**現状**: translate()のみ
+**実装**: 2D変換行列でrotate, scale, skewを実装。painter.zigでの座標変換
 
-**現状**: 未実装。
-**影響**: React, jQuery, 多くのフレームワークが使用。
-**実装**: 4つのposition（beforebegin, afterbegin, beforeend, afterend）に対応。lexborのフラグメントパーサーを使用。
+### Priority 4: fetch() API
 
-### Priority 4: align-content (複数行flex)
+**影響**: React SPA、多くの現代的サイトが使用
+**実装**: QuickJSのPromise + httpxで非同期HTTP fetch
 
-**現状**: align-items のみ。flex-wrap + align-content の組み合わせが未対応。
-**実装**: flex.zig のwrapレイアウトで、各行のcross-axisサイズを計算後にalign-contentで分配。
+### Priority 5: HTMLCanvasElement (2D Context)
 
-### Priority 5: HTMLElement.hidden
+**影響**: グラフ、チャート、ゲーム、多くのライブラリ
+**実装**: nsfb surface上で直接描画。最低限: fillRect, strokeRect, fillText, beginPath, arc, fill
 
-**現状**: HTML `hidden` 属性はパーサーで認識されるがJSからアクセス不可。
-**実装**: element protoにgetter/setterを追加。hidden=true → display:none相当。
+### Priority 6: テーブルレイアウト改善
 
-### Priority 6: flex shorthand
+**現状**: 基本的なtable-row/table-cellレイアウトはあるが、auto width計算が不正確
+**影響**: Wikipedia、多くのドキュメントサイト
 
-**現状**: flex-grow, flex-shrink, flex-basis は個別対応だが `flex: 1` のショートハンド未対応。
-**実装**: properties.zig の expandFlex() を確認・修正。`flex: 1` = `flex: 1 1 0%` の展開。
+### Priority 7: MutationObserver
 
-### Priority 7: CSS gradients
+**影響**: React、Vue等のフレームワーク、多くのライブラリ
+**実装**: dom_dirty時にobserverコールバックを発火
 
-**現状**: gradient_color_start/end フィールドはあるがパーサー未実装。
-**影響**: 多くのサイトのボタン・ヘッダー背景。
-**実装**: `linear-gradient(direction, color-stop, ...)` のパースと paint/painter.zig でのピクセル描画。
+### Priority 8: XMLHttpRequest
 
-### Priority 8: CSS transforms (rotate/scale)
-
-**現状**: translate()のみ。
-**実装**: 2D変換行列でrotate, scale, skewを実装。painter.zigでの座標変換。
+**影響**: jQueryベースのサイト、レガシーWebアプリ
+**実装**: fetch()と同じHTTPクライアントをXHR APIで包む
 
 ## テスト方法
 
@@ -91,33 +93,40 @@ rm -f /tmp/ff-headless-profile/lock /tmp/ff-headless-profile/.parentlock
 MOZ_HEADLESS=1 firefox -profile /tmp/ff-headless-profile --screenshot results/firefox/TEST_NAME.png --window-size=800,2000 "http://localhost:8765/PATH.html"
 
 # suzume スクリーンショット (Xephyr必須)
-nohup Xephyr :99 -screen 800x2000 -ac &>/dev/null &
+Xephyr :99 -screen 800x2000 -ac &>/dev/null &
 DISPLAY=:99 SUZUME_WIDTH=800 SUZUME_HEIGHT=2000 ~/suzume/zig-out/bin/suzume "http://localhost:8765/PATH.html" &
 sleep 5
 DISPLAY=:99 import -window root results/suzume/TEST_NAME.png
+
+# ベンチマーク
+DISPLAY=:99 SUZUME_WIDTH=800 SUZUME_HEIGHT=4000 ~/suzume/zig-out/bin/suzume "http://localhost:8765/benchmark/suzume-capabilities.html"
+# ログに SCORE: 82/87 (94%) が出る
 
 # ビルド注意: zig build のキャッシュが古い場合 touch src/main.zig してから再ビルド
 ```
 
 ## コードベース要約
 
-- `src/css/cascade.zig` (2000行): CSSカスケード、スタイル適用
-- `src/css/properties.zig` (1100行): CSSプロパティパース、named colors、shorthand展開
-- `src/css/selectors.zig` (830行): CSSセレクタマッチング（cascade用）
-- `src/layout/flex.zig` (720行): Flexboxレイアウト（order対応済み）
+- `src/css/cascade.zig` (2150行): CSSカスケード、スタイル適用、linear-gradient パーサー
+- `src/css/properties.zig` (1110行): CSSプロパティパース、named colors、shorthand展開
+- `src/css/computed.zig` (420行): ComputedStyle構造体（align-content追加済み）
+- `src/css/selectors.zig` (830行): CSSセレクタマッチング
+- `src/layout/flex.zig` (790行): Flexboxレイアウト（align-content対応済み）
 - `src/layout/block.zig` (1380行): Block + inlineレイアウト
-- `src/js/dom_api.zig` (3100行): DOM API (querySelector, classList, style, etc.)
-- `src/js/web_api.zig` (870行): Web API (timers, performance, navigator, etc.)
-- `src/js/events.zig` (430行): イベントシステム（addEventListener, dispatchEvent, click）
-- `src/main.zig` (3400行): エントリポイント、イベントループ、ページ状態管理
-- `src/paint/painter.zig` (780行): 描画エンジン
+- `src/js/dom_api.zig` (3600行): DOM API (getComputedStyle, insertAdjacentHTML, hidden, node cache)
+- `src/js/web_api.zig` (870行): Web API (timers with rAF timestamp)
+- `src/js/events.zig` (460行): イベントシステム（element prototype injection修正済み）
+- `src/main.zig` (3600行): エントリポイント、data: URI、parseDataUri
+- `src/paint/painter.zig` (780行): 描画エンジン（gradient描画済み）
+- `tests/wpt/benchmark/suzume-capabilities.html`: 87項目ベンチマーク
 
-## レビュー方法
+## 外部テストサイト参考
 
-```bash
-# CodeRabbit CLI
-cr review --plain --type committed --base-commit 'HEAD~N'
-
-# 内蔵コードレビュー
-# superpowers:code-reviewer agent を使用
-```
+| サイト | 用途 | suzume対応状況 |
+|--------|------|----------------|
+| Example.com | 最小HTML | ✅ 完璧 |
+| Wikipedia | セマンティックHTML | ⚠️ 読める、横幅問題 |
+| Acid3 | DOM/CSS/JS | ⚠️ フレーム表示、SVG等未対応でスコアなし |
+| HTML5test | HTML5機能 | ❌ JS重すぎ |
+| CSS3 Test | CSS3対応 | 未テスト |
+| Google Search | 高度なJS | 未テスト |
