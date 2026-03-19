@@ -108,8 +108,8 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     // Re-cascade styles from the current DOM (includes any <style> tags JS may have added)
     var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css, @intCast(layout_width), @intCast(layout_height)) catch return;
 
-    // Build new box tree
-    const new_root_box = box_tree.buildBoxTree(body_node, &new_styles, allocator) catch {
+    // Build new box tree from html root (not body) for proper CSS background propagation
+    const new_root_box = box_tree.buildBoxTree(root_node, &new_styles, allocator) catch {
         new_styles.deinit();
         return;
     };
@@ -464,32 +464,6 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
     }
 }
 
-/// Search for first background color in a box's descendant tree (BFS, max depth 3).
-/// Checks all children at each level before going deeper.
-fn findFirstBackground(box: *const Box) u32 {
-    // Level 1: direct children
-    for (box.children.items) |child| {
-        const bg = child.style.background_color;
-        if (bg != 0x00000000) return bg;
-    }
-    // Level 2: grandchildren
-    for (box.children.items) |child| {
-        for (child.children.items) |gc| {
-            const bg = gc.style.background_color;
-            if (bg != 0x00000000) return bg;
-        }
-    }
-    // Level 3: great-grandchildren
-    for (box.children.items) |child| {
-        for (child.children.items) |gc| {
-            for (gc.children.items) |ggc| {
-                const bg = ggc.style.background_color;
-                if (bg != 0x00000000) return bg;
-            }
-        }
-    }
-    return 0x00000000;
-}
 
 /// Navigate to a URL: fetch, parse, style, layout.
 /// Returns true on success, false on failure.
@@ -538,15 +512,19 @@ fn navigateTo(
             return false;
         };
 
-        const root_box = box_tree.buildBoxTree(body_node, &styles, allocator) catch {
+        const root_box = box_tree.buildBoxTree(root_node, &styles, allocator) catch {
             styles.deinit();
             doc.deinit();
             allocator.free(html_owned);
             return false;
         };
 
-        const body_style = styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
-        const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
+        // Apply body margin to the root box (html element has 0 margin by default)
+        // Find body box in tree and use its margin, or fall back to 8px default
+        const body_margin: f32 = blk: {
+            const body_style = styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
+            break :blk if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
+        };
         root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
 
         const content_w: f32 = @floatFromInt(layout_width);
@@ -1461,7 +1439,10 @@ pub fn main() !void {
     while (running) {
         // Repaint if needed
         if (needs_repaint) {
-            // CSS background propagation: if html has no background, use body's
+            // CSS background propagation (per CSS Backgrounds L3 §2.11.2):
+            // 1. If html has a background, use it for the canvas
+            // 2. Else if body has a background, propagate it to the canvas
+            // 3. Else default to white
             const canvas_bg: ?u32 = blk: {
                 const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
                     &page_states.items[tab_mgr.active_index]
@@ -1469,14 +1450,21 @@ pub fn main() !void {
                     null;
                 if (active_pg) |pg| {
                     if (pg.root_box) |root| {
+                        // Step 1: check html element background
                         const html_bg = root.style.background_color;
                         if (html_bg != 0x00000000) break :blk html_bg;
-                        // Propagate body/first-content background to canvas
-                        // Box tree may not have a body box (body content inlined under html root)
-                        // so search root's descendants for first background color
-                        const found_bg = findFirstBackground(root);
-                        if (found_bg != 0x00000000) break :blk found_bg;
-                        // Default to white when page has no explicit background
+                        // Step 2: find body child and use its background
+                        for (root.children.items) |child| {
+                            if (child.dom_node) |dn| {
+                                const tag = dn.tagName() orelse "";
+                                if (std.mem.eql(u8, tag, "body") or std.mem.eql(u8, tag, "BODY")) {
+                                    const body_bg = child.style.background_color;
+                                    if (body_bg != 0x00000000) break :blk body_bg;
+                                    break;
+                                }
+                            }
+                        }
+                        // Step 3: default to white
                         break :blk @as(u32, 0xFFFFFFFF);
                     }
                 }
