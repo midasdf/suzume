@@ -500,7 +500,7 @@ fn walkAndCompute(
         // Only use the cache when there are no custom properties in scope
         // (var_map.parent == null means we're at the root VarMap — no --vars
         // have been defined by any ancestor, so cache is safe to use).
-        const can_use_cache = (var_map.parent == null);
+        const can_use_cache = false; // Temporarily disabled for debugging
         if (can_use_cache) {
             if (style_cache.get(cache_key)) |cached_style| {
                 try styles.put(@intFromPtr(node.lxb_node), cached_style);
