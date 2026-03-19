@@ -217,7 +217,9 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
 /// Maximum size for a fetched external script (500 KB).
 const max_external_script_size = 512 * 1024;
 /// Maximum number of external scripts to fetch per page.
-const max_external_script_count = 20;
+const max_external_script_count = 50;
+/// Maximum total bytes of external scripts to load per page.
+const max_external_script_total_bytes: usize = 2 * 1024 * 1024; // 2MB
 /// Timeout in seconds for fetching an external script.
 const external_script_timeout = 5;
 
@@ -278,10 +280,9 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         return;
                     }
 
-                    // Check count limit
+                    // Check limits (count and total bytes)
                     if (ext_count.* >= max_external_script_count) {
-                        std.debug.print("[JS] External script limit reached ({d}), skipping: {s}\n", .{ max_external_script_count, resolved_url });
-                        return;
+                        return; // silently skip — too noisy to log on big sites
                     }
 
                     const ld = loader orelse return;
