@@ -1938,6 +1938,18 @@ fn applyHtmlAttributes(node: DomNode, style: *ComputedStyle) void {
         else if (eqlIgnoreCase(valign_val, "top")) style.vertical_align = .top
         else if (eqlIgnoreCase(valign_val, "bottom")) style.vertical_align = .bottom;
     }
+    // HTML hidden attribute
+    if (node.getAttribute("hidden") != null) {
+        style.display = .none;
+    }
+    // data-is-here-when: responsive visibility (Stack Overflow pattern)
+    // "md lg" = show on medium/large only. On small screens (< 980px), hide.
+    if (node.getAttribute("data-is-here-when")) |when| {
+        // If the attribute doesn't include "sm" (small), hide on small screens
+        if (std.mem.indexOf(u8, when, "sm") == null) {
+            style.display = .none;
+        }
+    }
 }
 
 const eqlIgnoreCase = util.eqlIgnoreCase;
