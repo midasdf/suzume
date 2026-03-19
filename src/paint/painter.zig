@@ -31,16 +31,20 @@ fn blitGlyphClipped(ctx: BlitCtx, glyph: GlyphBitmap) void {
     );
 }
 
-/// Simple font cache that creates TextRenderers for different pixel sizes.
+/// Simple font cache that creates TextRenderers for different pixel sizes and font families.
 pub const FontCache = struct {
-    renderers: std.AutoHashMap(u32, *TextRenderer),
+    renderers: std.AutoHashMap(u64, *TextRenderer),
     font_path: [*:0]const u8,
+    font_path_serif: [*:0]const u8,
+    font_path_mono: [*:0]const u8,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, font_path: [*:0]const u8) FontCache {
         return .{
-            .renderers = std.AutoHashMap(u32, *TextRenderer).init(allocator),
+            .renderers = std.AutoHashMap(u64, *TextRenderer).init(allocator),
             .font_path = font_path,
+            .font_path_serif = font_path, // fallback to same font
+            .font_path_mono = font_path,
             .allocator = allocator,
         };
     }
@@ -55,16 +59,30 @@ pub const FontCache = struct {
     }
 
     pub fn getRenderer(self: *FontCache, size_px: u32) ?*TextRenderer {
-        const clamped = if (size_px < 6) @as(u32, 6) else if (size_px > 72) @as(u32, 72) else size_px;
-        if (self.renderers.get(clamped)) |tr| return tr;
+        return self.getRendererForFamily(size_px, .sans_serif);
+    }
 
-        // Create new renderer for this size
+    const FontFamily = @import("../css/computed.zig").FontFamily;
+
+    pub fn getRendererForFamily(self: *FontCache, size_px: u32, family: FontFamily) ?*TextRenderer {
+        const clamped = if (size_px < 6) @as(u32, 6) else if (size_px > 72) @as(u32, 72) else size_px;
+        const key: u64 = @as(u64, clamped) | (@as(u64, @intFromEnum(family)) << 32);
+        if (self.renderers.get(key)) |tr| return tr;
+
+        // Select font path based on family
+        const path = switch (family) {
+            .serif => self.font_path_serif,
+            .monospace => self.font_path_mono,
+            .sans_serif => self.font_path,
+        };
+
+        // Create new renderer for this size + family
         const tr = self.allocator.create(TextRenderer) catch return null;
-        tr.* = TextRenderer.init(self.font_path, clamped) catch {
+        tr.* = TextRenderer.init(path, clamped) catch {
             self.allocator.destroy(tr);
             return null;
         };
-        self.renderers.put(clamped, tr) catch {
+        self.renderers.put(key, tr) catch {
             tr.deinit();
             self.allocator.destroy(tr);
             return null;
@@ -438,7 +456,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
             if (!is_visible) return;
             const colour = Surface.argbToColour(box.style.color);
             const size_px: u32 = @intFromFloat(box.style.font_size_px);
-            const tr = fonts.getRenderer(size_px) orelse return;
+            const tr = fonts.getRendererForFamily(size_px, box.style.font_family) orelse return;
 
             // Paint background on inline text if set
             const ibg = box.style.background_color;

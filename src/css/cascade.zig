@@ -153,6 +153,7 @@ const ua_stylesheet_text =
 const inherited_properties = [_]PropertyId{
     .color,
     .font_size,
+    .font_family,
     .font_weight,
     .font_style,
     .line_height,
@@ -836,6 +837,7 @@ fn collectInlineDecls(
 fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
     style.color = parent.color;
     style.color_set_by_css = parent.color_set_by_css;
+    style.font_family = parent.font_family;
     style.font_size_px = parent.font_size_px;
     style.font_weight = parent.font_weight;
     style.font_style = parent.font_style;
@@ -856,6 +858,7 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
     switch (prop) {
         .color => style.color = parent.color,
         .font_size => style.font_size_px = parent.font_size_px,
+        .font_family => style.font_family = parent.font_family,
         .font_weight => style.font_weight = parent.font_weight,
         .font_style => style.font_style = parent.font_style,
         .line_height => style.line_height = parent.line_height,
@@ -1032,6 +1035,46 @@ fn applyDeclaration(
             if (eqlIgnoreCase(trimmed, "normal")) style.font_style = .normal
             else if (eqlIgnoreCase(trimmed, "italic")) style.font_style = .italic
             else if (eqlIgnoreCase(trimmed, "oblique")) style.font_style = .oblique;
+        },
+        .font_family => {
+            // Parse font-family: match known generic families and common font names
+            // Check each family in the comma-separated list
+            var iter = std.mem.splitScalar(u8, trimmed, ',');
+            while (iter.next()) |raw_family| {
+                const family = std.mem.trim(u8, raw_family, " \t\r\n'\"");
+                if (family.len == 0) continue;
+                // Generic families
+                if (eqlIgnoreCase(family, "sans-serif") or eqlIgnoreCase(family, "system-ui")) {
+                    style.font_family = .sans_serif;
+                    break;
+                } else if (eqlIgnoreCase(family, "serif")) {
+                    style.font_family = .serif;
+                    break;
+                } else if (eqlIgnoreCase(family, "monospace")) {
+                    style.font_family = .monospace;
+                    break;
+                }
+                // Named fonts → map to generic family
+                else if (eqlIgnoreCase(family, "Verdana") or eqlIgnoreCase(family, "Arial") or
+                    eqlIgnoreCase(family, "Helvetica") or eqlIgnoreCase(family, "Tahoma") or
+                    eqlIgnoreCase(family, "Geneva") or eqlIgnoreCase(family, "Segoe UI") or
+                    eqlIgnoreCase(family, "Roboto") or eqlIgnoreCase(family, "Inter"))
+                {
+                    style.font_family = .sans_serif;
+                    break;
+                } else if (eqlIgnoreCase(family, "Times") or eqlIgnoreCase(family, "Times New Roman") or
+                    eqlIgnoreCase(family, "Georgia") or eqlIgnoreCase(family, "Palatino"))
+                {
+                    style.font_family = .serif;
+                    break;
+                } else if (eqlIgnoreCase(family, "Courier") or eqlIgnoreCase(family, "Courier New") or
+                    eqlIgnoreCase(family, "Consolas") or eqlIgnoreCase(family, "Monaco"))
+                {
+                    style.font_family = .monospace;
+                    break;
+                }
+                // Unknown font name — try next in list
+            }
         },
         .text_align => {
             if (eqlIgnoreCase(trimmed, "left") or eqlIgnoreCase(trimmed, "start"))

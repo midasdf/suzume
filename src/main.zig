@@ -35,6 +35,8 @@ const default_bg = 0xFF1e1e2e;
 // Font paths
 const font_cjk = "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc";
 const font_fallback = "/usr/share/fonts/TTF/DejaVuSans.ttf";
+const font_serif = "/usr/share/fonts/TTF/DejaVuSerif.ttf";
+const font_mono = "/usr/share/fonts/TTF/DejaVuSansMono.ttf";
 
 const dom_test = @import("test_dom_style.zig");
 const JsRuntime = @import("js/runtime.zig").JsRuntime;
@@ -1221,6 +1223,10 @@ pub fn main() !void {
 
     var fonts = painter_mod.FontCache.init(allocator, font_path);
     defer fonts.deinit();
+
+    // Set font paths for serif and monospace families
+    fonts.font_path_serif = font_serif;
+    fonts.font_path_mono = font_mono;
 
     // Surface
     var surface = Surface.init(default_window_w, default_window_h) catch |err| {

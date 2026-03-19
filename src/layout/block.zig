@@ -740,7 +740,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 if (text.len == 0) continue;
 
                 const size_px: u32 = @intFromFloat(child.style.font_size_px);
-                const text_renderer = fonts.getRenderer(size_px) orelse continue;
+                const text_renderer = fonts.getRendererForFamily(size_px, child.style.font_family) orelse continue;
 
                 // Measure text
                 const full_metrics = text_renderer.measure(text);
@@ -1254,7 +1254,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
     box.content.y = base_y;
 
     const size_px: u32 = @intFromFloat(box.style.font_size_px);
-    const text_renderer = fonts.getRenderer(size_px) orelse return;
+    const text_renderer = fonts.getRendererForFamily(size_px, box.style.font_family) orelse return;
     const allocator = fonts.allocator;
 
     // Measure full text first

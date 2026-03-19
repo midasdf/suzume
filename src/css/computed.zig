@@ -7,6 +7,12 @@
 /// every field on every child node.  That refactoring would touch layout, paint,
 /// cascade, and the whole tree traversal, so it is deferred; the grouping here
 /// makes the eventual split straightforward.
+pub const FontFamily = enum(u8) {
+    sans_serif, // Verdana, Arial, Helvetica, system-ui, sans-serif
+    serif, // Times, Georgia, serif
+    monospace, // Courier, monospace
+};
+
 pub const ComputedStyle = struct {
 
     // ═══════════════════════════════════════════════════════════════
@@ -17,6 +23,7 @@ pub const ComputedStyle = struct {
     color: u32 = 0xFF000000, // ARGB, standard black text default
     color_set_by_css: bool = false, // true when CSS explicitly set color
     font_size_px: f32 = 16.0,
+    font_family: FontFamily = .sans_serif,
     font_weight: u16 = 400,
     font_style: FontStyle = .normal,
     line_height: LineHeight = .normal,
