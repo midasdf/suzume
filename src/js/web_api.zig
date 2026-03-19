@@ -784,7 +784,20 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
         \\}
         \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
-        \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
+        \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb,opts){
+        \\  this._cb=cb;this._disconnected=false;
+        \\  this.observe=function(el){
+        \\    if(this._disconnected)return;var self=this;
+        \\    var entry={isIntersecting:true,intersectionRatio:1.0,target:el,
+        \\      boundingClientRect:(el.getBoundingClientRect?el.getBoundingClientRect():{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0}),
+        \\      intersectionRect:{x:0,y:0,width:0,height:0},rootBounds:null,
+        \\      time:(typeof performance!=='undefined'?performance.now():0)};
+        \\    setTimeout(function(){if(!self._disconnected)self._cb([entry],self);},16);
+        \\  };
+        \\  this.unobserve=function(){};
+        \\  this.disconnect=function(){this._disconnected=true;};
+        \\  this.takeRecords=function(){return[];};
+        \\};}
         \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
         \\globalThis.matchMedia=function(q){
         \\  var w=innerWidth,matches=false,m;
@@ -840,6 +853,14 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof visualViewport==='undefined'){globalThis.visualViewport={width:innerWidth,height:innerHeight,offsetLeft:0,offsetTop:0,scale:1,addEventListener:function(){}};}
         \\if(typeof CSS==='undefined'){globalThis.CSS={supports:function(){return false;},escape:function(s){return s;}};}
         \\if(typeof console!=='undefined'&&!console.warn){console.warn=console.log;console.error=console.log;console.info=console.log;console.debug=console.log;console.trace=function(){};}
+        \\if(typeof document!=='undefined'){
+        \\  if(!document.getElementsByClassName)document.getElementsByClassName=function(n){return document.querySelectorAll('.'+n);};
+        \\  if(!document.getElementsByTagName)document.getElementsByTagName=function(n){return document.querySelectorAll(n);};
+        \\  if(!document.getElementsByName)document.getElementsByName=function(n){return document.querySelectorAll('[name=\"'+n+'\"]');};
+        \\}
+        \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
+        \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
+        \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
