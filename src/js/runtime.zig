@@ -147,7 +147,8 @@ pub const JsRuntime = struct {
     };
 
     /// Sanitize a byte buffer so every byte sequence is valid UTF-8.
-    /// Invalid sequences are replaced with U+FFFD (EF BF BD).
+    /// Invalid sequences (including overlong encodings, surrogates, and
+    /// codepoints > U+10FFFF) are replaced with U+FFFD (EF BF BD).
     fn sanitizeUtf8(input: []const u8) ![]u8 {
         // Quick check: if all ASCII, no sanitization needed
         var needs_sanitize = false;
@@ -159,18 +160,25 @@ pub const JsRuntime = struct {
         }
         if (!needs_sanitize) return @constCast(input);
 
+        const alloc = std.heap.c_allocator;
         var out = std.ArrayListUnmanaged(u8){};
-        errdefer out.deinit(std.heap.c_allocator);
-        try out.ensureTotalCapacity(std.heap.c_allocator, input.len);
+        errdefer out.deinit(alloc);
+        try out.ensureTotalCapacity(alloc, input.len);
 
         var i: usize = 0;
         while (i < input.len) {
             const b0 = input[i];
-            const seq_len: usize = if (b0 < 0x80) 1 else if (b0 < 0xC0) 0 // invalid continuation
+            if (b0 < 0x80) {
+                try out.append(alloc, b0);
+                i += 1;
+                continue;
+            }
+
+            const seq_len: usize = if (b0 < 0xC0) 0 // invalid continuation
             else if (b0 < 0xE0) 2 else if (b0 < 0xF0) 3 else if (b0 < 0xF8) 4 else 0;
 
             if (seq_len == 0 or i + seq_len > input.len) {
-                try out.appendSlice(std.heap.c_allocator, "\xEF\xBF\xBD");
+                try out.appendSlice(alloc, "\xEF\xBF\xBD");
                 i += 1;
                 continue;
             }
@@ -184,14 +192,40 @@ pub const JsRuntime = struct {
                 }
             }
 
+            if (!valid) {
+                try out.appendSlice(alloc, "\xEF\xBF\xBD");
+                i += 1;
+                continue;
+            }
+
+            // Decode codepoint and validate range
+            var cp: u32 = 0;
+            switch (seq_len) {
+                2 => {
+                    cp = (@as(u32, b0 & 0x1F) << 6) | @as(u32, input[i + 1] & 0x3F);
+                    if (cp < 0x80) valid = false; // overlong
+                },
+                3 => {
+                    cp = (@as(u32, b0 & 0x0F) << 12) | (@as(u32, input[i + 1] & 0x3F) << 6) | @as(u32, input[i + 2] & 0x3F);
+                    if (cp < 0x800) valid = false; // overlong
+                    if (cp >= 0xD800 and cp <= 0xDFFF) valid = false; // surrogate
+                },
+                4 => {
+                    cp = (@as(u32, b0 & 0x07) << 18) | (@as(u32, input[i + 1] & 0x3F) << 12) | (@as(u32, input[i + 2] & 0x3F) << 6) | @as(u32, input[i + 3] & 0x3F);
+                    if (cp < 0x10000) valid = false; // overlong
+                    if (cp > 0x10FFFF) valid = false; // out of range
+                },
+                else => valid = false,
+            }
+
             if (valid) {
-                try out.appendSlice(std.heap.c_allocator, input[i .. i + seq_len]);
+                try out.appendSlice(alloc, input[i .. i + seq_len]);
                 i += seq_len;
             } else {
-                try out.appendSlice(std.heap.c_allocator, "\xEF\xBF\xBD");
+                try out.appendSlice(alloc, "\xEF\xBF\xBD");
                 i += 1;
             }
         }
-        return out.toOwnedSlice(std.heap.c_allocator);
+        return out.toOwnedSlice(alloc);
     }
 };

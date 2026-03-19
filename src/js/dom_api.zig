@@ -2772,6 +2772,25 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, cookieAtom, qjs.JS_NewCFunction(ctx, &documentGetCookie, "get cookie", 0), qjs.JS_NewCFunction(ctx, &documentSetCookie, "set cookie", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, cookieAtom);
 
+    // Document properties required by jQuery/Sizzle
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeType", qjs.JS_NewInt32(ctx, 9)); // DOCUMENT_NODE
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "defaultView", qjs.JS_DupValue(ctx, global)); // window
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "ownerDocument", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compatMode", qjs.JS_NewString(ctx, "CSS1Compat"));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "contentType", qjs.JS_NewString(ctx, "text/html"));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "characterSet", qjs.JS_NewString(ctx, "UTF-8"));
+    // document.implementation (jQuery feature detection uses createHTMLDocument)
+    {
+        const impl = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx,
+            \\(function(title) { return document; })
+        , 0, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx,
+            \\(function() { return true; })
+        , 0, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
+    }
+
     // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
 
