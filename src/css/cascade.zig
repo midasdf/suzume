@@ -835,6 +835,7 @@ fn collectInlineDecls(
 
 fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
     style.color = parent.color;
+    style.color_set_by_css = parent.color_set_by_css;
     style.font_size_px = parent.font_size_px;
     style.font_weight = parent.font_weight;
     style.font_style = parent.font_style;
@@ -973,7 +974,10 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "content-box")) style.box_sizing = .content_box;
         },
         .color => {
-            if (properties.parseColor(trimmed)) |c| style.color = c.toArgb();
+            if (properties.parseColor(trimmed)) |c| {
+                style.color = c.toArgb();
+                style.color_set_by_css = true;
+            }
         },
         .background_color => {
             if (properties.parseColor(trimmed)) |c| style.background_color = c.toArgb();

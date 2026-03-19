@@ -48,7 +48,10 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         box.content.height = 0;
         return;
     }
-    if (num_cols > MAX_COLS) num_cols = MAX_COLS;
+    if (num_cols > MAX_COLS) {
+        std.log.warn("table layout: column limit ({d}) exceeded ({d} cols), truncating", .{ MAX_COLS, num_cols });
+        num_cols = MAX_COLS;
+    }
 
     // Determine column widths
     const table_width = box.content.width;
@@ -320,6 +323,9 @@ fn collectRows(parent: *Box, buf: []*Box, count: *usize) void {
             if (count.* < buf.len) {
                 buf[count.*] = child;
                 count.* += 1;
+            } else {
+                std.log.warn("table layout: row limit ({d}) exceeded, truncating", .{buf.len});
+                return;
             }
         } else if (isRowGroup(child)) {
             collectRows(child, buf, count);

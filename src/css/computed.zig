@@ -15,6 +15,7 @@ pub const ComputedStyle = struct {
 
     // Color & typography
     color: u32 = 0xFF000000, // ARGB, standard black text default
+    color_set_by_css: bool = false, // true when CSS explicitly set color
     font_size_px: f32 = 16.0,
     font_weight: u16 = 400,
     font_style: FontStyle = .normal,

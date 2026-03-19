@@ -182,7 +182,7 @@ fn buildChildren(
                         if (child.getAttribute("href")) |href| {
                             link_url = href;
                             // Use UA default link color only if cascade didn't set a specific color
-                            if (child_box.style.color == 0xFF000000) {
+                            if (!child_box.style.color_set_by_css) {
                                 child_box.style.color = 0xFF0000EE;
                             }
                         }
@@ -293,7 +293,7 @@ fn buildChildren(
                                 }
                             }
                             // Default text color for buttons (dark text on light background)
-                            if (is_button and child_box.style.color == 0xFF000000) {
+                            if (is_button and !child_box.style.color_set_by_css) {
                                 child_box.style.color = 0xFF1f1f1f;
                             }
                             // Default border-radius for button-type inputs (6px, modern browser default)
@@ -581,7 +581,7 @@ fn buildChildren(
                     text_box.style = parent_box.style;
                     text_box.link_url = inherited_link;
 
-                    if (inherited_link != null and text_box.style.color == 0xFF000000) {
+                    if (inherited_link != null and !text_box.style.color_set_by_css) {
                         text_box.style.color = 0xFF0000EE;
                     }
 
@@ -615,7 +615,7 @@ fn buildChildren(
                     text_box.link_url = inherited_link;
 
                     // If inside a link, override color to link blue
-                    if (inherited_link != null and text_box.style.color == 0xFF000000) {
+                    if (inherited_link != null and !text_box.style.color_set_by_css) {
                         text_box.style.color = 0xFF0000EE;
                     }
 
