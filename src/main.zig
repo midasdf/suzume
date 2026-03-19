@@ -183,11 +183,35 @@ const PageState = struct {
     }
 };
 
+/// A script whose execution is deferred until after DOM parsing completes.
+const DeferredScript = struct {
+    code: []const u8, // Owned copy of script content
+    is_external: bool,
+};
+
 /// Find <script> tags in the DOM and execute their content.
-fn executeScripts(doc: *Document, js_rt: *JsRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
+/// Deferred scripts are collected during the DOM walk and executed after it completes.
+fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
     const doc_node = doc.documentNode();
     var ext_count: usize = 0;
-    collectAndExecScripts(doc_node.lxb_node, js_rt, allocator, loader, base_url, &ext_count);
+    var deferred = std.ArrayListUnmanaged(DeferredScript){};
+    defer {
+        for (deferred.items) |ds| alloc.free(ds.code);
+        deferred.deinit(alloc);
+    }
+
+    collectAndExecScripts(doc_node.lxb_node, js_rt, alloc, loader, base_url, &ext_count, &deferred);
+
+    // Execute deferred scripts in document order
+    for (deferred.items) |ds| {
+        std.debug.print("[JS] Executing deferred <script> ({d} bytes, external={any})\n", .{ ds.code.len, ds.is_external });
+        const result = js_rt.eval(ds.code);
+        defer result.deinit();
+        if (!result.isOk()) {
+            std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
+        }
+        js_rt.executePending();
+    }
 }
 
 /// Maximum size for a fetched external script (500 KB).
@@ -197,7 +221,7 @@ const max_external_script_count = 10;
 /// Timeout in seconds for fetching an external script.
 const external_script_timeout = 5;
 
-fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, ext_count: *usize) void {
+fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, ext_count: *usize, deferred: *std.ArrayListUnmanaged(DeferredScript)) void {
     if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
         const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
         var name_len: usize = 0;
@@ -223,6 +247,11 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                 if (nomod_ptr != null) {
                     return;
                 }
+
+                // Check for defer attribute
+                var defer_len: usize = 0;
+                const defer_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "defer", 5, &defer_len);
+                const is_defer = (defer_ptr != null);
 
                 // Check for src attribute (external script)
                 var src_len: usize = 0;
@@ -263,28 +292,46 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         std.debug.print("[JS] Failed to fetch external script {s}: {}\n", .{ resolved_url, err });
                         return;
                     };
-                    defer response.deinit();
 
                     if (response.status_code != 200) {
                         std.debug.print("[JS] External script returned status {d}: {s}\n", .{ response.status_code, resolved_url });
+                        response.deinit();
                         return;
                     }
 
                     // Check size limit
                     if (response.body.len > max_external_script_size) {
                         std.debug.print("[JS] External script too large ({d} bytes, max {d}): {s}\n", .{ response.body.len, max_external_script_size, resolved_url });
+                        response.deinit();
                         return;
                     }
 
                     ext_count.* += 1;
-                    const code = response.body;
-                    std.debug.print("[JS] Executing external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code.len });
-                    const result = js_rt.eval(code);
-                    defer result.deinit();
-                    if (!result.isOk()) {
-                        std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
+
+                    if (is_defer) {
+                        // Defer: fetch now, execute later. Take ownership of body.
+                        const code_copy = allocator.alloc(u8, response.body.len) catch {
+                            response.deinit();
+                            return;
+                        };
+                        @memcpy(code_copy, response.body);
+                        response.deinit();
+                        std.debug.print("[JS] Deferring external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code_copy.len });
+                        deferred.append(allocator, .{ .code = code_copy, .is_external = true }) catch {
+                            allocator.free(code_copy);
+                            return;
+                        };
+                    } else {
+                        const code = response.body;
+                        std.debug.print("[JS] Executing external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code.len });
+                        const result = js_rt.eval(code);
+                        defer result.deinit();
+                        if (!result.isOk()) {
+                            std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
+                        }
+                        js_rt.executePending();
+                        response.deinit();
                     }
-                    js_rt.executePending();
                 } else {
                     // Inline script: get text content of <script> tag
                     var content_len: usize = 0;
@@ -293,6 +340,17 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         // Skip very large inline scripts (often JSON data blobs that crash)
                         if (content_len > 100 * 1024) {
                             std.debug.print("[JS] Skipping large inline script ({d} bytes)\n", .{content_len});
+                        } else if (is_defer) {
+                            // Defer inline script (note: per spec, defer only applies to
+                            // external scripts, but some pages use it on inline scripts too)
+                            const code = content_ptr.?[0..content_len];
+                            const code_copy = allocator.alloc(u8, code.len) catch return;
+                            @memcpy(code_copy, code);
+                            std.debug.print("[JS] Deferring inline <script> ({d} bytes)\n", .{code_copy.len});
+                            deferred.append(allocator, .{ .code = code_copy, .is_external = false }) catch {
+                                allocator.free(code_copy);
+                                return;
+                            };
                         } else {
                             const code = content_ptr.?[0..content_len];
                             std.debug.print("[JS] Executing <script> ({d} bytes)\n", .{content_len});
@@ -312,7 +370,7 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
     // Recurse into children
     var child: ?*lxb.lxb_dom_node_t = node.first_child;
     while (child) |ch| {
-        collectAndExecScripts(ch, js_rt, allocator, loader, base_url, ext_count);
+        collectAndExecScripts(ch, js_rt, allocator, loader, base_url, ext_count, deferred);
         child = ch.next;
     }
 }
