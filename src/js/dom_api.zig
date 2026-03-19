@@ -749,20 +749,18 @@ fn elementSetInnerHTML(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    // Debug: detect body innerHTML overwrite
+    // Protect <body> from innerHTML overwrites that destroy page content.
+    // jQuery Sizzle's feature detection sets body.innerHTML to test forms.
+    // Only block writes that would replace content with small test markup;
+    // allow legitimate larger innerHTML updates through.
     {
         var name_len: usize = 0;
         const name_ptr = lxb.lxb_dom_element_local_name(elem, &name_len);
         if (name_ptr) |np| {
             const tag = np[0..name_len];
-            if (std.mem.eql(u8, tag, "body") or std.mem.eql(u8, tag, "html") or std.mem.eql(u8, tag, "head")) {
-                // Protect critical elements from innerHTML overwrite by JS frameworks.
-                // jQuery Sizzle's feature detection overwrites body.innerHTML with test forms.
-                // This destroys all page content. Instead, ignore the write.
-                const preview_len = @min(s.len, 80);
-                std.log.warn("[DOM] innerHTML SET on <{s}> blocked (would destroy content)! len={d} preview={s}", .{
-                    tag, s.len, s.ptr[0..preview_len],
-                });
+            if (std.mem.eql(u8, tag, "body") and s.len < 200) {
+                // Small innerHTML on body = likely feature detection probe, block it
+                std.log.info("[DOM] innerHTML SET on <body> blocked (probe, {d} bytes)", .{s.len});
                 return quickjs.JS_UNDEFINED();
             }
         }

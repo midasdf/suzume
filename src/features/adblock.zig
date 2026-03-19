@@ -94,11 +94,25 @@ const tracking_patterns = [_][]const u8{
 };
 
 /// Check if a script URL is for tracking/analytics and can be skipped.
+/// Case-insensitive matching to catch GTM.js, Analytics, etc.
 pub fn isTrackingScript(url: []const u8) bool {
     for (tracking_patterns) |pattern| {
-        if (std.mem.indexOf(u8, url, pattern) != null) return true;
+        if (indexOfIgnoreCase(url, pattern) != null) return true;
     }
     return false;
+}
+
+fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len > haystack.len) return null;
+    const end = haystack.len - needle.len + 1;
+    outer: for (0..end) |i| {
+        for (0..needle.len) |j| {
+            if (std.ascii.toLower(haystack[i + j]) != std.ascii.toLower(needle[j]))
+                continue :outer;
+        }
+        return i;
+    }
+    return null;
 }
 
 /// Get the count of blocked domains.

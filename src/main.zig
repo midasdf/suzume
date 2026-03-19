@@ -279,8 +279,10 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         return;
                     }
 
-                    // Skip tracking/analytics scripts to save memory
-                    if (adblock_mod.isTrackingScript(resolved_url)) {
+                    const ld = loader orelse return;
+
+                    // Skip tracking/analytics scripts to save memory (only when adblock enabled)
+                    if (ld.adblock_enabled and adblock_mod.isTrackingScript(resolved_url)) {
                         std.debug.print("[JS] Skipping tracking script: {s}\n", .{resolved_url});
                         return;
                     }
@@ -289,8 +291,6 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                     if (ext_count.* >= max_external_script_count) {
                         return; // silently skip — too noisy to log on big sites
                     }
-
-                    const ld = loader orelse return;
 
                     std.debug.print("[JS] Fetching external script: {s}\n", .{resolved_url});
 
@@ -657,18 +657,23 @@ fn navigateTo(
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page, allocator, loader, base_url_copy);
 
-    // After JS execution, remove anti-flicker and other animation-gate classes
-    // that hide content and rely on JS animations to reveal it.
+    // After JS execution, remove anti-flicker class if present.
+    // Only add w-mod-ix3 if anti-flicker was found (indicates Webflow site).
     if (page.js_rt) |*rt| {
         const cleanup = rt.eval(
             \\(function() {
             \\  var h = document.documentElement;
-            \\  if (h && h.className) {
+            \\  if (!h) return;
+            \\  var had = !!(h.className && /\banti-flicker\b/.test(h.className));
+            \\  if (had) {
             \\    h.className = h.className.replace(/\banti-flicker\b/g, '').trim();
+            \\    if (h.classList) h.classList.add('w-mod-ix3');
             \\  }
-            \\  if (h && h.classList) { h.classList.add('w-mod-ix3'); }
             \\})()
         );
+        if (!cleanup.isOk()) {
+            std.debug.print("[JS] cleanup eval failed: {s}\n", .{cleanup.value()});
+        }
         cleanup.deinit();
     }
 
