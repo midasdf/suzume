@@ -916,8 +916,8 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     line_height = 0;
                 }
 
-                // Re-layout at correct position with shrink-to-fit width
-                const layout_w = if (!has_explicit_width) child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right else container_width;
+                // Re-layout at correct position: use measured content width (both cases)
+                const layout_w = child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right;
                 layoutBlock(child, layout_w, base_y + cursor_y, fonts);
 
                 // Re-apply shrink-to-fit after second layout

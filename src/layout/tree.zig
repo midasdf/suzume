@@ -258,7 +258,7 @@ fn buildChildren(
 
                             // Add default styling for form inputs
                             if (child_box.style.background_color == 0x00000000) {
-                                child_box.style.background_color = if (is_button) 0xFFecedee else 0xFF313244;
+                                child_box.style.background_color = if (is_button) 0xFFecedee else 0xFFFFFFFF;
                             }
                             // Default padding for inputs (buttons get more padding)
                             if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
@@ -286,10 +286,10 @@ fn buildChildren(
                                     child_box.style.border_left_color = 0xFFc0c0c0;
                                     child_box.style.border_right_color = 0xFF808080;
                                 } else {
-                                    child_box.style.border_top_color = 0xFF585b70;
-                                    child_box.style.border_bottom_color = 0xFF585b70;
-                                    child_box.style.border_left_color = 0xFF585b70;
-                                    child_box.style.border_right_color = 0xFF585b70;
+                                    child_box.style.border_top_color = 0xFF767676;
+                                    child_box.style.border_bottom_color = 0xFF767676;
+                                    child_box.style.border_left_color = 0xFF767676;
+                                    child_box.style.border_right_color = 0xFF767676;
                                 }
                             }
                             // Default text color for buttons (dark text on light background)
@@ -348,7 +348,7 @@ fn buildChildren(
                                 text_box.style = child_box.style;
                                 // Placeholder text is dimmer
                                 if (child.getAttribute("value") == null) {
-                                    text_box.style.color = 0xFF6c7086; // overlay0
+                                    text_box.style.color = 0xFFA9A9A9; // overlay0
                                 }
                                 try child_box.children.append(allocator, text_box);
                             }
@@ -360,7 +360,7 @@ fn buildChildren(
                         child_box.box_type = .inline_box;
                         child_box.style.display = .inline_block;
                         if (child_box.style.background_color == 0x00000000) {
-                            child_box.style.background_color = 0xFF313244; // surface0
+                            child_box.style.background_color = 0xFFFFFFFF; // surface0
                         }
                         if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
                             child_box.padding.top = 4;
@@ -373,10 +373,10 @@ fn buildChildren(
                             child_box.border.bottom = 1;
                             child_box.border.left = 1;
                             child_box.border.right = 1;
-                            child_box.style.border_top_color = 0xFF585b70;
-                            child_box.style.border_bottom_color = 0xFF585b70;
-                            child_box.style.border_left_color = 0xFF585b70;
-                            child_box.style.border_right_color = 0xFF585b70;
+                            child_box.style.border_top_color = 0xFF767676;
+                            child_box.style.border_bottom_color = 0xFF767676;
+                            child_box.style.border_left_color = 0xFF767676;
+                            child_box.style.border_right_color = 0xFF767676;
                         }
                         // Default border-radius for buttons (6px, modern browser default)
                         if (child_box.style.border_radius_tl == 0 and
@@ -401,7 +401,7 @@ fn buildChildren(
                         child_box.box_type = .inline_box;
                         child_box.style.display = .inline_block;
                         if (child_box.style.background_color == 0x00000000) {
-                            child_box.style.background_color = 0xFF313244; // surface0
+                            child_box.style.background_color = 0xFFFFFFFF; // surface0
                         }
                         if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
                             child_box.padding.top = 2;
@@ -414,10 +414,10 @@ fn buildChildren(
                             child_box.border.bottom = 1;
                             child_box.border.left = 1;
                             child_box.border.right = 1;
-                            child_box.style.border_top_color = 0xFF585b70;
-                            child_box.style.border_bottom_color = 0xFF585b70;
-                            child_box.style.border_left_color = 0xFF585b70;
-                            child_box.style.border_right_color = 0xFF585b70;
+                            child_box.style.border_top_color = 0xFF767676;
+                            child_box.style.border_bottom_color = 0xFF767676;
+                            child_box.style.border_left_color = 0xFF767676;
+                            child_box.style.border_right_color = 0xFF767676;
                         }
                         if (child_box.style.width == .auto) {
                             // Default width: ~15 chars + arrow space
@@ -436,7 +436,7 @@ fn buildChildren(
                     // Handle <textarea> elements — block with rows/cols sizing
                     if (std.mem.eql(u8, tag, "textarea")) {
                         if (child_box.style.background_color == 0x00000000) {
-                            child_box.style.background_color = 0xFF313244; // surface0
+                            child_box.style.background_color = 0xFFFFFFFF; // surface0
                         }
                         if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
                             child_box.padding.top = 4;
@@ -449,10 +449,10 @@ fn buildChildren(
                             child_box.border.bottom = 1;
                             child_box.border.left = 1;
                             child_box.border.right = 1;
-                            child_box.style.border_top_color = 0xFF585b70;
-                            child_box.style.border_bottom_color = 0xFF585b70;
-                            child_box.style.border_left_color = 0xFF585b70;
-                            child_box.style.border_right_color = 0xFF585b70;
+                            child_box.style.border_top_color = 0xFF767676;
+                            child_box.style.border_bottom_color = 0xFF767676;
+                            child_box.style.border_left_color = 0xFF767676;
+                            child_box.style.border_right_color = 0xFF767676;
                         }
                         const char_width: f32 = child_box.style.font_size_px * 0.6;
                         const line_h: f32 = child_box.style.font_size_px * 1.4;

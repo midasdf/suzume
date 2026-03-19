@@ -74,9 +74,10 @@ pub const HttpClient = struct {
 
         var rc = c.curl_easy_perform(self.handle);
 
-        // SSL cert verification failure — retry without verification
+        // SSL CA cert verification failure — retry with peer verification disabled
+        // but keep hostname verification (VERIFYHOST=2) to prevent MITM
         if (rc == c.CURLE_SSL_CACERT or rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_SSL_CERTPROBLEM) {
-            std.debug.print("[SSL] Certificate verification failed for {s}, retrying without verification\n", .{url});
+            std.log.warn("SSL certificate verification failed for {s}, retrying without CA verification", .{url});
             ctx.buffer.clearRetainingCapacity();
             c.curl_easy_reset(self.handle);
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_URL, url.ptr);
@@ -84,7 +85,7 @@ pub const HttpClient = struct {
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(&ctx)));
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0));
-            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0));
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2));
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, ua_string.ptr);
             rc = c.curl_easy_perform(self.handle);

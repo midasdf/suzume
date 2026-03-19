@@ -272,8 +272,10 @@ fn parseInlineWidth(style: []const u8, table_width: f32) ?f32 {
         while (pos < style.len and (style[pos] == ' ' or style[pos] == '\t')) pos += 1;
         if (pos >= style.len) break;
 
-        // Check for "width"
-        if (pos + 5 <= style.len and std.mem.eql(u8, style[pos .. pos + 5], "width")) {
+        // Check for "width" (but not "min-width" or "max-width")
+        if (pos + 5 <= style.len and std.mem.eql(u8, style[pos .. pos + 5], "width") and
+            (pos == 0 or style[pos - 1] == ';' or style[pos - 1] == ' ' or style[pos - 1] == '\t'))
+        {
             var p = pos + 5;
             // Skip whitespace and colon
             while (p < style.len and (style[p] == ' ' or style[p] == '\t')) p += 1;

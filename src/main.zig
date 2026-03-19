@@ -1651,16 +1651,12 @@ pub fn main() !void {
                     else
                         null;
                     if (resize_pg) |pg| {
-                        if (pg.root_box) |rb| {
-                            const cw: f32 = @floatFromInt(surface.width);
-                            block_layout.layoutBlockVp(rb, cw, 0, &fonts, @floatFromInt(surface.height));
-                            pg.total_height = painter_mod.contentHeight(rb);
-                            pg.total_width = painter_mod.contentWidth(rb);
-                            // Clamp scroll to new content bounds
-                            const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
-                            const max_scroll = @max(pg.total_height - ch, 0);
-                            scroll_y = @max(0, @min(scroll_y, max_scroll));
-                        }
+                        // Full re-cascade + re-layout for viewport-dependent CSS (@media, vw/vh)
+                        restylePage(pg, allocator, &fonts, surface.width, surface.height);
+                        // Clamp scroll to new content bounds
+                        const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
+                        const max_scroll = @max(if (pg.total_height > ch) pg.total_height - ch else 0, 0);
+                        scroll_y = @max(0, @min(scroll_y, max_scroll));
                     }
                     needs_repaint = true;
                 },
