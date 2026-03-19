@@ -106,7 +106,8 @@ const ua_stylesheet_text =
     \\head, style, script, link, meta, title, template { display: none; }
     \\table { display: table; }
     \\tr { display: table-row; }
-    \\td, th { display: table-cell; padding: 1px; }
+    \\td { display: table-cell; padding: 1px; text-align: left; }
+    \\th { display: table-cell; padding: 1px; }
     \\th { font-weight: bold; text-align: center; }
     \\thead { display: table-header-group; }
     \\tbody { display: table-row-group; }
