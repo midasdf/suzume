@@ -34,7 +34,23 @@ const StyleCacheKey = struct {
     parent_hash: u32,
 };
 
-pub const StyleCache = std.AutoHashMap(StyleCacheKey, ComputedStyle);
+const StyleCacheEntry = struct {
+    style: ComputedStyle,
+    // Store actual attribute values for collision verification
+    tag: ?[]const u8,
+    class: ?[]const u8,
+    id: ?[]const u8,
+    inline_style: ?[]const u8,
+};
+
+pub const StyleCache = std.AutoHashMap(StyleCacheKey, StyleCacheEntry);
+
+/// Compare two optional strings for equality (null == null, "a" == "a").
+fn optionalEql(a: ?[]const u8, b: ?[]const u8) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    return std.mem.eql(u8, a.?, b.?);
+}
 
 fn hashAttr(s: ?[]const u8) u32 {
     const str = s orelse return 0;
@@ -490,28 +506,37 @@ fn walkAndCompute(
         // ── Style sharing cache lookup ─────────────────────────────────
         // Elements with identical attributes and equivalent parent style
         // will produce the same computed style — skip the full cascade.
+        const node_tag = node.tagName();
+        const node_class = node.getAttribute("class");
+        const node_id = node.getAttribute("id");
+        const node_inline = node.getAttribute("style");
         const cache_key = StyleCacheKey{
-            .tag_hash = hashAttr(node.tagName()),
-            .class_hash = hashAttr(node.getAttribute("class")),
-            .id_hash = hashAttr(node.getAttribute("id")),
-            .inline_hash = hashAttr(node.getAttribute("style")),
+            .tag_hash = hashAttr(node_tag),
+            .class_hash = hashAttr(node_class),
+            .id_hash = hashAttr(node_id),
+            .inline_hash = hashAttr(node_inline),
             .parent_hash = hashParentStyle(parent_style),
         };
-        // Only use the cache when there are no custom properties in scope
-        // (var_map.parent == null means we're at the root VarMap — no --vars
-        // have been defined by any ancestor, so cache is safe to use).
-        const can_use_cache = false; // Temporarily disabled for debugging
+        // Only use cache when no custom properties in scope
+        const can_use_cache = (var_map.parent == null);
         if (can_use_cache) {
-            if (style_cache.get(cache_key)) |cached_style| {
-                try styles.put(@intFromPtr(node.lxb_node), cached_style);
-                // Recurse into children passing the cached style.
-                var cached_copy = cached_style;
-                var child = node.firstChild();
-                while (child) |c| {
-                    try walkAndCompute(c, &cached_copy, styles, ua_index, author_index, var_map, vw, vh, arena, &element_bloom, style_cache);
-                    child = c.nextSibling();
+            if (style_cache.get(cache_key)) |entry| {
+                // Verify full string match to prevent hash collision crashes
+                if (optionalEql(entry.tag, node_tag) and
+                    optionalEql(entry.class, node_class) and
+                    optionalEql(entry.id, node_id) and
+                    optionalEql(entry.inline_style, node_inline))
+                {
+                    try styles.put(@intFromPtr(node.lxb_node), entry.style);
+                    var cached_copy = entry.style;
+                    var child = node.firstChild();
+                    while (child) |c| {
+                        try walkAndCompute(c, &cached_copy, styles, ua_index, author_index, var_map, vw, vh, arena, &element_bloom, style_cache);
+                        child = c.nextSibling();
+                    }
+                    return;
                 }
-                return;
+                // Hash collision — fall through to full cascade
             }
         }
 
@@ -588,7 +613,13 @@ fn walkAndCompute(
 
         // Store in style sharing cache (only when no custom properties in scope).
         if (can_use_cache) {
-            style_cache.put(cache_key, style) catch {};
+            style_cache.put(cache_key, .{
+                .style = style,
+                .tag = node_tag,
+                .class = node_class,
+                .id = node_id,
+                .inline_style = node_inline,
+            }) catch {};
         }
 
         // Recurse into children with this element's VarMap (scoped inheritance).
