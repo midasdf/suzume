@@ -2530,9 +2530,26 @@ fn documentWrite(
     }
     _ = lxb_dom_node_destroy(frag);
 
-    // Check if <script> was injected
-    if (std.mem.indexOf(u8, html, "<script") != null) {
-        std.log.warn("[JS] document.write injected <script> — execution not supported", .{});
+    // Check if <script> was injected (case-insensitive)
+    {
+        var has_script = false;
+        var si: usize = 0;
+        while (si + 7 < html.len) : (si += 1) {
+            if (html[si] == '<' and
+                (html[si + 1] == 's' or html[si + 1] == 'S') and
+                (html[si + 2] == 'c' or html[si + 2] == 'C') and
+                (html[si + 3] == 'r' or html[si + 3] == 'R') and
+                (html[si + 4] == 'i' or html[si + 4] == 'I') and
+                (html[si + 5] == 'p' or html[si + 5] == 'P') and
+                (html[si + 6] == 't' or html[si + 6] == 'T'))
+            {
+                has_script = true;
+                break;
+            }
+        }
+        if (has_script) {
+            std.log.warn("[JS] document.write injected <script> — execution not supported", .{});
+        }
     }
 
     setDomDirty();
@@ -2887,12 +2904,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // document.implementation (jQuery feature detection uses createHTMLDocument)
     {
         const impl = qjs.JS_NewObject(ctx);
+        const create_html_doc_js = "(function(title) { return document; })";
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx,
-            \\(function(title) { return document; })
-        , 0, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+            create_html_doc_js, create_html_doc_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const has_feature_js = "(function() { return true; })";
         _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx,
-            \\(function() { return true; })
-        , 0, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+            has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
     }
 
