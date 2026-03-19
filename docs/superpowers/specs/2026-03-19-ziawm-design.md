@@ -58,6 +58,8 @@ ziawm/
 
 3 binaries: `ziawm` (WM), `ziawm-msg` (IPC CLI), `ziawm-bar` (bar).
 
+**Shared code:** `ipc.zig` contains both server (ziawm) and client (ziawm-msg, ziawm-bar) IPC protocol handling. The binary framing (magic + length + type + payload) encode/decode is shared. ziawm-msg and ziawm-bar import `ipc.zig` as a module from the main `src/`.
+
 ### Dependencies
 
 **System libraries (linked via @cImport):**
@@ -69,6 +71,8 @@ ziawm/
 - `xft`, `fontconfig` — bar font rendering (ziawm-bar only)
 
 **No external Zig packages.** No GLib, no pango, no cairo.
+
+EWMH/ICCCM atoms are managed manually via raw `xcb_intern_atom` calls at startup. No `xcb-util-wm`, `xcb-icccm`, or `xcb-ewmh` dependencies — keeps the dependency count minimal and avoids pulling in unused helpers.
 
 ## Data Model — Container Tree
 
@@ -111,8 +115,11 @@ const Container = struct {
     // Workspace-specific
     workspace: ?WorkspaceData,
 
-    // Split-specific
-    split_ratio: f32,     // 0.0-1.0, default even split
+    // Split-specific — percentage of parent's space this container occupies
+    // In a 3-way split, children might have percentages [0.33, 0.33, 0.34]
+    // `resize grow/shrink width 10 px` adjusts this container's percent and
+    // redistributes the difference to the adjacent sibling
+    percent: f32,         // 0.0-1.0, default: 1.0/num_siblings
 
     // State
     is_floating: bool,
@@ -167,6 +174,9 @@ Pure functions in `layout.zig`, zero xcb dependency.
 **Dirty flag optimization:**
 Only recalculate subtrees where `dirty == true`. Single window move doesn't trigger full tree recalculation.
 
+**Strut-aware area calculation:**
+When a window sets `_NET_WM_STRUT_PARTIAL` (bars, panels), the layout engine subtracts the reserved area from the output's usable region before tiling. The usable area per output is recalculated whenever struts change.
+
 ## IPC Protocol (i3-compatible)
 
 ```
@@ -192,6 +202,7 @@ Uses `"i3-ipc"` magic string so `i3-msg`, `i3blocks`, `i3status` etc. connect di
 | 5 | GET_MARKS | List marks |
 | 6 | GET_BAR_CONFIG | Bar configuration |
 | 7 | GET_VERSION | Version info |
+| 8 | SEND_TICK | Not supported (reserved for i3 compatibility) |
 | 9 | GET_CONFIG | Current config |
 | 10 | GET_BINDING_MODES | Binding modes |
 
@@ -210,6 +221,12 @@ Uses `"i3-ipc"` magic string so `i3-msg`, `i3blocks`, `i3status` etc. connect di
 - i3 uses yajl (C library) → ziawm uses `std.json`
 - GET_TREE response buffer reused across calls to minimize allocation
 - IPC handled in same event loop thread via epoll (no separate thread)
+
+**Socket discovery (i3-compatible):**
+- Set `I3SOCK` environment variable to socket path on startup (inherited by child processes)
+- Set `_I3_SOCKET_PATH` property on X root window
+- `ziawm-msg` checks: `I3SOCK` env → root window atom → default path
+- This allows `i3-msg` to find the socket without `-s` flag
 
 **ziawm-msg:**
 ```bash
@@ -311,6 +328,11 @@ bar {
 - `bindsym $mod+Shift+c reload` → re-parse config, re-grab keys, notify bar
 - On any parse error: keep old config, log + notify error
 
+**Config file search order:**
+1. `$XDG_CONFIG_HOME/ziawm/config` (typically `~/.config/ziawm/config`)
+2. `~/.ziawm/config`
+3. `/etc/ziawm/config`
+
 **Not supported in v1:**
 - `bindcode` (keysym only, keycode later)
 - `no_focus`
@@ -357,6 +379,58 @@ ziawm-bar → status_command (stdout, click events):
 ```
 ziawm ←IPC socket→ ziawm-bar ←stdin/stdout→ i3blocks
 ```
+
+## Command Execution + Child Process Spawning
+
+**`exec` command:**
+- `exec` and `exec_always` in config, `exec` command via IPC/keybind
+- All commands pass through `/bin/sh -c "command"` (same as i3) to support shell features (pipes, env vars, `&`)
+- `--no-startup-id` flag suppresses startup notification (sets `_NET_STARTUP_ID`)
+
+**Spawn mechanism:**
+1. `fork()` in the WM process
+2. Child: `setsid()` to detach from WM's process group
+3. Child: close xcb fd and IPC fds (prevent inheritance)
+4. Child: set `DISPLAY`, `I3SOCK` environment variables
+5. Child: `execvp("/bin/sh", ["/bin/sh", "-c", command])`
+6. Parent: continues event loop (SIGCHLD handled via signalfd to reap)
+
+**`exec` vs `exec_always`:**
+- `exec` — runs only on initial startup, not on config reload
+- `exec_always` — runs on every config reload
+
+**Window kill protocol:**
+1. Check if window supports `WM_DELETE_WINDOW` in `WM_PROTOCOLS`
+2. If yes: send `ClientMessage` with `WM_DELETE_WINDOW` atom (graceful close)
+3. If no: `xcb_kill_client` immediately (force kill)
+4. No timeout — same behavior as i3 (single kill command = graceful, `kill kill` = force)
+
+**`assign` directive processing:**
+- `assign [criteria] workspace N` rules stored at config parse time
+- On `MapRequest` (new window managed), run all assign rules against the window
+- If matched, move the window to the target workspace before tiling
+- Processed before `for_window` rules
+
+## Focus Model
+
+**Default: click-to-focus** (same as i3 default).
+
+Config directives:
+```bash
+focus_follows_mouse yes|no    # default: yes (i3 default)
+focus_wrapping yes|no         # default: yes
+```
+
+**Focus behavior:**
+- `focus_follows_mouse yes` — EnterNotify events change focus (sloppy focus)
+- `focus_follows_mouse no` — only explicit focus commands or clicks change focus
+- Click on window → focus (always, regardless of focus_follows_mouse)
+- Focus within fullscreen: only the fullscreen container and its children receive focus
+
+**Focus stack:**
+- Managed by child ordering in the tree (last-focused child moved to head of siblings)
+- `focus parent` / `focus child` navigate up/down the tree
+- `focus mode_toggle` switches between tiling and floating layer
 
 ## Criteria Matching
 
@@ -439,8 +513,12 @@ bindsym $mod+minus scratchpad show
 **Signals:**
 - `SIGCHLD` → signalfd reap (prevent zombies)
 - `SIGTERM/SIGINT` → clean shutdown
-- `SIGHUP` → config reload + exec self (restart)
+- `SIGHUP` → restart (see below)
 - `SIGUSR1` → config reload only
+
+**Restart vs Reload:**
+- **Reload** (`reload` command, `SIGUSR1`): re-parse config, re-grab keys, notify bar. Tree preserved.
+- **Restart** (`restart` command, `SIGHUP`): serialize current tree to `/run/user/{uid}/ziawm/restart-state.json`, then `execvp` self. On startup, if restart state file exists, deserialize tree and restore window layout. This preserves window positions across restarts, same as i3.
 
 ## XRandR + Output Management
 
@@ -514,7 +592,7 @@ Unassigned workspaces created on currently focused output.
 
 ## Memory Management
 
-- Container pool via arena allocator — freed containers returned to pool, reused on next window open
+- Container pool via arena allocator — initial pool: 64 containers, doubles on exhaustion, never shrinks. Freed containers returned to pool, reused on next window open
 - IPC JSON buffer: single fixed-size buffer, reused across calls
 - No dynamic config string allocation beyond initial parse
 - Target RSS: < 2MB (i3 typically 5-10MB)
