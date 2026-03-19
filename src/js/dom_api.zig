@@ -1729,7 +1729,40 @@ fn getDocumentNode() ?*lxb.lxb_dom_node_t {
 }
 
 fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb_dom_node_t {
-    // Simple selector matching: #id, .class, tagname
+    if (selector.len == 0) return null;
+    const trimmed = std.mem.trim(u8, selector, " \t");
+    if (trimmed.len == 0) return null;
+
+    // Split compound selector on spaces for descendant combinator
+    // e.g. "#t9 .special" → find #t9, then find .special within it
+    var parts: [8][]const u8 = undefined;
+    var part_count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, trimmed, " \t");
+    while (iter.next()) |part| {
+        if (part_count >= parts.len) break;
+        parts[part_count] = part;
+        part_count += 1;
+    }
+
+    if (part_count == 0) return null;
+
+    if (part_count == 1) {
+        // Simple selector
+        return walkTreeBySimpleSelector(node, parts[0]);
+    }
+
+    // Compound selector: find first part in tree, then search within it for remaining parts
+    var search_root: *lxb.lxb_dom_node_t = node;
+    for (0..part_count - 1) |i| {
+        const found = walkTreeBySimpleSelector(search_root, parts[i]) orelse return null;
+        search_root = found;
+    }
+    // Search for the last part within the found ancestor
+    return walkTreeBySimpleSelector(search_root, parts[part_count - 1]);
+}
+
+/// Match a single simple selector: #id, .class, tag, tag.class, tag#id
+fn walkTreeBySimpleSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb_dom_node_t {
     if (selector.len == 0) return null;
 
     if (selector[0] == '#') {
@@ -1739,9 +1772,40 @@ fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb
         // Class selector
         return walkTreeByClass(node, selector[1..]);
     } else {
+        // Check for tag.class or tag#id compound (e.g. "div.special")
+        if (std.mem.indexOfScalar(u8, selector, '.')) |dot_idx| {
+            // tag.class — find by tag first, then filter by class
+            return walkTreeByTagAndClass(node, selector[0..dot_idx], selector[dot_idx + 1 ..]);
+        }
+        if (std.mem.indexOfScalar(u8, selector, '#')) |hash_idx| {
+            // tag#id — find by id (tag is redundant but valid)
+            return walkTreeById(node, selector[hash_idx + 1 ..]);
+        }
         // Tag name selector
         return walkTreeByTag(node, selector);
     }
+}
+
+fn walkTreeByTagAndClass(root: *lxb.lxb_dom_node_t, tag_name: []const u8, class_name: []const u8) ?*lxb.lxb_dom_node_t {
+    var current: ?*lxb.lxb_dom_node_t = root;
+    while (current) |node| {
+        if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            // Check tag name
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and name_len == tag_name.len and
+                std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], tag_name))
+            {
+                // Check class
+                var val_len: usize = 0;
+                const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
+                if (val != null and val_len > 0 and classContains(val.?[0..val_len], class_name)) return node;
+            }
+        }
+        current = nextDfsNode(node, root);
+    }
+    return null;
 }
 
 /// Iterative depth-first next node (stack-safe tree traversal helper)
@@ -1827,39 +1891,101 @@ fn documentQuerySelectorAll(
     return arr;
 }
 
-/// Iterative querySelectorAll collector (stack-safe)
+/// Check if an element node matches a single simple selector (#id, .class, tag, tag.class)
+fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    if (selector.len == 0) return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    if (selector[0] == '#') {
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
+        return val != null and val_len == selector.len - 1 and
+            std.mem.eql(u8, val.?[0..val_len], selector[1..]);
+    } else if (selector[0] == '.') {
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
+        return val != null and val_len > 0 and classContains(val.?[0..val_len], selector[1..]);
+    } else if (std.mem.indexOfScalar(u8, selector, '.')) |dot_idx| {
+        // tag.class
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+        if (name_ptr == null or name_len != dot_idx or
+            !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..dot_idx])) return false;
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
+        return val != null and val_len > 0 and classContains(val.?[0..val_len], selector[dot_idx + 1 ..]);
+    } else if (std.mem.indexOfScalar(u8, selector, '[')) |bracket_idx| {
+        // tag[attr="value"] — basic attribute selector
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+        if (bracket_idx > 0) {
+            if (name_ptr == null or name_len != bracket_idx or
+                !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..bracket_idx])) return false;
+        }
+        // Parse [attr="value"]
+        const attr_sel = selector[bracket_idx + 1 ..];
+        const close = std.mem.indexOfScalar(u8, attr_sel, ']') orelse return false;
+        const attr_inner = attr_sel[0..close];
+        if (std.mem.indexOf(u8, attr_inner, "=\"")) |eq_idx| {
+            const attr_name = attr_inner[0..eq_idx];
+            const attr_val = std.mem.trim(u8, attr_inner[eq_idx + 2 ..], "\"'");
+            var av_len: usize = 0;
+            const av = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &av_len);
+            return av != null and av_len == attr_val.len and std.mem.eql(u8, av.?[0..av_len], attr_val);
+        }
+        // [attr] — existence check
+        var av_len: usize = 0;
+        return lxb_dom_element_get_attribute(elem, attr_inner.ptr, attr_inner.len, &av_len) != null;
+    } else {
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+        return name_ptr != null and name_len == selector.len and
+            std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector);
+    }
+}
+
+/// Check if a node matches a full compound selector (space-separated descendant combinator)
+fn nodeMatchesCompound(node: *lxb.lxb_dom_node_t, parts: []const []const u8) bool {
+    if (parts.len == 0) return false;
+    // Last part must match the node itself
+    if (!nodeMatchesSimple(node, parts[parts.len - 1])) return false;
+    if (parts.len == 1) return true;
+    // Each preceding part must match some ancestor
+    var ancestor: ?*lxb.lxb_dom_node_t = node.parent;
+    var pi: usize = parts.len - 2;
+    while (true) {
+        const cur_ancestor = ancestor orelse return false;
+        if (nodeMatchesSimple(cur_ancestor, parts[pi])) {
+            if (pi == 0) return true;
+            pi -= 1;
+        }
+        ancestor = cur_ancestor.parent;
+    }
+}
+
+/// Iterative querySelectorAll collector — supports compound selectors
 fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector: []const u8, arr: qjs.JSValue, idx: *u32) void {
     if (selector.len == 0) return;
+    const trimmed = std.mem.trim(u8, selector, " \t");
+    if (trimmed.len == 0) return;
+
+    // Parse compound selector
+    var parts: [8][]const u8 = undefined;
+    var part_count: usize = 0;
+    var part_iter = std.mem.tokenizeAny(u8, trimmed, " \t");
+    while (part_iter.next()) |part| {
+        if (part_count >= parts.len) break;
+        parts[part_count] = part;
+        part_count += 1;
+    }
+    if (part_count == 0) return;
+
     var current: ?*lxb.lxb_dom_node_t = root;
     while (current) |node| {
-        if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            var matches = false;
-            if (selector[0] == '#') {
-                const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-                var val_len: usize = 0;
-                const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
-                if (val != null and val_len == selector.len - 1) {
-                    if (std.mem.eql(u8, val.?[0..val_len], selector[1..])) matches = true;
-                }
-            } else if (selector[0] == '.') {
-                const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-                var val_len: usize = 0;
-                const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-                if (val != null and val_len > 0) {
-                    if (classContains(val.?[0..val_len], selector[1..])) matches = true;
-                }
-            } else {
-                const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-                var name_len: usize = 0;
-                const name_ptr = lxb_dom_element_local_name(elem, &name_len);
-                if (name_ptr != null and name_len == selector.len) {
-                    if (std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector)) matches = true;
-                }
-            }
-            if (matches) {
-                _ = qjs.JS_SetPropertyUint32(ctx, arr, idx.*, wrapNode(ctx, node));
-                idx.* += 1;
-            }
+        if (nodeMatchesCompound(node, parts[0..part_count])) {
+            _ = qjs.JS_SetPropertyUint32(ctx, arr, idx.*, wrapNode(ctx, node));
+            idx.* += 1;
         }
         current = nextDfsNode(node, root);
     }

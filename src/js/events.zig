@@ -391,7 +391,42 @@ pub fn injectElementEventMethods(ctx: *qjs.JSContext, class_id: qjs.JSClassID) v
     }
     _ = qjs.JS_SetPropertyStr(ctx, proto, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 2));
     _ = qjs.JS_SetPropertyStr(ctx, proto, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, proto, "click", qjs.JS_NewCFunction(ctx, &jsElementClick, "click", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, proto, "dispatchEvent", qjs.JS_NewCFunction(ctx, &jsElementDispatchEvent, "dispatchEvent", 1));
     qjs.JS_FreeValue(ctx, proto);
+}
+
+/// element.click() — programmatically fire a click event on the element
+fn jsElementClick(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    _ = dispatchEvent(c, node, "click");
+    return quickjs.JS_UNDEFINED();
+}
+
+/// element.dispatchEvent(event) — fire a custom event
+fn jsElementDispatchEvent(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return qjs.JS_FALSE;
+    if (argc < 1) return qjs.JS_FALSE;
+    const args = argv orelse return qjs.JS_FALSE;
+    const node = dom_api.getNodePublic(c, this_val) orelse return qjs.JS_FALSE;
+    // Get event type from event object's .type property
+    const type_val = qjs.JS_GetPropertyStr(c, args[0], "type");
+    defer qjs.JS_FreeValue(c, type_val);
+    const type_str = dom_api.jsStringToSlice(c, type_val) orelse return qjs.JS_FALSE;
+    defer qjs.JS_FreeCString(c, type_str.ptr);
+    const result = dispatchEvent(c, node, type_str.ptr[0..type_str.len]);
+    return if (result) qjs.JS_TRUE else qjs.JS_FALSE;
 }
 
 /// Expose the element_class_id for the event system to inject methods.
