@@ -256,7 +256,7 @@ fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_s
     return switch (style_lh) {
         .px => |px| @max(px, raw_height),
         .number => |n| font_size * n,
-        .normal => raw_height * 1.4,
+        .normal => raw_height * 1.2,
     };
 }
 
