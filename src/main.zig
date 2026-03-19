@@ -390,16 +390,39 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Register event APIs (addEventListener on window/document/elements)
     events.registerEventApis(js_rt.ctx);
 
+    // readyState = "loading" during script execution
+    dom_api.setReadyState(.loading);
+
     // Execute <script> tags (including external scripts via src attribute)
     executeScripts(doc, &js_rt, allocator, loader, base_url);
 
-    // Fire DOMContentLoaded
+    // Transition readyState and fire events per HTML spec
+    dom_api.setReadyState(.interactive);
+    events.dispatchDocumentEvent(js_rt.ctx, "readystatechange");
     events.dispatchDocumentEvent(js_rt.ctx, "DOMContentLoaded");
     js_rt.executePending();
 
-    // Fire load
+    // Tick timers for setTimeout(fn, 0) callbacks (critical for anti-flicker)
+    {
+        var timer_iters: u32 = 0;
+        while (web_api.tickTimers(js_rt.ctx) and timer_iters < 100) : (timer_iters += 1) {
+            js_rt.executePending();
+        }
+    }
+
+    // Complete loading
+    dom_api.setReadyState(.complete);
+    events.dispatchDocumentEvent(js_rt.ctx, "readystatechange");
     events.dispatchWindowEvent(js_rt.ctx, "load");
     js_rt.executePending();
+
+    // Final timer tick
+    {
+        var timer_iters: u32 = 0;
+        while (web_api.tickTimers(js_rt.ctx) and timer_iters < 100) : (timer_iters += 1) {
+            js_rt.executePending();
+        }
+    }
 
     page.js_rt = js_rt;
 }

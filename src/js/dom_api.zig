@@ -67,6 +67,13 @@ fn findBoxForNode(root: *const Box, target: *lxb.lxb_dom_node_t) ?*const Box {
     return null;
 }
 
+/// Ready state for document.readyState
+pub var g_ready_state: enum { loading, interactive, complete } = .loading;
+
+pub fn setReadyState(state: @TypeOf(g_ready_state)) void {
+    g_ready_state = state;
+}
+
 /// Current page URL — set from main when navigating.
 var g_current_url: ?[]const u8 = null;
 
@@ -2442,6 +2449,96 @@ fn documentCreateDocumentFragment(
     return wrapNode(c, node);
 }
 
+// ── document.readyState getter ──────────────────────────────────────
+
+fn documentGetReadyState(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const state_str: []const u8 = switch (g_ready_state) {
+        .loading => "loading",
+        .interactive => "interactive",
+        .complete => "complete",
+    };
+    return qjs.JS_NewString(c, state_str.ptr);
+}
+
+// ── document.createEvent ────────────────────────────────────────────
+
+fn documentCreateEvent(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Return an Event-like object with initEvent() method
+    const js_code =
+        \\(function(){var e={type:'',bubbles:false,cancelable:false,
+        \\defaultPrevented:false,_stopped:false,isTrusted:false,eventPhase:0,
+        \\preventDefault:function(){this.defaultPrevented=true;},
+        \\stopPropagation:function(){this._stopped=true;},
+        \\stopImmediatePropagation:function(){this._stopped=true;},
+        \\initEvent:function(t,b,c){this.type=t;this.bubbles=b!==false;this.cancelable=c!==false;}
+        \\};return e;})()
+    ;
+    return qjs.JS_Eval(c, js_code, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+}
+
+// ── document.write ─────────────────────────────────────────────────
+
+fn documentWrite(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    // Only works during loading phase
+    if (g_ready_state != .loading) {
+        std.log.warn("[JS] document.write called after page load, ignoring", .{});
+        return quickjs.JS_UNDEFINED();
+    }
+
+    const str = qjs.JS_ToCString(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, str);
+    const html = std.mem.span(str);
+
+    if (html.len == 0) return quickjs.JS_UNDEFINED();
+
+    std.log.info("[JS] document.write: {d} bytes", .{html.len});
+
+    // Parse HTML fragment and append to body
+    const doc_ptr = g_document orelse return quickjs.JS_UNDEFINED();
+    const doc_node = getDocumentNode() orelse return quickjs.JS_UNDEFINED();
+    const body_node = walkTreeByTag(doc_node, "body") orelse return quickjs.JS_UNDEFINED();
+    const body_elem: *lxb.lxb_dom_element_t = @ptrCast(body_node);
+
+    // Parse HTML fragment using lexbor
+    const frag = lxb_html_document_parse_fragment(doc_ptr, body_elem, html.ptr, html.len) orelse return quickjs.JS_UNDEFINED();
+
+    // Move children from fragment to body
+    while (frag.first_child) |child| {
+        lxb_dom_node_remove(child);
+        lxb_dom_node_insert_child(body_node, child);
+    }
+    _ = lxb_dom_node_destroy(frag);
+
+    // Check if <script> was injected
+    if (std.mem.indexOf(u8, html, "<script") != null) {
+        std.log.warn("[JS] document.write injected <script> — execution not supported", .{});
+    }
+
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 // ── No-op constructor for DOM interface globals ─────────────────────
 
 fn jsNoOpConstructor(
@@ -2746,6 +2843,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &documentCreateDocumentFragment, "createDocumentFragment", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &documentCreateEvent, "createEvent", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "write", qjs.JS_NewCFunction(ctx, &documentWrite, "write", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "writeln", qjs.JS_NewCFunction(ctx, &documentWrite, "writeln", 1));
+
+    // document.readyState (getter)
+    const readyStateAtom = qjs.JS_NewAtom(ctx, "readyState");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, readyStateAtom, qjs.JS_NewCFunction(ctx, &documentGetReadyState, "get readyState", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, readyStateAtom);
 
     // document.body (getter)
     const bodyAtom = qjs.JS_NewAtom(ctx, "body");
