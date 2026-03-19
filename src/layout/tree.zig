@@ -669,13 +669,17 @@ fn applyTextTransform(text: []const u8, transform: ComputedStyle.TextTransform, 
     }
 }
 
-/// Collapse whitespace in text: replace runs of whitespace with single space,
-/// and trim leading/trailing whitespace.
+/// Collapse whitespace in text: replace runs of whitespace with single space.
+/// Preserves a leading space if the original text started with whitespace
+/// (needed for inter-element spacing in inline formatting context).
 fn collapseWhitespace(text: []const u8, allocator: std.mem.Allocator) ![]const u8 {
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
 
-    var in_ws = true; // start true to trim leading whitespace
+    // Check if text starts with whitespace — preserve as single space
+    const starts_with_ws = text.len > 0 and (text[0] == ' ' or text[0] == '\t' or text[0] == '\n' or text[0] == '\r');
+
+    var in_ws = true; // start true to collapse leading whitespace
     for (text) |ch| {
         if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
             if (!in_ws) {
@@ -683,15 +687,18 @@ fn collapseWhitespace(text: []const u8, allocator: std.mem.Allocator) ![]const u
                 in_ws = true;
             }
         } else {
+            // If first non-ws char and original started with ws, prepend space
+            if (buf.items.len == 0 and starts_with_ws) {
+                try buf.append(allocator, ' ');
+            }
             try buf.append(allocator, ch);
             in_ws = false;
         }
     }
 
-    // Trim trailing space
-    if (buf.items.len > 0 and buf.items[buf.items.len - 1] == ' ') {
-        buf.items.len -= 1;
-    }
+    // Keep trailing space — it may be needed for inter-element spacing
+    // in inline formatting context. The line breaker will handle trailing
+    // whitespace at line ends.
     return buf.toOwnedSlice(allocator);
 }
 
