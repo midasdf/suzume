@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CSS Text & Typography Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; }
+.sample { background: #ecf0f1; padding: 5px; margin-bottom: 5px; }
+
+/* Test 1: font-size */
+#t1 .s12 { font-size: 12px; }
+#t1 .s16 { font-size: 16px; }
+#t1 .s24 { font-size: 24px; }
+#t1 .s2em { font-size: 2em; }
+
+/* Test 2: font-weight */
+#t2 .w100 { font-weight: 100; }
+#t2 .w400 { font-weight: 400; }
+#t2 .w700 { font-weight: 700; }
+#t2 .w900 { font-weight: 900; }
+
+/* Test 3: font-style */
+#t3 .normal { font-style: normal; }
+#t3 .italic { font-style: italic; }
+
+/* Test 4: text-align */
+#t4 .left { text-align: left; }
+#t4 .center { text-align: center; }
+#t4 .right { text-align: right; }
+
+/* Test 5: text-decoration */
+#t5 .under { text-decoration: underline; }
+#t5 .over { text-decoration: overline; }
+#t5 .through { text-decoration: line-through; }
+#t5 .none { text-decoration: none; }
+
+/* Test 6: line-height */
+#t6 .lh1 { line-height: 1; background: #ecf0f1; }
+#t6 .lh15 { line-height: 1.5; background: #d5dbdb; }
+#t6 .lh2 { line-height: 2; background: #aeb6bf; }
+
+/* Test 7: white-space */
+#t7 .normal { white-space: normal; width: 200px; }
+#t7 .nowrap { white-space: nowrap; width: 200px; overflow: hidden; }
+#t7 .pre { white-space: pre; }
+#t7 .prewrap { white-space: pre-wrap; width: 200px; }
+
+/* Test 8: overflow-wrap / word-break */
+#t8 .break { overflow-wrap: break-word; width: 100px; }
+#t8 .breakall { word-break: break-all; width: 100px; }
+
+/* Test 9: text-transform */
+#t9 .upper { text-transform: uppercase; }
+#t9 .lower { text-transform: lowercase; }
+#t9 .cap { text-transform: capitalize; }
+
+/* Test 10: letter-spacing / word-spacing */
+#t10 .ls { letter-spacing: 5px; }
+#t10 .ws { word-spacing: 20px; }
+</style>
+</head>
+<body>
+<h2>1. font-size (12px, 16px, 24px, 2em)</h2>
+<div class="test" id="t1">
+<span class="s12">12px</span> <span class="s16">16px</span> <span class="s24">24px</span> <span class="s2em">2em</span>
+</div>
+
+<h2>2. font-weight (100, 400, 700, 900)</h2>
+<div class="test" id="t2">
+<span class="w100">Thin 100</span> <span class="w400">Normal 400</span> <span class="w700">Bold 700</span> <span class="w900">Black 900</span>
+</div>
+
+<h2>3. font-style</h2>
+<div class="test" id="t3"><span class="normal">Normal text</span> <span class="italic">Italic text</span></div>
+
+<h2>4. text-align (left, center, right)</h2>
+<div class="test" id="t4">
+<div class="sample left">Left aligned</div>
+<div class="sample center">Center aligned</div>
+<div class="sample right">Right aligned</div>
+</div>
+
+<h2>5. text-decoration</h2>
+<div class="test" id="t5">
+<span class="under">underline</span> <span class="over">overline</span> <span class="through">line-through</span> <a href="#" class="none">no-decoration link</a>
+</div>
+
+<h2>6. line-height (1, 1.5, 2)</h2>
+<div class="test" id="t6">
+<div class="lh1">Line height 1.0 — text sits tight</div>
+<div class="lh15">Line height 1.5 — some breathing room</div>
+<div class="lh2">Line height 2.0 — double spaced feel</div>
+</div>
+
+<h2>7. white-space (normal, nowrap, pre, pre-wrap)</h2>
+<div class="test" id="t7">
+<div class="sample normal">This   text   has   extra   spaces   and   should   wrap   normally   in   the   box.</div>
+<div class="sample nowrap">This text should not wrap and gets clipped.</div>
+<div class="sample pre">  Pre  served   spaces
+  and   line
+  breaks</div>
+<div class="sample prewrap">  Pre-wrap  preserves   spaces   but   also   wraps   when   line   is   too   long   for   container.</div>
+</div>
+
+<h2>8. overflow-wrap / word-break (100px width)</h2>
+<div class="test" id="t8">
+<div class="sample break">Superlongwordthatwillnotfitinthecontainer</div>
+<div class="sample breakall">Superlongwordthatwillnotfitinthecontainer</div>
+</div>
+
+<h2>9. text-transform</h2>
+<div class="test" id="t9">
+<div class="upper">uppercase text</div>
+<div class="lower">LOWERCASE TEXT</div>
+<div class="cap">capitalize each word</div>
+</div>
+
+<h2>10. letter-spacing (5px) / word-spacing (20px)</h2>
+<div class="test" id="t10">
+<div class="ls">Spaced letters</div>
+<div class="ws">Words with extra spacing</div>
+</div>
+</body>
+</html>

@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CSS Positioning Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; position: relative; }
+.box { width: 60px; height: 40px; display: flex; align-items: center; justify-content: center; color: white; font-size: 11px; }
+.r { background: #e74c3c; } .g { background: #2ecc71; } .b { background: #3498db; } .y { background: #f1c40f; color: black; }
+
+/* Test 1: position: relative with offset */
+#t1 .rel { position: relative; top: 10px; left: 20px; }
+
+/* Test 2: position: absolute */
+#t2 { height: 100px; background: #ecf0f1; position: relative; }
+#t2 .abs { position: absolute; top: 10px; right: 10px; }
+
+/* Test 3: absolute with all 4 offsets (stretching) */
+#t3 { height: 80px; background: #ecf0f1; position: relative; }
+#t3 .stretch { position: absolute; top: 10px; bottom: 10px; left: 10px; right: 10px; background: #3498db; }
+
+/* Test 4: z-index stacking */
+#t4 { height: 80px; position: relative; }
+#t4 .a { position: absolute; z-index: 1; top: 0; left: 0; width: 80px; height: 60px; }
+#t4 .b { position: absolute; z-index: 3; top: 10px; left: 30px; width: 80px; height: 60px; }
+#t4 .c { position: absolute; z-index: 2; top: 20px; left: 60px; width: 80px; height: 60px; }
+
+/* Test 5: position: fixed (simulated in container) */
+#t5 { height: 100px; overflow: hidden; position: relative; background: #ecf0f1; }
+#t5 .fixed-sim { position: absolute; bottom: 0; right: 0; }
+
+/* Test 6: Nested relative */
+#t6 { position: relative; background: #ecf0f1; padding: 10px; }
+#t6 .inner { position: relative; left: 20px; background: #ddd; padding: 10px; }
+#t6 .deep { position: relative; left: 20px; }
+
+/* Test 7: Absolute inside relative */
+#t7 { position: relative; height: 80px; background: #ecf0f1; }
+#t7 .rel-parent { position: relative; left: 50px; top: 10px; width: 200px; height: 60px; background: #ddd; }
+#t7 .abs-child { position: absolute; right: 0; bottom: 0; }
+
+/* Test 8: Overflow hidden + positioned */
+#t8 { width: 150px; height: 80px; overflow: hidden; background: #ecf0f1; position: relative; }
+#t8 .overflow { position: absolute; top: -10px; left: -10px; width: 80px; height: 100px; }
+
+/* Test 9: display:none vs visibility:hidden */
+#t9 .none { display: none; }
+#t9 .hidden { visibility: hidden; }
+
+/* Test 10: opacity */
+#t10 .half { opacity: 0.5; }
+#t10 .quarter { opacity: 0.25; }
+</style>
+</head>
+<body>
+<h2>1. position: relative (top: 10px, left: 20px)</h2>
+<div class="test"><div class="box r">static</div><div class="box g rel">moved</div><div class="box b">static</div></div>
+
+<h2>2. position: absolute (top-right corner)</h2>
+<div class="test" id="t2"><div class="box r">flow</div><div class="box g abs">abs</div></div>
+
+<h2>3. Absolute stretching (all 4 offsets)</h2>
+<div class="test" id="t3"><div class="stretch"></div></div>
+
+<h2>4. z-index stacking (red=1, blue=3, green=2)</h2>
+<div class="test" id="t4"><div class="box r a">z1</div><div class="box b b">z3</div><div class="box g c">z2</div></div>
+
+<h2>5. Fixed-like positioning (bottom-right)</h2>
+<div class="test" id="t5"><div class="box r">content</div><div class="box g fixed-sim">fix</div></div>
+
+<h2>6. Nested relative offsets</h2>
+<div class="test" id="t6"><div class="inner"><div class="box r deep">deep</div></div></div>
+
+<h2>7. Absolute child in relative parent</h2>
+<div class="test" id="t7"><div class="rel-parent"><div class="box r abs-child">abs</div></div></div>
+
+<h2>8. Overflow hidden clips positioned child</h2>
+<div class="test" id="t8"><div class="box r overflow">clip me</div></div>
+
+<h2>9. display:none (no space) vs visibility:hidden (space reserved)</h2>
+<div class="test" id="t9">
+<div class="box r">A</div><div class="box g none">NONE</div><div class="box b">B</div>
+<div style="margin-top:5px"><div class="box r" style="display:inline-block">A</div><div class="box g hidden" style="display:inline-block">HIDE</div><div class="box b" style="display:inline-block">B</div></div>
+</div>
+
+<h2>10. Opacity (1.0, 0.5, 0.25)</h2>
+<div class="test" id="t10"><div class="box r" style="display:inline-block">1.0</div><div class="box r half" style="display:inline-block">0.5</div><div class="box r quarter" style="display:inline-block">0.25</div></div>
+</body>
+</html>

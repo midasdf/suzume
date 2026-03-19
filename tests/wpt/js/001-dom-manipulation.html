@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>DOM Manipulation Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; font-weight: bold; }
+.fail { color: #e74c3c; font-weight: bold; }
+.box { width: 50px; height: 30px; display: inline-block; margin: 2px; }
+</style>
+</head>
+<body>
+<h2>1. createElement + appendChild</h2>
+<div class="test" id="t1"><!-- JS fills this --></div>
+
+<h2>2. textContent</h2>
+<div class="test" id="t2">Original text</div>
+
+<h2>3. innerHTML</h2>
+<div class="test" id="t3"><!-- JS fills this --></div>
+
+<h2>4. setAttribute / getAttribute</h2>
+<div class="test" id="t4"><div id="t4-target">Check data-value</div></div>
+
+<h2>5. classList.add / remove / toggle / contains</h2>
+<div class="test" id="t5"><div id="t5-target" class="initial">classList test</div></div>
+
+<h2>6. style property manipulation</h2>
+<div class="test" id="t6"><div id="t6-target">Style me</div></div>
+
+<h2>7. removeChild</h2>
+<div class="test" id="t7"><div id="t7-a" class="box" style="background:#e74c3c"></div><div id="t7-b" class="box" style="background:#2ecc71"></div><div id="t7-c" class="box" style="background:#3498db"></div></div>
+
+<h2>8. insertBefore</h2>
+<div class="test" id="t8"><div class="box" style="background:#e74c3c" id="t8-first"></div><div class="box" style="background:#3498db" id="t8-last"></div></div>
+
+<h2>9. querySelector / querySelectorAll</h2>
+<div class="test" id="t9">
+<ul><li class="item">A</li><li class="item">B</li><li class="item special">C</li><li class="item">D</li></ul>
+<div id="t9-result"></div>
+</div>
+
+<h2>10. cloneNode</h2>
+<div class="test" id="t10"><div id="t10-src" class="box" style="background:#9b59b6"></div><div id="t10-dest"></div></div>
+
+<script>
+// Test 1: createElement + appendChild
+(function() {
+  var container = document.getElementById('t1');
+  for (var i = 0; i < 5; i++) {
+    var div = document.createElement('div');
+    div.className = 'box';
+    div.style.backgroundColor = ['#e74c3c','#2ecc71','#3498db','#f1c40f','#9b59b6'][i];
+    container.appendChild(div);
+  }
+})();
+
+// Test 2: textContent
+document.getElementById('t2').textContent = 'Text set by JavaScript';
+
+// Test 3: innerHTML
+document.getElementById('t3').innerHTML = '<strong style="color:#e74c3c">Bold red</strong> and <em style="color:#3498db">italic blue</em>';
+
+// Test 4: setAttribute / getAttribute
+(function() {
+  var el = document.getElementById('t4-target');
+  el.setAttribute('data-value', 'hello-world');
+  var val = el.getAttribute('data-value');
+  el.textContent = 'data-value = ' + val;
+  el.style.color = val === 'hello-world' ? '#2ecc71' : '#e74c3c';
+})();
+
+// Test 5: classList
+(function() {
+  var el = document.getElementById('t5-target');
+  el.classList.add('added');
+  el.classList.remove('initial');
+  el.classList.toggle('toggled');
+  var has = el.classList.contains('added');
+  el.textContent = 'classes: ' + el.className + ' | contains(added)=' + has;
+  el.style.color = (has && !el.classList.contains('initial')) ? '#2ecc71' : '#e74c3c';
+})();
+
+// Test 6: style property
+(function() {
+  var el = document.getElementById('t6-target');
+  el.style.backgroundColor = '#3498db';
+  el.style.color = 'white';
+  el.style.padding = '10px';
+  el.style.fontWeight = 'bold';
+  el.style.borderRadius = '5px';
+})();
+
+// Test 7: removeChild (remove middle green box)
+(function() {
+  var parent = document.getElementById('t7');
+  var middle = document.getElementById('t7-b');
+  parent.removeChild(middle);
+})();
+
+// Test 8: insertBefore (insert green between red and blue)
+(function() {
+  var parent = document.getElementById('t8');
+  var last = document.getElementById('t8-last');
+  var newEl = document.createElement('div');
+  newEl.className = 'box';
+  newEl.style.backgroundColor = '#2ecc71';
+  parent.insertBefore(newEl, last);
+})();
+
+// Test 9: querySelector / querySelectorAll
+(function() {
+  var special = document.querySelector('#t9 .special');
+  var all = document.querySelectorAll('#t9 .item');
+  var result = document.getElementById('t9-result');
+  result.textContent = 'querySelector(.special)=' + (special ? special.textContent : 'null') +
+    ' | querySelectorAll(.item).length=' + all.length;
+  result.style.color = (special && special.textContent === 'C' && all.length === 4) ? '#2ecc71' : '#e74c3c';
+})();
+
+// Test 10: cloneNode
+(function() {
+  var src = document.getElementById('t10-src');
+  var dest = document.getElementById('t10-dest');
+  var clone = src.cloneNode(true);
+  clone.id = 't10-clone';
+  clone.style.backgroundColor = '#e67e22';
+  dest.appendChild(clone);
+})();
+</script>
+</body>
+</html>

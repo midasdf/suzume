@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CSS Box Model Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; }
+.ref { border: 1px dashed #ccc; padding: 2px; display: inline-block; }
+
+/* Test 1: Basic margin */
+#t1 { width: 100px; height: 50px; background: #e74c3c; margin: 20px; }
+
+/* Test 2: Padding */
+#t2 { background: #3498db; padding: 20px; display: inline-block; }
+#t2 span { background: #ecf0f1; }
+
+/* Test 3: Border */
+#t3 { width: 100px; height: 50px; border: 5px solid #2ecc71; background: #f1c40f; }
+
+/* Test 4: Box-sizing: border-box */
+#t4a, #t4b { width: 150px; height: 50px; padding: 10px; border: 5px solid #9b59b6; display: inline-block; }
+#t4a { box-sizing: content-box; background: #e74c3c; }
+#t4b { box-sizing: border-box; background: #3498db; }
+
+/* Test 5: Margin collapse */
+#t5a { margin-bottom: 30px; background: #e74c3c; height: 30px; }
+#t5b { margin-top: 20px; background: #3498db; height: 30px; }
+
+/* Test 6: Auto margin centering */
+#t6 { width: 200px; height: 40px; margin: 0 auto; background: #2ecc71; }
+
+/* Test 7: Negative margin */
+#t7a { background: #e74c3c; height: 40px; width: 100px; }
+#t7b { background: rgba(52,152,219,0.7); height: 40px; width: 100px; margin-top: -20px; margin-left: 20px; }
+
+/* Test 8: Percentage width/padding */
+#t8-wrap { width: 300px; background: #ecf0f1; }
+#t8 { width: 50%; padding: 5%; background: #e74c3c; height: 30px; }
+
+/* Test 9: Max/min width */
+#t9 { min-width: 100px; max-width: 200px; width: 50%; background: #9b59b6; height: 30px; }
+
+/* Test 10: Inline padding/margin */
+#t10 span { background: #f1c40f; padding: 5px 15px; margin: 0 10px; border: 2px solid #e67e22; }
+</style>
+</head>
+<body>
+<h2>1. Margin (20px all sides)</h2>
+<div class="test"><div id="t1"></div></div>
+
+<h2>2. Padding (20px, inner span visible)</h2>
+<div class="test"><div id="t2"><span>Inner content</span></div></div>
+
+<h2>3. Border (5px solid green)</h2>
+<div class="test"><div id="t3"></div></div>
+
+<h2>4. Box-sizing: content-box (red) vs border-box (blue) — same width:150px</h2>
+<div class="test"><div id="t4a">content</div><div id="t4b">border</div></div>
+
+<h2>5. Margin collapse (30px bottom + 20px top = 30px gap)</h2>
+<div class="test"><div id="t5a"></div><div id="t5b"></div></div>
+
+<h2>6. Auto margin centering</h2>
+<div class="test"><div id="t6"></div></div>
+
+<h2>7. Negative margin overlap</h2>
+<div class="test"><div id="t7a"></div><div id="t7b"></div></div>
+
+<h2>8. Percentage width (50%) and padding (5%)</h2>
+<div class="test"><div id="t8-wrap"><div id="t8"></div></div></div>
+
+<h2>9. Min-width: 100px, Max-width: 200px</h2>
+<div class="test"><div id="t9"></div></div>
+
+<h2>10. Inline element padding/margin/border</h2>
+<div class="test"><p>Text <span id="t10"><span>padded inline</span></span> text</p></div>
+</body>
+</html>

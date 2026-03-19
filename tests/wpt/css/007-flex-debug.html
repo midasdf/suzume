@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Flex Debug</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+
+/* Test: inline style vs class */
+.flex-row { display: flex; height: 60px; background: #ecf0f1; margin-bottom: 10px; }
+.box { width: 50px; height: 50px; background: #e74c3c; color: white; display: flex; align-items: center; justify-content: center; }
+
+/* Inline justify-content */
+</style>
+</head>
+<body>
+<p>1. justify-content via inline style: flex-end</p>
+<div class="flex-row" style="justify-content: flex-end;">
+<div class="box">1</div><div class="box" style="background:#2ecc71">2</div><div class="box" style="background:#3498db">3</div>
+</div>
+
+<p>2. justify-content via inline style: center</p>
+<div class="flex-row" style="justify-content: center;">
+<div class="box">1</div><div class="box" style="background:#2ecc71">2</div><div class="box" style="background:#3498db">3</div>
+</div>
+
+<p>3. justify-content via inline style: space-between</p>
+<div class="flex-row" style="justify-content: space-between;">
+<div class="box">1</div><div class="box" style="background:#2ecc71">2</div><div class="box" style="background:#3498db">3</div>
+</div>
+
+<p>4. align-items via inline style: flex-end (height:100px)</p>
+<div style="display:flex;height:100px;background:#ecf0f1;margin-bottom:10px;align-items:flex-end;">
+<div class="box">1</div><div class="box" style="background:#2ecc71;height:30px">2</div><div class="box" style="background:#3498db">3</div>
+</div>
+
+<p>5. align-items via inline style: center (height:100px)</p>
+<div style="display:flex;height:100px;background:#ecf0f1;margin-bottom:10px;align-items:center;">
+<div class="box">1</div><div class="box" style="background:#2ecc71;height:30px">2</div><div class="box" style="background:#3498db">3</div>
+</div>
+
+<p>6. flex-grow via inline style (1:2:1)</p>
+<div class="flex-row" style="width: 400px;">
+<div class="box" style="flex-grow:1;width:auto">1</div>
+<div class="box" style="flex-grow:2;width:auto;background:#2ecc71">2</div>
+<div class="box" style="flex-grow:1;width:auto;background:#3498db">3</div>
+</div>
+
+<p>7. margin: 0 auto centering</p>
+<div style="width: 200px; height: 40px; margin: 0 auto; background: #2ecc71;"></div>
+
+<p>8. text-align: center</p>
+<div style="text-align: center; background: #ecf0f1; padding: 10px;">Centered text</div>
+
+<p>9. text-align: right</p>
+<div style="text-align: right; background: #ecf0f1; padding: 10px;">Right text</div>
+
+<p>10. display: inline-block</p>
+<div><span style="display:inline-block;width:80px;height:30px;background:#e74c3c;margin:2px"></span><span style="display:inline-block;width:80px;height:30px;background:#2ecc71;margin:2px"></span><span style="display:inline-block;width:80px;height:30px;background:#3498db;margin:2px"></span></div>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CSS Selectors Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; }
+.box { padding: 8px; margin: 2px 0; }
+.pass { background: #2ecc71; color: white; }
+.fail { background: #e74c3c; color: white; }
+
+/* Test 1: Type selector */
+#t1 p { background: #2ecc71; color: white; padding: 5px; }
+
+/* Test 2: Class selector */
+.highlight { background: #f1c40f; padding: 5px; }
+
+/* Test 3: ID selector */
+#unique-element { background: #3498db; color: white; padding: 5px; }
+
+/* Test 4: Descendant combinator */
+#t4 div span { color: #e74c3c; font-weight: bold; }
+
+/* Test 5: Child combinator */
+#t5 > .direct { background: #2ecc71; color: white; padding: 5px; }
+#t5 .nested .direct { background: #ecf0f1; color: black; } /* Should NOT apply if > works */
+
+/* Test 6: Adjacent sibling */
+#t6 .trigger + .target { background: #9b59b6; color: white; padding: 5px; }
+
+/* Test 7: General sibling */
+#t7 .trigger ~ .target { background: #e67e22; color: white; padding: 5px; }
+
+/* Test 8: Attribute selectors */
+[data-test="exact"] { background: #2ecc71; color: white; padding: 5px; }
+[data-test^="start"] { border-left: 4px solid #e74c3c; padding-left: 5px; }
+[data-test$="end"] { border-right: 4px solid #3498db; padding-right: 5px; }
+[data-test*="mid"] { text-decoration: underline; }
+
+/* Test 9: Pseudo-classes */
+#t9 a:link { color: #3498db; }
+#t9 .items :first-child { font-weight: bold; background: #ecf0f1; }
+#t9 .items :last-child { font-style: italic; background: #d5dbdb; }
+#t9 .items :nth-child(2n) { color: #e74c3c; }
+
+/* Test 10: Combined selectors */
+#t10 div.special[data-role="main"] > p:first-child { background: #9b59b6; color: white; padding: 5px; }
+</style>
+</head>
+<body>
+<h2>1. Type selector (p elements green)</h2>
+<div class="test" id="t1"><p>This paragraph should be green</p><div>This div should not be green</div></div>
+
+<h2>2. Class selector (.highlight = yellow)</h2>
+<div class="test"><div class="highlight">Highlighted</div><div>Not highlighted</div></div>
+
+<h2>3. ID selector (#unique-element = blue)</h2>
+<div class="test"><div id="unique-element">Unique element</div></div>
+
+<h2>4. Descendant combinator (div span = red bold)</h2>
+<div class="test" id="t4"><div>Text <span>descendant span</span> text</div><span>Direct span (not in div)</span></div>
+
+<h2>5. Child combinator (> .direct = green, NOT nested)</h2>
+<div class="test" id="t5">
+<div class="direct">Direct child (green)</div>
+<div class="nested"><div class="direct">Nested (should NOT be green via >)</div></div>
+</div>
+
+<h2>6. Adjacent sibling (.trigger + .target = purple)</h2>
+<div class="test" id="t6">
+<div class="target">Before trigger (no style)</div>
+<div class="trigger">Trigger</div>
+<div class="target">Right after trigger (purple)</div>
+<div class="target">Not adjacent (no style)</div>
+</div>
+
+<h2>7. General sibling (.trigger ~ .target = orange)</h2>
+<div class="test" id="t7">
+<div class="target">Before trigger (no style)</div>
+<div class="trigger">Trigger</div>
+<div class="target">After trigger (orange)</div>
+<div>Non-target</div>
+<div class="target">Also after trigger (orange)</div>
+</div>
+
+<h2>8. Attribute selectors</h2>
+<div class="test">
+<div data-test="exact">Exact match [="exact"]</div>
+<div data-test="starts-here">Starts with [^="start"]</div>
+<div data-test="the-end">Ends with [$="end"]</div>
+<div data-test="in-middle-of">Contains [*="mid"]</div>
+</div>
+
+<h2>9. Pseudo-classes (:link, :first-child, :last-child, :nth-child(2n))</h2>
+<div class="test" id="t9">
+<a href="#">Link styled</a>
+<div class="items">
+<div>First (bold, light bg)</div>
+<div>Second (red, even)</div>
+<div>Third</div>
+<div>Fourth (red, even)</div>
+<div>Fifth (italic, dark bg)</div>
+</div>
+</div>
+
+<h2>10. Combined selector: div.special[data-role="main"] > p:first-child</h2>
+<div class="test" id="t10">
+<div class="special" data-role="main"><p>Should be purple (matches)</p><p>Not first (no style)</p></div>
+<div class="special"><p>No data-role (no style)</p></div>
+</div>
+</body>
+</html>

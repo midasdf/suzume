@@ -1280,8 +1280,9 @@ pub fn main() !void {
     fonts.font_path_serif = font_serif;
     fonts.font_path_mono = font_mono;
 
-    // Surface
-    var surface = Surface.init(default_window_w, default_window_h) catch |err| {
+    // Surface (check env vars for window size override)
+    chrome.initWindowSize();
+    var surface = Surface.init(chrome.default_window_w, chrome.default_window_h) catch |err| {
         std.debug.print("Failed to create surface: {}\n", .{err});
         return err;
     };

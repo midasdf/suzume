@@ -233,38 +233,162 @@ fn toLowerBuf(s: []const u8, buf: []u8) ?[]u8 {
 const NamedColorEntry = struct { []const u8, u32 };
 
 const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
+    // CSS Color Level 4 — full 148 named colors + grey aliases
     .{ "transparent", values.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } },
-    .{ "black", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
-    .{ "white", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
-    .{ "red", values.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } },
-    .{ "green", values.Color{ .r = 0, .g = 128, .b = 0, .a = 255 } },
-    .{ "blue", values.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } },
-    .{ "yellow", values.Color{ .r = 255, .g = 255, .b = 0, .a = 255 } },
-    .{ "orange", values.Color{ .r = 255, .g = 165, .b = 0, .a = 255 } },
-    .{ "purple", values.Color{ .r = 128, .g = 0, .b = 128, .a = 255 } },
-    .{ "pink", values.Color{ .r = 255, .g = 192, .b = 203, .a = 255 } },
-    .{ "cyan", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },
-    .{ "magenta", values.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } },
-    .{ "gray", values.Color{ .r = 128, .g = 128, .b = 128, .a = 255 } },
-    .{ "grey", values.Color{ .r = 128, .g = 128, .b = 128, .a = 255 } },
-    .{ "darkgray", values.Color{ .r = 169, .g = 169, .b = 169, .a = 255 } },
-    .{ "darkgrey", values.Color{ .r = 169, .g = 169, .b = 169, .a = 255 } },
-    .{ "lightgray", values.Color{ .r = 211, .g = 211, .b = 211, .a = 255 } },
-    .{ "lightgrey", values.Color{ .r = 211, .g = 211, .b = 211, .a = 255 } },
-    .{ "navy", values.Color{ .r = 0, .g = 0, .b = 128, .a = 255 } },
-    .{ "teal", values.Color{ .r = 0, .g = 128, .b = 128, .a = 255 } },
-    .{ "olive", values.Color{ .r = 128, .g = 128, .b = 0, .a = 255 } },
-    .{ "maroon", values.Color{ .r = 128, .g = 0, .b = 0, .a = 255 } },
-    .{ "aqua", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },
-    .{ "fuchsia", values.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } },
-    .{ "lime", values.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } },
-    .{ "silver", values.Color{ .r = 192, .g = 192, .b = 192, .a = 255 } },
     .{ "currentcolor", values.Color{ .r = 0, .g = 0, .b = 0, .a = 0 } }, // sentinel
+    .{ "aliceblue", values.Color{ .r = 240, .g = 248, .b = 255, .a = 255 } },
+    .{ "antiquewhite", values.Color{ .r = 250, .g = 235, .b = 215, .a = 255 } },
+    .{ "aqua", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },
+    .{ "aquamarine", values.Color{ .r = 127, .g = 255, .b = 212, .a = 255 } },
+    .{ "azure", values.Color{ .r = 240, .g = 255, .b = 255, .a = 255 } },
+    .{ "beige", values.Color{ .r = 245, .g = 245, .b = 220, .a = 255 } },
+    .{ "bisque", values.Color{ .r = 255, .g = 228, .b = 196, .a = 255 } },
+    .{ "black", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
+    .{ "blanchedalmond", values.Color{ .r = 255, .g = 235, .b = 205, .a = 255 } },
+    .{ "blue", values.Color{ .r = 0, .g = 0, .b = 255, .a = 255 } },
+    .{ "blueviolet", values.Color{ .r = 138, .g = 43, .b = 226, .a = 255 } },
+    .{ "brown", values.Color{ .r = 165, .g = 42, .b = 42, .a = 255 } },
+    .{ "burlywood", values.Color{ .r = 222, .g = 184, .b = 135, .a = 255 } },
+    .{ "cadetblue", values.Color{ .r = 95, .g = 158, .b = 160, .a = 255 } },
+    .{ "chartreuse", values.Color{ .r = 127, .g = 255, .b = 0, .a = 255 } },
+    .{ "chocolate", values.Color{ .r = 210, .g = 105, .b = 30, .a = 255 } },
+    .{ "coral", values.Color{ .r = 255, .g = 127, .b = 80, .a = 255 } },
+    .{ "cornflowerblue", values.Color{ .r = 100, .g = 149, .b = 237, .a = 255 } },
+    .{ "cornsilk", values.Color{ .r = 255, .g = 248, .b = 220, .a = 255 } },
+    .{ "crimson", values.Color{ .r = 220, .g = 20, .b = 60, .a = 255 } },
+    .{ "cyan", values.Color{ .r = 0, .g = 255, .b = 255, .a = 255 } },
+    .{ "darkblue", values.Color{ .r = 0, .g = 0, .b = 139, .a = 255 } },
+    .{ "darkcyan", values.Color{ .r = 0, .g = 139, .b = 139, .a = 255 } },
+    .{ "darkgoldenrod", values.Color{ .r = 184, .g = 134, .b = 11, .a = 255 } },
+    .{ "darkgray", values.Color{ .r = 169, .g = 169, .b = 169, .a = 255 } },
+    .{ "darkgreen", values.Color{ .r = 0, .g = 100, .b = 0, .a = 255 } },
+    .{ "darkgrey", values.Color{ .r = 169, .g = 169, .b = 169, .a = 255 } },
+    .{ "darkkhaki", values.Color{ .r = 189, .g = 183, .b = 107, .a = 255 } },
+    .{ "darkmagenta", values.Color{ .r = 139, .g = 0, .b = 139, .a = 255 } },
+    .{ "darkolivegreen", values.Color{ .r = 85, .g = 107, .b = 47, .a = 255 } },
+    .{ "darkorange", values.Color{ .r = 255, .g = 140, .b = 0, .a = 255 } },
+    .{ "darkorchid", values.Color{ .r = 153, .g = 50, .b = 204, .a = 255 } },
+    .{ "darkred", values.Color{ .r = 139, .g = 0, .b = 0, .a = 255 } },
+    .{ "darksalmon", values.Color{ .r = 233, .g = 150, .b = 122, .a = 255 } },
+    .{ "darkseagreen", values.Color{ .r = 143, .g = 188, .b = 143, .a = 255 } },
+    .{ "darkslateblue", values.Color{ .r = 72, .g = 61, .b = 139, .a = 255 } },
+    .{ "darkslategray", values.Color{ .r = 47, .g = 79, .b = 79, .a = 255 } },
+    .{ "darkslategrey", values.Color{ .r = 47, .g = 79, .b = 79, .a = 255 } },
+    .{ "darkturquoise", values.Color{ .r = 0, .g = 206, .b = 209, .a = 255 } },
+    .{ "darkviolet", values.Color{ .r = 148, .g = 0, .b = 211, .a = 255 } },
+    .{ "deeppink", values.Color{ .r = 255, .g = 20, .b = 147, .a = 255 } },
+    .{ "deepskyblue", values.Color{ .r = 0, .g = 191, .b = 255, .a = 255 } },
+    .{ "dimgray", values.Color{ .r = 105, .g = 105, .b = 105, .a = 255 } },
+    .{ "dimgrey", values.Color{ .r = 105, .g = 105, .b = 105, .a = 255 } },
+    .{ "dodgerblue", values.Color{ .r = 30, .g = 144, .b = 255, .a = 255 } },
+    .{ "firebrick", values.Color{ .r = 178, .g = 34, .b = 34, .a = 255 } },
+    .{ "floralwhite", values.Color{ .r = 255, .g = 250, .b = 240, .a = 255 } },
+    .{ "forestgreen", values.Color{ .r = 34, .g = 139, .b = 34, .a = 255 } },
+    .{ "fuchsia", values.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } },
+    .{ "gainsboro", values.Color{ .r = 220, .g = 220, .b = 220, .a = 255 } },
+    .{ "ghostwhite", values.Color{ .r = 248, .g = 248, .b = 255, .a = 255 } },
+    .{ "gold", values.Color{ .r = 255, .g = 215, .b = 0, .a = 255 } },
+    .{ "goldenrod", values.Color{ .r = 218, .g = 165, .b = 32, .a = 255 } },
+    .{ "gray", values.Color{ .r = 128, .g = 128, .b = 128, .a = 255 } },
+    .{ "green", values.Color{ .r = 0, .g = 128, .b = 0, .a = 255 } },
+    .{ "greenyellow", values.Color{ .r = 173, .g = 255, .b = 47, .a = 255 } },
+    .{ "grey", values.Color{ .r = 128, .g = 128, .b = 128, .a = 255 } },
+    .{ "honeydew", values.Color{ .r = 240, .g = 255, .b = 240, .a = 255 } },
+    .{ "hotpink", values.Color{ .r = 255, .g = 105, .b = 180, .a = 255 } },
+    .{ "indianred", values.Color{ .r = 205, .g = 92, .b = 92, .a = 255 } },
+    .{ "indigo", values.Color{ .r = 75, .g = 0, .b = 130, .a = 255 } },
+    .{ "ivory", values.Color{ .r = 255, .g = 255, .b = 240, .a = 255 } },
+    .{ "khaki", values.Color{ .r = 240, .g = 230, .b = 140, .a = 255 } },
+    .{ "lavender", values.Color{ .r = 230, .g = 230, .b = 250, .a = 255 } },
+    .{ "lavenderblush", values.Color{ .r = 255, .g = 240, .b = 245, .a = 255 } },
+    .{ "lawngreen", values.Color{ .r = 124, .g = 252, .b = 0, .a = 255 } },
+    .{ "lemonchiffon", values.Color{ .r = 255, .g = 250, .b = 205, .a = 255 } },
+    .{ "lightblue", values.Color{ .r = 173, .g = 216, .b = 230, .a = 255 } },
+    .{ "lightcoral", values.Color{ .r = 240, .g = 128, .b = 128, .a = 255 } },
+    .{ "lightcyan", values.Color{ .r = 224, .g = 255, .b = 255, .a = 255 } },
+    .{ "lightgoldenrodyellow", values.Color{ .r = 250, .g = 250, .b = 210, .a = 255 } },
+    .{ "lightgray", values.Color{ .r = 211, .g = 211, .b = 211, .a = 255 } },
+    .{ "lightgreen", values.Color{ .r = 144, .g = 238, .b = 144, .a = 255 } },
+    .{ "lightgrey", values.Color{ .r = 211, .g = 211, .b = 211, .a = 255 } },
+    .{ "lightpink", values.Color{ .r = 255, .g = 182, .b = 193, .a = 255 } },
+    .{ "lightsalmon", values.Color{ .r = 255, .g = 160, .b = 122, .a = 255 } },
+    .{ "lightseagreen", values.Color{ .r = 32, .g = 178, .b = 170, .a = 255 } },
+    .{ "lightskyblue", values.Color{ .r = 135, .g = 206, .b = 250, .a = 255 } },
+    .{ "lightslategray", values.Color{ .r = 119, .g = 136, .b = 153, .a = 255 } },
+    .{ "lightslategrey", values.Color{ .r = 119, .g = 136, .b = 153, .a = 255 } },
+    .{ "lightsteelblue", values.Color{ .r = 176, .g = 196, .b = 222, .a = 255 } },
+    .{ "lightyellow", values.Color{ .r = 255, .g = 255, .b = 224, .a = 255 } },
+    .{ "lime", values.Color{ .r = 0, .g = 255, .b = 0, .a = 255 } },
+    .{ "limegreen", values.Color{ .r = 50, .g = 205, .b = 50, .a = 255 } },
+    .{ "linen", values.Color{ .r = 250, .g = 240, .b = 230, .a = 255 } },
+    .{ "magenta", values.Color{ .r = 255, .g = 0, .b = 255, .a = 255 } },
+    .{ "maroon", values.Color{ .r = 128, .g = 0, .b = 0, .a = 255 } },
+    .{ "mediumaquamarine", values.Color{ .r = 102, .g = 205, .b = 170, .a = 255 } },
+    .{ "mediumblue", values.Color{ .r = 0, .g = 0, .b = 205, .a = 255 } },
+    .{ "mediumorchid", values.Color{ .r = 186, .g = 85, .b = 211, .a = 255 } },
+    .{ "mediumpurple", values.Color{ .r = 147, .g = 112, .b = 219, .a = 255 } },
+    .{ "mediumseagreen", values.Color{ .r = 60, .g = 179, .b = 113, .a = 255 } },
+    .{ "mediumslateblue", values.Color{ .r = 123, .g = 104, .b = 238, .a = 255 } },
+    .{ "mediumspringgreen", values.Color{ .r = 0, .g = 250, .b = 154, .a = 255 } },
+    .{ "mediumturquoise", values.Color{ .r = 72, .g = 209, .b = 204, .a = 255 } },
+    .{ "mediumvioletred", values.Color{ .r = 199, .g = 21, .b = 133, .a = 255 } },
+    .{ "midnightblue", values.Color{ .r = 25, .g = 25, .b = 112, .a = 255 } },
+    .{ "mintcream", values.Color{ .r = 245, .g = 255, .b = 250, .a = 255 } },
+    .{ "mistyrose", values.Color{ .r = 255, .g = 228, .b = 225, .a = 255 } },
+    .{ "moccasin", values.Color{ .r = 255, .g = 228, .b = 181, .a = 255 } },
+    .{ "navajowhite", values.Color{ .r = 255, .g = 222, .b = 173, .a = 255 } },
+    .{ "navy", values.Color{ .r = 0, .g = 0, .b = 128, .a = 255 } },
+    .{ "oldlace", values.Color{ .r = 253, .g = 245, .b = 230, .a = 255 } },
+    .{ "olive", values.Color{ .r = 128, .g = 128, .b = 0, .a = 255 } },
+    .{ "olivedrab", values.Color{ .r = 107, .g = 142, .b = 35, .a = 255 } },
+    .{ "orange", values.Color{ .r = 255, .g = 165, .b = 0, .a = 255 } },
+    .{ "orangered", values.Color{ .r = 255, .g = 69, .b = 0, .a = 255 } },
+    .{ "orchid", values.Color{ .r = 218, .g = 112, .b = 214, .a = 255 } },
+    .{ "palegoldenrod", values.Color{ .r = 238, .g = 232, .b = 170, .a = 255 } },
+    .{ "palegreen", values.Color{ .r = 152, .g = 251, .b = 152, .a = 255 } },
+    .{ "paleturquoise", values.Color{ .r = 175, .g = 238, .b = 238, .a = 255 } },
+    .{ "palevioletred", values.Color{ .r = 219, .g = 112, .b = 147, .a = 255 } },
+    .{ "papayawhip", values.Color{ .r = 255, .g = 239, .b = 213, .a = 255 } },
+    .{ "peachpuff", values.Color{ .r = 255, .g = 218, .b = 185, .a = 255 } },
+    .{ "peru", values.Color{ .r = 205, .g = 133, .b = 63, .a = 255 } },
+    .{ "pink", values.Color{ .r = 255, .g = 192, .b = 203, .a = 255 } },
+    .{ "plum", values.Color{ .r = 221, .g = 160, .b = 221, .a = 255 } },
+    .{ "powderblue", values.Color{ .r = 176, .g = 224, .b = 230, .a = 255 } },
+    .{ "purple", values.Color{ .r = 128, .g = 0, .b = 128, .a = 255 } },
+    .{ "rebeccapurple", values.Color{ .r = 102, .g = 51, .b = 153, .a = 255 } },
+    .{ "red", values.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } },
+    .{ "rosybrown", values.Color{ .r = 188, .g = 143, .b = 143, .a = 255 } },
+    .{ "royalblue", values.Color{ .r = 65, .g = 105, .b = 225, .a = 255 } },
+    .{ "saddlebrown", values.Color{ .r = 139, .g = 69, .b = 19, .a = 255 } },
+    .{ "salmon", values.Color{ .r = 250, .g = 128, .b = 114, .a = 255 } },
+    .{ "sandybrown", values.Color{ .r = 244, .g = 164, .b = 96, .a = 255 } },
+    .{ "seagreen", values.Color{ .r = 46, .g = 139, .b = 87, .a = 255 } },
+    .{ "seashell", values.Color{ .r = 255, .g = 245, .b = 238, .a = 255 } },
+    .{ "sienna", values.Color{ .r = 160, .g = 82, .b = 45, .a = 255 } },
+    .{ "silver", values.Color{ .r = 192, .g = 192, .b = 192, .a = 255 } },
+    .{ "skyblue", values.Color{ .r = 135, .g = 206, .b = 235, .a = 255 } },
+    .{ "slateblue", values.Color{ .r = 106, .g = 90, .b = 205, .a = 255 } },
+    .{ "slategray", values.Color{ .r = 112, .g = 128, .b = 144, .a = 255 } },
+    .{ "slategrey", values.Color{ .r = 112, .g = 128, .b = 144, .a = 255 } },
+    .{ "snow", values.Color{ .r = 255, .g = 250, .b = 250, .a = 255 } },
+    .{ "springgreen", values.Color{ .r = 0, .g = 255, .b = 127, .a = 255 } },
+    .{ "steelblue", values.Color{ .r = 70, .g = 130, .b = 180, .a = 255 } },
+    .{ "tan", values.Color{ .r = 210, .g = 180, .b = 140, .a = 255 } },
+    .{ "teal", values.Color{ .r = 0, .g = 128, .b = 128, .a = 255 } },
+    .{ "thistle", values.Color{ .r = 216, .g = 191, .b = 216, .a = 255 } },
+    .{ "tomato", values.Color{ .r = 255, .g = 99, .b = 71, .a = 255 } },
+    .{ "turquoise", values.Color{ .r = 64, .g = 224, .b = 208, .a = 255 } },
+    .{ "violet", values.Color{ .r = 238, .g = 130, .b = 238, .a = 255 } },
+    .{ "wheat", values.Color{ .r = 245, .g = 222, .b = 179, .a = 255 } },
+    .{ "white", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    .{ "whitesmoke", values.Color{ .r = 245, .g = 245, .b = 245, .a = 255 } },
+    .{ "yellow", values.Color{ .r = 255, .g = 255, .b = 0, .a = 255 } },
+    .{ "yellowgreen", values.Color{ .r = 154, .g = 205, .b = 50, .a = 255 } },
 });
 
 fn namedColor(name: []const u8) ?values.Color {
     // StaticStringMap is case-sensitive, so lowercase for lookup
-    var buf: [32]u8 = undefined;
+    var buf: [64]u8 = undefined;
     if (name.len > buf.len) return null;
     for (name, 0..) |c, i| {
         buf[i] = util.toLower(c);
@@ -595,12 +719,48 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         return decls;
     }
 
+    // First: try parsing the entire value as a single color (handles rgb(), hsl(), etc.)
+    if (parseColor(value) != null) {
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .background_color, .property_name = "background-color", .value_raw = value, .important = false };
+        return decls;
+    }
+
     // Try to extract color, image (url), and repeat from the background shorthand
     var color_val: []const u8 = "transparent";
     var image_val: ?[]const u8 = null;
     var repeat_val: ?[]const u8 = null;
-    var iter = std.mem.tokenizeAny(u8, value, " \t");
-    while (iter.next()) |tok| {
+
+    // Tokenize respecting parentheses so rgb(...), url(...) etc. stay intact
+    var tokens: [16][]const u8 = undefined;
+    var token_count: usize = 0;
+    {
+        var i: usize = 0;
+        while (i < value.len and token_count < tokens.len) {
+            // Skip whitespace
+            while (i < value.len and (value[i] == ' ' or value[i] == '\t')) i += 1;
+            if (i >= value.len) break;
+            const start = i;
+            var depth: usize = 0;
+            while (i < value.len) {
+                if (value[i] == '(') {
+                    depth += 1;
+                } else if (value[i] == ')') {
+                    if (depth > 0) depth -= 1;
+                    if (depth == 0) { i += 1; break; }
+                } else if ((value[i] == ' ' or value[i] == '\t') and depth == 0) {
+                    break;
+                }
+                i += 1;
+            }
+            if (i > start) {
+                tokens[token_count] = value[start..i];
+                token_count += 1;
+            }
+        }
+    }
+
+    for (tokens[0..token_count]) |tok| {
         // Extract url(...) as background-image
         if (startsWithIgnoreCase(tok, "url(")) {
             image_val = tok;
@@ -615,7 +775,7 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         }
         // Skip other background keywords (position, size, attachment)
         if (isBackgroundKeyword(tok)) continue;
-        // Try parsing as color
+        // Try parsing as color (now handles rgb(), hsl() etc. properly)
         if (parseColor(tok) != null) {
             color_val = tok;
             continue;

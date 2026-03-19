@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CSS Flexbox Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; }
+.box { width: 50px; height: 50px; display: flex; align-items: center; justify-content: center; color: white; font-size: 12px; }
+.r { background: #e74c3c; } .g { background: #2ecc71; } .b { background: #3498db; } .y { background: #f1c40f; color: black; } .p { background: #9b59b6; }
+
+/* Test 1: Row direction */
+#t1 { display: flex; gap: 5px; }
+
+/* Test 2: Column direction */
+#t2 { display: flex; flex-direction: column; gap: 5px; width: 200px; }
+
+/* Test 3: justify-content variations */
+.jc { display: flex; height: 60px; background: #ecf0f1; margin-bottom: 5px; }
+#t3a { justify-content: flex-start; }
+#t3b { justify-content: flex-end; }
+#t3c { justify-content: center; }
+#t3d { justify-content: space-between; }
+#t3e { justify-content: space-around; }
+#t3f { justify-content: space-evenly; }
+
+/* Test 4: align-items */
+.ai { display: flex; height: 80px; background: #ecf0f1; margin-bottom: 5px; gap: 5px; }
+#t4a { align-items: flex-start; }
+#t4b { align-items: flex-end; }
+#t4c { align-items: center; }
+#t4d { align-items: stretch; }
+#t4d .box { height: auto; }
+
+/* Test 5: flex-wrap */
+#t5 { display: flex; flex-wrap: wrap; width: 180px; gap: 5px; background: #ecf0f1; }
+
+/* Test 6: flex-grow */
+#t6 { display: flex; gap: 5px; width: 300px; }
+#t6a { flex-grow: 1; }
+#t6b { flex-grow: 2; }
+#t6c { flex-grow: 1; }
+
+/* Test 7: flex-shrink */
+#t7 { display: flex; width: 120px; background: #ecf0f1; }
+#t7 .box { width: 80px; flex-shrink: 1; }
+
+/* Test 8: align-self */
+#t8 { display: flex; height: 100px; background: #ecf0f1; gap: 5px; align-items: flex-start; }
+#t8 .as-end { align-self: flex-end; }
+#t8 .as-center { align-self: center; }
+#t8 .as-stretch { align-self: stretch; height: auto; }
+
+/* Test 9: order */
+#t9 { display: flex; gap: 5px; }
+#t9 .o3 { order: 3; } #t9 .o1 { order: 1; } #t9 .o2 { order: 2; }
+
+/* Test 10: Nested flex */
+#t10 { display: flex; gap: 10px; }
+#t10 > div { display: flex; flex-direction: column; gap: 5px; background: #ecf0f1; padding: 5px; }
+</style>
+</head>
+<body>
+<h2>1. flex-direction: row (default)</h2>
+<div class="test"><div id="t1"><div class="box r">1</div><div class="box g">2</div><div class="box b">3</div></div></div>
+
+<h2>2. flex-direction: column</h2>
+<div class="test"><div id="t2"><div class="box r">1</div><div class="box g">2</div><div class="box b">3</div></div></div>
+
+<h2>3. justify-content variations</h2>
+<div class="test">
+<div class="jc" id="t3a"><div class="box r">S</div><div class="box g">S</div><div class="box b">S</div></div>
+<div class="jc" id="t3b"><div class="box r">E</div><div class="box g">E</div><div class="box b">E</div></div>
+<div class="jc" id="t3c"><div class="box r">C</div><div class="box g">C</div><div class="box b">C</div></div>
+<div class="jc" id="t3d"><div class="box r">B</div><div class="box g">B</div><div class="box b">B</div></div>
+<div class="jc" id="t3e"><div class="box r">A</div><div class="box g">A</div><div class="box b">A</div></div>
+<div class="jc" id="t3f"><div class="box r">E</div><div class="box g">E</div><div class="box b">E</div></div>
+</div>
+
+<h2>4. align-items variations</h2>
+<div class="test">
+<div class="ai" id="t4a"><div class="box r">S</div><div class="box g" style="height:30px">S</div><div class="box b">S</div></div>
+<div class="ai" id="t4b"><div class="box r">E</div><div class="box g" style="height:30px">E</div><div class="box b">E</div></div>
+<div class="ai" id="t4c"><div class="box r">C</div><div class="box g" style="height:30px">C</div><div class="box b">C</div></div>
+<div class="ai" id="t4d"><div class="box r">St</div><div class="box g">St</div><div class="box b">St</div></div>
+</div>
+
+<h2>5. flex-wrap (180px container)</h2>
+<div class="test"><div id="t5"><div class="box r">1</div><div class="box g">2</div><div class="box b">3</div><div class="box y">4</div><div class="box p">5</div></div></div>
+
+<h2>6. flex-grow (1:2:1 ratio, 300px)</h2>
+<div class="test"><div id="t6"><div class="box r" id="t6a">1</div><div class="box g" id="t6b">2</div><div class="box b" id="t6c">1</div></div></div>
+
+<h2>7. flex-shrink (3 x 80px in 120px)</h2>
+<div class="test"><div id="t7"><div class="box r">1</div><div class="box g">2</div><div class="box b">3</div></div></div>
+
+<h2>8. align-self overrides</h2>
+<div class="test"><div id="t8"><div class="box r">def</div><div class="box g as-end">end</div><div class="box b as-center">ctr</div><div class="box y as-stretch">str</div></div></div>
+
+<h2>9. order (visual: 1,2,3 but DOM: 3,1,2)</h2>
+<div class="test"><div id="t9"><div class="box r o3">3→3</div><div class="box g o1">1→1</div><div class="box b o2">2→2</div></div></div>
+
+<h2>10. Nested flex</h2>
+<div class="test"><div id="t10"><div><div class="box r">A1</div><div class="box g">A2</div></div><div><div class="box b">B1</div><div class="box y">B2</div><div class="box p">B3</div></div></div></div>
+</body>
+</html>

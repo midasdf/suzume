@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Events & Timers Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; } .fail { color: #e74c3c; }
+.box { padding: 8px; margin: 3px; display: inline-block; }
+</style>
+</head>
+<body>
+<h2>1. setTimeout (fires after 100ms)</h2>
+<div class="test" id="t1">Waiting...</div>
+
+<h2>2. setInterval + clearInterval (count to 3)</h2>
+<div class="test" id="t2">Count: 0</div>
+
+<h2>3. addEventListener (auto-triggered click)</h2>
+<div class="test" id="t3"><button id="t3-btn">Click me</button> <span id="t3-result"></span></div>
+
+<h2>4. Event object properties</h2>
+<div class="test" id="t4"><div id="t4-target" style="background:#3498db;color:white;padding:10px;display:inline-block">Event target</div> <span id="t4-result"></span></div>
+
+<h2>5. Event bubbling</h2>
+<div class="test" id="t5">
+<div id="t5-outer" style="background:#ecf0f1;padding:10px">
+  Outer
+  <div id="t5-inner" style="background:#3498db;color:white;padding:10px">Inner (click source)</div>
+</div>
+<div id="t5-result"></div>
+</div>
+
+<h2>6. Multiple listeners on same element</h2>
+<div class="test" id="t6"><div id="t6-target" style="padding:10px;background:#f1c40f">Multi-listener</div><div id="t6-result"></div></div>
+
+<h2>7. requestAnimationFrame</h2>
+<div class="test" id="t7">Waiting for rAF...</div>
+
+<h2>8. performance.now()</h2>
+<div class="test" id="t8">Measuring...</div>
+
+<h2>9. DOMContentLoaded equivalent (script at end)</h2>
+<div class="test" id="t9">Checking DOM ready...</div>
+
+<h2>10. Error handling (try/catch in event)</h2>
+<div class="test" id="t10">Testing...</div>
+
+<script>
+// Test 1: setTimeout
+setTimeout(function() {
+  document.getElementById('t1').textContent = 'setTimeout fired!';
+  document.getElementById('t1').className = 'test pass';
+}, 100);
+
+// Test 2: setInterval + clearInterval
+(function() {
+  var count = 0;
+  var el = document.getElementById('t2');
+  var id = setInterval(function() {
+    count++;
+    el.textContent = 'Count: ' + count;
+    if (count >= 3) {
+      clearInterval(id);
+      el.textContent += ' (stopped)';
+      el.className = 'test pass';
+    }
+  }, 100);
+})();
+
+// Test 3: addEventListener + programmatic click
+(function() {
+  var btn = document.getElementById('t3-btn');
+  var result = document.getElementById('t3-result');
+  btn.addEventListener('click', function() {
+    result.textContent = 'Clicked!';
+    result.className = 'pass';
+  });
+  // Auto-trigger after DOM setup
+  setTimeout(function() { btn.click(); }, 50);
+})();
+
+// Test 4: Event object
+(function() {
+  var target = document.getElementById('t4-target');
+  var result = document.getElementById('t4-result');
+  target.addEventListener('click', function(e) {
+    var info = 'type=' + e.type + ' target.id=' + e.target.id;
+    result.textContent = info;
+    result.className = (e.type === 'click' && e.target.id === 't4-target') ? 'pass' : 'fail';
+  });
+  setTimeout(function() { target.click(); }, 60);
+})();
+
+// Test 5: Event bubbling
+(function() {
+  var order = [];
+  var result = document.getElementById('t5-result');
+  document.getElementById('t5-inner').addEventListener('click', function() { order.push('inner'); });
+  document.getElementById('t5-outer').addEventListener('click', function() { order.push('outer'); });
+  setTimeout(function() {
+    document.getElementById('t5-inner').click();
+    result.textContent = 'Bubble order: ' + order.join(' → ');
+    result.className = (order[0] === 'inner' && order[1] === 'outer') ? 'pass' : 'fail';
+  }, 70);
+})();
+
+// Test 6: Multiple listeners
+(function() {
+  var results = [];
+  var el = document.getElementById('t6-target');
+  var result = document.getElementById('t6-result');
+  el.addEventListener('click', function() { results.push('A'); });
+  el.addEventListener('click', function() { results.push('B'); });
+  el.addEventListener('click', function() { results.push('C'); });
+  setTimeout(function() {
+    el.click();
+    result.textContent = 'Listeners fired: ' + results.join(', ');
+    result.className = (results.length === 3) ? 'pass' : 'fail';
+  }, 80);
+})();
+
+// Test 7: requestAnimationFrame
+if (typeof requestAnimationFrame === 'function') {
+  requestAnimationFrame(function(timestamp) {
+    var el = document.getElementById('t7');
+    el.textContent = 'rAF fired! timestamp=' + Math.round(timestamp);
+    el.className = 'test pass';
+  });
+} else {
+  document.getElementById('t7').textContent = 'requestAnimationFrame not available';
+  document.getElementById('t7').className = 'test fail';
+}
+
+// Test 8: performance.now()
+(function() {
+  var el = document.getElementById('t8');
+  if (typeof performance !== 'undefined' && typeof performance.now === 'function') {
+    var t0 = performance.now();
+    // Busy loop
+    for (var i = 0; i < 100000; i++) {}
+    var t1 = performance.now();
+    el.textContent = 'performance.now() works: ' + (t1 - t0).toFixed(3) + 'ms elapsed';
+    el.className = 'test pass';
+  } else {
+    el.textContent = 'performance.now() not available';
+    el.className = 'test fail';
+  }
+})();
+
+// Test 9: DOM ready check
+(function() {
+  var el = document.getElementById('t9');
+  // If this script runs, DOM is ready (script is at end of body)
+  var allH2 = document.querySelectorAll('h2');
+  el.textContent = 'DOM ready: found ' + allH2.length + ' h2 elements';
+  el.className = (allH2.length === 10) ? 'test pass' : 'test fail';
+})();
+
+// Test 10: Error handling
+(function() {
+  var el = document.getElementById('t10');
+  try {
+    var x = undefined;
+    x.property; // Should throw
+    el.textContent = 'Error NOT caught (fail)';
+    el.className = 'test fail';
+  } catch(e) {
+    el.textContent = 'Error caught: ' + e.message;
+    el.className = 'test pass';
+  }
+})();
+</script>
+</body>
+</html>

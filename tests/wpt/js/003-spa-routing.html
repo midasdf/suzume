@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>SPA Routing & Dynamic Content Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; } .fail { color: #e74c3c; }
+.nav { display: flex; gap: 5px; margin-bottom: 10px; }
+.nav a { padding: 5px 10px; background: #3498db; color: white; text-decoration: none; cursor: pointer; }
+.nav a.active { background: #2c3e50; }
+.page { padding: 10px; min-height: 50px; border: 1px solid #bdc3c7; }
+.hidden { display: none; }
+.item { padding: 5px; margin: 2px 0; background: white; border-left: 3px solid #3498db; padding-left: 8px; }
+</style>
+</head>
+<body>
+<h2>1. SPA-style page switching (no reload)</h2>
+<div class="test" id="t1">
+<div class="nav" id="t1-nav">
+  <a id="t1-home" class="active" onclick="switchPage('home')">Home</a>
+  <a id="t1-about" onclick="switchPage('about')">About</a>
+  <a id="t1-contact" onclick="switchPage('contact')">Contact</a>
+</div>
+<div id="page-home" class="page">Home page content</div>
+<div id="page-about" class="page hidden">About page content</div>
+<div id="page-contact" class="page hidden">Contact page content</div>
+</div>
+
+<h2>2. Dynamic list rendering</h2>
+<div class="test" id="t2">
+<div id="t2-list"></div>
+</div>
+
+<h2>3. Template-based rendering</h2>
+<div class="test" id="t3"></div>
+
+<h2>4. Conditional rendering</h2>
+<div class="test" id="t4">
+<div id="t4-login" style="display:none;background:#2ecc71;color:white;padding:10px">Welcome, User!</div>
+<div id="t4-guest" style="background:#e74c3c;color:white;padding:10px">Please log in</div>
+<div id="t4-result"></div>
+</div>
+
+<h2>5. Data binding (input → display)</h2>
+<div class="test" id="t5">
+<div id="t5-display" style="padding:10px;background:white;border:1px solid #bdc3c7;min-height:20px">Type something...</div>
+</div>
+
+<h2>6. Component-like pattern (render function)</h2>
+<div class="test" id="t6"></div>
+
+<h2>7. State management pattern</h2>
+<div class="test" id="t7">
+<div id="t7-count" style="font-size:24px;text-align:center;padding:10px">0</div>
+<div id="t7-result"></div>
+</div>
+
+<h2>8. Dynamic style changes</h2>
+<div class="test" id="t8">
+<div id="t8-box" style="width:100px;height:50px;background:#3498db;transition:none;padding:5px;color:white">Default</div>
+</div>
+
+<h2>9. DOM diffing pattern (update without full replace)</h2>
+<div class="test" id="t9">
+<ul id="t9-list">
+<li>Item A</li><li>Item B</li><li>Item C</li>
+</ul>
+<div id="t9-result"></div>
+</div>
+
+<h2>10. Async content loading simulation</h2>
+<div class="test" id="t10">
+<div id="t10-loading" style="color:#7f8c8d">Loading...</div>
+<div id="t10-content" style="display:none"></div>
+</div>
+
+<script>
+// Test 1: SPA page switching
+function switchPage(name) {
+  var pages = ['home', 'about', 'contact'];
+  for (var i = 0; i < pages.length; i++) {
+    document.getElementById('page-' + pages[i]).className = (pages[i] === name) ? 'page' : 'page hidden';
+    document.getElementById('t1-' + pages[i]).className = (pages[i] === name) ? 'active' : '';
+  }
+}
+// Auto-switch to test
+setTimeout(function() { switchPage('about'); }, 100);
+setTimeout(function() { switchPage('contact'); }, 200);
+setTimeout(function() { switchPage('home'); }, 300);
+
+// Test 2: Dynamic list
+(function() {
+  var items = ['Apple', 'Banana', 'Cherry', 'Date', 'Elderberry'];
+  var list = document.getElementById('t2-list');
+  for (var i = 0; i < items.length; i++) {
+    var div = document.createElement('div');
+    div.className = 'item';
+    div.textContent = items[i];
+    list.appendChild(div);
+  }
+})();
+
+// Test 3: Template rendering
+(function() {
+  var data = { title: 'Hello World', body: 'This content was rendered from a JS object.', tags: ['javascript', 'dom', 'spa'] };
+  var html = '<h3 style="margin:0 0 5px;font-size:16px">' + data.title + '</h3>' +
+    '<p>' + data.body + '</p>' +
+    '<div>' + data.tags.map(function(t) { return '<span style="background:#3498db;color:white;padding:2px 8px;margin:2px;display:inline-block;font-size:12px">' + t + '</span>'; }).join('') + '</div>';
+  document.getElementById('t3').innerHTML = html;
+})();
+
+// Test 4: Conditional rendering
+(function() {
+  var loggedIn = false;
+  var result = document.getElementById('t4-result');
+  // Simulate login
+  setTimeout(function() {
+    loggedIn = true;
+    document.getElementById('t4-login').style.display = 'block';
+    document.getElementById('t4-guest').style.display = 'none';
+    result.textContent = 'Login state toggled';
+    result.className = 'pass';
+  }, 150);
+})();
+
+// Test 5: Simulated data binding
+(function() {
+  var display = document.getElementById('t5-display');
+  var text = 'Simulated input text';
+  display.textContent = text;
+  display.style.color = '#2ecc71';
+})();
+
+// Test 6: Component pattern
+function Card(props) {
+  var div = document.createElement('div');
+  div.style.cssText = 'border:1px solid #bdc3c7;padding:10px;margin:5px;display:inline-block;min-width:100px';
+  var title = document.createElement('strong');
+  title.textContent = props.title;
+  var body = document.createElement('p');
+  body.textContent = props.body;
+  body.style.margin = '5px 0 0';
+  body.style.fontSize = '12px';
+  body.style.color = '#7f8c8d';
+  div.appendChild(title);
+  div.appendChild(body);
+  return div;
+}
+(function() {
+  var container = document.getElementById('t6');
+  container.appendChild(Card({ title: 'Card A', body: 'First component' }));
+  container.appendChild(Card({ title: 'Card B', body: 'Second component' }));
+  container.appendChild(Card({ title: 'Card C', body: 'Third component' }));
+})();
+
+// Test 7: State management
+(function() {
+  var state = { count: 0 };
+  var el = document.getElementById('t7-count');
+  var result = document.getElementById('t7-result');
+  function render() { el.textContent = state.count; }
+  function increment() { state.count++; render(); }
+  function decrement() { state.count--; render(); }
+  increment(); increment(); increment(); decrement();
+  result.textContent = 'Final count: ' + state.count + ' (expected 2)';
+  result.className = state.count === 2 ? 'pass' : 'fail';
+})();
+
+// Test 8: Dynamic style
+(function() {
+  var box = document.getElementById('t8-box');
+  setTimeout(function() {
+    box.style.backgroundColor = '#e74c3c';
+    box.style.width = '200px';
+    box.style.borderRadius = '10px';
+    box.textContent = 'Styled!';
+  }, 120);
+})();
+
+// Test 9: DOM diffing
+(function() {
+  var list = document.getElementById('t9-list');
+  var result = document.getElementById('t9-result');
+  var items = list.querySelectorAll('li');
+  // Update item B to B-updated without touching A or C
+  if (items.length >= 2) {
+    items[1].textContent = 'Item B (updated)';
+    items[1].style.color = '#e74c3c';
+  }
+  // Add item D
+  var newItem = document.createElement('li');
+  newItem.textContent = 'Item D (new)';
+  newItem.style.color = '#2ecc71';
+  list.appendChild(newItem);
+  // Remove item A
+  if (items.length >= 1) {
+    list.removeChild(items[0]);
+  }
+  var finalItems = list.querySelectorAll('li');
+  result.textContent = 'Items after diff: ' + finalItems.length + ' (expected 3: B-updated, C, D)';
+  result.className = finalItems.length === 3 ? 'pass' : 'fail';
+})();
+
+// Test 10: Async loading simulation
+(function() {
+  var loading = document.getElementById('t10-loading');
+  var content = document.getElementById('t10-content');
+  setTimeout(function() {
+    loading.style.display = 'none';
+    content.style.display = 'block';
+    content.innerHTML = '<div class="item">Loaded item 1</div><div class="item">Loaded item 2</div><div class="item">Loaded item 3</div>';
+  }, 200);
+})();
+</script>
+</body>
+</html>

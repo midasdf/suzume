@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CSS Colors & Backgrounds Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 15px; }
+.swatch { width: 60px; height: 40px; display: inline-block; margin: 2px; border: 1px solid #ccc; }
+
+/* Test 1: Hex colors */
+#t1 .c3 { background: #f00; }
+#t1 .c6 { background: #ff6600; }
+#t1 .c8 { background: #3498db80; }
+
+/* Test 2: RGB/RGBA */
+#t2 .rgb { background: rgb(46, 204, 113); }
+#t2 .rgba { background: rgba(231, 76, 60, 0.5); }
+#t2 .rgb-pct { background: rgb(60%, 20%, 80%); }
+
+/* Test 3: HSL/HSLA */
+#t3 .hsl { background: hsl(210, 100%, 50%); }
+#t3 .hsla { background: hsla(120, 60%, 50%, 0.7); }
+#t3 .hsl2 { background: hsl(0, 80%, 60%); }
+
+/* Test 4: Named colors */
+#t4 .c1 { background: coral; }
+#t4 .c2 { background: cornflowerblue; }
+#t4 .c3 { background: darkslategray; }
+#t4 .c4 { background: transparent; }
+
+/* Test 5: currentColor */
+#t5 { color: #e74c3c; }
+#t5 .border { border: 3px solid currentColor; padding: 5px; display: inline-block; }
+
+/* Test 6: Background color + text color */
+#t6 .dark { background: #2c3e50; color: #ecf0f1; padding: 10px; }
+#t6 .light { background: #ecf0f1; color: #2c3e50; padding: 10px; }
+
+/* Test 7: Inheritance */
+#t7 { color: #e74c3c; }
+#t7 .child { /* should inherit red */ padding: 5px; background: #ecf0f1; }
+#t7 .override { color: #3498db; }
+
+/* Test 8: border-color */
+#t8 .mixed { width: 100px; height: 60px;
+  border-top: 5px solid #e74c3c;
+  border-right: 5px solid #2ecc71;
+  border-bottom: 5px solid #3498db;
+  border-left: 5px solid #f1c40f;
+}
+
+/* Test 9: outline */
+#t9 .outline { outline: 3px solid #e74c3c; outline-offset: 5px; width: 80px; height: 40px; background: #ecf0f1; margin: 15px; }
+
+/* Test 10: Color functions in CSS vars */
+#t10 { --brand: #9b59b6; --brand-light: #c39bd3; }
+#t10 .var-color { background: var(--brand); color: white; padding: 10px; display: inline-block; }
+#t10 .var-light { background: var(--brand-light); padding: 10px; display: inline-block; }
+</style>
+</head>
+<body>
+<h2>1. Hex colors (#f00, #ff6600, #3498db80)</h2>
+<div class="test" id="t1"><div class="swatch c3"></div><div class="swatch c6"></div><div class="swatch c8"></div></div>
+
+<h2>2. RGB/RGBA</h2>
+<div class="test" id="t2"><div class="swatch rgb"></div><div class="swatch rgba"></div><div class="swatch rgb-pct"></div></div>
+
+<h2>3. HSL/HSLA</h2>
+<div class="test" id="t3"><div class="swatch hsl"></div><div class="swatch hsla"></div><div class="swatch hsl2"></div></div>
+
+<h2>4. Named colors (coral, cornflowerblue, darkslategray, transparent)</h2>
+<div class="test" id="t4"><div class="swatch c1"></div><div class="swatch c2"></div><div class="swatch c3"></div><div class="swatch c4"></div></div>
+
+<h2>5. currentColor (red text, border uses currentColor)</h2>
+<div class="test" id="t5"><div class="border">currentColor border</div></div>
+
+<h2>6. Background + text color contrast</h2>
+<div class="test" id="t6"><div class="dark">Light on dark</div><div class="light">Dark on light</div></div>
+
+<h2>7. Color inheritance (red parent, child inherits, override to blue)</h2>
+<div class="test" id="t7"><div class="child">Inherited red <span class="override">Override blue</span> back to red</div></div>
+
+<h2>8. Mixed border colors (T:red R:green B:blue L:yellow)</h2>
+<div class="test" id="t8"><div class="mixed"></div></div>
+
+<h2>9. Outline with offset</h2>
+<div class="test" id="t9"><div class="outline"></div></div>
+
+<h2>10. CSS custom properties for colors</h2>
+<div class="test" id="t10"><div class="var-color">Brand</div> <div class="var-light">Light</div></div>
+</body>
+</html>
