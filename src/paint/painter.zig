@@ -268,10 +268,9 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
     const clamped_opacity = if (box.style.opacity < 0.01) @as(f32, 1.0) else box.style.opacity;
     const effective_opacity = accumulated_opacity * clamped_opacity;
 
-    // Treat all elements as visible — sites like anthropic.com use
-    // visibility:hidden with JS animations to reveal content. Without
-    // full animation support, forcing visibility ensures content is readable.
-    const is_visible = true;
+    // Respect visibility:hidden — skip painting this element's own content
+    // but still recurse into children (which may have visibility:visible).
+    const is_visible = box.style.visibility == .visible;
 
     const clip_top = clip.top;
     const clip_bottom = clip.bottom;
