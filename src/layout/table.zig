@@ -5,6 +5,9 @@ const block = @import("block.zig");
 const FontCache = @import("../paint/painter.zig").FontCache;
 const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 
+const MAX_COLS = 64;
+const MAX_ROWS = 512;
+
 /// Lay out a table element and its children.
 pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
     const content_x = box.padding.left + box.border.left;
@@ -21,8 +24,8 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
     };
     box.content.width = if (explicit_w) |w| @min(w, @max(containing_width - h_space, 0)) else @max(containing_width - h_space, 0);
 
-    // Collect rows
-    var rows_buf: [128]*Box = undefined;
+    // Collect rows (flatten through row-groups)
+    var rows_buf: [MAX_ROWS]*Box = undefined;
     var num_rows: usize = 0;
     collectRows(box, &rows_buf, &num_rows);
 
@@ -31,79 +34,114 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         return;
     }
 
-    // Count max columns
+    // Count columns (accounting for colspan)
     var num_cols: usize = 0;
     for (rows_buf[0..num_rows]) |row| {
-        const cell_count = countCells(row);
-        if (cell_count > num_cols) num_cols = cell_count;
+        var col_span_total: usize = 0;
+        for (row.children.items) |cell| {
+            if (!isTableCell(cell)) continue;
+            col_span_total += getColspan(cell);
+        }
+        if (col_span_total > num_cols) num_cols = col_span_total;
     }
-
     if (num_cols == 0) {
         box.content.height = 0;
         return;
     }
+    if (num_cols > MAX_COLS) num_cols = MAX_COLS;
 
-    // ── Calculate column widths respecting td width attributes/CSS ──
+    // Determine column widths
     const table_width = box.content.width;
-    var col_widths: [64]f32 = undefined;
-    const effective_cols = @min(num_cols, 64);
+    var col_widths: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
 
-    // Initialize all to 0 (unspecified)
-    for (col_widths[0..effective_cols]) |*w| w.* = 0;
-
-    // First pass: collect explicit widths from first row's cells
-    if (num_rows > 0) {
+    // Pass 1: collect explicit widths from cells (non-colspan cells only)
+    var col_has_explicit: [MAX_COLS]bool = [_]bool{false} ** MAX_COLS;
+    for (rows_buf[0..num_rows]) |row| {
         var col_idx: usize = 0;
-        for (rows_buf[0].children.items) |cell| {
+        for (row.children.items) |cell| {
             if (!isTableCell(cell)) continue;
-            if (col_idx >= effective_cols) break;
+            const cs = getColspan(cell);
+            if (col_idx >= num_cols) break;
 
-            // Check CSS width
-            switch (cell.style.width) {
-                .px => |w| {
-                    col_widths[col_idx] = w;
-                },
-                .percent => |pct| {
-                    // width:100% in a table cell means "take remaining space" (auto-like)
-                    // Only apply percentages < 100 as fixed proportions
-                    if (pct < 100) {
-                        col_widths[col_idx] = pct * table_width / 100.0;
+            if (cs == 1) {
+                const cell_w = getCellExplicitWidth(cell, table_width);
+                if (cell_w) |w| {
+                    if (w > col_widths[col_idx]) {
+                        col_widths[col_idx] = w;
+                        col_has_explicit[col_idx] = true;
                     }
-                    // else: leave as 0 (auto) — will get remaining space
-                },
-                else => {},
+                }
             }
-            col_idx += 1;
+            col_idx += cs;
         }
     }
 
-    // Second pass: distribute remaining width to unspecified columns
-    var specified_total: f32 = 0;
-    var unspecified_count: usize = 0;
-    for (col_widths[0..effective_cols]) |w| {
-        if (w > 0) {
-            specified_total += w;
+    // Pass 2: estimate content width for flex columns using text length heuristic
+    var col_min_content: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
+    const sample_rows = @min(num_rows, 5);
+    for (rows_buf[0..sample_rows]) |row| {
+        var col_idx: usize = 0;
+        for (row.children.items) |cell| {
+            if (!isTableCell(cell)) continue;
+            const cs = getColspan(cell);
+            if (col_idx >= num_cols) break;
+
+            if (cs == 1 and !col_has_explicit[col_idx]) {
+                // Estimate content width from text length without pre-layout
+                const est_w = estimateCellContentWidth(cell, cell.style.font_size_px);
+                if (est_w > col_min_content[col_idx]) {
+                    col_min_content[col_idx] = est_w;
+                }
+            }
+            col_idx += cs;
+        }
+    }
+
+    // Pass 3: distribute remaining width to columns without explicit widths
+    var used_width: f32 = 0;
+    var flex_cols: usize = 0;
+    var flex_content_total: f32 = 0;
+    for (0..num_cols) |i| {
+        if (col_has_explicit[i]) {
+            used_width += col_widths[i];
         } else {
-            unspecified_count += 1;
+            flex_cols += 1;
+            flex_content_total += @max(col_min_content[i], 1);
         }
     }
 
-    const remaining = @max(table_width - specified_total, 0);
-    const auto_width = if (unspecified_count > 0)
-        remaining / @as(f32, @floatFromInt(unspecified_count))
-    else
-        0;
-
-    for (col_widths[0..effective_cols]) |*w| {
-        if (w.* == 0) w.* = auto_width;
+    const remaining = @max(table_width - used_width, 0);
+    if (flex_cols > 0) {
+        if (flex_content_total > 0) {
+            // Distribute proportionally to content width
+            for (0..num_cols) |i| {
+                if (!col_has_explicit[i]) {
+                    const ratio = @max(col_min_content[i], 1) / flex_content_total;
+                    col_widths[i] = remaining * ratio;
+                }
+            }
+        } else {
+            // Equal distribution fallback
+            const flex_width = remaining / @as(f32, @floatFromInt(flex_cols));
+            for (0..num_cols) |i| {
+                if (!col_has_explicit[i]) {
+                    col_widths[i] = flex_width;
+                }
+            }
+        }
+    } else if (used_width > 0 and used_width != table_width) {
+        // Scale explicit widths to fill table
+        const scale = table_width / used_width;
+        for (0..num_cols) |i| {
+            col_widths[i] *= scale;
+        }
     }
 
-    // If total exceeds table width, scale down proportionally
-    var total_col_width: f32 = 0;
-    for (col_widths[0..effective_cols]) |w| total_col_width += w;
-    if (total_col_width > table_width and total_col_width > 0) {
-        const scale = table_width / total_col_width;
-        for (col_widths[0..effective_cols]) |*w| w.* *= scale;
+    // Precompute column X positions
+    var col_x: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
+    col_x[0] = 0;
+    for (1..num_cols) |i| {
+        col_x[i] = col_x[i - 1] + col_widths[i - 1];
     }
 
     // Layout each row
@@ -115,26 +153,29 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 
         for (row.children.items) |cell| {
             if (!isTableCell(cell)) continue;
-            if (col_idx >= effective_cols) break;
+            if (col_idx >= num_cols) break;
 
-            // Layout cell with its column width
-            const cell_w = col_widths[col_idx];
-            block.layoutBlock(cell, cell_w, box.content.y + row_y, fonts);
+            const cs = @min(getColspan(cell), num_cols - col_idx);
 
-            // Position cell at correct column x
-            var col_x: f32 = 0;
-            for (0..col_idx) |c| {
-                col_x += if (c < effective_cols) col_widths[c] else 0;
+            // Calculate cell width (sum of spanned columns)
+            var cell_width: f32 = 0;
+            for (col_idx..col_idx + cs) |ci| {
+                cell_width += col_widths[ci];
             }
-            const target_x = box.content.x + col_x + cell.padding.left + cell.border.left + cell.margin.left;
-            const dx = target_x - cell.content.x;
+
+            // Layout cell as a block
+            block.layoutBlock(cell, cell_width, box.content.y + row_y, fonts);
+
+            // Position cell at the correct column
+            const cell_target_x = box.content.x + col_x[col_idx];
+            const dx = cell_target_x - cell.content.x + cell.padding.left + cell.border.left + cell.margin.left;
             block.adjustXPositions(cell, dx);
 
             const cell_height = cell.content.height + cell.padding.top + cell.padding.bottom +
                 cell.border.top + cell.border.bottom;
             if (cell_height > max_row_height) max_row_height = cell_height;
 
-            col_idx += 1;
+            col_idx += cs;
         }
 
         // Set row dimensions
@@ -146,7 +187,7 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         row_y += max_row_height;
     }
 
-    // Position table-row-group wrappers (tbody etc)
+    // Position table-row-group wrappers (tbody etc) if present
     for (box.children.items) |child| {
         if (isRowGroup(child)) {
             child.content.x = box.content.x;
@@ -159,9 +200,120 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
     box.content.height = row_y;
 }
 
+/// Estimate cell content width from text length without full layout.
+fn estimateCellContentWidth(cell: *Box, font_size: f32) f32 {
+    var max_text_len: usize = 0;
+    // Check direct text children
+    for (cell.children.items) |child| {
+        if (child.text) |text| {
+            if (text.len > max_text_len) max_text_len = text.len;
+        }
+        // Check one level deeper (e.g. <span>text</span>)
+        for (child.children.items) |gc| {
+            if (gc.text) |text| {
+                if (text.len > max_text_len) max_text_len = text.len;
+            }
+        }
+    }
+    // Approximate: each character is ~0.6 * font_size pixels wide
+    const char_width = font_size * 0.6;
+    return @as(f32, @floatFromInt(max_text_len)) * char_width;
+}
+
+/// Get colspan attribute from a cell's DOM node.
+fn getColspan(cell: *Box) usize {
+    if (cell.dom_node) |dn| {
+        if (dn.getAttribute("colspan")) |cs_str| {
+            return std.fmt.parseInt(usize, cs_str, 10) catch 1;
+        }
+    }
+    return 1;
+}
+
+/// Get explicit width from a cell's style or HTML width attribute.
+fn getCellExplicitWidth(cell: *Box, table_width: f32) ?f32 {
+    // CSS width takes priority
+    switch (cell.style.width) {
+        .px => |w| return w,
+        .percent => |pct| return pct * table_width / 100.0,
+        else => {},
+    }
+    // Check HTML width attribute
+    if (cell.dom_node) |dn| {
+        if (dn.getAttribute("width")) |w_str| {
+            // Check if it's a percentage
+            if (std.mem.endsWith(u8, w_str, "%")) {
+                const num_str = w_str[0 .. w_str.len - 1];
+                if (std.fmt.parseFloat(f32, num_str) catch null) |pct| {
+                    return pct * table_width / 100.0;
+                }
+            } else {
+                // Pixel value
+                if (std.fmt.parseFloat(f32, w_str) catch null) |px| {
+                    return px;
+                }
+            }
+        }
+        // Check inline style width (e.g., style="width:18px")
+        if (dn.getAttribute("style")) |style_str| {
+            if (parseInlineWidth(style_str, table_width)) |w| {
+                return w;
+            }
+        }
+    }
+    return null;
+}
+
+/// Parse width from an inline style string (e.g., "width:18px;padding-right:4px").
+fn parseInlineWidth(style: []const u8, table_width: f32) ?f32 {
+    var pos: usize = 0;
+    while (pos < style.len) {
+        // Skip whitespace
+        while (pos < style.len and (style[pos] == ' ' or style[pos] == '\t')) pos += 1;
+        if (pos >= style.len) break;
+
+        // Check for "width"
+        if (pos + 5 <= style.len and std.mem.eql(u8, style[pos .. pos + 5], "width")) {
+            var p = pos + 5;
+            // Skip whitespace and colon
+            while (p < style.len and (style[p] == ' ' or style[p] == '\t')) p += 1;
+            if (p < style.len and style[p] == ':') {
+                p += 1;
+                while (p < style.len and (style[p] == ' ' or style[p] == '\t')) p += 1;
+                // Parse the value
+                const val_start = p;
+                while (p < style.len and (style[p] == '.' or (style[p] >= '0' and style[p] <= '9'))) p += 1;
+                if (p > val_start) {
+                    const val_str = style[val_start..p];
+                    if (std.fmt.parseFloat(f32, val_str) catch null) |val| {
+                        // Check unit
+                        if (p + 1 < style.len and style[p] == 'p' and style[p + 1] == 'x') {
+                            return val;
+                        } else if (p < style.len and style[p] == '%') {
+                            return val * table_width / 100.0;
+                        } else {
+                            // No unit, treat as px
+                            return val;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Skip to next property
+        while (pos < style.len and style[pos] != ';') pos += 1;
+        if (pos < style.len) pos += 1; // skip ';'
+    }
+    return null;
+}
+
 /// Collect all table-row boxes, flattening through row-groups.
+/// Stops at nested tables (display: table) to avoid collecting their rows.
 fn collectRows(parent: *Box, buf: []*Box, count: *usize) void {
     for (parent.children.items) |child| {
+        // Skip nested tables — their rows belong to them, not to us
+        if (child.style.display == .table) continue;
+
         if (isTableRow(child)) {
             if (count.* < buf.len) {
                 buf[count.*] = child;
@@ -169,16 +321,29 @@ fn collectRows(parent: *Box, buf: []*Box, count: *usize) void {
             }
         } else if (isRowGroup(child)) {
             collectRows(child, buf, count);
+        } else if (child.style.display == .block) {
+            // A block child inside a table row-group might wrap table structure
+            // (e.g. lexbor creates block wrappers around nested tables)
+            // Only recurse if this block contains table-rows directly
+            var has_table_rows = false;
+            for (child.children.items) |grandchild| {
+                if (isTableRow(grandchild)) {
+                    has_table_rows = true;
+                    break;
+                }
+            }
+            if (has_table_rows) {
+                // Check if this block is actually a nested table (has table display in DOM)
+                if (child.dom_node) |dn| {
+                    const tag = dn.tagName() orelse "";
+                    if (std.mem.eql(u8, tag, "table") or std.mem.eql(u8, tag, "TABLE")) {
+                        continue; // Skip — it's a nested table
+                    }
+                }
+                collectRows(child, buf, count);
+            }
         }
     }
-}
-
-fn countCells(row: *Box) usize {
-    var count: usize = 0;
-    for (row.children.items) |child| {
-        if (isTableCell(child)) count += 1;
-    }
-    return count;
 }
 
 fn isTableRow(b: *Box) bool {

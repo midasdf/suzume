@@ -272,9 +272,13 @@ pub fn resolveUrl(allocator: std.mem.Allocator, base: []const u8, relative: []co
         }
     }
 
-    const result = try allocator.allocSentinel(u8, dir.len + rel.len, 0);
+    // Check if dir needs a trailing / (origin-only URL like "https://example.com")
+    const needs_slash = dir.len > 0 and dir[dir.len - 1] != '/';
+    const slash_len: usize = if (needs_slash) 1 else 0;
+    const result = try allocator.allocSentinel(u8, dir.len + slash_len + rel.len, 0);
     @memcpy(result[0..dir.len], dir);
-    @memcpy(result[dir.len..][0..rel.len], rel);
+    if (needs_slash) result[dir.len] = '/';
+    @memcpy(result[dir.len + slash_len ..][0..rel.len], rel);
     return result;
 }
 
@@ -303,6 +307,10 @@ fn extractBaseDir(url: []const u8) []const u8 {
             return url[0 .. idx + 1];
         }
     }
-    // No path component, add trailing /
+    // No path component — origin-only URL like "https://example.com"
+    // The last / is inside the scheme "://", so we need to treat the whole URL as the base
+    // and append "/" for proper relative resolution
+    // We can't allocate here, so return the full URL — resolveUrl handles this case
+    // by checking if scheme_end == url.len (no path after host)
     return url;
 }

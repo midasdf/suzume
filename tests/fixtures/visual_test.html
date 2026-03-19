@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>suzume Visual Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; font-size: 16px; color: #222; background: #fff; padding: 20px; }
+
+/* Headings */
+h1 { font-size: 32px; margin-bottom: 10px; color: #333; }
+h2 { font-size: 24px; margin: 16px 0 8px; color: #555; }
+h3 { font-size: 18px; margin: 12px 0 6px; color: #666; }
+
+/* Paragraphs and inline */
+p { margin: 8px 0; line-height: 1.5; }
+strong { font-weight: bold; }
+em { font-style: italic; }
+a { color: #0066cc; text-decoration: underline; }
+
+/* Box Model Test */
+.box-model {
+  width: 300px;
+  padding: 20px;
+  margin: 10px 0;
+  border: 2px solid #333;
+  background-color: #f0f0f0;
+}
+
+/* Colors and Backgrounds */
+.color-test {
+  display: flex;
+  gap: 10px;
+  margin: 10px 0;
+}
+.color-box {
+  width: 60px;
+  height: 60px;
+  border: 1px solid #ccc;
+}
+
+/* Flexbox */
+.flex-row {
+  display: flex;
+  gap: 10px;
+  margin: 10px 0;
+}
+.flex-item {
+  flex: 1;
+  padding: 15px;
+  background: #e8e8e8;
+  border: 1px solid #bbb;
+  text-align: center;
+}
+
+/* Border Radius */
+.rounded {
+  width: 100px;
+  height: 100px;
+  background: #4a90d9;
+  border-radius: 15px;
+  display: inline-block;
+  margin: 5px;
+}
+.circle {
+  width: 100px;
+  height: 100px;
+  background: #e74c3c;
+  border-radius: 50%;
+  display: inline-block;
+  margin: 5px;
+}
+
+/* Nested blocks */
+.card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 16px;
+  margin: 10px 0;
+  background: #fafafa;
+}
+.card-title {
+  font-size: 20px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+.card-body {
+  color: #444;
+}
+
+/* List */
+ul, ol { margin: 8px 0; padding-left: 30px; }
+li { margin: 4px 0; }
+
+/* Table */
+table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: left; }
+th { background: #f5f5f5; font-weight: bold; }
+
+/* Code */
+code { background: #f4f4f4; padding: 2px 6px; border-radius: 3px; font-family: monospace; font-size: 14px; }
+pre { background: #2d2d2d; color: #f8f8f2; padding: 16px; border-radius: 6px; margin: 10px 0; overflow-x: auto; font-family: monospace; font-size: 14px; }
+
+/* Position */
+.relative-box {
+  position: relative;
+  width: 200px;
+  height: 100px;
+  background: #ddd;
+  margin: 10px 0;
+}
+.absolute-child {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  width: 80px;
+  height: 40px;
+  background: #ff6b6b;
+  color: white;
+  text-align: center;
+  line-height: 40px;
+  font-size: 12px;
+}
+
+/* Opacity */
+.opacity-test {
+  display: flex;
+  gap: 10px;
+  margin: 10px 0;
+}
+.opacity-box {
+  width: 60px;
+  height: 60px;
+  background: #2ecc71;
+}
+
+/* Text styles */
+.text-decoration { text-decoration: underline; }
+.text-line-through { text-decoration: line-through; }
+.text-uppercase { text-transform: uppercase; }
+
+/* Overflow hidden */
+.overflow-test {
+  width: 200px;
+  height: 50px;
+  overflow: hidden;
+  border: 1px solid #999;
+  margin: 10px 0;
+  padding: 5px;
+}
+
+/* Box shadow */
+.shadow-box {
+  width: 150px;
+  height: 80px;
+  background: white;
+  box-shadow: 3px 3px 10px rgba(0,0,0,0.3);
+  margin: 15px;
+  display: inline-block;
+  border-radius: 4px;
+}
+</style>
+</head>
+<body>
+
+<h1>suzume Visual Regression Test</h1>
+<p>This page tests various CSS features for visual comparison with Firefox.</p>
+
+<h2>1. Box Model</h2>
+<div class="box-model">
+  <p>This box has 20px padding, 2px border, and 300px width.</p>
+</div>
+
+<h2>2. Colors</h2>
+<div class="color-test">
+  <div class="color-box" style="background:#e74c3c;"></div>
+  <div class="color-box" style="background:#3498db;"></div>
+  <div class="color-box" style="background:#2ecc71;"></div>
+  <div class="color-box" style="background:#f39c12;"></div>
+  <div class="color-box" style="background:#9b59b6;"></div>
+</div>
+
+<h2>3. Flexbox</h2>
+<div class="flex-row">
+  <div class="flex-item">Item 1</div>
+  <div class="flex-item">Item 2</div>
+  <div class="flex-item">Item 3</div>
+</div>
+
+<h2>4. Border Radius</h2>
+<div>
+  <div class="rounded"></div>
+  <div class="circle"></div>
+</div>
+
+<h2>5. Card Component</h2>
+<div class="card">
+  <div class="card-title">Card Title</div>
+  <div class="card-body">
+    <p>This is a card with rounded corners and a subtle border.</p>
+    <p>It contains <strong>bold text</strong>, <em>italic text</em>, and <a href="#">links</a>.</p>
+  </div>
+</div>
+
+<h2>6. Lists</h2>
+<ul>
+  <li>Unordered item 1</li>
+  <li>Unordered item 2</li>
+  <li>Unordered item 3</li>
+</ul>
+<ol>
+  <li>Ordered item 1</li>
+  <li>Ordered item 2</li>
+  <li>Ordered item 3</li>
+</ol>
+
+<h2>7. Table</h2>
+<table>
+  <tr><th>Name</th><th>Type</th><th>Value</th></tr>
+  <tr><td>Alpha</td><td>String</td><td>Hello</td></tr>
+  <tr><td>Beta</td><td>Number</td><td>42</td></tr>
+  <tr><td>Gamma</td><td>Boolean</td><td>true</td></tr>
+</table>
+
+<h2>8. Code</h2>
+<p>Inline <code>code element</code> in a paragraph.</p>
+<pre>fn main() void {
+    std.debug.print("Hello from suzume!\n", .{});
+}</pre>
+
+<h2>9. Position</h2>
+<div class="relative-box">
+  <div class="absolute-child">Absolute</div>
+</div>
+
+<h2>10. Opacity</h2>
+<div class="opacity-test">
+  <div class="opacity-box" style="opacity:1.0;"></div>
+  <div class="opacity-box" style="opacity:0.7;"></div>
+  <div class="opacity-box" style="opacity:0.4;"></div>
+  <div class="opacity-box" style="opacity:0.1;"></div>
+</div>
+
+<h2>11. Text Styles</h2>
+<p class="text-decoration">Underlined text</p>
+<p class="text-line-through">Strikethrough text</p>
+<p class="text-uppercase">uppercase text</p>
+
+<h2>12. Overflow Hidden</h2>
+<div class="overflow-test">
+  <p>This text is very long and should be clipped because the container has overflow hidden set. You should not see this part of the text at all.</p>
+</div>
+
+<h2>13. Box Shadow</h2>
+<div>
+  <div class="shadow-box"></div>
+  <div class="shadow-box"></div>
+</div>
+
+<h2>14. Inline Elements</h2>
+<p>This paragraph has <strong>bold</strong>, <em>italic</em>, <code>code</code>, and <a href="#">link</a> inline elements mixed together in a single line of text.</p>
+
+</body>
+</html>

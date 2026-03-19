@@ -1,7 +1,10 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const c = @cImport({
     @cInclude("curl/curl.h");
 });
+
+const ua_string = "suzume/1.0 (Linux; " ++ @tagName(builtin.cpu.arch) ++ ")";
 
 pub const Response = struct {
     status_code: u32,
@@ -65,13 +68,29 @@ pub const HttpClient = struct {
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(&ctx)));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 1));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 2));
         _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
-        // Honest UA — suzume is its own browser, not pretending to be Chrome.
-        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, "suzume/1.0 (Linux; aarch64)");
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, ua_string.ptr);
 
-        const rc = c.curl_easy_perform(self.handle);
+        var rc = c.curl_easy_perform(self.handle);
+
+        // SSL cert verification failure — retry without verification
+        if (rc == c.CURLE_SSL_CACERT or rc == c.CURLE_PEER_FAILED_VERIFICATION or rc == c.CURLE_SSL_CERTPROBLEM) {
+            std.debug.print("[SSL] Certificate verification failed for {s}, retrying without verification\n", .{url});
+            ctx.buffer.clearRetainingCapacity();
+            c.curl_easy_reset(self.handle);
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_URL, url.ptr);
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEFUNCTION, @as(?*const fn ([*c]u8, usize, usize, *anyopaque) callconv(.c) usize, &writeCallback));
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_WRITEDATA, @as(*anyopaque, @ptrCast(&ctx)));
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_FOLLOWLOCATION, @as(c_long, 1));
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYPEER, @as(c_long, 0));
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_SSL_VERIFYHOST, @as(c_long, 0));
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_TIMEOUT, timeout_secs);
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_USERAGENT, ua_string.ptr);
+            rc = c.curl_easy_perform(self.handle);
+        }
+
         if (rc != c.CURLE_OK) {
-            ctx.buffer.deinit(allocator);
             return error.CurlPerformFailed;
         }
 

@@ -804,8 +804,18 @@ fn matchPseudoClass(pc: PseudoClass, element: ElementAdapter) bool {
         },
         // nth-child/nth-last-child/nth-of-type: return true for now (full an+b parsing not yet implemented)
         .nth_child, .nth_last_child, .nth_of_type => return true,
-        // Interactive pseudo-classes: always false for now
-        .hover, .focus, .active, .visited, .link => return false,
+        // :link matches <a> elements with href attribute (unvisited)
+        .link => {
+            const tag = element.tagName() orelse "";
+            if (eqlIgnoreCase(tag, "a") or eqlIgnoreCase(tag, "area")) {
+                return element.getAttribute("href") != null;
+            }
+            return false;
+        },
+        // :visited — we don't track visit history, so never matches
+        .visited => return false,
+        // Interactive pseudo-classes: always false for static rendering
+        .hover, .focus, .active => return false,
     }
 }
 

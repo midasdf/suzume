@@ -464,6 +464,33 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
     }
 }
 
+/// Search for first background color in a box's descendant tree (BFS, max depth 3).
+/// Checks all children at each level before going deeper.
+fn findFirstBackground(box: *const Box) u32 {
+    // Level 1: direct children
+    for (box.children.items) |child| {
+        const bg = child.style.background_color;
+        if (bg != 0x00000000) return bg;
+    }
+    // Level 2: grandchildren
+    for (box.children.items) |child| {
+        for (child.children.items) |gc| {
+            const bg = gc.style.background_color;
+            if (bg != 0x00000000) return bg;
+        }
+    }
+    // Level 3: great-grandchildren
+    for (box.children.items) |child| {
+        for (child.children.items) |gc| {
+            for (gc.children.items) |ggc| {
+                const bg = ggc.style.background_color;
+                if (bg != 0x00000000) return bg;
+            }
+        }
+    }
+    return 0x00000000;
+}
+
 /// Navigate to a URL: fetch, parse, style, layout.
 /// Returns true on success, false on failure.
 fn navigateTo(
@@ -1434,8 +1461,28 @@ pub fn main() !void {
     while (running) {
         // Repaint if needed
         if (needs_repaint) {
-            // Clear content area
-            chrome.clearContentArea(&surface);
+            // CSS background propagation: if html has no background, use body's
+            const canvas_bg: ?u32 = blk: {
+                const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                    &page_states.items[tab_mgr.active_index]
+                else
+                    null;
+                if (active_pg) |pg| {
+                    if (pg.root_box) |root| {
+                        const html_bg = root.style.background_color;
+                        if (html_bg != 0x00000000) break :blk html_bg;
+                        // Propagate body/first-content background to canvas
+                        // Box tree may not have a body box (body content inlined under html root)
+                        // so search root's descendants for first background color
+                        const found_bg = findFirstBackground(root);
+                        if (found_bg != 0x00000000) break :blk found_bg;
+                        // Default to white when page has no explicit background
+                        break :blk @as(u32, 0xFFFFFFFF);
+                    }
+                }
+                break :blk null;
+            };
+            chrome.clearContentArea(&surface, canvas_bg);
 
             // Paint page content (from active tab's page state)
             const active_page: ?*PageState = if (tab_mgr.active_index < page_states.items.len)

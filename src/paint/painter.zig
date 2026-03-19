@@ -151,7 +151,7 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
                 const inner_r_bl = @max(@as(i32, @intFromFloat(style.border_radius_bl)) - bw_left, 0);
                 const inner_r_br = @max(@as(i32, @intFromFloat(style.border_radius_br)) - bw_right, 0);
                 // Use background color for inner fill (or transparent/dark for the "hole")
-                const bg = if ((style.background_color >> 24) > 0) style.background_color else 0xFF1e1e2e;
+                const bg = if ((style.background_color >> 24) > 0) style.background_color else 0x00000000;
                 surface.fillRoundedRectPerCorner(inner_x, inner_y, inner_w, inner_h,
                     inner_r_tl, inner_r_tr, inner_r_bl, inner_r_br,
                     Surface.argbToColour(bg));

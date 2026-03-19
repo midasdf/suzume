@@ -865,18 +865,9 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     else => false,
                 };
 
-                // For shrink-to-fit (auto width), first layout with container width.
-                // For explicit width inline-blocks, use the explicit width as containing
-                // width so internal layout uses the correct size (not the cramped container).
-                const explicit_w_val: f32 = switch (child.style.width) {
-                    .px => |w| w + child.padding.left + child.padding.right + child.border.left + child.border.right,
-                    else => 0,
-                };
-                const initial_layout_w = if (has_explicit_width and explicit_w_val > 0)
-                    @max(container_width, explicit_w_val)
-                else
-                    container_width;
-                layoutBlock(child, initial_layout_w, base_y + cursor_y, fonts);
+                // For shrink-to-fit (auto width), first layout with container
+                // width to get content size, then shrink to that content width
+                layoutBlock(child, container_width, base_y + cursor_y, fonts);
 
                 // If width is auto, shrink to content (inline-block shrink-to-fit)
                 if (!has_explicit_width) {
@@ -925,12 +916,8 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     line_height = 0;
                 }
 
-                // Re-layout at correct position. Use shrink-to-fit width for
-                // auto-width elements, or explicit width + box for sized elements.
-                const layout_w = if (!has_explicit_width)
-                    child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right
-                else
-                    child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right;
+                // Re-layout at correct position with shrink-to-fit width
+                const layout_w = if (!has_explicit_width) child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right else container_width;
                 layoutBlock(child, layout_w, base_y + cursor_y, fonts);
 
                 // Re-apply shrink-to-fit after second layout

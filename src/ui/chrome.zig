@@ -275,7 +275,8 @@ pub fn paintStatusBar(surface: *Surface, fonts: *FontCache, status: []const u8) 
     }
 }
 
-/// Clear the content area with the default background.
-pub fn clearContentArea(surface: *Surface) void {
-    surface.fillRect(0, content_y, surface.width, contentHeight(surface.height), Surface.argbToColour(content_bg));
+/// Clear the content area. Uses page canvas background if provided, otherwise default.
+pub fn clearContentArea(surface: *Surface, canvas_bg: ?u32) void {
+    const bg = canvas_bg orelse content_bg;
+    surface.fillRect(0, content_y, surface.width, contentHeight(surface.height), Surface.argbToColour(bg));
 }

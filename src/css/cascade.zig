@@ -95,10 +95,10 @@ pub const CascadeResult = struct {
     }
 };
 
-/// Minimal user-agent default stylesheet (Catppuccin Mocha theme).
+/// Minimal user-agent default stylesheet (standard browser defaults).
 const ua_stylesheet_text =
-    \\html { color: #cdd6f4; }
-    \\body { margin: 8px; color: #cdd6f4; }
+    \\html { color: #000000; }
+    \\body { margin: 8px; color: #000000; }
     \\html, body, div, section, article, aside, nav, main,
     \\header, footer, h1, h2, h3, h4, h5, h6, p, blockquote,
     \\dl, dt, dd, figure, figcaption, form, fieldset,
@@ -124,10 +124,10 @@ const ua_stylesheet_text =
     \\h6 { font-size: 0.67em; font-weight: bold; margin-top: 2.33em; margin-bottom: 2.33em; }
     \\b, strong { font-weight: bold; display: inline; }
     \\em, i { font-style: italic; display: inline; }
-    \\a { color: #89b4fa; text-decoration: underline; display: inline; }
+    \\a { color: #0000EE; text-decoration: underline; display: inline; }
     \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp { display: inline; }
     \\pre, code { white-space: pre; }
-    \\code { color: #a6e3a1; }
+    \\code { font-family: monospace; }
     \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
     \\hr { border-top-width: 1px; margin-top: 8px; margin-bottom: 8px; }
     \\p { margin-top: 1em; margin-bottom: 1em; }
@@ -517,8 +517,13 @@ fn walkAndCompute(
             .inline_hash = hashAttr(node_inline),
             .parent_hash = hashParentStyle(parent_style),
         };
-        // Only use cache when no custom properties in scope
-        const can_use_cache = (var_map.parent == null);
+        // Only use cache when no custom properties in scope and no HTML presentational attrs
+        const has_presentational = node.getAttribute("bgcolor") != null or
+            node.getAttribute("width") != null or
+            node.getAttribute("height") != null or
+            node.getAttribute("align") != null or
+            node.getAttribute("valign") != null;
+        const can_use_cache = (var_map.parent == null) and !has_presentational;
         if (can_use_cache) {
             if (style_cache.get(cache_key)) |entry| {
                 // Verify full string match to prevent hash collision crashes
