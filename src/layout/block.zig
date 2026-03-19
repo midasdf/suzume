@@ -315,9 +315,17 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     const auto_width = @max(containing_width - h_space, 0);
 
     if (explicit_width) |ew| {
-        // CSS: explicit width is respected even if it exceeds containing block
-        // (overflow is handled by overflow property, not by clamping width)
-        box.content.width = ew;
+        // CSS: explicit width is respected, but for block-level elements we
+        // still clamp to containing block unless overflow allows it.
+        // This prevents 728px elements from overflowing 712px containers.
+        // Inline-blocks (buttons, inputs) keep their width since they're
+        // inside IFC and overflow is expected.
+        const is_inline_level = (box.style.display == .inline_block or
+            box.style.display == .inline_flex or box.style.display == .inline_);
+        box.content.width = if (is_inline_level)
+            ew
+        else
+            @min(ew, @max(containing_width - pad_h - bdr_h, 0));
 
         // margin:auto centering — only when both margins are auto and width is set
         if (box.style.margin_left_auto and box.style.margin_right_auto) {
