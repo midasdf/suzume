@@ -651,6 +651,21 @@ fn navigateTo(
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page, allocator, loader, base_url_copy);
 
+    // After JS execution, remove anti-flicker and other animation-gate classes
+    // that hide content and rely on JS animations to reveal it.
+    if (page.js_rt) |*rt| {
+        const cleanup = rt.eval(
+            \\(function() {
+            \\  var h = document.documentElement;
+            \\  if (h && h.className) {
+            \\    h.className = h.className.replace(/\banti-flicker\b/g, '').trim();
+            \\  }
+            \\  if (h && h.classList) { h.classList.add('w-mod-ix3'); }
+            \\})()
+        );
+        cleanup.deinit();
+    }
+
     // Re-style if JS mutated the DOM during script execution
     if (dom_api.dom_dirty) {
         dom_api.dom_dirty = false;
