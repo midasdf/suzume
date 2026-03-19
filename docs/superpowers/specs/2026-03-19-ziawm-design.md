@@ -344,6 +344,7 @@ bar {
 - ziawm spawns ziawm-bar based on `bar {}` config block
 - ziawm-bar spawns `status_command` (i3blocks etc) as child process
 - Receives workspace info via IPC, renders to its own X window
+- Gets output geometry from IPC (GET_OUTPUTS), does not query RandR directly
 
 **Protocol (i3bar protocol compliant):**
 
@@ -400,10 +401,9 @@ ziawm ←IPC socket→ ziawm-bar ←stdin/stdout→ i3blocks
 - `exec_always` — runs on every config reload
 
 **Window kill protocol:**
-1. Check if window supports `WM_DELETE_WINDOW` in `WM_PROTOCOLS`
-2. If yes: send `ClientMessage` with `WM_DELETE_WINDOW` atom (graceful close)
-3. If no: `xcb_kill_client` immediately (force kill)
-4. No timeout — same behavior as i3 (single kill command = graceful, `kill kill` = force)
+1. `kill` command: check if window supports `WM_DELETE_WINDOW` in `WM_PROTOCOLS`. If yes, send `ClientMessage` with `WM_DELETE_WINDOW` atom (graceful close). If no, `xcb_kill_client` immediately.
+2. `kill kill` command: always `xcb_kill_client` (force kill, bypasses graceful close).
+3. No timeout — same behavior as i3.
 
 **`assign` directive processing:**
 - `assign [criteria] workspace N` rules stored at config parse time
@@ -517,8 +517,10 @@ bindsym $mod+minus scratchpad show
 - `SIGUSR1` → config reload only
 
 **Restart vs Reload:**
-- **Reload** (`reload` command, `SIGUSR1`): re-parse config, re-grab keys, notify bar. Tree preserved.
-- **Restart** (`restart` command, `SIGHUP`): serialize current tree to `/run/user/{uid}/ziawm/restart-state.json`, then `execvp` self. On startup, if restart state file exists, deserialize tree and restore window layout. This preserves window positions across restarts, same as i3.
+- **Reload** (`reload` command, `SIGUSR1`): re-parse config, re-grab keys, notify bar. Tree preserved. `exec_always` re-runs, `exec` does not.
+- **Restart** (`restart` command, `SIGHUP`): serialize current tree to `/run/user/{uid}/ziawm/restart-state.json`, then `execvp` self. On startup, if restart state file exists, deserialize tree and restore window layout. `exec` commands are suppressed during restart (only run on fresh startup). `exec_always` runs on both startup and restart. This preserves window positions across restarts, same as i3.
+
+**Platform note:** signalfd and epoll are Linux-specific. ziawm targets Linux only (not BSDs).
 
 ## XRandR + Output Management
 
@@ -632,7 +634,8 @@ ziawm.linkSystemLibrary("xkbcommon-x11");
 ziawm.linkLibC();
 
 const ziawm_msg = b.addExecutable(.{ .name = "ziawm-msg", ... });
-ziawm_msg.linkLibC();  // socket operations only
+ziawm_msg.linkSystemLibrary("xcb");  // for root window atom lookup (socket discovery)
+ziawm_msg.linkLibC();
 
 const ziawm_bar = b.addExecutable(.{ .name = "ziawm-bar", ... });
 ziawm_bar.linkSystemLibrary("xcb");
