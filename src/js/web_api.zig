@@ -832,6 +832,14 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  USPp.values=function(){return this._params.map(function(p){return p[1];});};
         \\  USPp.getAll=function(n){return this._params.filter(function(p){return p[0]===n;}).map(function(p){return p[1];});};
         \\}
+        \\if(typeof CustomEvent==='undefined'){globalThis.CustomEvent=function(type,opts){this.type=type;this.detail=(opts&&opts.detail)||null;this.bubbles=!!(opts&&opts.bubbles);this.cancelable=!!(opts&&opts.cancelable);this.defaultPrevented=false;this.preventDefault=function(){this.defaultPrevented=true;};this.stopPropagation=function(){};this.stopImmediatePropagation=function(){};};}
+        \\if(typeof Event==='undefined'){globalThis.Event=function(type,opts){this.type=type;this.bubbles=!!(opts&&opts.bubbles);this.cancelable=!!(opts&&opts.cancelable);this.defaultPrevented=false;this.preventDefault=function(){this.defaultPrevented=true;};this.stopPropagation=function(){};this.stopImmediatePropagation=function(){};};}
+        \\if(typeof Headers==='undefined'){globalThis.Headers=function(init){this._h={};if(init)for(var k in init)this._h[k.toLowerCase()]=init[k];};Headers.prototype.get=function(n){return this._h[n.toLowerCase()]||null;};Headers.prototype.set=function(n,v){this._h[n.toLowerCase()]=v;};Headers.prototype.has=function(n){return n.toLowerCase() in this._h;};Headers.prototype.forEach=function(cb){for(var k in this._h)cb(this._h[k],k);};}
+        \\if(typeof Response==='undefined'){globalThis.Response=function(body,opts){this.body=body;this.status=(opts&&opts.status)||200;this.ok=this.status>=200&&this.status<300;this.headers=new Headers((opts&&opts.headers)||{});this.text=function(){return Promise.resolve(String(body||''));};this.json=function(){return Promise.resolve(JSON.parse(body||'null'));};};}
+        \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
+        \\if(typeof visualViewport==='undefined'){globalThis.visualViewport={width:innerWidth,height:innerHeight,offsetLeft:0,offsetTop:0,scale:1,addEventListener:function(){}};}
+        \\if(typeof CSS==='undefined'){globalThis.CSS={supports:function(){return false;},escape:function(s){return s;}};}
+        \\if(typeof console!=='undefined'&&!console.warn){console.warn=console.log;console.error=console.log;console.info=console.log;console.debug=console.log;console.trace=function(){};}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
