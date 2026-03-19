@@ -40,6 +40,7 @@ const font_mono = "/usr/share/fonts/TTF/DejaVuSansMono.ttf";
 
 const dom_test = @import("test_dom_style.zig");
 const JsRuntime = @import("js/runtime.zig").JsRuntime;
+const quickjs = @import("bindings/quickjs.zig");
 const web_api = @import("js/web_api.zig");
 const dom_api = @import("js/dom_api.zig");
 const events = @import("js/events.zig");
@@ -213,7 +214,7 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
 }
 
 /// Maximum size for a fetched external script (500 KB).
-const max_external_script_size = 512 * 1024;
+const max_external_script_size = 1024 * 1024;
 /// Maximum number of external scripts to fetch per page.
 const max_external_script_count = 50;
 /// Maximum total bytes of external scripts to load per page.
@@ -329,6 +330,8 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                             std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
                         }
                         js_rt.executePending();
+                        // GC after external scripts to reclaim memory
+                        quickjs.c.JS_RunGC(js_rt.rt);
                         response.deinit();
                     }
                 } else {

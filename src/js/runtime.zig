@@ -11,7 +11,7 @@ pub const JsRuntime = struct {
         const rt = qjs.JS_NewRuntime() orelse return error.JsRuntimeInit;
         errdefer qjs.JS_FreeRuntime(rt);
 
-        qjs.JS_SetMemoryLimit(rt, 32 * 1024 * 1024);
+        qjs.JS_SetMemoryLimit(rt, 48 * 1024 * 1024);
 
         const ctx = qjs.JS_NewContext(rt) orelse {
             return error.JsContextInit;
@@ -38,10 +38,14 @@ pub const JsRuntime = struct {
 
     /// Evaluate JavaScript code. Returns the result as a string, or an error string.
     pub fn eval(self: *JsRuntime, code: []const u8) EvalResult {
+        // Sanitize invalid UTF-8 sequences before QuickJS eval
+        const clean = sanitizeUtf8(code) catch code;
+        defer if (clean.ptr != code.ptr) std.heap.c_allocator.free(clean);
+
         const result = qjs.JS_Eval(
             self.ctx,
-            code.ptr,
-            code.len,
+            clean.ptr,
+            clean.len,
             "<eval>",
             qjs.JS_EVAL_TYPE_GLOBAL,
         );
@@ -141,4 +145,53 @@ pub const JsRuntime = struct {
             return false;
         }
     };
+
+    /// Sanitize a byte buffer so every byte sequence is valid UTF-8.
+    /// Invalid sequences are replaced with U+FFFD (EF BF BD).
+    fn sanitizeUtf8(input: []const u8) ![]u8 {
+        // Quick check: if all ASCII, no sanitization needed
+        var needs_sanitize = false;
+        for (input) |b| {
+            if (b >= 0x80) {
+                needs_sanitize = true;
+                break;
+            }
+        }
+        if (!needs_sanitize) return @constCast(input);
+
+        var out = std.ArrayListUnmanaged(u8){};
+        errdefer out.deinit(std.heap.c_allocator);
+        try out.ensureTotalCapacity(std.heap.c_allocator, input.len);
+
+        var i: usize = 0;
+        while (i < input.len) {
+            const b0 = input[i];
+            const seq_len: usize = if (b0 < 0x80) 1 else if (b0 < 0xC0) 0 // invalid continuation
+            else if (b0 < 0xE0) 2 else if (b0 < 0xF0) 3 else if (b0 < 0xF8) 4 else 0;
+
+            if (seq_len == 0 or i + seq_len > input.len) {
+                try out.appendSlice(std.heap.c_allocator, "\xEF\xBF\xBD");
+                i += 1;
+                continue;
+            }
+
+            // Validate continuation bytes (must be 10xxxxxx)
+            var valid = true;
+            for (1..seq_len) |j| {
+                if ((input[i + j] & 0xC0) != 0x80) {
+                    valid = false;
+                    break;
+                }
+            }
+
+            if (valid) {
+                try out.appendSlice(std.heap.c_allocator, input[i .. i + seq_len]);
+                i += seq_len;
+            } else {
+                try out.appendSlice(std.heap.c_allocator, "\xEF\xBF\xBD");
+                i += 1;
+            }
+        }
+        return out.toOwnedSlice(std.heap.c_allocator);
+    }
 };
