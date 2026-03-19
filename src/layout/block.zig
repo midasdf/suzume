@@ -533,9 +533,18 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 }
 
                 // Handle floated elements
+                // If the float's explicit width exceeds the container, treat as non-float
+                // (graceful degradation for fixed-width elements in narrow viewports)
                 if (child.style.float_ != .none) {
-                    layoutFloat(child, box, &child_y, &float_left_bottom, &float_right_bottom, &float_left_width, &float_right_width, fonts);
-                    continue;
+                    const float_w: f32 = switch (child.style.width) {
+                        .px => |w| w,
+                        else => 0,
+                    };
+                    if (float_w <= box.content.width) {
+                        layoutFloat(child, box, &child_y, &float_left_bottom, &float_right_bottom, &float_left_width, &float_right_width, fonts);
+                        continue;
+                    }
+                    // else: fall through to normal block layout
                 }
 
                 // Margin collapsing: BFC elements do not participate in margin collapsing
