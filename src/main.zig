@@ -103,7 +103,6 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     const doc = &(page.doc orelse return);
 
     const root_node = doc.root() orelse return;
-    const body_node = doc.body() orelse return;
 
     // Re-cascade styles from the current DOM (includes any <style> tags JS may have added)
     var new_styles = cascade_mod.cascade(root_node, allocator, page.external_css, @intCast(layout_width), @intCast(layout_height)) catch return;
@@ -114,17 +113,12 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
         return;
     };
 
-    // Apply body margin
-    const body_style = new_styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
-    const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
-    new_root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
+    // html root has no margin; body margin is applied via CSS cascade
+    new_root_box.margin = .{};
 
-    // Layout
+    // Layout with full viewport width
     const content_w: f32 = @floatFromInt(layout_width);
-    const root_containing_width = content_w - new_root_box.margin.left - new_root_box.margin.right;
-    block_layout.layoutBlockVp(new_root_box, root_containing_width, 0, fonts, @floatFromInt(layout_height));
-    block_layout.adjustXPositions(new_root_box, new_root_box.margin.left);
-    block_layout.adjustYPositions(new_root_box, new_root_box.margin.top);
+    block_layout.layoutBlockVp(new_root_box, content_w, 0, fonts, @floatFromInt(layout_height));
 
     // Replace old styles and box tree (order matters: box tree refs styles)
     // Note: old root_box is arena-allocated by buildBoxTree and not individually freed.
@@ -143,7 +137,9 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     // Update global root box pointer for JS layout queries
     dom_api.setRootBox(new_root_box);
 
-    std.debug.print("[JS] DOM mutation → re-styled and re-laid out\n", .{});
+    std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
+        page.total_height, page.total_width, new_root_box.children.items.len,
+    });
 }
 
 /// Browser state holding the current page's data.
@@ -500,12 +496,6 @@ fn navigateTo(
             allocator.free(html_owned);
             return false;
         };
-        const body_node = doc.body() orelse {
-            doc.deinit();
-            allocator.free(html_owned);
-            return false;
-        };
-
         var styles = cascade_mod.cascade(root_node, allocator, null, @intCast(layout_width), @intCast(layout_height)) catch {
             doc.deinit();
             allocator.free(html_owned);
@@ -520,18 +510,11 @@ fn navigateTo(
         };
 
         // Apply body margin to the root box (html element has 0 margin by default)
-        // Find body box in tree and use its margin, or fall back to 8px default
-        const body_margin: f32 = blk: {
-            const body_style = styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
-            break :blk if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
-        };
-        root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
+        // html root has no margin; body margin is applied via CSS cascade
+        root_box.margin = .{};
 
         const content_w: f32 = @floatFromInt(layout_width);
-        const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
-        block_layout.layoutBlockVp(root_box, root_containing_width, 0, fonts, @floatFromInt(layout_height));
-        block_layout.adjustXPositions(root_box, root_box.margin.left);
-        block_layout.adjustYPositions(root_box, root_box.margin.top);
+        block_layout.layoutBlockVp(root_box, content_w, 0, fonts, @floatFromInt(layout_height));
 
         const total_h = painter_mod.contentHeight(root_box);
         const total_w = painter_mod.contentWidth(root_box);
@@ -574,11 +557,6 @@ fn navigateTo(
         doc.deinit();
         return false;
     };
-    const body_node = doc.body() orelse {
-        doc.deinit();
-        return false;
-    };
-
     // Style (pass external CSS from loader — includes <link> stylesheets)
     const ext_css: ?[]const u8 = if (content.css.len > 0) content.css else null;
     var styles = cascade_mod.cascade(root_node, allocator, ext_css, @intCast(layout_width), @intCast(layout_height)) catch {
@@ -586,24 +564,19 @@ fn navigateTo(
         return false;
     };
 
-    // Build box tree
-    const root_box = box_tree.buildBoxTree(body_node, &styles, allocator) catch {
+    // Build box tree from html root for proper CSS background propagation
+    const root_box = box_tree.buildBoxTree(root_node, &styles, allocator) catch {
         styles.deinit();
         doc.deinit();
         return false;
     };
 
-    // Apply body margin
-    const body_style = styles.getStyle(body_node) orelse @import("css/computed.zig").ComputedStyle{};
-    const body_margin: f32 = if (body_style.margin_top == 0 and body_style.margin_left == 0) 8.0 else body_style.margin_left;
-    root_box.margin = .{ .top = body_margin, .right = body_margin, .bottom = body_margin, .left = body_margin };
+    // html root has no margin; body margin is applied via CSS cascade
+    root_box.margin = .{};
 
-    // Layout
+    // Layout with full viewport width
     const content_w: f32 = @floatFromInt(layout_width);
-    const root_containing_width = content_w - root_box.margin.left - root_box.margin.right;
-    block_layout.layoutBlockVp(root_box, root_containing_width, 0, fonts, @floatFromInt(layout_height));
-    block_layout.adjustXPositions(root_box, root_box.margin.left);
-    block_layout.adjustYPositions(root_box, root_box.margin.top);
+    block_layout.layoutBlockVp(root_box, content_w, 0, fonts, @floatFromInt(layout_height));
 
     // Collect image URLs for incremental loading (loaded 1 per event loop tick)
     const img_cache = ImageCache.init(allocator);
@@ -1633,10 +1606,7 @@ pub fn main() !void {
                                                             if (updated) {
                                                                 // Re-layout to apply new aspect ratios
                                                                 const cw: f32 = @floatFromInt(surface.width);
-                                                                const rcw = cw - rb.margin.left - rb.margin.right;
-                                                                block_layout.layoutBlockVp(rb, rcw, 0, &fonts, @floatFromInt(surface.height));
-                                                                block_layout.adjustXPositions(rb, rb.margin.left);
-                                                                block_layout.adjustYPositions(rb, rb.margin.top);
+                                                                block_layout.layoutBlockVp(rb, cw, 0, &fonts, @floatFromInt(surface.height));
                                                                 pg.total_height = painter_mod.contentHeight(rb);
                                                                 pg.total_width = painter_mod.contentWidth(rb);
                                                             }
@@ -1675,6 +1645,23 @@ pub fn main() !void {
                         @intCast(surface.width),
                         @intCast(@max(0, chrome.contentHeight(surface.height))),
                     );
+                    // Re-layout page content for new width
+                    const resize_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                        &page_states.items[tab_mgr.active_index]
+                    else
+                        null;
+                    if (resize_pg) |pg| {
+                        if (pg.root_box) |rb| {
+                            const cw: f32 = @floatFromInt(surface.width);
+                            block_layout.layoutBlockVp(rb, cw, 0, &fonts, @floatFromInt(surface.height));
+                            pg.total_height = painter_mod.contentHeight(rb);
+                            pg.total_width = painter_mod.contentWidth(rb);
+                            // Clamp scroll to new content bounds
+                            const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
+                            const max_scroll = @max(pg.total_height - ch, 0);
+                            scroll_y = @max(0, @min(scroll_y, max_scroll));
+                        }
+                    }
                     needs_repaint = true;
                 },
 
