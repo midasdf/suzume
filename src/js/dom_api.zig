@@ -4179,6 +4179,35 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, html_element_ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
     _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLElement", html_element_ctor);
 
+    // HTML element subclass constructors (for instanceof checks)
+    const html_subclasses = [_][]const u8{
+        "HTMLDivElement",       "HTMLSpanElement",      "HTMLParagraphElement",
+        "HTMLImageElement",     "HTMLAnchorElement",    "HTMLFormElement",
+        "HTMLInputElement",     "HTMLTextAreaElement",  "HTMLSelectElement",
+        "HTMLButtonElement",    "HTMLTableElement",     "HTMLTableRowElement",
+        "HTMLTableCellElement", "HTMLLIElement",        "HTMLUListElement",
+        "HTMLOListElement",     "HTMLHeadingElement",   "HTMLPreElement",
+        "HTMLCanvasElement",    "HTMLVideoElement",     "HTMLAudioElement",
+        "HTMLIFrameElement",    "HTMLLabelElement",     "HTMLScriptElement",
+        "HTMLStyleElement",     "HTMLLinkElement",      "HTMLMetaElement",
+        "HTMLBRElement",        "HTMLHRElement",        "HTMLBodyElement",
+        "HTMLHeadElement",      "HTMLHtmlElement",      "HTMLOptionElement",
+        "HTMLTemplateElement",  "HTMLDialogElement",    "HTMLDetailsElement",
+        "HTMLSummaryElement",   "HTMLFieldSetElement",  "HTMLLegendElement",
+    };
+    for (html_subclasses) |name| {
+        const ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);
+        _ = qjs.JS_SetPropertyStr(ctx, ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
+        _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
+    }
+
+    // window.top / window.parent / window.self / window.frames
+    _ = qjs.JS_SetPropertyStr(ctx, global, "top", qjs.JS_DupValue(ctx, global));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "parent", qjs.JS_DupValue(ctx, global));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "frames", qjs.JS_DupValue(ctx, global));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "frameElement", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, global, "length", qjs.JS_NewInt32(ctx, 0)); // frames.length
+
     // ── Text prototype (inherits Node.prototype) ─────────────────────
     // Text nodes get Node methods (textContent, parentNode, etc.) via prototype chain.
     // No need to duplicate them — just set Node.prototype as the text proto's prototype.
@@ -4243,6 +4272,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const docElemAtom = qjs.JS_NewAtom(ctx, "documentElement");
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, docElemAtom, qjs.JS_NewCFunction(ctx, &documentGetDocumentElement, "get documentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, docElemAtom);
+
+    // document.currentScript (null when not in script execution)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "currentScript", quickjs.JS_NULL());
 
     // document.head (getter)
     const headAtom = qjs.JS_NewAtom(ctx, "head");

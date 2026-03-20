@@ -192,6 +192,39 @@ const DeferredScript = struct {
     source_url: ?[:0]const u8 = null,
 };
 
+/// Set document.currentScript to a script-like object with the given src URL.
+fn setCurrentScript(ctx: *quickjs.c.JSContext, src_url: [:0]const u8) void {
+    const global = quickjs.c.JS_GetGlobalObject(ctx);
+    defer quickjs.c.JS_FreeValue(ctx, global);
+    const doc_obj = quickjs.c.JS_GetPropertyStr(ctx, global, "document");
+    defer quickjs.c.JS_FreeValue(ctx, doc_obj);
+    if (quickjs.JS_IsUndefined(doc_obj) or quickjs.JS_IsNull(doc_obj)) return;
+
+    const script_obj = quickjs.c.JS_NewObject(ctx);
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "src", quickjs.c.JS_NewStringLen(ctx, src_url.ptr, src_url.len));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "type", quickjs.c.JS_NewString(ctx, "text/javascript"));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "getAttribute", quickjs.c.JS_NewCFunction(ctx, &scriptGetAttribute, "getAttribute", 1));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, doc_obj, "currentScript", script_obj);
+}
+
+fn scriptGetAttribute(ctx: ?*quickjs.c.JSContext, this_val: quickjs.c.JSValue, argc: c_int, argv: ?[*]quickjs.c.JSValue) callconv(.c) quickjs.c.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    // Return the property value directly (src, type, etc.)
+    return quickjs.c.JS_GetProperty(c, this_val, quickjs.c.JS_ValueToAtom(c, args[0]));
+}
+
+/// Clear document.currentScript (set to null).
+fn clearCurrentScript(ctx: *quickjs.c.JSContext) void {
+    const global = quickjs.c.JS_GetGlobalObject(ctx);
+    defer quickjs.c.JS_FreeValue(ctx, global);
+    const doc_obj = quickjs.c.JS_GetPropertyStr(ctx, global, "document");
+    defer quickjs.c.JS_FreeValue(ctx, doc_obj);
+    if (quickjs.JS_IsUndefined(doc_obj) or quickjs.JS_IsNull(doc_obj)) return;
+    _ = quickjs.c.JS_SetPropertyStr(ctx, doc_obj, "currentScript", quickjs.JS_NULL());
+}
+
 /// Find <script> tags in the DOM and execute their content.
 /// Deferred scripts are collected during the DOM walk and executed after it completes.
 fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
@@ -454,11 +487,19 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                     } else {
                         const code = response.body;
                         std.debug.print("[JS] Executing external <script src=\"{s}\"> ({d} bytes, module={any})\n", .{ resolved_url, code.len, is_module });
+
+                        // Set document.currentScript for Webpack publicPath detection
+                        setCurrentScript(js_rt.ctx, resolved_url);
+
                         const result = if (is_module)
                             js_rt.evalModule(code, resolved_url)
                         else
                             js_rt.eval(code);
                         defer result.deinit();
+
+                        // Clear document.currentScript after execution
+                        clearCurrentScript(js_rt.ctx);
+
                         if (!result.isOk()) {
                             std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
                         }
