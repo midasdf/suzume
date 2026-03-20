@@ -69,7 +69,7 @@ check('localStorage.setItem', 'function');
 // URL
 check('window.URL', 'function');
 check('window.URLSearchParams', 'function');
-check('URL.prototype.searchParams', 'exists');
+check('new URL("http://x.com").searchParams', 'exists');
 
 // Fetch extras
 check('window.AbortController', 'function');
