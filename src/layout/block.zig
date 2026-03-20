@@ -914,6 +914,11 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     } else if (fit_w > 0 and fit_w < child.content.width) {
                         child.content.width = fit_w;
                     }
+                    // Clamp to container width to prevent overflow
+                    const max_w = @max(container_width - child_h_extra, 0);
+                    if (child.content.width > max_w) {
+                        child.content.width = max_w;
+                    }
                 }
 
                 const child_total_w = child.content.width + child_h_extra;

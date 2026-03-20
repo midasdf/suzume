@@ -659,9 +659,10 @@ pub fn contentHeight(box: *const Box) f32 {
 
 /// Compute the total content width of a box tree (for horizontal scroll limits).
 pub fn contentWidth(box: *const Box) f32 {
-    var max_w: f32 = 0;
-    contentWidthRecurse(box, &max_w);
-    return max_w;
+    // Use the root box's laid-out width as the page width.
+    // Don't recurse into children — overflow content shouldn't expand the viewport.
+    const mbox = box.marginBox();
+    return mbox.x + mbox.width;
 }
 
 fn contentWidthRecurse(box: *const Box, max_w: *f32) void {
@@ -670,6 +671,8 @@ fn contentWidthRecurse(box: *const Box, max_w: *f32) void {
             const mbox = box.marginBox();
             const right = mbox.x + mbox.width;
             if (right > max_w.*) max_w.* = right;
+            // Skip children of overflow:hidden boxes (they're clipped visually)
+            if (box.style.overflow_x == .hidden) return;
             for (box.children.items) |child| {
                 contentWidthRecurse(child, max_w);
             }
