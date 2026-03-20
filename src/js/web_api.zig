@@ -1652,6 +1652,13 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
         \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
         \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
+        \\if(typeof Atomics!=='undefined'&&!Atomics.waitAsync){
+        \\  Atomics.waitAsync=function(ta,index,value,timeout){
+        \\    try{var r=Atomics.wait(ta,index,value,typeof timeout==='number'?timeout:0);
+        \\      return{async:false,value:r};}
+        \\    catch(e){return{async:true,value:Promise.resolve('ok')};}
+        \\  };
+        \\}
         \\if(typeof TextEncoder==='undefined'){
         \\  globalThis.TextEncoder=function(){};
         \\  TextEncoder.prototype.encode=function(s){
