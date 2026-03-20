@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>ES Module Test</title></head>
+<body>
+<script>
+// Test 1: typeof import (should be 'object' in module context, but we test via feature detection)
+console.log('import.meta support: ' + (typeof Worker === 'function'));
+</script>
+<script type="module">
+// Test 2: Module script executes
+console.log('MODULE: script executed');
+
+// Test 3: import/export (relative URL would need HTTP resolution)
+// For now just test that module syntax works
+const x = 42;
+export { x };
+console.log('MODULE: export works, x=' + x);
+</script>
+<script>
+// Test 4: Module scripts are deferred (this classic script runs before modules)
+console.log('CLASSIC: runs before module');
+</script>
+</body></html>

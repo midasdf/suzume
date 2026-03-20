@@ -18,6 +18,9 @@ pub const JsRuntime = struct {
         };
         errdefer qjs.JS_FreeContext(ctx);
 
+        // Register ES module loader (must be done before creating context APIs)
+        qjs.JS_SetModuleLoaderFunc(rt, null, &moduleLoader, null);
+
         var self = JsRuntime{
             .rt = rt,
             .ctx = ctx,
@@ -36,6 +39,43 @@ pub const JsRuntime = struct {
         web_api.deinitWorkers(self.ctx);
         qjs.JS_FreeContext(self.ctx);
         qjs.JS_FreeRuntime(self.rt);
+    }
+
+    /// Evaluate JavaScript code as an ES module.
+    pub fn evalModule(self: *JsRuntime, code: []const u8, source_name: [*:0]const u8) EvalResult {
+        const clean = sanitizeUtf8(code) catch code;
+        defer if (clean.ptr != code.ptr) std.heap.c_allocator.free(clean);
+
+        const eval_buf = std.heap.c_allocator.allocSentinel(u8, clean.len, 0) catch {
+            return .{ .err = "out of memory" };
+        };
+        defer std.heap.c_allocator.free(eval_buf);
+        @memcpy(eval_buf, clean);
+
+        const result = qjs.JS_Eval(
+            self.ctx,
+            eval_buf.ptr,
+            eval_buf.len,
+            source_name,
+            qjs.JS_EVAL_TYPE_MODULE,
+        );
+
+        if (quickjs.JS_IsException(result)) {
+            const exc = qjs.JS_GetException(self.ctx);
+            defer qjs.JS_FreeValue(self.ctx, exc);
+            const exc_str = qjs.JS_ToCString(self.ctx, exc);
+            if (exc_str) |s| {
+                defer qjs.JS_FreeCString(self.ctx, s);
+                const len = std.mem.len(s);
+                const owned = std.heap.c_allocator.alloc(u8, len) catch return .{ .err = "out of memory" };
+                @memcpy(owned, s[0..len]);
+                return .{ .err = owned };
+            }
+            return .{ .err = "module evaluation error" };
+        }
+
+        qjs.JS_FreeValue(self.ctx, result);
+        return .{ .ok = "undefined" };
     }
 
     /// Evaluate JavaScript code. Returns the result as a string, or an error string.
@@ -258,3 +298,82 @@ pub const JsRuntime = struct {
         return out.toOwnedSlice(alloc);
     }
 };
+
+// ── ES Module Loader ────────────────────────────────────────────────
+
+const HttpClient = @import("../net/http.zig").HttpClient;
+
+/// Module loader callback for JS_SetModuleLoaderFunc.
+/// Fetches module source via HTTP and compiles it as an ES module.
+fn moduleLoader(
+    ctx: ?*qjs.JSContext,
+    module_name: [*c]const u8,
+    _: ?*anyopaque,
+) callconv(.c) ?*qjs.JSModuleDef {
+    const c = ctx orelse return null;
+    const name = std.mem.span(module_name);
+
+    std.debug.print("[Module] Loading: {s}\n", .{name});
+
+    // Only handle http/https URLs
+    if (!std.mem.startsWith(u8, name, "http://") and !std.mem.startsWith(u8, name, "https://")) {
+        // For relative paths or bare specifiers, try to resolve against current URL
+        // For now, log and return null (module not found)
+        std.debug.print("[Module] Skipping non-URL module: {s}\n", .{name});
+        _ = qjs.JS_ThrowReferenceError(c, "module '%s' not found", module_name);
+        return null;
+    }
+
+    // Fetch module source via HTTP
+    const url_z = std.heap.c_allocator.allocSentinel(u8, name.len, 0) catch {
+        _ = qjs.JS_ThrowReferenceError(c, "out of memory loading module '%s'", module_name);
+        return null;
+    };
+    defer std.heap.c_allocator.free(url_z);
+    @memcpy(url_z, name);
+
+    // Use the shared HTTP client if available, otherwise create a temporary one
+    const web_api_mod = @import("web_api.zig");
+    const client = web_api_mod.getHttpClient() orelse {
+        _ = qjs.JS_ThrowReferenceError(c, "HTTP client not available for module '%s'", module_name);
+        return null;
+    };
+
+    var response = client.getWithTimeout(std.heap.c_allocator, url_z, 10) catch {
+        _ = qjs.JS_ThrowReferenceError(c, "failed to fetch module '%s'", module_name);
+        return null;
+    };
+    defer response.deinit();
+
+    if (response.status_code != 200) {
+        std.debug.print("[Module] HTTP {d} for {s}\n", .{ response.status_code, name });
+        _ = qjs.JS_ThrowReferenceError(c, "HTTP %d loading module '%s'", @as(c_int, @intCast(response.status_code)), module_name);
+        return null;
+    }
+
+    std.debug.print("[Module] Loaded {d} bytes from {s}\n", .{ response.body.len, name });
+
+    // Null-terminate the source
+    const src_z = std.heap.c_allocator.allocSentinel(u8, response.body.len, 0) catch {
+        _ = qjs.JS_ThrowReferenceError(c, "out of memory compiling module '%s'", module_name);
+        return null;
+    };
+    defer std.heap.c_allocator.free(src_z);
+    @memcpy(src_z, response.body);
+
+    // Compile as ES module
+    const func_val = qjs.JS_Eval(c, src_z.ptr, src_z.len, module_name,
+        qjs.JS_EVAL_TYPE_MODULE | qjs.JS_EVAL_FLAG_COMPILE_ONLY);
+
+    if (quickjs.JS_IsException(func_val)) {
+        std.debug.print("[Module] Compilation failed for {s}\n", .{name});
+        return null;
+    }
+
+    // Get the module definition from the compiled function
+    // JS_VALUE_GET_PTR equivalent for getting the module pointer
+    const m: ?*qjs.JSModuleDef = @ptrCast(@alignCast(func_val.u.ptr));
+    qjs.JS_FreeValue(c, func_val);
+
+    return m;
+}

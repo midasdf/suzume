@@ -188,6 +188,8 @@ const PageState = struct {
 const DeferredScript = struct {
     code: []const u8, // Owned copy of script content
     is_external: bool,
+    is_module: bool = false,
+    source_url: ?[:0]const u8 = null,
 };
 
 /// Find <script> tags in the DOM and execute their content.
@@ -205,8 +207,11 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
 
     // Execute deferred scripts in document order
     for (deferred.items) |ds| {
-        std.debug.print("[JS] Executing deferred <script> ({d} bytes, external={any})\n", .{ ds.code.len, ds.is_external });
-        const result = js_rt.eval(ds.code);
+        std.debug.print("[JS] Executing deferred <script> ({d} bytes, external={any}, module={any})\n", .{ ds.code.len, ds.is_external, ds.is_module });
+        const result = if (ds.is_module)
+            js_rt.evalModule(ds.code, ds.source_url orelse "<module>")
+        else
+            js_rt.eval(ds.code);
         defer result.deinit();
         if (!result.isOk()) {
             std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
@@ -328,17 +333,22 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
         const name_ptr: ?[*]const u8 = lxb.lxb_dom_element_local_name(elem, &name_len);
         if (name_ptr != null and name_len == 6) {
             if (std.mem.eql(u8, name_ptr.?[0..6], "script")) {
-                // Skip type="module" scripts (ES modules not supported)
+                // Check script type attribute
                 var type_len: usize = 0;
                 const type_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+                var is_module = false;
                 if (type_ptr != null and type_len > 0) {
                     const script_type = type_ptr.?[0..type_len];
-                    // Only execute scripts with type="" (default), "text/javascript",
-                    // or "application/javascript". Skip everything else (module, json, etc.)
-                    const is_js = script_type.len == 0 or
-                        std.mem.eql(u8, script_type, "text/javascript") or
-                        std.mem.eql(u8, script_type, "application/javascript");
-                    if (!is_js) return;
+                    if (std.mem.eql(u8, script_type, "module")) {
+                        is_module = true;
+                    } else {
+                        // Only execute scripts with type="" (default), "text/javascript",
+                        // or "application/javascript". Skip everything else (json, etc.)
+                        const is_js = script_type.len == 0 or
+                            std.mem.eql(u8, script_type, "text/javascript") or
+                            std.mem.eql(u8, script_type, "application/javascript");
+                        if (!is_js) return;
+                    }
                 }
 
                 // Skip scripts with nomodule attribute
@@ -437,14 +447,17 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         @memcpy(code_copy, response.body);
                         response.deinit();
                         std.debug.print("[JS] Deferring external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code_copy.len });
-                        deferred.append(allocator, .{ .code = code_copy, .is_external = true }) catch {
+                        deferred.append(allocator, .{ .code = code_copy, .is_external = true, .is_module = is_module }) catch {
                             allocator.free(code_copy);
                             return;
                         };
                     } else {
                         const code = response.body;
-                        std.debug.print("[JS] Executing external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code.len });
-                        const result = js_rt.eval(code);
+                        std.debug.print("[JS] Executing external <script src=\"{s}\"> ({d} bytes, module={any})\n", .{ resolved_url, code.len, is_module });
+                        const result = if (is_module)
+                            js_rt.evalModule(code, resolved_url)
+                        else
+                            js_rt.eval(code);
                         defer result.deinit();
                         if (!result.isOk()) {
                             std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
@@ -462,14 +475,13 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         // Skip very large inline scripts (often JSON data blobs that crash)
                         if (content_len > 512 * 1024) {
                             std.debug.print("[JS] Skipping large inline script ({d} bytes)\n", .{content_len});
-                        } else if (is_defer) {
-                            // Defer inline script (note: per spec, defer only applies to
-                            // external scripts, but some pages use it on inline scripts too)
+                        } else if (is_defer or is_module) {
+                            // Defer inline script. ES modules are always deferred per spec.
                             const code = content_ptr.?[0..content_len];
                             const code_copy = allocator.alloc(u8, code.len) catch return;
                             @memcpy(code_copy, code);
-                            std.debug.print("[JS] Deferring inline <script> ({d} bytes)\n", .{code_copy.len});
-                            deferred.append(allocator, .{ .code = code_copy, .is_external = false }) catch {
+                            std.debug.print("[JS] Deferring inline <script> ({d} bytes, module={any})\n", .{ code_copy.len, is_module });
+                            deferred.append(allocator, .{ .code = code_copy, .is_external = false, .is_module = is_module }) catch {
                                 allocator.free(code_copy);
                                 return;
                             };
