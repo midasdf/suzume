@@ -2685,7 +2685,7 @@ fn windowLocationAssign(
     const url_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, url_s.ptr);
     // Delegate to web_api for actual navigation
-    const web_api = @import("../js/web_api.zig");
+    const web_api = @import("web_api.zig");
     web_api.requestNavigation(url_s.ptr[0..url_s.len]);
     return quickjs.JS_UNDEFINED();
 }

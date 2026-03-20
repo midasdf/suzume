@@ -130,7 +130,7 @@ const ua_stylesheet_text =
     \\a { color: #0000EE; text-decoration: underline; display: inline; }
     \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp, time, mark,
     \\data, output, wbr, ruby, rt, rp, bdi, bdo, label { display: inline; }
-    \\pre { white-space: pre; }
+    \\pre { white-space: pre; font-family: monospace; }
     \\code { font-family: monospace; display: inline; white-space: pre; }
     \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
     \\hr { border-top-width: 1px; margin-top: 8px; margin-bottom: 8px; }

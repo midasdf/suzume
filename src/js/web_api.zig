@@ -472,8 +472,8 @@ fn jsFetch(
 
     var headers_buf: [32][2][]const u8 = undefined;
     var headers_count: usize = 0;
-    // We need to track allocated header strings for cleanup
-    var header_strs: [64][]const u8 = undefined;
+    // Track allocated strings for cleanup (body + up to 32 headers * 2 key/value = max 65)
+    var header_strs: [96][]const u8 = undefined;
     var header_str_count: usize = 0;
     defer for (header_strs[0..header_str_count]) |s| {
         std.heap.c_allocator.free(s);

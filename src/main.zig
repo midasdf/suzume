@@ -2996,6 +2996,7 @@ fn handleClick(
         std.debug.print("[click] screen=({d},{d}) layout=({d:.0},{d:.0}) scroll=({d:.0},{d:.0}) content_y={d}\n", .{ mx, my, layout_x, layout_y, scroll_x.*, scroll_y.*, chrome.content_y });
 
         // Dispatch mouse events to JavaScript: mousedown → mouseup → click
+        var click_prevented = false;
         if (page.js_rt) |*js_rt| {
             if (painter_mod.hitTestNode(root_box, layout_x, layout_y)) |node_ptr| {
                 const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
@@ -3003,8 +3004,9 @@ fn handleClick(
                 js_rt.executePending();
                 _ = events.dispatchMouseEvent(js_rt.ctx, node, "mouseup", mx, my - chrome.content_y, 0);
                 js_rt.executePending();
-                _ = events.dispatchMouseEvent(js_rt.ctx, node, "click", mx, my - chrome.content_y, 0);
+                const click_allowed = events.dispatchMouseEvent(js_rt.ctx, node, "click", mx, my - chrome.content_y, 0);
                 js_rt.executePending();
+                if (!click_allowed) click_prevented = true;
                 // Re-style and re-layout if DOM was mutated by the event handler
                 if (dom_api.dom_dirty) {
                     dom_api.dom_dirty = false;
@@ -3013,6 +3015,9 @@ fn handleClick(
                 }
             }
         }
+
+        // If JS called preventDefault() on click, skip default actions
+        if (click_prevented) return;
 
         // Re-read root_box in case restylePage replaced it
         const current_root = page.root_box orelse return;

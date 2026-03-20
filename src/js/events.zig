@@ -229,7 +229,10 @@ fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?
     _ = qjs.JS_SetPropertyStr(ctx, event, "pageX", qjs.JS_NewInt32(ctx, client_x));
     _ = qjs.JS_SetPropertyStr(ctx, event, "pageY", qjs.JS_NewInt32(ctx, client_y));
     _ = qjs.JS_SetPropertyStr(ctx, event, "button", qjs.JS_NewInt32(ctx, button));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "buttons", qjs.JS_NewInt32(ctx, if (button == 0) 1 else if (button == 2) 2 else 0));
+    // buttons: bitmask of currently pressed buttons. Only set during mousedown.
+    const is_down = std.mem.eql(u8, event_type, "mousedown");
+    const buttons_val: i32 = if (is_down) (if (button == 0) 1 else if (button == 2) 2 else 0) else 0;
+    _ = qjs.JS_SetPropertyStr(ctx, event, "buttons", qjs.JS_NewInt32(ctx, buttons_val));
     return event;
 }
 
@@ -262,6 +265,25 @@ pub fn dispatchMouseEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, even
                     qjs.JS_FreeValue(ctx, this);
                     qjs.JS_FreeValue(ctx, event_obj);
 
+                    if (current_event_flags.stop_propagation) break;
+                }
+                break;
+            }
+        }
+    }
+
+    // Also fire window/document-level listeners (bubbles to window)
+    if (!current_event_flags.stop_propagation) {
+        for (window_listener_entries.items) |*entry| {
+            if (std.mem.eql(u8, entry.event_type, event_type)) {
+                for (entry.callbacks.items) |callback| {
+                    const event_obj = createMouseEventObject(ctx, event_type, target, null, client_x, client_y, button);
+                    var argv = [_]qjs.JSValue{event_obj};
+                    const global = qjs.JS_GetGlobalObject(ctx);
+                    const ret = qjs.JS_Call(ctx, callback, global, 1, &argv);
+                    qjs.JS_FreeValue(ctx, ret);
+                    qjs.JS_FreeValue(ctx, global);
+                    qjs.JS_FreeValue(ctx, event_obj);
                     if (current_event_flags.stop_propagation) break;
                 }
                 break;

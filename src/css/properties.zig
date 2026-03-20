@@ -537,7 +537,7 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
         // Extract list-style-type keyword from the shorthand value
         // e.g., "none", "disc", "decimal", "square inside", "none outside"
         var type_val = trimmed;
-        var iter = std.mem.splitScalar(u8, trimmed, ' ');
+        var iter = std.mem.tokenizeAny(u8, trimmed, " \t\n\r");
         while (iter.next()) |word| {
             const w = std.mem.trim(u8, word, " ");
             if (w.len == 0) continue;
