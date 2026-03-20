@@ -327,6 +327,7 @@ fn keyCodeToKeyName(buf: *[16]u8, key_code: u32) []const u8 {
 /// Dispatch a keyboard event (keydown/keyup) with key and keyCode properties.
 /// Returns true if preventDefault was NOT called.
 pub fn dispatchKeyboardEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, key_code: u32) bool {
+    const saved_flags = current_event_flags;
     current_event_flags = .{};
 
     // Collect ancestors for bubbling (target -> ... -> document)
@@ -371,12 +372,15 @@ pub fn dispatchKeyboardEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, e
         }
     }
 
-    return !current_event_flags.prevent_default;
+    const kb_result = !current_event_flags.prevent_default;
+    current_event_flags = saved_flags;
+    return kb_result;
 }
 
 /// Dispatch an event to a target element with bubbling.
 /// Returns true if preventDefault was NOT called.
 pub fn dispatchEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8) bool {
+    const saved_flags = current_event_flags;
     current_event_flags = .{};
 
     // Collect ancestors for bubbling (target -> ... -> document)
@@ -415,7 +419,9 @@ pub fn dispatchEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_typ
         }
     }
 
-    return !current_event_flags.prevent_default;
+    const ev_result = !current_event_flags.prevent_default;
+    current_event_flags = saved_flags;
+    return ev_result;
 }
 
 /// Dispatch a window-level event (load, DOMContentLoaded, etc.).
