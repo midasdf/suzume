@@ -56,6 +56,11 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
     // Only wrap if this is a block-level container
     if (parent.box_type != .block and parent.box_type != .anonymous_block) return;
 
+    // For flex/grid containers, ALL inline children must be wrapped in anonymous blocks
+    // (CSS spec: "Each in-flow child of a flex container becomes a flex item")
+    const is_flex_or_grid = parent.style.display == .flex or parent.style.display == .inline_flex or
+        parent.style.display == .grid or parent.style.display == .inline_grid;
+
     // Check if we have a mix of inline and block children
     var has_inline = false;
     var has_block = false;
@@ -67,9 +72,10 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
         }
     }
 
-    // If all inline or all block, no wrapping needed
-    // If all inline, the parent will use inline formatting context
-    if (!has_inline or !has_block) return;
+    // For flex/grid: force wrapping if any inline children exist
+    // For block: only wrap if mixed inline+block
+    if (!has_inline) return;
+    if (!is_flex_or_grid and !has_block) return;
 
     // Mixed: wrap consecutive inline runs in anonymous blocks
     var new_children: @TypeOf(parent.children) = .empty;
