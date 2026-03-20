@@ -178,7 +178,13 @@ pub const JsRuntime = struct {
             else if (b0 < 0xE0) 2 else if (b0 < 0xF0) 3 else if (b0 < 0xF8) 4 else 0;
 
             if (seq_len == 0 or i + seq_len > input.len) {
-                try out.appendSlice(alloc, "\xEF\xBF\xBD");
+                // Latin-1 fallback
+                if (b0 >= 0x80) {
+                    try out.append(alloc, 0xC0 | (b0 >> 6));
+                    try out.append(alloc, 0x80 | (b0 & 0x3F));
+                } else {
+                    try out.append(alloc, '?');
+                }
                 i += 1;
                 continue;
             }
@@ -193,7 +199,13 @@ pub const JsRuntime = struct {
             }
 
             if (!valid) {
-                try out.appendSlice(alloc, "\xEF\xBF\xBD");
+                // Latin-1 fallback
+                if (b0 >= 0x80) {
+                    try out.append(alloc, 0xC0 | (b0 >> 6));
+                    try out.append(alloc, 0x80 | (b0 & 0x3F));
+                } else {
+                    try out.append(alloc, '?');
+                }
                 i += 1;
                 continue;
             }
@@ -222,7 +234,14 @@ pub const JsRuntime = struct {
                 try out.appendSlice(alloc, input[i .. i + seq_len]);
                 i += seq_len;
             } else {
-                try out.appendSlice(alloc, "\xEF\xBF\xBD");
+                // Try Latin-1 interpretation: 0x80-0xFF → valid UTF-8
+                if (b0 >= 0x80 and b0 <= 0xFF) {
+                    // Encode Latin-1 byte as UTF-8 (U+0080..U+00FF)
+                    try out.append(alloc, 0xC0 | (b0 >> 6));
+                    try out.append(alloc, 0x80 | (b0 & 0x3F));
+                } else {
+                    try out.append(alloc, '?');
+                }
                 i += 1;
             }
         }
