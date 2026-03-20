@@ -1494,6 +1494,117 @@ fn documentCreateComment(
     return obj;
 }
 
+fn documentAdoptNode(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    return qjs.JS_DupValue(c, args[0]);
+}
+
+fn documentImportNode(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    return qjs.JS_DupValue(c, args[0]);
+}
+
+fn documentCreateRange(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const range = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, range, "startOffset", qjs.JS_NewInt32(c, 0));
+    _ = qjs.JS_SetPropertyStr(c, range, "endOffset", qjs.JS_NewInt32(c, 0));
+    _ = qjs.JS_SetPropertyStr(c, range, "collapsed", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(c, range, "setStart", qjs.JS_NewCFunction(c, &jsReturnNull, "setStart", 2));
+    _ = qjs.JS_SetPropertyStr(c, range, "setEnd", qjs.JS_NewCFunction(c, &jsReturnNull, "setEnd", 2));
+    _ = qjs.JS_SetPropertyStr(c, range, "selectNode", qjs.JS_NewCFunction(c, &jsReturnNull, "selectNode", 1));
+    _ = qjs.JS_SetPropertyStr(c, range, "selectNodeContents", qjs.JS_NewCFunction(c, &jsReturnNull, "selectNodeContents", 1));
+    _ = qjs.JS_SetPropertyStr(c, range, "collapse", qjs.JS_NewCFunction(c, &jsReturnNull, "collapse", 1));
+    _ = qjs.JS_SetPropertyStr(c, range, "cloneRange", qjs.JS_NewCFunction(c, &documentCreateRange, "cloneRange", 0));
+    _ = qjs.JS_SetPropertyStr(c, range, "getBoundingClientRect", qjs.JS_NewCFunction(c, &elementGetBoundingClientRect, "getBoundingClientRect", 0));
+    return range;
+}
+
+fn documentCreateTreeWalker(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const walker = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, walker, "currentNode", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, walker, "nextNode", qjs.JS_NewCFunction(c, &jsReturnNull, "nextNode", 0));
+    _ = qjs.JS_SetPropertyStr(c, walker, "previousNode", qjs.JS_NewCFunction(c, &jsReturnNull, "previousNode", 0));
+    _ = qjs.JS_SetPropertyStr(c, walker, "firstChild", qjs.JS_NewCFunction(c, &jsReturnNull, "firstChild", 0));
+    _ = qjs.JS_SetPropertyStr(c, walker, "lastChild", qjs.JS_NewCFunction(c, &jsReturnNull, "lastChild", 0));
+    _ = qjs.JS_SetPropertyStr(c, walker, "parentNode", qjs.JS_NewCFunction(c, &jsReturnNull, "parentNode", 0));
+    return walker;
+}
+
+fn jsReturnNull(
+    _: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return quickjs.JS_NULL();
+}
+
+fn nodeIsEqualNode(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    if (argc < 1) return quickjs.JS_NewBool(false);
+    const args = argv orelse return quickjs.JS_NewBool(false);
+    const node_a = getNode(c, this_val);
+    const node_b = getNode(c, args[0]);
+    return quickjs.JS_NewBool(node_a != null and node_b != null and node_a.? == node_b.?);
+}
+
+fn nodeCompareDocumentPosition(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return qjs.JS_NewInt32(c, 0);
+    const args = argv orelse return qjs.JS_NewInt32(c, 0);
+    const node_a = getNode(c, this_val) orelse return qjs.JS_NewInt32(c, 1);
+    const node_b = getNode(c, args[0]) orelse return qjs.JS_NewInt32(c, 1);
+    if (node_a == node_b) return qjs.JS_NewInt32(c, 0);
+    // Simplified: check if b is descendant of a, or vice versa
+    var walk: ?*lxb.lxb_dom_node_t = node_b;
+    while (walk) |w| {
+        if (w == node_a) return qjs.JS_NewInt32(c, 16 | 4); // CONTAINS | FOLLOWING
+        walk = w.parent;
+    }
+    walk = node_a;
+    while (walk) |w| {
+        if (w == node_b) return qjs.JS_NewInt32(c, 8 | 2); // CONTAINED_BY | PRECEDING
+        walk = w.parent;
+    }
+    return qjs.JS_NewInt32(c, 1); // DISCONNECTED
+}
+
 // ── element.contains(other) ─────────────────────────────────────────
 
 fn elementContains(
@@ -3788,6 +3899,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "remove", qjs.JS_NewCFunction(ctx, &elementRemove, "remove", 0));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "append", qjs.JS_NewCFunction(ctx, &elementAppend, "append", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "prepend", qjs.JS_NewCFunction(ctx, &elementPrepend, "prepend", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "isEqualNode", qjs.JS_NewCFunction(ctx, &nodeIsEqualNode, "isEqualNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "normalize", qjs.JS_NewCFunction(ctx, &jsReturnNull, "normalize", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &nodeCompareDocumentPosition, "compareDocumentPosition", 1));
 
     // Node constants
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
@@ -4052,6 +4166,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByName", qjs.JS_NewCFunction(ctx, &documentGetElementsByName, "getElementsByName", 1));
 
+    // document.adoptNode / importNode (stub — return the node as-is)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptNode", qjs.JS_NewCFunction(ctx, &documentAdoptNode, "adoptNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &documentImportNode, "importNode", 2));
+    // document.createRange (stub)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &documentCreateRange, "createRange", 0));
+    // document.createTreeWalker (stub)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &documentCreateTreeWalker, "createTreeWalker", 3));
+    // document.createNodeIterator (stub)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createNodeIterator", qjs.JS_NewCFunction(ctx, &documentCreateTreeWalker, "createNodeIterator", 3));
+
     // document.readyState (getter)
     const readyStateAtom = qjs.JS_NewAtom(ctx, "readyState");
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, readyStateAtom, qjs.JS_NewCFunction(ctx, &documentGetReadyState, "get readyState", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
@@ -4108,6 +4232,27 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compatMode", qjs.JS_NewString(ctx, "CSS1Compat"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "contentType", qjs.JS_NewString(ctx, "text/html"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "characterSet", qjs.JS_NewString(ctx, "UTF-8"));
+
+    // document.forms / links / images (query-based getters)
+    {
+        const forms_js = "(function(){return document.querySelectorAll('form');})";
+        const formsAtom = qjs.JS_NewAtom(ctx, "forms");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, formsAtom, qjs.JS_Eval(ctx, forms_js, forms_js.len, "<forms>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, formsAtom);
+    }
+    {
+        const links_js = "(function(){return document.querySelectorAll('a[href],area[href]');})";
+        const linksAtom = qjs.JS_NewAtom(ctx, "links");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, linksAtom, qjs.JS_Eval(ctx, links_js, links_js.len, "<links>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, linksAtom);
+    }
+    {
+        const images_js = "(function(){return document.querySelectorAll('img');})";
+        const imagesAtom = qjs.JS_NewAtom(ctx, "images");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, imagesAtom, qjs.JS_Eval(ctx, images_js, images_js.len, "<images>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, imagesAtom);
+    }
+
     // document.implementation (jQuery feature detection uses createHTMLDocument)
     {
         const impl = qjs.JS_NewObject(ctx);

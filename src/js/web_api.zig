@@ -1214,7 +1214,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
         \\}
 
-        \\if(typeof AbortController==='undefined'){globalThis.AbortController=function(){this.signal={aborted:false,addEventListener:function(){}};this.abort=function(){this.signal.aborted=true;};};}
+
         \\if(typeof XMLHttpRequest==='undefined'){
         \\  globalThis.XMLHttpRequest=function(){
         \\    this.readyState=0;this.status=0;this.statusText='';this.responseText='';this.responseURL='';
@@ -1305,6 +1305,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
         \\if(typeof visualViewport==='undefined'){globalThis.visualViewport={width:innerWidth,height:innerHeight,offsetLeft:0,offsetTop:0,scale:1,addEventListener:function(){}};}
         \\if(typeof CSS==='undefined'){globalThis.CSS={supports:function(){return false;},escape:function(s){return s;}};}
+        \\if(typeof CSSStyleDeclaration==='undefined'){globalThis.CSSStyleDeclaration=function(){};CSSStyleDeclaration.prototype.getPropertyValue=function(n){return this[n]||'';};CSSStyleDeclaration.prototype.setProperty=function(n,v){this[n]=v;};CSSStyleDeclaration.prototype.removeProperty=function(n){delete this[n];return'';};}
         \\if(typeof console!=='undefined'&&!console.warn){console.warn=console.log;console.error=console.log;console.info=console.log;console.debug=console.log;console.trace=function(){};}
         \\if(typeof document!=='undefined'){
         \\  if(!document.getElementsByClassName)document.getElementsByClassName=function(n){return document.querySelectorAll('.'+n);};
