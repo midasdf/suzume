@@ -91,6 +91,8 @@ const tracking_patterns = [_][]const u8{
     "clarity.ms",
     "plausible.io",
     "matomo",
+    "recaptcha",
+    "grecaptcha",
 };
 
 /// Check if a script URL is for tracking/analytics and can be skipped.

@@ -13,6 +13,9 @@ pub const JsRuntime = struct {
 
         qjs.JS_SetMemoryLimit(rt, 48 * 1024 * 1024);
 
+        // Interrupt handler prevents infinite loops / very heavy scripts
+        qjs.JS_SetInterruptHandler(rt, &interruptHandler, null);
+
         const ctx = qjs.JS_NewContext(rt) orelse {
             return error.JsContextInit;
         };
@@ -43,6 +46,7 @@ pub const JsRuntime = struct {
 
     /// Evaluate JavaScript code as an ES module.
     pub fn evalModule(self: *JsRuntime, code: []const u8, source_name: [*:0]const u8) EvalResult {
+        resetScriptTimer();
         const clean = sanitizeUtf8(code) catch code;
         defer if (clean.ptr != code.ptr) std.heap.c_allocator.free(clean);
 
@@ -80,6 +84,7 @@ pub const JsRuntime = struct {
 
     /// Evaluate JavaScript code. Returns the result as a string, or an error string.
     pub fn eval(self: *JsRuntime, code: []const u8) EvalResult {
+        resetScriptTimer();
         // Sanitize invalid UTF-8 sequences before QuickJS eval
         const clean = sanitizeUtf8(code) catch code;
         defer if (clean.ptr != code.ptr) std.heap.c_allocator.free(clean);
@@ -298,6 +303,35 @@ pub const JsRuntime = struct {
         return out.toOwnedSlice(alloc);
     }
 };
+
+// ── Script Execution Timeout ────────────────────────────────────────
+
+/// Timestamp (ms) when current script execution started.
+var script_start_time: i64 = 0;
+/// Maximum execution time per eval() call in milliseconds.
+const max_script_execution_ms: i64 = 5000; // 5 seconds
+
+fn currentTimeMs() i64 {
+    const ts = std.time.milliTimestamp();
+    return ts;
+}
+
+/// Called before each eval to reset the timer.
+fn resetScriptTimer() void {
+    script_start_time = currentTimeMs();
+}
+
+/// QuickJS interrupt handler — called periodically during script execution.
+/// Return 1 to interrupt (abort), 0 to continue.
+fn interruptHandler(_: ?*qjs.JSRuntime, _: ?*anyopaque) callconv(.c) c_int {
+    if (script_start_time == 0) return 0; // timer not set
+    const elapsed = currentTimeMs() - script_start_time;
+    if (elapsed > max_script_execution_ms) {
+        std.debug.print("[JS] Script execution timeout ({d}ms > {d}ms limit)\n", .{ elapsed, max_script_execution_ms });
+        return 1; // interrupt
+    }
+    return 0; // continue
+}
 
 // ── ES Module Loader ────────────────────────────────────────────────
 

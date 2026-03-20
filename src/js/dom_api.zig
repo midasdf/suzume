@@ -4352,7 +4352,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // navigator object (minimal)
     const nav_obj = qjs.JS_NewObject(ctx);
-    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "userAgent", qjs.JS_NewStringLen(ctx, "Mozilla/5.0 Suzume/1.0", 22));
+    const nav_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "userAgent", qjs.JS_NewStringLen(ctx, nav_ua, nav_ua.len));
     _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "language", qjs.JS_NewStringLen(ctx, "en", 2));
     _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "platform", qjs.JS_NewStringLen(ctx, "Linux", 5));
     _ = qjs.JS_SetPropertyStr(ctx, global, "navigator", nav_obj);

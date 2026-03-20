@@ -4,7 +4,7 @@ const c = @cImport({
     @cInclude("curl/curl.h");
 });
 
-const ua_string = "suzume/1.0 (Linux; " ++ @tagName(builtin.cpu.arch) ++ ")";
+const ua_string = "Mozilla/5.0 (X11; Linux " ++ @tagName(builtin.cpu.arch) ++ ") AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 pub const Response = struct {
     status_code: u32,
