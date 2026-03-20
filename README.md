@@ -20,13 +20,40 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 - CSS transforms (translate)
 - 120+ CSS properties, 200+ unit tests
 - HTML5 parsing via lexbor
-- JavaScript via QuickJS-ng (basic DOM API, event handling)
+- **JavaScript engine** — QuickJS-ng with full DOM/Web API (see Benchmark below)
 - X11/XCB framebuffer rendering via libnsfb
 - FreeType + HarfBuzz text shaping (CJK support)
 - Tab browsing, keyboard navigation, find-in-page
 - Window resize with re-layout and media query re-evaluation
 - Mouse wheel scrolling
 - SSL certificate fallback with hostname verification
+
+## Benchmark
+
+**111/111 (100%)** on the internal capability test suite.
+
+| Category | Score | Details |
+|----------|-------|---------|
+| DOM Core | 28/28 | createElement, querySelector, classList, innerHTML, etc. |
+| CSS / Style | 5/5 | getComputedStyle, style manipulation |
+| Events | 6/6 | addEventListener, removeEventListener, bubbling, dispatchEvent |
+| Timers | 6/6 | setTimeout, setInterval, requestAnimationFrame, performance.now |
+| Web APIs | 6/6 | console, JSON, window, navigator |
+| ES6+ | 21/21 | let/const, arrow functions, async/await, Proxy, optional chaining, etc. |
+| Form Elements | 4/4 | input.value, textarea.value, select.value |
+| Mouse Events | 3/3 | mousedown, mouseup, mousemove |
+| Event Correctness | 1/1 | removeEventListener identity check |
+| Scroll APIs | 5/5 | scrollTo, scrollBy, scrollX/Y, pageYOffset |
+| Navigation APIs | 5/5 | location.assign/replace, history.pushState/replaceState/back |
+| XHR | 5/5 | XMLHttpRequest with open/send/setRequestHeader/readyState |
+| MutationObserver | 3/3 | constructor, observe, disconnect |
+| Advanced Web | 12/12 | fetch, localStorage, Canvas 2D, WebSocket, Worker, Blob, crypto, etc. |
+| Error Handling | 2/2 | try/catch, TypeError |
+
+Additional test suites:
+- **QuickJS ES features**: 61/63 (97%) — ES2024 coverage
+- **DOM API audit**: 74/74 (100%) — TextEncoder, Intl, AbortController, etc.
+- **Real site JS errors**: 0 on HN, Reddit, CNN, Wikipedia, DDG, Lobsters, npm
 
 ## Tested Sites
 
