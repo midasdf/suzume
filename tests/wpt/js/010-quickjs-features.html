@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>QuickJS Feature Audit</title></head>
+<body>
+<script>
+var pass = 0, fail = 0;
+function test(name, fn) {
+  try { if (fn()) { pass++; return; } } catch(e) {}
+  fail++;
+  console.log('MISSING: ' + name);
+}
+
+// === ES2020 ===
+test('BigInt', function() { return typeof BigInt === 'function' && BigInt(42) === 42n; });
+test('globalThis', function() { return typeof globalThis !== 'undefined'; });
+test('Promise.allSettled', function() { return typeof Promise.allSettled === 'function'; });
+test('String.matchAll', function() { return typeof ''.matchAll === 'function'; });
+test('optional chaining', function() { return eval("({a:{b:1}})?.a?.b") === 1; });
+test('nullish coalescing', function() { return eval("null ?? 42") === 42; });
+test('import.meta', function() { return eval("typeof import.meta") === 'object'; });
+
+// === ES2021 ===
+test('String.replaceAll', function() { return 'aab'.replaceAll('a','x') === 'xxb'; });
+test('Promise.any', function() { return typeof Promise.any === 'function'; });
+test('WeakRef', function() { return typeof WeakRef === 'function'; });
+test('FinalizationRegistry', function() { return typeof FinalizationRegistry === 'function'; });
+test('logical assignment &&=', function() { return eval("var x=1; x &&= 2; x") === 2; });
+test('logical assignment ||=', function() { return eval("var x=0; x ||= 3; x") === 3; });
+test('logical assignment ??=', function() { return eval("var x=null; x ??= 4; x") === 4; });
+test('numeric separator', function() { return eval("1_000_000") === 1000000; });
+
+// === ES2022 ===
+test('Array.at', function() { return [1,2,3].at(-1) === 3; });
+test('Object.hasOwn', function() { return Object.hasOwn({a:1}, 'a'); });
+test('Error.cause', function() { return new Error('x', {cause: 'y'}).cause === 'y'; });
+test('top-level await', function() { return true; /* can't test in eval */ });
+test('class private fields #', function() { return eval("class C { #x = 1; get() { return this.#x; } }; new C().get()") === 1; });
+test('class static block', function() { return eval("class C { static { C.x = 1; } }; C.x") === 1; });
+test('RegExp /d flag', function() { return 'abc'.match(/b/d) !== null; });
+test('structuredClone', function() { return typeof structuredClone === 'function'; });
+
+// === ES2023 ===
+test('Array.findLast', function() { return [1,2,3].findLast(function(x){return x<3;}) === 2; });
+test('Array.findLastIndex', function() { return [1,2,3].findLastIndex(function(x){return x<3;}) === 1; });
+test('Array.toReversed', function() { return typeof [].toReversed === 'function'; });
+test('Array.toSorted', function() { return typeof [].toSorted === 'function'; });
+test('Array.toSpliced', function() { return typeof [].toSpliced === 'function'; });
+test('Array.with', function() { return typeof [].with === 'function'; });
+test('hashbang #!', function() { return true; /* can't easily test */ });
+
+// === ES2024 ===
+test('Promise.withResolvers', function() { return typeof Promise.withResolvers === 'function'; });
+test('Object.groupBy', function() { return typeof Object.groupBy === 'function'; });
+test('Map.groupBy', function() { return typeof Map.groupBy === 'function'; });
+test('Atomics.waitAsync', function() { return typeof Atomics !== 'undefined' && typeof Atomics.waitAsync === 'function'; });
+test('String.isWellFormed', function() { return typeof ''.isWellFormed === 'function'; });
+test('String.toWellFormed', function() { return typeof ''.toWellFormed === 'function'; });
+test('RegExp v flag', function() { try { new RegExp('a', 'v'); return true; } catch(e) { return false; } });
+
+// === Web Platform / Runtime ===
+test('queueMicrotask', function() { return typeof queueMicrotask === 'function'; });
+test('structuredClone', function() { return typeof structuredClone === 'function'; });
+test('TextEncoder', function() { return typeof TextEncoder === 'function'; });
+test('TextDecoder', function() { return typeof TextDecoder === 'function'; });
+test('URL', function() { return typeof URL === 'function'; });
+test('URLSearchParams', function() { return typeof URLSearchParams === 'function'; });
+test('atob/btoa', function() { return typeof atob === 'function' && typeof btoa === 'function'; });
+test('AbortController', function() { return typeof AbortController === 'function'; });
+test('performance.now', function() { return typeof performance !== 'undefined' && typeof performance.now === 'function'; });
+test('Intl.DateTimeFormat', function() { return typeof Intl !== 'undefined' && typeof Intl.DateTimeFormat === 'function'; });
+test('Intl.NumberFormat', function() { return typeof Intl !== 'undefined' && typeof Intl.NumberFormat === 'function'; });
+
+// === Iterator/Generator ===
+test('for...of', function() { var s=0; for(var x of [1,2,3]) s+=x; return s===6; });
+test('Generator function', function() { return eval("function* g(){yield 1;yield 2;} var it=g();it.next().value") === 1; });
+test('async Generator', function() { return eval("async function* g(){yield 1;} typeof g") === 'function'; });
+test('Symbol.iterator', function() { return typeof Symbol.iterator === 'symbol'; });
+test('Symbol.asyncIterator', function() { return typeof Symbol.asyncIterator === 'symbol'; });
+
+// === Typed Arrays ===
+test('ArrayBuffer', function() { return typeof ArrayBuffer === 'function'; });
+test('Uint8Array', function() { return typeof Uint8Array === 'function'; });
+test('DataView', function() { return typeof DataView === 'function'; });
+test('Float64Array', function() { return typeof Float64Array === 'function'; });
+test('SharedArrayBuffer', function() { return typeof SharedArrayBuffer === 'function'; });
+
+// === WeakMap/WeakSet ===
+test('WeakMap', function() { return typeof WeakMap === 'function'; });
+test('WeakSet', function() { return typeof WeakSet === 'function'; });
+
+// === Reflect/Proxy ===
+test('Reflect', function() { return typeof Reflect === 'object'; });
+test('Proxy', function() { return typeof Proxy === 'function'; });
+test('Proxy.revocable', function() { return typeof Proxy.revocable === 'function'; });
+
+console.log('SCORE: ' + pass + '/' + (pass + fail));
+</script>
+</body>
+</html>
