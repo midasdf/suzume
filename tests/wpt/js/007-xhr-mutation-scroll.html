@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>XHR, MutationObserver, Scroll Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 10px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; font-weight: bold; } .fail { color: #e74c3c; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>XHR, MutationObserver, Scroll Tests</h1>
+
+<h2>1. XMLHttpRequest constructor</h2>
+<div class="test" id="t1">Checking...</div>
+
+<h2>2. XHR open/send/readyState</h2>
+<div class="test" id="t2">Checking...</div>
+
+<h2>3. XHR setRequestHeader</h2>
+<div class="test" id="t3">Checking...</div>
+
+<h2>4. XHR constants</h2>
+<div class="test" id="t4">Checking...</div>
+
+<h2>5. MutationObserver constructor</h2>
+<div class="test" id="t5">Checking...</div>
+
+<h2>6. MutationObserver observe/disconnect</h2>
+<div class="test" id="t6">Checking...</div>
+
+<h2>7. window.scrollX/scrollY defined</h2>
+<div class="test" id="t7">Checking...</div>
+
+<h2>8. window.pageXOffset/pageYOffset</h2>
+<div class="test" id="t8">Checking...</div>
+
+<h2>9. scrollTo function</h2>
+<div class="test" id="t9">Checking...</div>
+
+<h2>10. scrollBy function</h2>
+<div class="test" id="t10">Checking...</div>
+
+<h2>11. document.activeElement</h2>
+<div class="test" id="t11">Checking...</div>
+
+<h2>12. Blob constructor</h2>
+<div class="test" id="t12">Checking...</div>
+
+<h2>13. Blob.text()</h2>
+<div class="test" id="t13">Checking...</div>
+
+<h2>14. crypto.getRandomValues</h2>
+<div class="test" id="t14">Checking...</div>
+
+<h2>15. history.pushState/replaceState</h2>
+<div class="test" id="t15">Checking...</div>
+
+<script>
+var pass = 0, fail = 0;
+function check(id, cond, msg) {
+  var el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'test ' + (cond ? 'pass' : 'fail');
+  if (cond) pass++; else fail++;
+  console.log((cond ? 'PASS' : 'FAIL') + ': ' + msg);
+}
+
+// Test 1: XHR constructor
+check('t1', typeof XMLHttpRequest === 'function', 'typeof XMLHttpRequest = ' + typeof XMLHttpRequest);
+
+// Test 2: XHR open/send/readyState
+var xhr = new XMLHttpRequest();
+check('t2', xhr.readyState === 0 && typeof xhr.open === 'function' && typeof xhr.send === 'function',
+  'readyState=' + xhr.readyState + ' open=' + typeof xhr.open + ' send=' + typeof xhr.send);
+
+// Test 3: XHR setRequestHeader
+check('t3', typeof xhr.setRequestHeader === 'function', 'typeof setRequestHeader = ' + typeof xhr.setRequestHeader);
+
+// Test 4: XHR constants
+check('t4', XMLHttpRequest.DONE === 4 && XMLHttpRequest.OPENED === 1,
+  'DONE=' + XMLHttpRequest.DONE + ' OPENED=' + XMLHttpRequest.OPENED);
+
+// Test 5: MutationObserver constructor
+var moCreated = false;
+try {
+  var mo = new MutationObserver(function() {});
+  moCreated = true;
+} catch(e) {}
+check('t5', moCreated, 'MutationObserver created: ' + moCreated);
+
+// Test 6: MutationObserver observe/disconnect
+var moMethods = false;
+try {
+  var mo2 = new MutationObserver(function() {});
+  moMethods = typeof mo2.observe === 'function' && typeof mo2.disconnect === 'function' && typeof mo2.takeRecords === 'function';
+} catch(e) {}
+check('t6', moMethods, 'observe/disconnect/takeRecords available: ' + moMethods);
+
+// Test 7: scrollX/scrollY
+check('t7', typeof scrollX === 'number' && typeof scrollY === 'number',
+  'scrollX=' + scrollX + ' scrollY=' + scrollY);
+
+// Test 8: pageXOffset/pageYOffset
+check('t8', typeof pageXOffset === 'number' && typeof pageYOffset === 'number',
+  'pageXOffset=' + pageXOffset + ' pageYOffset=' + pageYOffset);
+
+// Test 9: scrollTo
+check('t9', typeof scrollTo === 'function', 'typeof scrollTo = ' + typeof scrollTo);
+
+// Test 10: scrollBy
+check('t10', typeof scrollBy === 'function', 'typeof scrollBy = ' + typeof scrollBy);
+
+// Test 11: document.activeElement
+check('t11', document.activeElement !== undefined && document.activeElement !== null,
+  'document.activeElement = ' + (document.activeElement ? document.activeElement.tagName : 'null'));
+
+// Test 12: Blob constructor
+var blob = null;
+try {
+  blob = new Blob(['hello', ' world'], { type: 'text/plain' });
+} catch(e) {}
+check('t12', blob !== null && blob.size === 11 && blob.type === 'text/plain',
+  'Blob created: size=' + (blob ? blob.size : '?') + ' type=' + (blob ? blob.type : '?'));
+
+// Test 13: Blob.text()
+if (blob && typeof blob.text === 'function') {
+  blob.text().then(function(text) {
+    check('t13', text === 'hello world', 'Blob.text() = "' + text + '"');
+  }).catch(function(e) {
+    check('t13', false, 'Blob.text() error: ' + e);
+  });
+} else {
+  check('t13', false, 'Blob.text not available');
+}
+
+// Test 14: crypto.getRandomValues
+var cryptoOk = false;
+try {
+  var arr = new Uint8Array(8);
+  crypto.getRandomValues(arr);
+  // Check that at least one value is non-zero (very unlikely all zeros)
+  var hasNonZero = false;
+  for (var i = 0; i < arr.length; i++) if (arr[i] !== 0) hasNonZero = true;
+  cryptoOk = hasNonZero;
+} catch(e) {}
+check('t14', cryptoOk, 'crypto.getRandomValues works: ' + cryptoOk);
+
+// Test 15: history.pushState
+var histOk = typeof history.pushState === 'function' && typeof history.replaceState === 'function' &&
+             typeof history.back === 'function' && typeof history.state !== 'undefined';
+check('t15', histOk, 'history API: pushState=' + typeof history.pushState +
+  ' replaceState=' + typeof history.replaceState + ' state=' + history.state);
+
+// Final
+setTimeout(function() {
+  console.log('SCORE: ' + pass + '/' + (pass + fail));
+}, 200);
+</script>
+</body>
+</html>

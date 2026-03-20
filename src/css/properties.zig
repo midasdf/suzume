@@ -532,6 +532,27 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
             .{ .id = .padding_left, .name = "padding-left" },
         }, allocator);
     }
+    // list-style shorthand: map to list-style-type (simplified — ignores position/image)
+    if (std.mem.eql(u8, name, "list-style")) {
+        // Extract list-style-type keyword from the shorthand value
+        // e.g., "none", "disc", "decimal", "square inside", "none outside"
+        var type_val = trimmed;
+        var iter = std.mem.tokenizeAny(u8, trimmed, " \t\n\r");
+        while (iter.next()) |word| {
+            const w = std.mem.trim(u8, word, " ");
+            if (w.len == 0) continue;
+            if (eqlIgnoreCase(w, "none") or eqlIgnoreCase(w, "disc") or
+                eqlIgnoreCase(w, "circle") or eqlIgnoreCase(w, "square") or
+                eqlIgnoreCase(w, "decimal"))
+            {
+                type_val = w;
+                break;
+            }
+        }
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .list_style_type, .property_name = "list-style-type", .value_raw = type_val, .important = false };
+        return decls;
+    }
     if (std.mem.eql(u8, name, "border-radius")) {
         return expandBoxShorthand(trimmed, &.{
             .{ .id = .border_radius_top_left, .name = "border-top-left-radius" },

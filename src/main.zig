@@ -513,6 +513,9 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Inject click/dispatchEvent/addEventListener into Element prototype
     events.injectElementEventMethods(js_rt.ctx, dom_api.element_class_id);
 
+    // Set current URL for location object and cookie domain
+    dom_api.setCurrentUrl(base_url);
+
     // readyState = "loading" during script execution
     dom_api.setReadyState(.loading);
 
@@ -1386,6 +1389,31 @@ pub fn main() !void {
     };
     defer http_client.deinit();
 
+    // Set up persistent cookie storage
+    const cookie_path = blk: {
+        const home = std.posix.getenv("HOME") orelse break :blk null;
+        const path = std.fmt.allocPrint(allocator, "{s}/.local/share/suzume/cookies.txt", .{home}) catch break :blk null;
+        const path_z = allocator.allocSentinel(u8, path.len, 0) catch {
+            allocator.free(path);
+            break :blk null;
+        };
+        @memcpy(path_z, path);
+        allocator.free(path);
+        break :blk path_z;
+    };
+    if (cookie_path) |cp| {
+        // Ensure directory exists
+        const dir_end = std.mem.lastIndexOf(u8, cp, "/") orelse 0;
+        if (dir_end > 0) {
+            std.fs.cwd().makePath(cp[0..dir_end]) catch {};
+        }
+        http_client.setCookieFile(cp);
+        std.debug.print("Cookie file: {s}\n", .{cp});
+    }
+
+    // Share HTTP client with fetch() API so cookies are shared
+    web_api.setSharedHttpClient(&http_client);
+
     var loader = Loader.init(allocator, &http_client);
 
     // Font
@@ -1707,12 +1735,55 @@ pub fn main() !void {
                 null;
             if (active_pg) |pg| {
                 if (pg.js_rt) |*js_rt| {
+                    // Sync scroll position to JS before ticking timers
+                    dom_api.scroll_x = scroll_x;
+                    dom_api.scroll_y = scroll_y;
+
                     _ = web_api.tickTimers(js_rt.ctx);
                     js_rt.executePending();
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
                         restylePage(pg, allocator, &fonts, surface.width, surface.height);
                         needs_repaint = true;
+                    }
+                    // Apply pending scroll requests from JS (clamp to content bounds)
+                    if (dom_api.pending_scroll_y) |sy| {
+                        const max_scroll_y = @max(pg.total_height - @as(f32, @floatFromInt(surface.height - chrome.content_y - chrome.status_bar_height)), 0);
+                        scroll_y = @max(0, @min(sy, max_scroll_y));
+                        dom_api.pending_scroll_y = null;
+                        needs_repaint = true;
+                    }
+                    if (dom_api.pending_scroll_x) |sx| {
+                        const max_scroll_x = @max(pg.total_width - @as(f32, @floatFromInt(surface.width)), 0);
+                        scroll_x = @max(0, @min(sx, max_scroll_x));
+                        dom_api.pending_scroll_x = null;
+                        needs_repaint = true;
+                    }
+                }
+            }
+        }
+
+        // Check for JS-initiated navigation (location.assign, location.href = ...)
+        if (web_api.getPendingNavigation()) |nav_url| {
+            defer std.heap.c_allocator.free(nav_url);
+            const nav_url_z = allocator.allocSentinel(u8, nav_url.len, 0) catch null;
+            if (nav_url_z) |uz| {
+                defer allocator.free(uz);
+                @memcpy(uz, nav_url);
+                const nav_pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                if (nav_pg) |pg| {
+                    status_text = "Loading...";
+                    if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                        status_text = "Done";
+                        scroll_y = 0;
+                        scroll_x = 0;
+                        if (current_url) |old| allocator.free(old);
+                        current_url = allocator.dupe(u8, nav_url) catch null;
+                        url_input.setText(nav_url);
+                        tab_mgr.updateActiveUrl(nav_url);
+                        needs_repaint = true;
+                    } else {
+                        status_text = "Failed";
                     }
                 }
             }
@@ -2283,6 +2354,7 @@ pub fn main() !void {
                             );
                             // Dispatch focus/blur events when focused element changes
                             if (focused_input_node != prev_focused_input_node) {
+                                dom_api.active_element = focused_input_node;
                                 if (page.js_rt) |*js_rt| {
                                     if (prev_focused_input_node) |prev_node| {
                                         _ = events.dispatchEvent(js_rt.ctx, prev_node, "blur");
@@ -2688,6 +2760,24 @@ pub fn main() !void {
                     mouse_x = event.value.vector.x;
                     mouse_y = event.value.vector.y;
 
+                    // Dispatch mousemove to JS if in content area
+                    if (mouse_y >= chrome.content_y and mouse_y < surface.height - chrome.status_bar_height) {
+                        const pg_move = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        if (pg_move) |p_move| {
+                            if (p_move.js_rt) |*js_rt| {
+                                if (p_move.root_box) |root| {
+                                    const lx_m = @as(f32, @floatFromInt(mouse_x)) + scroll_x;
+                                    const ly_m = @as(f32, @floatFromInt(mouse_y - chrome.content_y)) + scroll_y;
+                                    if (painter_mod.hitTestNode(root, lx_m, ly_m)) |node_ptr| {
+                                        const mnode: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
+                                        _ = events.dispatchMouseEvent(js_rt.ctx, mnode, "mousemove", mouse_x, mouse_y - chrome.content_y, 0);
+                                        js_rt.executePending();
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // Update cursor shape based on what's under the mouse
                     if (mouse_y >= chrome.content_y and mouse_y < surface.height - chrome.status_bar_height) {
                         const layout_x = @as(f32, @floatFromInt(mouse_x)) + scroll_x;
@@ -2907,12 +2997,18 @@ fn handleClick(
 
         std.debug.print("[click] screen=({d},{d}) layout=({d:.0},{d:.0}) scroll=({d:.0},{d:.0}) content_y={d}\n", .{ mx, my, layout_x, layout_y, scroll_x.*, scroll_y.*, chrome.content_y });
 
-        // Dispatch click event to JavaScript
+        // Dispatch mouse events to JavaScript: mousedown → mouseup → click
+        var click_prevented = false;
         if (page.js_rt) |*js_rt| {
             if (painter_mod.hitTestNode(root_box, layout_x, layout_y)) |node_ptr| {
                 const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
-                _ = events.dispatchEvent(js_rt.ctx, node, "click");
+                _ = events.dispatchMouseEvent(js_rt.ctx, node, "mousedown", mx, my - chrome.content_y, 0);
                 js_rt.executePending();
+                _ = events.dispatchMouseEvent(js_rt.ctx, node, "mouseup", mx, my - chrome.content_y, 0);
+                js_rt.executePending();
+                const click_allowed = events.dispatchMouseEvent(js_rt.ctx, node, "click", mx, my - chrome.content_y, 0);
+                js_rt.executePending();
+                if (!click_allowed) click_prevented = true;
                 // Re-style and re-layout if DOM was mutated by the event handler
                 if (dom_api.dom_dirty) {
                     dom_api.dom_dirty = false;
@@ -2921,6 +3017,9 @@ fn handleClick(
                 }
             }
         }
+
+        // If JS called preventDefault() on click, skip default actions
+        if (click_prevented) return;
 
         // Re-read root_box in case restylePage replaced it
         const current_root = page.root_box orelse return;
@@ -3367,23 +3466,96 @@ fn submitForm(
 
     // Get action URL (default to current page)
     const action = form_dn.getAttribute("action") orelse "";
-    const method = form_dn.getAttribute("method") orelse "get";
-    _ = method; // We only support GET for now
+    const method_str = form_dn.getAttribute("method") orelse "get";
+    const is_post = std.mem.eql(u8, method_str, "post") or std.mem.eql(u8, method_str, "POST");
 
-    std.debug.print("[form] Submitting form action=\"{s}\"\n", .{action});
+    std.debug.print("[form] Submitting form method=\"{s}\" action=\"{s}\"\n", .{ method_str, action });
 
     // Collect form data
     const query_string = collectFormData(allocator, form_node, focused_node, form_text) orelse return null;
     defer allocator.free(query_string);
 
-    std.debug.print("[form] Query string: {s}\n", .{query_string});
+    std.debug.print("[form] Form data: {s}\n", .{query_string});
 
-    // Build full URL: resolve action against current URL, append query string
+    // Build full URL: resolve action against current URL
     const base = if (current_url) |u| u else "";
     const resolved_action = resolveUrl(allocator, base, action) catch return null;
     defer allocator.free(resolved_action);
 
-    // Build final URL with query string
+    if (is_post) {
+        // POST: send form data to action URL, navigate to result
+        const url_z = allocator.allocSentinel(u8, resolved_action.len, 0) catch return null;
+        @memcpy(url_z, resolved_action);
+
+        std.debug.print("[form] POST to: {s}\n", .{resolved_action});
+
+        var headers_arr = [_][2][]const u8{
+            .{ "Content-Type", "application/x-www-form-urlencoded" },
+        };
+        var response = loader.client.request(allocator, url_z, .{
+            .method = "POST",
+            .body = query_string,
+            .headers = &headers_arr,
+            .timeout_secs = 15,
+        }) catch {
+            allocator.free(url_z);
+            return null;
+        };
+
+        // Check for redirect (3xx) — follow it with GET
+        if (response.status_code >= 300 and response.status_code < 400) {
+            // For redirect, just navigate to action URL (simplified)
+            response.deinit();
+            if (navigateTo(allocator, loader, url_z, fonts, page, storage, win_w, win_h)) {
+                const final_url = allocator.dupe(u8, resolved_action) catch {
+                    allocator.free(url_z);
+                    return null;
+                };
+                allocator.free(url_z);
+                return final_url;
+            }
+            allocator.free(url_z);
+            return null;
+        }
+
+        // Non-redirect: load the response body as HTML
+        page.deinit();
+
+        const html = allocator.alloc(u8, response.body.len) catch {
+            response.deinit();
+            allocator.free(url_z);
+            return null;
+        };
+        @memcpy(html, response.body);
+        response.deinit();
+
+        // Parse and load using the same flow as navigateTo
+        const parse_doc = Document.parse(html) catch {
+            allocator.free(html);
+            allocator.free(url_z);
+            return null;
+        };
+
+        // Set up page state with parsed document
+        page.doc = parse_doc;
+
+        // Style and layout the POST response
+        restylePage(page, allocator, fonts, win_w, win_h);
+
+        // Execute JS on the POST result page
+        if (page.doc) |*pd| {
+            initPageJs(pd, page, allocator, loader, resolved_action);
+        }
+
+        const final_url = allocator.dupe(u8, resolved_action) catch {
+            allocator.free(url_z);
+            return null;
+        };
+        allocator.free(url_z);
+        return final_url;
+    }
+
+    // GET: append query string to URL
     var final_url_buf: std.ArrayListUnmanaged(u8) = .empty;
     final_url_buf.appendSlice(allocator, resolved_action) catch return null;
 

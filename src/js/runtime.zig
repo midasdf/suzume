@@ -42,10 +42,18 @@ pub const JsRuntime = struct {
         const clean = sanitizeUtf8(code) catch code;
         defer if (clean.ptr != code.ptr) std.heap.c_allocator.free(clean);
 
+        // QuickJS utf8_decode assumes null-terminated or UTF8_CHAR_LEN_MAX padding.
+        // Ensure we pass a null-terminated buffer to avoid read-past-end.
+        const eval_buf = std.heap.c_allocator.allocSentinel(u8, clean.len, 0) catch {
+            return .{ .err = "out of memory" };
+        };
+        defer std.heap.c_allocator.free(eval_buf);
+        @memcpy(eval_buf, clean);
+
         const result = qjs.JS_Eval(
             self.ctx,
-            clean.ptr,
-            clean.len,
+            eval_buf.ptr,
+            eval_buf.len,
             "<eval>",
             qjs.JS_EVAL_TYPE_GLOBAL,
         );

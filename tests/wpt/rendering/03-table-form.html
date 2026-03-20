@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Table & Form Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; font-size: 14px; color: #333; background: #fff; padding: 20px; width: 800px; }
+h2 { font-size: 16px; margin: 15px 0 8px; color: #2c3e50; }
+
+table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+th, td { border: 1px solid #bdc3c7; padding: 8px 12px; text-align: left; }
+th { background: #2c3e50; color: white; }
+tr:nth-child(even) { background: #ecf0f1; }
+
+form { margin: 10px 0; }
+label { display: block; margin: 8px 0 4px; font-weight: bold; }
+input[type="text"], input[type="email"], input[type="password"] {
+  width: 100%; padding: 8px; border: 1px solid #bdc3c7; border-radius: 4px;
+  font-size: 14px;
+}
+textarea { width: 100%; padding: 8px; border: 1px solid #bdc3c7; border-radius: 4px; height: 80px; font-size: 14px; }
+select { width: 100%; padding: 8px; border: 1px solid #bdc3c7; border-radius: 4px; font-size: 14px; }
+button, input[type="submit"] {
+  padding: 10px 20px; background: #3498db; color: white; border: none;
+  border-radius: 4px; font-size: 14px; cursor: pointer; margin-top: 10px;
+}
+.form-row { display: flex; gap: 15px; }
+.form-row > div { flex: 1; }
+</style>
+</head>
+<body>
+<h2>1. Basic Table</h2>
+<table>
+  <thead>
+    <tr><th>Name</th><th>Age</th><th>City</th><th>Role</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>Alice</td><td>28</td><td>Tokyo</td><td>Engineer</td></tr>
+    <tr><td>Bob</td><td>35</td><td>Osaka</td><td>Designer</td></tr>
+    <tr><td>Charlie</td><td>42</td><td>Kyoto</td><td>Manager</td></tr>
+    <tr><td>Diana</td><td>31</td><td>Nagoya</td><td>Developer</td></tr>
+  </tbody>
+</table>
+
+<h2>2. Form Elements</h2>
+<form>
+  <div class="form-row">
+    <div>
+      <label for="fname">First Name</label>
+      <input type="text" id="fname" value="Taro" placeholder="Enter first name">
+    </div>
+    <div>
+      <label for="lname">Last Name</label>
+      <input type="text" id="lname" value="Yamada" placeholder="Enter last name">
+    </div>
+  </div>
+
+  <label for="email">Email</label>
+  <input type="email" id="email" value="taro@example.com" placeholder="Enter email">
+
+  <label for="country">Country</label>
+  <select id="country">
+    <option value="jp" selected>Japan</option>
+    <option value="us">United States</option>
+    <option value="uk">United Kingdom</option>
+  </select>
+
+  <label for="bio">Bio</label>
+  <textarea id="bio" placeholder="Tell us about yourself">Hello, I am a software developer.</textarea>
+
+  <div style="margin-top:10px;">
+    <input type="checkbox" id="agree"> <label for="agree" style="display:inline;font-weight:normal;">I agree to the terms</label>
+  </div>
+
+  <button type="submit">Submit</button>
+</form>
+
+<h2>3. Inline Elements in Table</h2>
+<table>
+  <tr><th>Feature</th><th>Status</th></tr>
+  <tr><td>CSS Flexbox</td><td><span style="color:#27ae60;font-weight:bold;">Supported</span></td></tr>
+  <tr><td>CSS Grid</td><td><span style="color:#e74c3c;font-weight:bold;">Not Yet</span></td></tr>
+  <tr><td>JavaScript</td><td><span style="color:#27ae60;font-weight:bold;">Supported</span></td></tr>
+  <tr><td>Canvas</td><td><span style="color:#f39c12;font-weight:bold;">Planned</span></td></tr>
+</table>
+</body>
+</html>

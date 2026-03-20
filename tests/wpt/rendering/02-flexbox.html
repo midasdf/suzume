@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Flexbox Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; font-size: 14px; color: #333; background: #fff; padding: 20px; width: 800px; }
+h2 { font-size: 16px; margin: 15px 0 8px; color: #2c3e50; }
+
+.flex-row { display: flex; gap: 10px; margin: 10px 0; }
+.flex-col { display: flex; flex-direction: column; gap: 8px; margin: 10px 0; }
+.flex-center { display: flex; justify-content: center; align-items: center; }
+.flex-between { display: flex; justify-content: space-between; }
+.flex-wrap { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.item { padding: 10px 15px; background: #3498db; color: white; border-radius: 4px; }
+.item-red { padding: 10px 15px; background: #e74c3c; color: white; border-radius: 4px; }
+.item-green { padding: 10px 15px; background: #27ae60; color: white; border-radius: 4px; }
+.item-grow { flex-grow: 1; }
+
+.card { border: 1px solid #ddd; border-radius: 8px; padding: 15px; background: #fafafa; }
+.card-title { font-weight: bold; font-size: 16px; margin-bottom: 5px; }
+.card-body { color: #666; }
+
+.h100 { height: 100px; }
+.h60 { height: 60px; }
+</style>
+</head>
+<body>
+<h2>1. Flex Row (default)</h2>
+<div class="flex-row">
+  <div class="item">Item 1</div>
+  <div class="item-red">Item 2</div>
+  <div class="item-green">Item 3</div>
+</div>
+
+<h2>2. Flex Column</h2>
+<div class="flex-col" style="width:200px;">
+  <div class="item">Column 1</div>
+  <div class="item-red">Column 2</div>
+  <div class="item-green">Column 3</div>
+</div>
+
+<h2>3. Justify Content: space-between</h2>
+<div class="flex-between" style="border:1px solid #ccc;padding:10px;">
+  <div class="item">Left</div>
+  <div class="item-red">Center</div>
+  <div class="item-green">Right</div>
+</div>
+
+<h2>4. Align Items: center (vertical)</h2>
+<div class="flex-center h100" style="border:1px solid #ccc;">
+  <div class="item">Centered vertically and horizontally</div>
+</div>
+
+<h2>5. Flex Grow</h2>
+<div class="flex-row">
+  <div class="item" style="width:100px;">Fixed 100px</div>
+  <div class="item-red item-grow">Grows to fill</div>
+  <div class="item-green" style="width:100px;">Fixed 100px</div>
+</div>
+
+<h2>6. Flex Wrap</h2>
+<div class="flex-wrap" style="width:400px;border:1px solid #ccc;padding:10px;">
+  <div class="item" style="width:120px;">Wrap 1</div>
+  <div class="item-red" style="width:120px;">Wrap 2</div>
+  <div class="item-green" style="width:120px;">Wrap 3</div>
+  <div class="item" style="width:120px;">Wrap 4</div>
+  <div class="item-red" style="width:120px;">Wrap 5</div>
+</div>
+
+<h2>7. Card Layout (Flex)</h2>
+<div class="flex-row">
+  <div class="card item-grow">
+    <div class="card-title">Card 1</div>
+    <div class="card-body">Description text here</div>
+  </div>
+  <div class="card item-grow">
+    <div class="card-title">Card 2</div>
+    <div class="card-body">Another card with different content length that might wrap</div>
+  </div>
+  <div class="card item-grow">
+    <div class="card-title">Card 3</div>
+    <div class="card-body">Short</div>
+  </div>
+</div>
+
+<h2>8. Nested Flex</h2>
+<div class="flex-row" style="border:1px solid #ccc;padding:10px;">
+  <div class="flex-col item-grow">
+    <div class="item">Nested A1</div>
+    <div class="item-red">Nested A2</div>
+  </div>
+  <div class="flex-col item-grow">
+    <div class="item-green">Nested B1</div>
+    <div class="item">Nested B2</div>
+    <div class="item-red">Nested B3</div>
+  </div>
+</div>
+</body>
+</html>

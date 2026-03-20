@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Basic Layout Test</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: sans-serif; font-size: 16px; color: #333; background: #fff; padding: 20px; width: 800px; }
+
+h1 { font-size: 24px; margin-bottom: 10px; color: #1a1a2e; }
+h2 { font-size: 18px; margin: 15px 0 8px; color: #16213e; border-bottom: 2px solid #0f3460; padding-bottom: 4px; }
+p { margin-bottom: 10px; line-height: 1.5; }
+
+/* Block model */
+.box { border: 2px solid #333; padding: 10px; margin: 10px 0; background: #f0f0f0; }
+.nested { border: 1px dashed #999; padding: 8px; margin: 5px; background: #fff; }
+
+/* Widths */
+.w50 { width: 50%; }
+.w100 { width: 100%; }
+
+/* Colors */
+.red { color: #e74c3c; }
+.blue { color: #2980b9; }
+.green { color: #27ae60; }
+.bg-yellow { background: #f1c40f; }
+.bg-lightblue { background: #d4e6f1; }
+
+/* Text styles */
+.bold { font-weight: bold; }
+.italic { font-style: italic; }
+.underline { text-decoration: underline; }
+.center { text-align: center; }
+.right { text-align: right; }
+
+/* Lists */
+ul, ol { margin: 10px 0 10px 30px; }
+li { margin-bottom: 4px; }
+</style>
+</head>
+<body>
+<h1>Basic Layout Test</h1>
+
+<h2>1. Text Styling</h2>
+<p>Normal text. <span class="bold">Bold text.</span> <span class="italic">Italic text.</span> <span class="underline">Underlined text.</span></p>
+<p class="red">Red colored text</p>
+<p class="blue">Blue colored text</p>
+<p class="green">Green colored text</p>
+
+<h2>2. Block Model</h2>
+<div class="box">
+  Box with border, padding, margin
+  <div class="nested">Nested box inside</div>
+  <div class="nested bg-yellow">Nested with yellow background</div>
+</div>
+
+<h2>3. Width Control</h2>
+<div class="box w50">50% width box</div>
+<div class="box w100 bg-lightblue">100% width box with light blue bg</div>
+
+<h2>4. Text Alignment</h2>
+<p class="center">Center aligned text</p>
+<p class="right">Right aligned text</p>
+<p>Left aligned text (default)</p>
+
+<h2>5. Lists</h2>
+<ul>
+  <li>Unordered item 1</li>
+  <li>Unordered item 2</li>
+  <li>Unordered item 3</li>
+</ul>
+<ol>
+  <li>Ordered item 1</li>
+  <li>Ordered item 2</li>
+  <li>Ordered item 3</li>
+</ol>
+
+<h2>6. Inline Elements</h2>
+<p>This has <a href="#">a link</a>, <strong>strong</strong>, <em>emphasis</em>, <code>code</code>, and <span style="background:#eee;padding:2px 4px;border:1px solid #ccc;">inline styled span</span>.</p>
+
+<h2>7. Long Text Wrap</h2>
+<p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+</body>
+</html>

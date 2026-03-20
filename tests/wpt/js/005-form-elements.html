@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Form Elements Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 10px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; font-weight: bold; } .fail { color: #e74c3c; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Form Elements Tests</h1>
+
+<input type="text" id="inp1" value="initial">
+<input type="text" id="inp2">
+<textarea id="ta1">textarea content</textarea>
+<select id="sel1">
+  <option value="alpha">Alpha</option>
+  <option value="beta" selected>Beta</option>
+  <option value="gamma">Gamma</option>
+</select>
+<select id="sel2">
+  <option value="first">First</option>
+  <option value="second">Second</option>
+</select>
+
+<h2>1. input.value getter (from attribute)</h2>
+<div class="test" id="t1">Checking...</div>
+
+<h2>2. input.value setter</h2>
+<div class="test" id="t2">Checking...</div>
+
+<h2>3. input.value on empty input</h2>
+<div class="test" id="t3">Checking...</div>
+
+<h2>4. textarea.value getter</h2>
+<div class="test" id="t4">Checking...</div>
+
+<h2>5. textarea.value setter</h2>
+<div class="test" id="t5">Checking...</div>
+
+<h2>6. select.value (selected option)</h2>
+<div class="test" id="t6">Checking...</div>
+
+<h2>7. select.value (no selected, first option default)</h2>
+<div class="test" id="t7">Checking...</div>
+
+<h2>8. input.value after setAttribute</h2>
+<div class="test" id="t8">Checking...</div>
+
+<h2>9. dynamic input creation</h2>
+<div class="test" id="t9">Checking...</div>
+
+<h2>10. password input.value</h2>
+<div class="test" id="t10">Checking...</div>
+
+<script>
+var pass = 0, fail = 0;
+function check(id, cond, msg) {
+  var el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'test ' + (cond ? 'pass' : 'fail');
+  if (cond) pass++; else fail++;
+  console.log((cond ? 'PASS' : 'FAIL') + ': ' + msg);
+}
+
+// Test 1
+var inp1 = document.getElementById('inp1');
+check('t1', inp1.value === 'initial', 'input.value = "' + inp1.value + '" (expected "initial")');
+
+// Test 2
+inp1.value = 'changed';
+check('t2', inp1.value === 'changed', 'After setter: input.value = "' + inp1.value + '" (expected "changed")');
+
+// Test 3
+var inp2 = document.getElementById('inp2');
+check('t3', inp2.value === '', 'Empty input.value = "' + inp2.value + '" (expected "")');
+
+// Test 4
+var ta1 = document.getElementById('ta1');
+check('t4', ta1.value === 'textarea content', 'textarea.value = "' + ta1.value + '" (expected "textarea content")');
+
+// Test 5
+ta1.value = 'new text';
+check('t5', ta1.value === 'new text', 'After setter: textarea.value = "' + ta1.value + '" (expected "new text")');
+
+// Test 6
+var sel1 = document.getElementById('sel1');
+check('t6', sel1.value === 'beta', 'select.value = "' + sel1.value + '" (expected "beta")');
+
+// Test 7
+var sel2 = document.getElementById('sel2');
+check('t7', sel2.value === 'first', 'select.value (no selected) = "' + sel2.value + '" (expected "first")');
+
+// Test 8
+inp2.setAttribute('value', 'attr-set');
+check('t8', inp2.value === 'attr-set', 'After setAttribute: value = "' + inp2.value + '" (expected "attr-set")');
+
+// Test 9
+var dynInput = document.createElement('input');
+dynInput.value = 'dynamic';
+check('t9', dynInput.value === 'dynamic', 'Dynamic input.value = "' + dynInput.value + '" (expected "dynamic")');
+
+// Test 10
+var passInp = document.createElement('input');
+passInp.setAttribute('type', 'password');
+passInp.value = 'secret123';
+check('t10', passInp.value === 'secret123', 'Password input.value = "' + passInp.value + '"');
+
+console.log('SCORE: ' + pass + '/' + (pass + fail));
+</script>
+</body>
+</html>

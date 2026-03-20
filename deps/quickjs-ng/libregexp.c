@@ -765,8 +765,10 @@ static int get_class_atom(REParseState *s, CharRange *cr,
         p++;
         if (c >= 0x80) {
             c = utf8_decode(p - 1, &p_next);
-            if (p_next == p)
-                return re_parse_error(s, "invalid UTF-8 sequence");
+            if (p_next == p) {
+                c = 0xFFFD;
+                p_next = p + 1;
+            }
             p = p_next;
             if (c > 0xFFFF && !s->is_unicode) {
                 // TODO(chqrlie): should handle non BMP-1 code points in

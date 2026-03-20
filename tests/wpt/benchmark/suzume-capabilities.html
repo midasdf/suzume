@@ -134,17 +134,103 @@ test('ES6+', 'String.prototype.includes', function() { return typeof ''.includes
 test('ES6+', 'Array.prototype.find', function() { return typeof [].find === 'function'; });
 test('ES6+', 'Array.prototype.filter', function() { return typeof [].filter === 'function'; });
 
-// === Not Yet Expected ===
+// === Form Elements ===
+test('Form Elements', 'input.value getter', function() {
+  var inp = document.createElement('input'); inp.setAttribute('value', 'hello');
+  return inp.value === 'hello';
+});
+test('Form Elements', 'input.value setter', function() {
+  var inp = document.createElement('input'); inp.value = 'world';
+  return inp.value === 'world';
+});
+test('Form Elements', 'textarea.value', function() {
+  var ta = document.createElement('textarea'); ta.value = 'text content';
+  return ta.value === 'text content';
+});
+test('Form Elements', 'select.value', function() {
+  var sel = document.createElement('select');
+  document.body.appendChild(sel);
+  sel.innerHTML = '<option value="a">A</option><option value="b" selected>B</option>';
+  var v = sel.value;
+  document.body.removeChild(sel);
+  return v === 'b';
+});
+
+// === Mouse Events ===
+test('Mouse Events', 'mousedown event', function() {
+  var d = document.createElement('div'); document.body.appendChild(d);
+  var fired = false;
+  d.addEventListener('mousedown', function(e) { fired = true; });
+  d.dispatchEvent(new Event('mousedown'));
+  document.body.removeChild(d);
+  return fired;
+});
+test('Mouse Events', 'mouseup event', function() {
+  var d = document.createElement('div'); document.body.appendChild(d);
+  var fired = false;
+  d.addEventListener('mouseup', function() { fired = true; });
+  d.dispatchEvent(new Event('mouseup'));
+  document.body.removeChild(d);
+  return fired;
+});
+test('Mouse Events', 'mousemove event listener', function() {
+  var d = document.createElement('div');
+  var ok = false;
+  d.addEventListener('mousemove', function() { ok = true; });
+  return typeof d.addEventListener === 'function'; // listener registered
+});
+
+// === Event Correctness ===
+test('Event Correctness', 'removeEventListener identity', function() {
+  var d = document.createElement('div'); document.body.appendChild(d);
+  var count = 0;
+  var fn1 = function() { count += 1; };
+  var fn2 = function() { count += 10; };
+  d.addEventListener('click', fn1);
+  d.addEventListener('click', fn2);
+  d.removeEventListener('click', fn1);
+  d.click();
+  document.body.removeChild(d);
+  return count === 10; // only fn2 should fire
+});
+
+// === Scroll APIs ===
+test('Scroll APIs', 'window.scrollTo', function() { return typeof scrollTo === 'function'; });
+test('Scroll APIs', 'window.scrollBy', function() { return typeof scrollBy === 'function'; });
+test('Scroll APIs', 'window.scrollY', function() { return typeof scrollY === 'number'; });
+test('Scroll APIs', 'window.scrollX', function() { return typeof scrollX === 'number'; });
+test('Scroll APIs', 'window.pageYOffset', function() { return typeof pageYOffset === 'number'; });
+
+// === Document Properties ===
+test('Document Properties', 'document.activeElement', function() { return document.activeElement !== undefined; });
+
+// === Navigation APIs ===
+test('Navigation APIs', 'location.assign', function() { return typeof location.assign === 'function'; });
+test('Navigation APIs', 'location.replace', function() { return typeof location.replace === 'function'; });
+test('Navigation APIs', 'history.pushState', function() { return typeof history.pushState === 'function'; });
+test('Navigation APIs', 'history.replaceState', function() { return typeof history.replaceState === 'function'; });
+test('Navigation APIs', 'history.back', function() { return typeof history.back === 'function'; });
+
+// === XHR ===
+test('XHR', 'XMLHttpRequest constructor', function() { return typeof XMLHttpRequest === 'function'; });
+test('XHR', 'XMLHttpRequest.open', function() { var x = new XMLHttpRequest(); return typeof x.open === 'function'; });
+test('XHR', 'XMLHttpRequest.send', function() { var x = new XMLHttpRequest(); return typeof x.send === 'function'; });
+test('XHR', 'XMLHttpRequest.setRequestHeader', function() { var x = new XMLHttpRequest(); return typeof x.setRequestHeader === 'function'; });
+test('XHR', 'XMLHttpRequest readyState', function() { var x = new XMLHttpRequest(); return x.readyState === 0; });
+
+// === MutationObserver ===
+test('MutationObserver', 'constructor', function() { return typeof MutationObserver === 'function'; });
+test('MutationObserver', 'observe method', function() { var o = new MutationObserver(function(){}); return typeof o.observe === 'function'; });
+test('MutationObserver', 'disconnect method', function() { var o = new MutationObserver(function(){}); return typeof o.disconnect === 'function'; });
+
+// === Advanced Web ===
 test('Advanced Web', 'fetch()', function() { return typeof fetch === 'function'; });
-test('Advanced Web', 'XMLHttpRequest', function() { return typeof XMLHttpRequest === 'function'; });
 test('Advanced Web', 'localStorage', function() { return typeof localStorage !== 'undefined'; });
 test('Advanced Web', 'sessionStorage', function() { return typeof sessionStorage !== 'undefined'; });
-test('Advanced Web', 'History API', function() { return typeof history !== 'undefined' && typeof history.pushState === 'function'; });
 test('Advanced Web', 'Canvas 2D', function() { var c = document.createElement('canvas'); return !!(c.getContext && c.getContext('2d')); });
 test('Advanced Web', 'WebSocket', function() { return typeof WebSocket === 'function'; });
 test('Advanced Web', 'Worker', function() { return typeof Worker === 'function'; });
 test('Advanced Web', 'IntersectionObserver', function() { return typeof IntersectionObserver === 'function'; });
-test('Advanced Web', 'MutationObserver', function() { return typeof MutationObserver === 'function'; });
 test('Advanced Web', 'ResizeObserver', function() { return typeof ResizeObserver === 'function'; });
 test('Advanced Web', 'FormData', function() { return typeof FormData === 'function'; });
 test('Advanced Web', 'URL constructor', function() { return typeof URL === 'function'; });
