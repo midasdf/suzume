@@ -757,6 +757,39 @@ fn classListToggle(
     }
 }
 
+fn classListReplace(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    if (argc < 2) return quickjs.JS_NewBool(false);
+    const args = argv orelse return quickjs.JS_NewBool(false);
+
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return quickjs.JS_NewBool(false);
+
+    const old_cls = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
+    defer qjs.JS_FreeCString(c, old_cls.ptr);
+    const new_cls = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
+    defer qjs.JS_FreeCString(c, new_cls.ptr);
+
+    var cur_len: usize = 0;
+    const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
+    if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
+
+    const cur_str = cur.?[0..cur_len];
+    if (!classContains(cur_str, old_cls.ptr[0..old_cls.len])) return quickjs.JS_NewBool(false);
+
+    // Remove old, add new
+    _ = classListRemove(ctx, this_val, 1, argv);
+    var new_argv = [_]qjs.JSValue{args[1]};
+    _ = classListAdd(ctx, this_val, 1, &new_argv);
+    return quickjs.JS_NewBool(true);
+}
+
 fn classContains(class_str: []const u8, needle: []const u8) bool {
     var iter = std.mem.splitSequence(u8, class_str, " ");
     while (iter.next()) |cls| {
@@ -774,6 +807,7 @@ fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue {
     _ = qjs.JS_SetPropertyStr(ctx, obj, "remove", qjs.JS_NewCFunction(ctx, &classListRemove, "remove", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "contains", qjs.JS_NewCFunction(ctx, &classListContains, "contains", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toggle", qjs.JS_NewCFunction(ctx, &classListToggle, "toggle", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "replace", qjs.JS_NewCFunction(ctx, &classListReplace, "replace", 2));
     return obj;
 }
 
@@ -1320,6 +1354,144 @@ fn elementRemove(
         setDomDirty();
     }
     return quickjs.JS_UNDEFINED();
+}
+
+// ── element.append(...nodes) / prepend(...nodes) ────────────────────
+
+fn elementAppend(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(argc))) : (i += 1) {
+        const child_node = getNode(c, args[i]);
+        if (child_node) |cn| {
+            _ = lxb.lxb_dom_node_insert_child(parent, cn);
+        } else if (qjs.JS_IsString(args[i])) {
+            // String argument: create text node and append
+            const s = jsStringToSlice(c, args[i]) orelse continue;
+            defer qjs.JS_FreeCString(c, s.ptr);
+            if (g_document) |doc| {
+                const text_node = lxb_dom_document_create_text_node(doc, s.ptr, s.len);
+                if (text_node) |tn| {
+                    _ = lxb.lxb_dom_node_insert_child(parent, tn);
+                }
+            }
+        }
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+fn elementPrepend(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const first_child = lxb.lxb_dom_node_first_child(parent);
+    var i: usize = 0;
+    while (i < @as(usize, @intCast(argc))) : (i += 1) {
+        const child_node = getNode(c, args[i]);
+        if (child_node) |cn| {
+            if (first_child) |fc| {
+                _ = lxb.lxb_dom_node_insert_before(fc, cn);
+            } else {
+                _ = lxb.lxb_dom_node_insert_child(parent, cn);
+            }
+        }
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── element.toggleAttribute / getAttributeNames / scrollIntoView ────
+
+fn elementToggleAttribute(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    if (argc < 1) return quickjs.JS_NewBool(false);
+    const args = argv orelse return quickjs.JS_NewBool(false);
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    const has = lxb_dom_element_has_attribute(elem, s.ptr, s.len);
+
+    // If force argument provided
+    if (argc >= 2) {
+        const force = qjs.JS_ToBool(c, args[1]) > 0;
+        if (force and !has) {
+            _ = lxb_dom_element_set_attribute(elem, s.ptr, s.len, "", 0);
+            setDomDirty();
+            return quickjs.JS_NewBool(true);
+        } else if (!force and has) {
+            _ = lxb_dom_element_remove_attribute(elem, s.ptr, s.len);
+            setDomDirty();
+            return quickjs.JS_NewBool(false);
+        }
+        return quickjs.JS_NewBool(has);
+    }
+
+    if (has) {
+        _ = lxb_dom_element_remove_attribute(elem, s.ptr, s.len);
+        setDomDirty();
+        return quickjs.JS_NewBool(false);
+    } else {
+        _ = lxb_dom_element_set_attribute(elem, s.ptr, s.len, "", 0);
+        setDomDirty();
+        return quickjs.JS_NewBool(true);
+    }
+}
+
+fn elementGetAttributeNames(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // Return empty array — full attribute enumeration requires lexbor iteration
+    const c = ctx orelse return quickjs.JS_NULL();
+    _ = this_val;
+    return qjs.JS_NewArray(c);
+}
+
+fn elementScrollIntoView(
+    _: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // Stub — actual scroll-to-element requires layout position lookup
+    return quickjs.JS_UNDEFINED();
+}
+
+fn documentCreateComment(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    // Return a minimal comment-like object
+    const obj = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 8));
+    _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_NewString(c, "#comment"));
+    return obj;
 }
 
 // ── element.contains(other) ─────────────────────────────────────────
@@ -3614,6 +3786,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "before", qjs.JS_NewCFunction(ctx, &elementBefore, "before", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "after", qjs.JS_NewCFunction(ctx, &elementAfter, "after", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "remove", qjs.JS_NewCFunction(ctx, &elementRemove, "remove", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "append", qjs.JS_NewCFunction(ctx, &elementAppend, "append", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "prepend", qjs.JS_NewCFunction(ctx, &elementPrepend, "prepend", 1));
 
     // Node constants
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
@@ -3720,6 +3894,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &elementGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &elementToggleAttribute, "toggleAttribute", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &elementGetAttributeNames, "getAttributeNames", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &elementScrollIntoView, "scrollIntoView", 1));
 
     // Element getters
     {
@@ -3911,6 +4088,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const cookieAtom = qjs.JS_NewAtom(ctx, "cookie");
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, cookieAtom, qjs.JS_NewCFunction(ctx, &documentGetCookie, "get cookie", 0), qjs.JS_NewCFunction(ctx, &documentSetCookie, "set cookie", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, cookieAtom);
+
+    // document.URL / referrer / domain
+    if (g_current_url) |url| {
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "URL", qjs.JS_NewStringLen(ctx, url.ptr, url.len));
+        const domain = extractDomain(url) orelse "";
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "domain", qjs.JS_NewStringLen(ctx, domain.ptr, domain.len));
+    } else {
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "URL", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "domain", qjs.JS_NewString(ctx, ""));
+    }
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "referrer", qjs.JS_NewString(ctx, ""));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createComment", qjs.JS_NewCFunction(ctx, &documentCreateComment, "createComment", 1));
 
     // Document properties required by jQuery/Sizzle
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeType", qjs.JS_NewInt32(ctx, 9)); // DOCUMENT_NODE

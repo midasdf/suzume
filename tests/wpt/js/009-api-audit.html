@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>JS API Audit</title></head>
+<body>
+<script>
+var missing = [], present = [];
+function check(path, expected) {
+  try {
+    var parts = path.split('.');
+    var obj = globalThis;
+    for (var i = 0; i < parts.length; i++) obj = obj[parts[i]];
+    if (typeof obj === expected || (expected === 'exists' && obj !== undefined)) {
+      present.push(path);
+    } else {
+      missing.push(path + ' (got ' + typeof obj + ')');
+    }
+  } catch(e) { missing.push(path + ' (error)'); }
+}
+
+// DOM traversal
+check('document.createTreeWalker', 'function');
+check('document.createNodeIterator', 'function');
+check('document.createRange', 'function');
+check('document.createComment', 'function');
+check('document.adoptNode', 'function');
+check('document.importNode', 'function');
+
+// Element APIs
+check('Element.prototype.closest', 'function');
+check('Element.prototype.matches', 'function');
+check('Element.prototype.scrollIntoView', 'function');
+check('Element.prototype.before', 'function');
+check('Element.prototype.after', 'function');
+check('Element.prototype.remove', 'function');
+check('Element.prototype.replaceWith', 'function');
+check('Element.prototype.append', 'function');
+check('Element.prototype.prepend', 'function');
+check('Element.prototype.contains', 'function');
+check('Element.prototype.getAttributeNames', 'function');
+check('Element.prototype.toggleAttribute', 'function');
+
+// classList
+check('document.body.classList.add', 'function');
+check('document.body.classList.remove', 'function');
+check('document.body.classList.toggle', 'function');
+check('document.body.classList.contains', 'function');
+check('document.body.classList.replace', 'function');
+
+// Style / CSSOM
+check('window.getComputedStyle', 'function');
+check('CSSStyleDeclaration', 'function');
+
+// Events
+check('window.CustomEvent', 'function');
+check('window.Event', 'function');
+check('EventTarget.prototype.addEventListener', 'function');
+
+// Timing
+check('window.requestIdleCallback', 'function');
+check('window.cancelIdleCallback', 'function');
+check('window.requestAnimationFrame', 'function');
+
+// Storage
+check('window.localStorage', 'exists');
+check('window.sessionStorage', 'exists');
+check('localStorage.getItem', 'function');
+check('localStorage.setItem', 'function');
+
+// URL
+check('window.URL', 'function');
+check('window.URLSearchParams', 'function');
+check('URL.prototype.searchParams', 'exists');
+
+// Fetch extras
+check('window.AbortController', 'function');
+check('window.AbortSignal', 'function');
+
+// DOM properties
+check('document.head', 'exists');
+check('document.forms', 'exists');
+check('document.links', 'exists');
+check('document.images', 'exists');
+check('document.characterSet', 'exists');
+check('document.contentType', 'exists');
+check('document.referrer', 'exists');
+check('document.domain', 'exists');
+check('document.URL', 'exists');
+check('document.compatMode', 'exists');
+
+// Node properties
+check('Node.prototype.contains', 'function');
+check('Node.prototype.isEqualNode', 'function');
+check('Node.prototype.compareDocumentPosition', 'function');
+check('Node.prototype.normalize', 'function');
+
+// Array/Object modern
+check('Array.prototype.flat', 'function');
+check('Array.prototype.flatMap', 'function');
+check('Array.prototype.at', 'function');
+check('Object.entries', 'function');
+check('Object.fromEntries', 'function');
+check('Object.keys', 'function');
+check('Object.values', 'function');
+check('String.prototype.startsWith', 'function');
+check('String.prototype.endsWith', 'function');
+check('String.prototype.padStart', 'function');
+check('String.prototype.trimStart', 'function');
+check('String.prototype.replaceAll', 'function');
+check('globalThis.structuredClone', 'function');
+check('globalThis.atob', 'function');
+check('globalThis.btoa', 'function');
+check('globalThis.TextEncoder', 'function');
+check('globalThis.TextDecoder', 'function');
+
+// Intl
+check('globalThis.Intl', 'exists');
+check('Intl.DateTimeFormat', 'function');
+check('Intl.NumberFormat', 'function');
+
+// Report
+console.log('PRESENT: ' + present.length + '/' + (present.length + missing.length));
+console.log('');
+console.log('MISSING APIs:');
+for (var i = 0; i < missing.length; i++) console.log('  - ' + missing[i]);
+</script>
+</body>
+</html>
