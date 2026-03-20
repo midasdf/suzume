@@ -663,8 +663,18 @@ fn buildChildren(
                     //    but skip if parent is block-level with no inline siblings
                     const trimmed = std.mem.trim(u8, text, " \t\n\r");
                     if (trimmed.len == 0) {
-                        // Keep as single space if parent has inline display (inter-element spacing)
-                        if (parent_box.style.display == .inline_ or parent_box.style.display == .inline_block or
+                        // Keep as single space for inter-element spacing.
+                        // This preserves whitespace between inline siblings in block containers
+                        // (e.g., <p>text <span>a</span> <span>b</span></p>)
+                        // Only keep if previous child is inline (avoids extra spacing between blocks)
+                        const prev_is_inline = blk: {
+                            const items = parent_box.children.items;
+                            if (items.len == 0) break :blk false;
+                            const last = items[items.len - 1];
+                            break :blk (last.box_type == .inline_text or last.box_type == .inline_box);
+                        };
+                        if (prev_is_inline or
+                            parent_box.style.display == .inline_ or parent_box.style.display == .inline_block or
                             parent_box.style.display == .inline_flex or parent_box.style.display == .table_cell)
                         {
                             const space_box = try allocator.create(Box);
