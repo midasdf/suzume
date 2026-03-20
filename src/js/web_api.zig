@@ -2,6 +2,7 @@ const std = @import("std");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const HttpClient = @import("../net/http.zig").HttpClient;
+const WebSocket = @import("../net/websocket.zig").WebSocket;
 
 // ── Navigation request (from location.assign/replace/href setter) ────
 
@@ -339,6 +340,161 @@ pub fn hasTimers() bool {
         if (!entry.cleared) return true;
     }
     return false;
+}
+
+// ── WebSocket Management ────────────────────────────────────────────
+
+const WsEntry = struct {
+    ws: WebSocket,
+    js_obj: qjs.JSValue, // The JS WebSocket object (has onmessage, onopen, etc.)
+    id: u32,
+};
+
+var ws_list: std.ArrayListUnmanaged(WsEntry) = .empty;
+var ws_next_id: u32 = 1;
+
+fn jsWebSocketConnect(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return qjs.JS_NewInt32(ctx orelse unreachable, -1);
+    if (argc < 2) return qjs.JS_NewInt32(c, -1);
+    const args = argv orelse return qjs.JS_NewInt32(c, -1);
+
+    const dom_api = @import("dom_api.zig");
+    const url_s = dom_api.jsStringToSlice(c, args[0]) orelse return qjs.JS_NewInt32(c, -1);
+    defer qjs.JS_FreeCString(c, url_s.ptr);
+
+    // Make null-terminated URL
+    const url_z = std.heap.c_allocator.allocSentinel(u8, url_s.len, 0) catch return qjs.JS_NewInt32(c, -1);
+    defer std.heap.c_allocator.free(url_z);
+    @memcpy(url_z, url_s.ptr[0..url_s.len]);
+
+    std.debug.print("[WebSocket] Connecting to {s}\n", .{url_z});
+
+    var ws = WebSocket.connect(std.heap.c_allocator, url_z) catch {
+        std.debug.print("[WebSocket] Connection failed\n", .{});
+        return qjs.JS_NewInt32(c, -1);
+    };
+    _ = &ws;
+
+    const id = ws_next_id;
+    ws_next_id += 1;
+
+    ws_list.append(std.heap.c_allocator, .{
+        .ws = ws,
+        .js_obj = qjs.JS_DupValue(c, args[1]), // Store reference to JS WebSocket object
+        .id = id,
+    }) catch return qjs.JS_NewInt32(c, -1);
+
+    std.debug.print("[WebSocket] Connected, id={d}\n", .{id});
+    return qjs.JS_NewInt32(c, @intCast(id));
+}
+
+fn jsWebSocketSend(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 2) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    var ws_id: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &ws_id, args[0]);
+
+    for (ws_list.items) |*entry| {
+        if (entry.id == @as(u32, @intCast(ws_id))) {
+            const dom_api = @import("dom_api.zig");
+            const data_s = dom_api.jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+            defer qjs.JS_FreeCString(c, data_s.ptr);
+            entry.ws.sendText(data_s.ptr[0..data_s.len]) catch {};
+            break;
+        }
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
+fn jsWebSocketClose(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    var ws_id: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &ws_id, args[0]);
+
+    for (ws_list.items) |*entry| {
+        if (entry.id == @as(u32, @intCast(ws_id))) {
+            entry.ws.close();
+            break;
+        }
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
+/// Poll all WebSocket connections for incoming messages and fire callbacks.
+pub fn tickWebSockets(ctx: *qjs.JSContext) void {
+    var i: usize = 0;
+    while (i < ws_list.items.len) {
+        var entry = &ws_list.items[i];
+        if (entry.ws.state == .closed) {
+            // Fire onclose
+            const onclose = qjs.JS_GetPropertyStr(ctx, entry.js_obj, "onclose");
+            if (qjs.JS_IsFunction(ctx, onclose)) {
+                const event = qjs.JS_NewObject(ctx);
+                _ = qjs.JS_SetPropertyStr(ctx, event, "type", qjs.JS_NewString(ctx, "close"));
+                _ = qjs.JS_SetPropertyStr(ctx, event, "code", qjs.JS_NewInt32(ctx, 1000));
+                _ = qjs.JS_SetPropertyStr(ctx, event, "reason", qjs.JS_NewString(ctx, ""));
+                var argv_close = [_]qjs.JSValue{event};
+                const ret = qjs.JS_Call(ctx, onclose, entry.js_obj, 1, &argv_close);
+                qjs.JS_FreeValue(ctx, ret);
+                qjs.JS_FreeValue(ctx, event);
+            }
+            qjs.JS_FreeValue(ctx, onclose);
+            // Cleanup
+            qjs.JS_FreeValue(ctx, entry.js_obj);
+            entry.ws.deinit();
+            _ = ws_list.swapRemove(i);
+            continue;
+        }
+
+        // Try to receive a message
+        if (entry.ws.recv()) |msg| {
+            var msg_copy = msg;
+            defer msg_copy.deinit();
+
+            const onmessage = qjs.JS_GetPropertyStr(ctx, entry.js_obj, "onmessage");
+            if (qjs.JS_IsFunction(ctx, onmessage)) {
+                const event = qjs.JS_NewObject(ctx);
+                _ = qjs.JS_SetPropertyStr(ctx, event, "type", qjs.JS_NewString(ctx, "message"));
+                _ = qjs.JS_SetPropertyStr(ctx, event, "data", qjs.JS_NewStringLen(ctx, msg_copy.data.ptr, msg_copy.data.len));
+                var argv_msg = [_]qjs.JSValue{event};
+                const ret = qjs.JS_Call(ctx, onmessage, entry.js_obj, 1, &argv_msg);
+                qjs.JS_FreeValue(ctx, ret);
+                qjs.JS_FreeValue(ctx, event);
+            }
+            qjs.JS_FreeValue(ctx, onmessage);
+        }
+
+        i += 1;
+    }
+}
+
+pub fn deinitWebSockets(ctx: *qjs.JSContext) void {
+    for (ws_list.items) |*entry| {
+        qjs.JS_FreeValue(ctx, entry.js_obj);
+        entry.ws.deinit();
+    }
+    ws_list.deinit(std.heap.c_allocator);
+    ws_list = .empty;
 }
 
 /// Free all timer callbacks. Called during JsRuntime.deinit().
@@ -1062,6 +1218,11 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- fetch() (native implementation) --
     _ = qjs.JS_SetPropertyStr(ctx, global, "fetch", qjs.JS_NewCFunction(ctx, &jsFetch, "fetch", 2));
 
+    // -- WebSocket native helpers --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__wsConnect", qjs.JS_NewCFunction(ctx, &jsWebSocketConnect, "__wsConnect", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__wsSend", qjs.JS_NewCFunction(ctx, &jsWebSocketSend, "__wsSend", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__wsClose", qjs.JS_NewCFunction(ctx, &jsWebSocketClose, "__wsClose", 1));
+
     // -- atob() / btoa() --
     _ = qjs.JS_SetPropertyStr(ctx, global, "btoa", qjs.JS_NewCFunction(ctx, &jsBtoa, "btoa", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "atob", qjs.JS_NewCFunction(ctx, &jsAtob, "atob", 1));
@@ -1305,6 +1466,23 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
         \\if(typeof visualViewport==='undefined'){globalThis.visualViewport={width:innerWidth,height:innerHeight,offsetLeft:0,offsetTop:0,scale:1,addEventListener:function(){}};}
         \\if(typeof CSS==='undefined'){globalThis.CSS={supports:function(){return false;},escape:function(s){return s;}};}
+        \\if(typeof WebSocket==='undefined'){
+        \\  globalThis.WebSocket=function(url,protocols){
+        \\    this.url=url;this.readyState=0;this.onopen=null;this.onmessage=null;this.onclose=null;this.onerror=null;
+        \\    this.CONNECTING=0;this.OPEN=1;this.CLOSING=2;this.CLOSED=3;
+        \\    this.bufferedAmount=0;this.extensions='';this.protocol=protocols||'';
+        \\    var self=this;
+        \\    var id=__wsConnect(url,this);
+        \\    if(id<0){this.readyState=3;setTimeout(function(){if(self.onerror)self.onerror({type:'error'});if(self.onclose)self.onclose({type:'close',code:1006,reason:'Connection failed'});},0);return;}
+        \\    this._id=id;this.readyState=1;
+        \\    setTimeout(function(){if(self.onopen)self.onopen({type:'open'});},0);
+        \\  };
+        \\  WebSocket.CONNECTING=0;WebSocket.OPEN=1;WebSocket.CLOSING=2;WebSocket.CLOSED=3;
+        \\  WebSocket.prototype.send=function(data){if(this.readyState!==1)throw new Error('WebSocket not open');__wsSend(this._id,String(data));};
+        \\  WebSocket.prototype.close=function(code,reason){this.readyState=2;__wsClose(this._id);};
+        \\  WebSocket.prototype.addEventListener=function(type,fn){this['on'+type]=fn;};
+        \\  WebSocket.prototype.removeEventListener=function(){};
+        \\}
         \\if(typeof CSSStyleDeclaration==='undefined'){globalThis.CSSStyleDeclaration=function(){};CSSStyleDeclaration.prototype.getPropertyValue=function(n){return this[n]||'';};CSSStyleDeclaration.prototype.setProperty=function(n,v){this[n]=v;};CSSStyleDeclaration.prototype.removeProperty=function(n){delete this[n];return'';};}
         \\if(typeof console!=='undefined'&&!console.warn){console.warn=console.log;console.error=console.log;console.info=console.log;console.debug=console.log;console.trace=function(){};}
         \\if(typeof document!=='undefined'){

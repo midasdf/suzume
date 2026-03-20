@@ -1740,6 +1740,7 @@ pub fn main() !void {
                     dom_api.scroll_y = scroll_y;
 
                     _ = web_api.tickTimers(js_rt.ctx);
+                    web_api.tickWebSockets(js_rt.ctx);
                     js_rt.executePending();
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
