@@ -226,8 +226,9 @@ fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?
     if (quickjs.JS_IsException(event)) return event;
     _ = qjs.JS_SetPropertyStr(ctx, event, "clientX", qjs.JS_NewInt32(ctx, client_x));
     _ = qjs.JS_SetPropertyStr(ctx, event, "clientY", qjs.JS_NewInt32(ctx, client_y));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "pageX", qjs.JS_NewInt32(ctx, client_x));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "pageY", qjs.JS_NewInt32(ctx, client_y));
+    // pageX/pageY include scroll offset per CSSOM View spec
+    _ = qjs.JS_SetPropertyStr(ctx, event, "pageX", qjs.JS_NewInt32(ctx, client_x + @as(i32, @intFromFloat(dom_api.scroll_x))));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "pageY", qjs.JS_NewInt32(ctx, client_y + @as(i32, @intFromFloat(dom_api.scroll_y))));
     _ = qjs.JS_SetPropertyStr(ctx, event, "button", qjs.JS_NewInt32(ctx, button));
     // buttons: bitmask of currently pressed buttons. Only set during mousedown.
     const is_down = std.mem.eql(u8, event_type, "mousedown");
@@ -238,6 +239,7 @@ fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?
 
 /// Dispatch a mouse event (mousedown/mouseup/mousemove/mouseover/mouseout) with coordinates.
 pub fn dispatchMouseEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, client_x: i32, client_y: i32, button: i32) bool {
+    const saved_flags = current_event_flags;
     current_event_flags = .{};
 
     var path: [64]*lxb.lxb_dom_node_t = undefined;
@@ -291,7 +293,9 @@ pub fn dispatchMouseEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, even
         }
     }
 
-    return !current_event_flags.prevent_default;
+    const result = !current_event_flags.prevent_default;
+    current_event_flags = saved_flags;
+    return result;
 }
 
 // ── Key code to key name mapping ────────────────────────────────────

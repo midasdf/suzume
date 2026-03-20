@@ -1746,14 +1746,16 @@ pub fn main() !void {
                         restylePage(pg, allocator, &fonts, surface.width, surface.height);
                         needs_repaint = true;
                     }
-                    // Apply pending scroll requests from JS
+                    // Apply pending scroll requests from JS (clamp to content bounds)
                     if (dom_api.pending_scroll_y) |sy| {
-                        scroll_y = @max(0, sy);
+                        const max_scroll_y = @max(pg.total_height - @as(f32, @floatFromInt(surface.height - chrome.content_y - chrome.status_bar_height)), 0);
+                        scroll_y = @max(0, @min(sy, max_scroll_y));
                         dom_api.pending_scroll_y = null;
                         needs_repaint = true;
                     }
                     if (dom_api.pending_scroll_x) |sx| {
-                        scroll_x = @max(0, sx);
+                        const max_scroll_x = @max(pg.total_width - @as(f32, @floatFromInt(surface.width)), 0);
+                        scroll_x = @max(0, @min(sx, max_scroll_x));
                         dom_api.pending_scroll_x = null;
                         needs_repaint = true;
                     }
