@@ -715,6 +715,10 @@ fn layoutFloat(child: *Box, parent: *Box, child_y: *f32, float_left_bottom: *f32
 /// the rightmost edge of all laid-out children relative to content origin.
 /// This correctly handles inline formatting contexts where multiple children
 /// sit on the same visual line (e.g. spans within a span).
+pub fn computeShrinkToFitWidthPublic(box: *Box) f32 {
+    return computeShrinkToFitWidth(box);
+}
+
 fn computeShrinkToFitWidth(box: *Box) f32 {
     const origin_x = box.content.x;
     var max_right: f32 = 0;

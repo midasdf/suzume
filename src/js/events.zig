@@ -7,6 +7,11 @@ const dom_api = @import("dom_api.zig");
 const Allocator = std.mem.Allocator;
 const allocator = std.heap.c_allocator;
 
+/// Compare two JSValues by identity (same tag + same pointer for objects/functions).
+fn jsValueEqual(a: qjs.JSValue, b: qjs.JSValue) bool {
+    return a.tag == b.tag and a.u.ptr == b.u.ptr;
+}
+
 // ── Event Listener Storage ──────────────────────────────────────────
 
 /// Key for event listener map: node pointer + event type.
@@ -122,19 +127,18 @@ pub fn jsRemoveEventListener(
     defer qjs.JS_FreeCString(c, type_s.ptr);
     const event_type = type_s.ptr[0..type_s.len];
 
+    const callback = args[1];
+
     const node = dom_api.getNodePublic(c, this_val);
     if (node) |n| {
         for (listener_entries.items) |*entry| {
             if (entry.key.node == n and std.mem.eql(u8, entry.key.event_type, event_type)) {
-                // Remove matching callback (simple identity check via JS_VALUE comparison is not reliable;
-                // just remove first matching callback)
+                // Find and remove the callback that matches by JS object identity
                 var i: usize = 0;
                 while (i < entry.callbacks.items.len) {
-                    // We can't easily compare JS functions, so for now we just don't support
-                    // targeted removal. Remove the last one added.
-                    if (i == entry.callbacks.items.len - 1) {
+                    if (jsValueEqual(entry.callbacks.items[i], callback)) {
                         qjs.JS_FreeValue(c, entry.callbacks.items[i]);
-                        _ = entry.callbacks.swapRemove(i);
+                        _ = entry.callbacks.orderedRemove(i);
                         break;
                     }
                     i += 1;
@@ -146,10 +150,14 @@ pub fn jsRemoveEventListener(
         // Window listener removal
         for (window_listener_entries.items) |*entry| {
             if (std.mem.eql(u8, entry.event_type, event_type)) {
-                if (entry.callbacks.items.len > 0) {
-                    const last = entry.callbacks.items.len - 1;
-                    qjs.JS_FreeValue(c, entry.callbacks.items[last]);
-                    _ = entry.callbacks.swapRemove(last);
+                var i: usize = 0;
+                while (i < entry.callbacks.items.len) {
+                    if (jsValueEqual(entry.callbacks.items[i], callback)) {
+                        qjs.JS_FreeValue(c, entry.callbacks.items[i]);
+                        _ = entry.callbacks.orderedRemove(i);
+                        break;
+                    }
+                    i += 1;
                 }
                 break;
             }
@@ -210,6 +218,58 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
     _ = qjs.JS_SetPropertyStr(ctx, event, "stopPropagation", qjs.JS_NewCFunction(ctx, &jsStopPropagation, "stopPropagation", 0));
 
     return event;
+}
+
+/// Create a mouse event object with clientX, clientY, button, pageX, pageY.
+fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.lxb_dom_node_t, current_target: ?*lxb.lxb_dom_node_t, client_x: i32, client_y: i32, button: i32) qjs.JSValue {
+    const event = createEventObject(ctx, event_type, target, current_target);
+    if (quickjs.JS_IsException(event)) return event;
+    _ = qjs.JS_SetPropertyStr(ctx, event, "clientX", qjs.JS_NewInt32(ctx, client_x));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "clientY", qjs.JS_NewInt32(ctx, client_y));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "pageX", qjs.JS_NewInt32(ctx, client_x));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "pageY", qjs.JS_NewInt32(ctx, client_y));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "button", qjs.JS_NewInt32(ctx, button));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "buttons", qjs.JS_NewInt32(ctx, if (button == 0) 1 else if (button == 2) 2 else 0));
+    return event;
+}
+
+/// Dispatch a mouse event (mousedown/mouseup/mousemove/mouseover/mouseout) with coordinates.
+pub fn dispatchMouseEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, client_x: i32, client_y: i32, button: i32) bool {
+    current_event_flags = .{};
+
+    var path: [64]*lxb.lxb_dom_node_t = undefined;
+    var path_len: usize = 0;
+    var current: ?*lxb.lxb_dom_node_t = target;
+    while (current) |node| {
+        if (path_len < path.len) {
+            path[path_len] = node;
+            path_len += 1;
+        }
+        current = node.parent;
+    }
+
+    for (path[0..path_len]) |node| {
+        if (current_event_flags.stop_propagation) break;
+
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                for (entry.callbacks.items) |callback| {
+                    const event_obj = createMouseEventObject(ctx, event_type, target, node, client_x, client_y, button);
+                    var argv = [_]qjs.JSValue{event_obj};
+                    const this = dom_api.wrapNodePublic(ctx, node);
+                    const ret = qjs.JS_Call(ctx, callback, this, 1, &argv);
+                    qjs.JS_FreeValue(ctx, ret);
+                    qjs.JS_FreeValue(ctx, this);
+                    qjs.JS_FreeValue(ctx, event_obj);
+
+                    if (current_event_flags.stop_propagation) break;
+                }
+                break;
+            }
+        }
+    }
+
+    return !current_event_flags.prevent_default;
 }
 
 // ── Key code to key name mapping ────────────────────────────────────

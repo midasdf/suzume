@@ -21640,8 +21640,8 @@ static __exception int js_parse_template_part(JSParseState *s,
         } else if (c >= 0x80) {
             c = utf8_decode(p - 1, &p_next);
             if (p_next == p) {
-                js_parse_error(s, "invalid UTF-8 sequence");
-                goto fail;
+                c = 0xFFFD; /* replace invalid UTF-8 with U+FFFD */
+                p_next = p + 1;
             }
             p = p_next;
         }
@@ -21749,7 +21749,8 @@ static __exception int js_parse_string(JSParseState *s, int sep,
                 } else if (c >= 0x80) {
                     c = utf8_decode(p, &p_next);
                     if (p_next == p + 1) {
-                        goto invalid_utf8;
+                        c = 0xFFFD; /* replace invalid UTF-8 */
+                        p_next = p + 2;
                     }
                     p = p_next;
                     /* LS or PS are skipped */
@@ -21774,8 +21775,10 @@ static __exception int js_parse_string(JSParseState *s, int sep,
             }
         } else if (c >= 0x80) {
             c = utf8_decode(p - 1, &p_next);
-            if (p_next == p)
-                goto invalid_utf8;
+            if (p_next == p) {
+                c = 0xFFFD; /* replace invalid UTF-8 */
+                p_next = p + 1;
+            }
             p = p_next;
         }
         if (string_buffer_putc(b, c))
@@ -21789,11 +21792,6 @@ static __exception int js_parse_string(JSParseState *s, int sep,
     token->u.str.str = str;
     *pp = p;
     return 0;
-
- invalid_utf8:
-    if (do_throw)
-        js_parse_error(s, "invalid UTF-8 sequence");
-    goto fail;
  invalid_char:
     if (do_throw)
         js_parse_error(s, "unexpected end of string");
@@ -21851,7 +21849,8 @@ static __exception int js_parse_regexp(JSParseState *s)
             else if (c >= 0x80) {
                 c = utf8_decode(p - 1, &p_next);
                 if (p_next == p) {
-                    goto invalid_utf8;
+                    c = 0xFFFD;
+                    p_next = p + 1;
                 }
                 p = p_next;
                 if (c == CP_LS || c == CP_PS)
@@ -21860,9 +21859,8 @@ static __exception int js_parse_regexp(JSParseState *s)
         } else if (c >= 0x80) {
             c = utf8_decode(p - 1, &p_next);
             if (p_next == p) {
-            invalid_utf8:
-                js_parse_error(s, "invalid UTF-8 sequence");
-                goto fail;
+                c = 0xFFFD; /* replace invalid UTF-8 */
+                p_next = p + 1;
             }
             p = p_next;
             /* LS or PS are considered as line terminator */
@@ -22204,8 +22202,10 @@ static __exception int next_token(JSParseState *s)
                 c = lre_parse_escape(&p_next, true);
             } else if (c >= 0x80) {
                 c = utf8_decode(p, &p_next);
-                if (p_next == p + 1)
-                    goto invalid_utf8;
+                if (p_next == p + 1) {
+                    c = 0xFFFD;
+                    p_next = p + 2;
+                }
             }
             if (!lre_js_is_ident_first(c)) {
                 js_parse_error(s, "invalid first character of private name");
@@ -22450,8 +22450,10 @@ static __exception int next_token(JSParseState *s)
     default:
         if (c >= 0x80) {  /* non-ASCII code-point */
             c = utf8_decode(p, &p_next);
-            if (p_next == p + 1)
-                goto invalid_utf8;
+            if (p_next == p + 1) {
+                c = 0xFFFD;
+                p_next = p + 2;
+            }
             p = p_next;
             switch(c) {
             case CP_PS:
@@ -22483,8 +22485,6 @@ static __exception int next_token(JSParseState *s)
     //    dump_token(s, &s->token);
     return 0;
 
- invalid_utf8:
-    js_parse_error(s, "invalid UTF-8 sequence");
  fail:
     s->token.val = TOK_ERROR;
     return -1;

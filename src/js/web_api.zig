@@ -3,6 +3,48 @@ const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const HttpClient = @import("../net/http.zig").HttpClient;
 
+// ── Navigation request (from location.assign/replace/href setter) ────
+
+var pending_navigation_url: ?[]const u8 = null;
+
+/// Request a navigation from Zig code (used by dom_api.zig).
+pub fn requestNavigation(url: []const u8) void {
+    if (pending_navigation_url) |old| std.heap.c_allocator.free(old);
+    const owned = std.heap.c_allocator.alloc(u8, url.len) catch return;
+    @memcpy(owned, url);
+    pending_navigation_url = owned;
+}
+
+/// Check if JS has requested a navigation. Returns the URL and clears it.
+pub fn getPendingNavigation() ?[]const u8 {
+    const url = pending_navigation_url;
+    pending_navigation_url = null;
+    return url;
+}
+
+fn jsLocationAssign(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    const dom_api = @import("dom_api.zig");
+    const url_s = dom_api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, url_s.ptr);
+
+    // Store navigation URL (allocate owned copy)
+    if (pending_navigation_url) |old| std.heap.c_allocator.free(old);
+    const owned = std.heap.c_allocator.alloc(u8, url_s.len) catch return quickjs.JS_UNDEFINED();
+    @memcpy(owned, url_s.ptr[0..url_s.len]);
+    pending_navigation_url = owned;
+
+    return quickjs.JS_UNDEFINED();
+}
+
 // ── Viewport dimensions ─────────────────────────────────────────────
 
 /// Viewport (content area) dimensions, updated on resize.
@@ -269,7 +311,26 @@ pub fn tickTimers(ctx: *qjs.JSContext) bool {
         }
     }
 
+    // Fire MutationObservers if DOM was mutated
+    const dom_api = @import("dom_api.zig");
+    if (dom_api.mutation_observers_pending) {
+        dom_api.mutation_observers_pending = false;
+        fireMutationObservers(ctx);
+    }
+
     return any_active;
+}
+
+/// Call __fireMutationObservers() in JS to notify all registered MutationObservers.
+fn fireMutationObservers(ctx: *qjs.JSContext) void {
+    const global = qjs.JS_GetGlobalObject(ctx);
+    defer qjs.JS_FreeValue(ctx, global);
+    const fn_val = qjs.JS_GetPropertyStr(ctx, global, "__fireMutationObservers");
+    defer qjs.JS_FreeValue(ctx, fn_val);
+    if (qjs.JS_IsFunction(ctx, fn_val)) {
+        const ret = qjs.JS_Call(ctx, fn_val, global, 0, null);
+        qjs.JS_FreeValue(ctx, ret);
+    }
 }
 
 /// Check if any timers are pending.
@@ -353,15 +414,29 @@ fn jsPerformanceNow(
 
 /// Global HTTP client for fetch() — initialized lazily.
 var g_http_client: ?HttpClient = null;
+var g_shared_client: ?*HttpClient = null;
+
+/// Set a shared HTTP client from main.zig (shares cookies with Loader).
+pub fn setSharedHttpClient(client: *HttpClient) void {
+    g_shared_client = client;
+}
 
 fn getOrInitHttpClient() ?*HttpClient {
+    // Prefer the shared client (shares cookie jar with page loads)
+    if (g_shared_client) |shared| return shared;
     if (g_http_client == null) {
         g_http_client = HttpClient.init() catch return null;
     }
     return &g_http_client.?;
 }
 
+/// Get the shared HTTP client (for cookie access from dom_api.zig).
+pub fn getHttpClient() ?*HttpClient {
+    return getOrInitHttpClient();
+}
+
 pub fn deinitHttpClient() void {
+    g_shared_client = null;
     if (g_http_client) |*client| {
         client.deinit();
         g_http_client = null;
@@ -387,9 +462,138 @@ fn jsFetch(
     defer qjs.JS_FreeCString(c, url_s.ptr);
     const url = url_s.ptr[0..url_s.len];
 
-    // Get HTTP method from options (default: GET)
-    // TODO: support POST body, headers from options object
-    _ = if (argc >= 2) args[1] else quickjs.JS_UNDEFINED();
+    // Parse options (method, body, headers)
+    var req_opts = HttpClient.RequestOptions{ .timeout_secs = 15 };
+
+    // Buffers for method string and headers
+    var method_buf: [:0]u8 = undefined;
+    var method_allocated = false;
+    defer if (method_allocated) std.heap.c_allocator.free(method_buf);
+
+    var headers_buf: [32][2][]const u8 = undefined;
+    var headers_count: usize = 0;
+    // We need to track allocated header strings for cleanup
+    var header_strs: [64][]const u8 = undefined;
+    var header_str_count: usize = 0;
+    defer for (header_strs[0..header_str_count]) |s| {
+        std.heap.c_allocator.free(s);
+    };
+
+    var body_js: qjs.JSValue = quickjs.JS_UNDEFINED();
+
+    if (argc >= 2) {
+        const opts = args[1];
+        if (!quickjs.JS_IsUndefined(opts) and !quickjs.JS_IsNull(opts)) {
+            // Parse method
+            const method_val = qjs.JS_GetPropertyStr(c, opts, "method");
+            if (!quickjs.JS_IsUndefined(method_val) and !quickjs.JS_IsNull(method_val)) {
+                const ms = dom_api.jsStringToSlice(c, method_val);
+                if (ms) |m| {
+                    const m_slice = m.ptr[0..m.len];
+                    method_buf = std.heap.c_allocator.allocSentinel(u8, m_slice.len, 0) catch {
+                        qjs.JS_FreeValue(c, method_val);
+                        qjs.JS_FreeCString(c, m.ptr);
+                        return rejectPromise(c, "fetch: out of memory");
+                    };
+                    // Uppercase the method
+                    for (m_slice, 0..) |ch, i| {
+                        method_buf[i] = std.ascii.toUpper(ch);
+                    }
+                    method_allocated = true;
+                    req_opts.method = method_buf;
+                    qjs.JS_FreeCString(c, m.ptr);
+                }
+            }
+            qjs.JS_FreeValue(c, method_val);
+
+            // Parse body
+            body_js = qjs.JS_GetPropertyStr(c, opts, "body");
+            if (!quickjs.JS_IsUndefined(body_js) and !quickjs.JS_IsNull(body_js)) {
+                const bs = dom_api.jsStringToSlice(c, body_js);
+                if (bs) |b| {
+                    // Allocate owned copy since FreeCString would invalidate
+                    const body_owned = std.heap.c_allocator.alloc(u8, b.len) catch {
+                        qjs.JS_FreeCString(c, b.ptr);
+                        qjs.JS_FreeValue(c, body_js);
+                        return rejectPromise(c, "fetch: out of memory");
+                    };
+                    @memcpy(body_owned, b.ptr[0..b.len]);
+                    qjs.JS_FreeCString(c, b.ptr);
+                    req_opts.body = body_owned;
+                    header_strs[header_str_count] = body_owned;
+                    header_str_count += 1;
+                }
+            }
+            qjs.JS_FreeValue(c, body_js);
+
+            // Parse headers
+            const hdrs_val = qjs.JS_GetPropertyStr(c, opts, "headers");
+            if (!quickjs.JS_IsUndefined(hdrs_val) and !quickjs.JS_IsNull(hdrs_val)) {
+                // Get property names from headers object
+                var ptab: [*c]qjs.JSPropertyEnum = null;
+                var plen: u32 = 0;
+                if (qjs.JS_GetOwnPropertyNames(c, &ptab, &plen, hdrs_val, qjs.JS_GPN_STRING_MASK | qjs.JS_GPN_ENUM_ONLY) == 0) {
+                    var hi: u32 = 0;
+                    while (hi < plen and headers_count < 32) : (hi += 1) {
+                        const atom = ptab[hi].atom;
+                        const key_js = qjs.JS_AtomToString(c, atom);
+                        const val_js = qjs.JS_GetProperty(c, hdrs_val, atom);
+
+                        const ks = dom_api.jsStringToSlice(c, key_js);
+                        const vs = dom_api.jsStringToSlice(c, val_js);
+
+                        if (ks != null and vs != null) {
+                            // Allocate owned copies
+                            const ko = std.heap.c_allocator.alloc(u8, ks.?.len) catch {
+                                qjs.JS_FreeCString(c, ks.?.ptr);
+                                qjs.JS_FreeCString(c, vs.?.ptr);
+                                qjs.JS_FreeValue(c, key_js);
+                                qjs.JS_FreeValue(c, val_js);
+                                continue;
+                            };
+                            @memcpy(ko, ks.?.ptr[0..ks.?.len]);
+                            const vo = std.heap.c_allocator.alloc(u8, vs.?.len) catch {
+                                std.heap.c_allocator.free(ko);
+                                qjs.JS_FreeCString(c, ks.?.ptr);
+                                qjs.JS_FreeCString(c, vs.?.ptr);
+                                qjs.JS_FreeValue(c, key_js);
+                                qjs.JS_FreeValue(c, val_js);
+                                continue;
+                            };
+                            @memcpy(vo, vs.?.ptr[0..vs.?.len]);
+
+                            headers_buf[headers_count] = .{ ko, vo };
+                            headers_count += 1;
+                            header_strs[header_str_count] = ko;
+                            header_str_count += 1;
+                            header_strs[header_str_count] = vo;
+                            header_str_count += 1;
+
+                            qjs.JS_FreeCString(c, ks.?.ptr);
+                            qjs.JS_FreeCString(c, vs.?.ptr);
+                        } else {
+                            if (ks) |k| qjs.JS_FreeCString(c, k.ptr);
+                            if (vs) |v| qjs.JS_FreeCString(c, v.ptr);
+                        }
+
+                        qjs.JS_FreeValue(c, key_js);
+                        qjs.JS_FreeValue(c, val_js);
+                    }
+                    // Free property enum
+                    var fi: u32 = 0;
+                    while (fi < plen) : (fi += 1) {
+                        qjs.JS_FreeAtom(c, ptab[fi].atom);
+                    }
+                    qjs.js_free(c, ptab);
+                }
+            }
+            qjs.JS_FreeValue(c, hdrs_val);
+        }
+    }
+
+    if (headers_count > 0) {
+        req_opts.headers = headers_buf[0..headers_count];
+    }
 
     // Validate URL
     if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) {
@@ -403,14 +607,15 @@ fn jsFetch(
     defer std.heap.c_allocator.free(url_z);
     @memcpy(url_z, url);
 
-    std.debug.print("[fetch] {s}\n", .{url_z});
+    const method_str = if (req_opts.method) |m| m.ptr[0..m.len] else "GET";
+    std.debug.print("[fetch] {s} {s}\n", .{ method_str, url_z });
 
     // Synchronous HTTP fetch
     const client = getOrInitHttpClient() orelse {
         return rejectPromise(c, "fetch: failed to initialize HTTP client");
     };
 
-    var response = client.getWithTimeout(std.heap.c_allocator, url_z, 15) catch {
+    var response = client.request(std.heap.c_allocator, url_z, req_opts) catch {
         return rejectPromise(c, "fetch: network error");
     };
 
@@ -924,9 +1129,9 @@ pub fn registerWebApis(js_rt: anytype) void {
         _ = qjs.JS_SetPropertyStr(ctx, loc, "hash", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "origin", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "assign",
-            qjs.JS_NewCFunction(ctx, &jsNoOp, "assign", 1));
+            qjs.JS_NewCFunction(ctx, &jsLocationAssign, "assign", 1));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "replace",
-            qjs.JS_NewCFunction(ctx, &jsNoOp, "replace", 1));
+            qjs.JS_NewCFunction(ctx, &jsLocationAssign, "replace", 1));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "reload",
             qjs.JS_NewCFunction(ctx, &jsNoOp, "reload", 0));
         _ = qjs.JS_SetPropertyStr(ctx, global, "location", loc);
@@ -948,7 +1153,33 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof customElements==='undefined'){
         \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
         \\}
-        \\if(typeof MutationObserver==='undefined'){globalThis.MutationObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.takeRecords=function(){return[];};};}
+        \\if(typeof MutationObserver==='undefined'){
+        \\  globalThis.__mutationObservers=[];
+        \\  globalThis.MutationObserver=function(cb){this._cb=cb;this._targets=[];this._disconnected=false;};
+        \\  MutationObserver.prototype.observe=function(target,opts){
+        \\    if(this._disconnected)return;
+        \\    this._targets.push({target:target,options:opts||{}});
+        \\    var found=false;for(var i=0;i<__mutationObservers.length;i++){if(__mutationObservers[i]===this){found=true;break;}}
+        \\    if(!found)__mutationObservers.push(this);
+        \\  };
+        \\  MutationObserver.prototype.disconnect=function(){
+        \\    this._disconnected=true;this._targets=[];
+        \\    globalThis.__mutationObservers=__mutationObservers.filter(function(o){return o!==this;}.bind(this));
+        \\  };
+        \\  MutationObserver.prototype.takeRecords=function(){return[];};
+        \\  globalThis.__fireMutationObservers=function(){
+        \\    for(var i=0;i<__mutationObservers.length;i++){
+        \\      var obs=__mutationObservers[i];
+        \\      if(!obs._disconnected&&obs._targets.length>0){
+        \\        var records=[];
+        \\        for(var j=0;j<obs._targets.length;j++){
+        \\          records.push({type:'childList',target:obs._targets[j].target,addedNodes:[],removedNodes:[],attributeName:null,oldValue:null});
+        \\        }
+        \\        try{obs._cb(records,obs);}catch(e){}
+        \\      }
+        \\    }
+        \\  };
+        \\}
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb,opts){
         \\  this._cb=cb;this._disconnected=false;
         \\  this.observe=function(el){
@@ -984,9 +1215,66 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\}
 
         \\if(typeof AbortController==='undefined'){globalThis.AbortController=function(){this.signal={aborted:false,addEventListener:function(){}};this.abort=function(){this.signal.aborted=true;};};}
-        \\if(typeof XMLHttpRequest==='undefined'){globalThis.XMLHttpRequest=function(){this.open=function(){};this.send=function(){};this.setRequestHeader=function(){};this.addEventListener=function(){};};}
+        \\if(typeof XMLHttpRequest==='undefined'){
+        \\  globalThis.XMLHttpRequest=function(){
+        \\    this.readyState=0;this.status=0;this.statusText='';this.responseText='';this.responseURL='';
+        \\    this.response='';this.responseType='';this._method='GET';this._url='';this._headers={};this._async=true;
+        \\    this.onreadystatechange=null;this.onload=null;this.onerror=null;this.onprogress=null;this.ontimeout=null;
+        \\    this._listeners={};this.timeout=0;this.withCredentials=false;
+        \\  };
+        \\  XMLHttpRequest.UNSENT=0;XMLHttpRequest.OPENED=1;XMLHttpRequest.HEADERS_RECEIVED=2;
+        \\  XMLHttpRequest.LOADING=3;XMLHttpRequest.DONE=4;
+        \\  XMLHttpRequest.prototype.open=function(method,url,async_){this._method=method;this._url=url;this._async=async_!==false;this.readyState=1;this._fireReadyState();};
+        \\  XMLHttpRequest.prototype.setRequestHeader=function(name,value){this._headers[name]=value;};
+        \\  XMLHttpRequest.prototype.getResponseHeader=function(name){return this._responseHeaders?this._responseHeaders[name.toLowerCase()]||null:null;};
+        \\  XMLHttpRequest.prototype.getAllResponseHeaders=function(){if(!this._responseHeaders)return'';var r='';for(var k in this._responseHeaders)r+=k+': '+this._responseHeaders[k]+'\r\n';return r;};
+        \\  XMLHttpRequest.prototype.send=function(body){
+        \\    var self=this,opts={method:this._method,headers:this._headers};
+        \\    if(body)opts.body=body;
+        \\    fetch(this._url,opts).then(function(resp){
+        \\      self.status=resp.status;self.statusText=resp.statusText||'';self.responseURL=resp.url||self._url;
+        \\      self._responseHeaders={};if(resp.headers&&resp.headers.forEach)resp.headers.forEach(function(v,k){self._responseHeaders[k]=v;});
+        \\      self.readyState=2;self._fireReadyState();
+        \\      return resp.text();
+        \\    }).then(function(text){
+        \\      self.readyState=3;self._fireReadyState();
+        \\      self.responseText=text;self.response=self.responseType==='json'?JSON.parse(text):text;
+        \\      self.readyState=4;self._fireReadyState();
+        \\      if(self.onload)try{self.onload({target:self,type:'load'});}catch(e){}
+        \\      self._fire('load',{target:self});
+        \\    })['catch'](function(err){
+        \\      self.readyState=4;self.status=0;self._fireReadyState();
+        \\      if(self.onerror)try{self.onerror({target:self,type:'error'});}catch(e){}
+        \\      self._fire('error',{target:self});
+        \\    });
+        \\  };
+        \\  XMLHttpRequest.prototype.abort=function(){this.readyState=0;};
+        \\  XMLHttpRequest.prototype.addEventListener=function(type,fn){if(!this._listeners[type])this._listeners[type]=[];this._listeners[type].push(fn);};
+        \\  XMLHttpRequest.prototype.removeEventListener=function(type,fn){if(!this._listeners[type])return;this._listeners[type]=this._listeners[type].filter(function(f){return f!==fn;});};
+        \\  XMLHttpRequest.prototype._fire=function(type,evt){if(!this._listeners[type])return;for(var i=0;i<this._listeners[type].length;i++)try{this._listeners[type][i](evt);}catch(e){}};
+        \\  XMLHttpRequest.prototype._fireReadyState=function(){if(this.onreadystatechange)try{this.onreadystatechange({target:this});}catch(e){}this._fire('readystatechange',{target:this});};
+        \\}
         \\if(typeof DOMParser==='undefined'){globalThis.DOMParser=function(){this.parseFromString=function(){return null;};};}
-        \\if(typeof history==='undefined'){globalThis.history={pushState:function(){},replaceState:function(){},back:function(){},forward:function(){},go:function(){},get length(){return 1;},get state(){return null;}};}
+        \\if(typeof history==='undefined'){
+        \\  globalThis.history=(function(){
+        \\    var stack=[{state:null,url:location.href}],idx=0;
+        \\    return {
+        \\      pushState:function(state,title,url){
+        \\        if(url){stack=stack.slice(0,idx+1);stack.push({state:state,url:url});idx=stack.length-1;
+        \\          location.href=url;location.pathname=url.replace(/^https?:\/\/[^\/]*/,'').replace(/[?#].*/,'');
+        \\          location.search=(url.indexOf('?')>=0?url.slice(url.indexOf('?')).replace(/#.*/,''):'');
+        \\          location.hash=(url.indexOf('#')>=0?url.slice(url.indexOf('#')):'');
+        \\        }
+        \\      },
+        \\      replaceState:function(state,title,url){if(url){stack[idx]={state:state,url:url};location.href=url;}},
+        \\      back:function(){if(idx>0){idx--;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
+        \\      forward:function(){if(idx<stack.length-1){idx++;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
+        \\      go:function(n){var ni=idx+n;if(ni>=0&&ni<stack.length){idx=ni;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
+        \\      get length(){return stack.length;},
+        \\      get state(){return stack[idx].state;}
+        \\    };
+        \\  })();
+        \\}
         \\if(typeof dispatchEvent==='undefined'){globalThis.dispatchEvent=function(e){return true;};}
         \\if(typeof FormData==='undefined'){globalThis.FormData=function(form){this._data=[];};FormData.prototype.append=function(k,v){this._data.push([k,v]);};FormData.prototype.get=function(k){for(var i=0;i<this._data.length;i++)if(this._data[i][0]===k)return this._data[i][1];return null;};FormData.prototype.has=function(k){return this._data.some(function(p){return p[0]===k;});};}
         \\if(typeof URLSearchParams==='undefined'){
@@ -1026,6 +1314,23 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
         \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
         \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
+        \\if(typeof Blob==='undefined'){
+        \\  globalThis.Blob=function(parts,opts){
+        \\    this.type=(opts&&opts.type)||'';
+        \\    var s='';if(parts)for(var i=0;i<parts.length;i++)s+=typeof parts[i]==='string'?parts[i]:String(parts[i]);
+        \\    this._data=s;this.size=s.length;
+        \\  };
+        \\  Blob.prototype.text=function(){return Promise.resolve(this._data);};
+        \\  Blob.prototype.arrayBuffer=function(){var b=new ArrayBuffer(this._data.length);var v=new Uint8Array(b);for(var i=0;i<this._data.length;i++)v[i]=this._data.charCodeAt(i);return Promise.resolve(b);};
+        \\  Blob.prototype.slice=function(s,e,t){return new Blob([this._data.slice(s,e)],{type:t||this.type});};
+        \\}
+        \\if(typeof crypto==='undefined'){
+        \\  globalThis.crypto={
+        \\    getRandomValues:function(arr){for(var i=0;i<arr.length;i++)arr[i]=Math.floor(Math.random()*256);return arr;},
+        \\    randomUUID:function(){var h='0123456789abcdef',s='';for(var i=0;i<36;i++){if(i===8||i===13||i===18||i===23)s+='-';else if(i===14)s+='4';else if(i===19)s+=h[8+(Math.random()*4|0)];else s+=h[Math.random()*16|0];}return s;},
+        \\    subtle:{digest:function(){return Promise.reject('not implemented');},encrypt:function(){return Promise.reject('not implemented');}}
+        \\  };
+        \\}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }

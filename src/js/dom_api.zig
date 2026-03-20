@@ -41,9 +41,21 @@ var g_document: ?*anyopaque = null;
 
 /// DOM dirty flag — set when JS mutates the DOM tree. Checked by the main loop.
 pub var dom_dirty: bool = false;
+pub var mutation_observers_pending: bool = false;
+
+/// Currently focused element (set from main.zig when input is focused/blurred).
+pub var active_element: ?*lxb.lxb_dom_node_t = null;
+
+/// Scroll position, synced from main.zig.
+pub var scroll_x: f32 = 0;
+pub var scroll_y: f32 = 0;
+/// Scroll request from JS (scrollTo/scrollBy). null = no pending request.
+pub var pending_scroll_x: ?f32 = null;
+pub var pending_scroll_y: ?f32 = null;
 
 fn setDomDirty() void {
     dom_dirty = true;
+    mutation_observers_pending = true;
 }
 
 /// Global root box pointer — set from main after layout, used for offset/rect queries.
@@ -1639,6 +1651,54 @@ fn elementQuerySelectorAll(
     return arr;
 }
 
+fn elementGetElementsByClassName(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    // Build CSS selector: ".className"
+    const class_name = s.ptr[0..s.len];
+    var selector_buf: [256]u8 = undefined;
+    if (class_name.len + 1 > selector_buf.len) return quickjs.JS_NULL();
+    selector_buf[0] = '.';
+    @memcpy(selector_buf[1 .. 1 + class_name.len], class_name);
+    const selector = selector_buf[0 .. 1 + class_name.len];
+
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+    var idx: u32 = 0;
+    walkTreeCollect(c, node, selector, arr, &idx);
+    return arr;
+}
+
+fn elementGetElementsByTagName(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+    var idx: u32 = 0;
+    walkTreeCollect(c, node, s.ptr[0..s.len], arr, &idx);
+    return arr;
+}
+
 // ── Element geometry (stub — returns 0 without layout) ──────────────
 
 /// Helper: get Box dimensions for the element attached to this_val.
@@ -1753,7 +1813,7 @@ fn elementGetScrollTop(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, 0);
+    return qjs.JS_NewInt32(c, @intFromFloat(scroll_y));
 }
 
 fn elementGetScrollLeft(
@@ -1763,7 +1823,7 @@ fn elementGetScrollLeft(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, 0);
+    return qjs.JS_NewInt32(c, @intFromFloat(scroll_x));
 }
 
 // ── element.nodeType ────────────────────────────────────────────────
@@ -2016,6 +2076,81 @@ fn documentQuerySelectorAll(
     const doc_node = getDocumentNode() orelse return arr;
     var idx: u32 = 0;
     walkTreeCollect(c, doc_node, s.ptr[0..s.len], arr, &idx);
+    return arr;
+}
+
+fn documentGetElementsByClassName(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    var selector_buf: [256]u8 = undefined;
+    const class_name = s.ptr[0..s.len];
+    if (class_name.len + 1 > selector_buf.len) return quickjs.JS_NULL();
+    selector_buf[0] = '.';
+    @memcpy(selector_buf[1 .. 1 + class_name.len], class_name);
+
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+    const doc_node = getDocumentNode() orelse return arr;
+    var idx: u32 = 0;
+    walkTreeCollect(c, doc_node, selector_buf[0 .. 1 + class_name.len], arr, &idx);
+    return arr;
+}
+
+fn documentGetElementsByTagName(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+    const doc_node = getDocumentNode() orelse return arr;
+    var idx: u32 = 0;
+    walkTreeCollect(c, doc_node, s.ptr[0..s.len], arr, &idx);
+    return arr;
+}
+
+fn documentGetElementsByName(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    var selector_buf: [270]u8 = undefined;
+    const name = s.ptr[0..s.len];
+    const prefix = "[name=\"";
+    const suffix = "\"]";
+    if (prefix.len + name.len + suffix.len > selector_buf.len) return quickjs.JS_NULL();
+    @memcpy(selector_buf[0..prefix.len], prefix);
+    @memcpy(selector_buf[prefix.len .. prefix.len + name.len], name);
+    @memcpy(selector_buf[prefix.len + name.len .. prefix.len + name.len + suffix.len], suffix);
+
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+    const doc_node = getDocumentNode() orelse return arr;
+    var idx: u32 = 0;
+    walkTreeCollect(c, doc_node, selector_buf[0 .. prefix.len + name.len + suffix.len], arr, &idx);
     return arr;
 }
 
@@ -2323,7 +2458,24 @@ fn documentGetHead(
 
 // ── document.cookie ─────────────────────────────────────────────────
 
-var g_cookies: ?[]u8 = null;
+/// Extract domain from a URL (e.g., "https://www.example.com/path" -> "www.example.com")
+fn extractDomain(url: []const u8) ?[]const u8 {
+    // Skip scheme
+    var rest = url;
+    if (std.mem.indexOf(u8, rest, "://")) |idx| {
+        rest = rest[idx + 3 ..];
+    }
+    // Take up to first '/' or end
+    if (std.mem.indexOf(u8, rest, "/")) |idx| {
+        rest = rest[0..idx];
+    }
+    // Remove port
+    if (std.mem.indexOf(u8, rest, ":")) |idx| {
+        rest = rest[0..idx];
+    }
+    if (rest.len == 0) return null;
+    return rest;
+}
 
 fn documentGetCookie(
     ctx: ?*qjs.JSContext,
@@ -2332,10 +2484,19 @@ fn documentGetCookie(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (g_cookies) |cookies| {
-        return qjs.JS_NewStringLen(c, cookies.ptr, cookies.len);
-    }
-    return qjs.JS_NewStringLen(c, "", 0);
+    const web_api = @import("web_api.zig");
+    const client = web_api.getHttpClient() orelse {
+        return qjs.JS_NewStringLen(c, "", 0);
+    };
+
+    const domain = if (g_current_url) |url| extractDomain(url) orelse "" else "";
+    if (domain.len == 0) return qjs.JS_NewStringLen(c, "", 0);
+
+    const cookies = client.getCookiesForDomain(std.heap.c_allocator, domain) orelse {
+        return qjs.JS_NewStringLen(c, "", 0);
+    };
+    defer std.heap.c_allocator.free(cookies);
+    return qjs.JS_NewStringLen(c, cookies.ptr, cookies.len);
 }
 
 fn documentSetCookie(
@@ -2350,21 +2511,13 @@ fn documentSetCookie(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    // Append cookie (real cookie parsing is complex; this appends per Set-Cookie behavior)
-    if (g_cookies) |old| {
-        const sep = "; ";
-        const new_len = old.len + sep.len + s.len;
-        const new_cookies = std.heap.c_allocator.alloc(u8, new_len) catch return quickjs.JS_UNDEFINED();
-        @memcpy(new_cookies[0..old.len], old);
-        @memcpy(new_cookies[old.len..][0..sep.len], sep);
-        @memcpy(new_cookies[old.len + sep.len ..][0..s.len], s.ptr[0..s.len]);
-        std.heap.c_allocator.free(old);
-        g_cookies = new_cookies;
-    } else {
-        const new_cookies = std.heap.c_allocator.alloc(u8, s.len) catch return quickjs.JS_UNDEFINED();
-        @memcpy(new_cookies, s.ptr[0..s.len]);
-        g_cookies = new_cookies;
-    }
+    const web_api = @import("web_api.zig");
+    const client = web_api.getHttpClient() orelse return quickjs.JS_UNDEFINED();
+
+    const domain = if (g_current_url) |url| extractDomain(url) orelse "" else "";
+    if (domain.len == 0) return quickjs.JS_UNDEFINED();
+
+    client.setJsCookie(domain, s.ptr[0..s.len]);
     return quickjs.JS_UNDEFINED();
 }
 
@@ -2521,12 +2674,19 @@ fn windowLocationReload(
 }
 
 fn windowLocationAssign(
-    _: ?*qjs.JSContext,
+    ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Stub — actual navigation requires main loop integration
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const url_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, url_s.ptr);
+    // Delegate to web_api for actual navigation
+    const web_api = @import("../js/web_api.zig");
+    web_api.requestNavigation(url_s.ptr[0..url_s.len]);
     return quickjs.JS_UNDEFINED();
 }
 
@@ -2569,28 +2729,107 @@ fn createLocationObject(ctx: *qjs.JSContext) qjs.JSValue {
 
     _ = qjs.JS_SetPropertyStr(ctx, loc, "reload", qjs.JS_NewCFunction(ctx, &windowLocationReload, "reload", 0));
     _ = qjs.JS_SetPropertyStr(ctx, loc, "assign", qjs.JS_NewCFunction(ctx, &windowLocationAssign, "assign", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, loc, "replace", qjs.JS_NewCFunction(ctx, &windowLocationAssign, "replace", 1));
     _ = qjs.JS_SetPropertyStr(ctx, loc, "toString", qjs.JS_NewCFunction(ctx, &windowLocationToString, "toString", 0));
 
     return loc;
 }
 
-// ── window.scrollTo / window.scrollBy (stubs) ───────────────────────
-
-fn windowScrollTo(
-    _: ?*qjs.JSContext,
+fn jsGetScrollX(
+    ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewFloat64(c, scroll_x);
+}
+
+fn jsGetScrollY(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewFloat64(c, scroll_y);
+}
+
+// ── window.scrollTo / window.scrollBy ───────────────────────────────
+
+fn windowScrollTo(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    // scrollTo(x, y) or scrollTo({top, left})
+    if (argc >= 2) {
+        var x_val: f64 = 0;
+        var y_val: f64 = 0;
+        _ = qjs.JS_ToFloat64(c, &x_val, args[0]);
+        _ = qjs.JS_ToFloat64(c, &y_val, args[1]);
+        pending_scroll_x = @floatCast(x_val);
+        pending_scroll_y = @floatCast(y_val);
+    } else {
+        // Options object: {top, left, behavior}
+        const opts = args[0];
+        const top_val = qjs.JS_GetPropertyStr(c, opts, "top");
+        const left_val = qjs.JS_GetPropertyStr(c, opts, "left");
+        defer qjs.JS_FreeValue(c, top_val);
+        defer qjs.JS_FreeValue(c, left_val);
+        if (!quickjs.JS_IsUndefined(top_val)) {
+            var y_val: f64 = 0;
+            _ = qjs.JS_ToFloat64(c, &y_val, top_val);
+            pending_scroll_y = @floatCast(y_val);
+        }
+        if (!quickjs.JS_IsUndefined(left_val)) {
+            var x_val: f64 = 0;
+            _ = qjs.JS_ToFloat64(c, &x_val, left_val);
+            pending_scroll_x = @floatCast(x_val);
+        }
+    }
     return quickjs.JS_UNDEFINED();
 }
 
 fn windowScrollBy(
-    _: ?*qjs.JSContext,
+    ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    if (argc >= 2) {
+        var dx: f64 = 0;
+        var dy: f64 = 0;
+        _ = qjs.JS_ToFloat64(c, &dx, args[0]);
+        _ = qjs.JS_ToFloat64(c, &dy, args[1]);
+        pending_scroll_x = scroll_x + @as(f32, @floatCast(dx));
+        pending_scroll_y = scroll_y + @as(f32, @floatCast(dy));
+    } else {
+        const opts = args[0];
+        const top_val = qjs.JS_GetPropertyStr(c, opts, "top");
+        const left_val = qjs.JS_GetPropertyStr(c, opts, "left");
+        defer qjs.JS_FreeValue(c, top_val);
+        defer qjs.JS_FreeValue(c, left_val);
+        if (!quickjs.JS_IsUndefined(top_val)) {
+            var dy: f64 = 0;
+            _ = qjs.JS_ToFloat64(c, &dy, top_val);
+            pending_scroll_y = scroll_y + @as(f32, @floatCast(dy));
+        }
+        if (!quickjs.JS_IsUndefined(left_val)) {
+            var dx: f64 = 0;
+            _ = qjs.JS_ToFloat64(c, &dx, left_val);
+            pending_scroll_x = scroll_x + @as(f32, @floatCast(dx));
+        }
+    }
     return quickjs.JS_UNDEFINED();
 }
 
@@ -2769,6 +3008,123 @@ fn elementSetHidden(
     }
     setDomDirty();
     return quickjs.JS_UNDEFINED();
+}
+
+// ── input.value / textarea.value / select.value ─────────────────────
+
+fn elementGetValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    // Check tag name
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
+    const tag = name_ptr.?[0..name_len];
+
+    if (std.mem.eql(u8, tag, "textarea")) {
+        // textarea: value = textContent
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var len: usize = 0;
+        const ptr = lxb_dom_node_text_content(node, &len);
+        if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, ptr.?, len);
+    } else if (std.mem.eql(u8, tag, "select")) {
+        // select: find selected option's value
+        return getSelectedOptionValue(c, @ptrCast(elem));
+    } else {
+        // input and other elements: use "value" attribute
+        var attr_len: usize = 0;
+        const attr_ptr = lxb_dom_element_get_attribute(elem, "value", 5, &attr_len);
+        if (attr_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, attr_ptr.?, attr_len);
+    }
+}
+
+fn elementSetValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    // Check tag name
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return quickjs.JS_UNDEFINED();
+    const tag = name_ptr.?[0..name_len];
+
+    if (std.mem.eql(u8, tag, "textarea")) {
+        // textarea: set textContent
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    } else {
+        // input, select, etc.: set "value" attribute
+        _ = lxb_dom_element_set_attribute(elem, "value", 5, s.ptr, s.len);
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+fn getSelectedOptionValue(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
+    // Walk children to find first <option> with "selected" attribute, or first <option>
+    var first_option_value: ?struct { ptr: [*]const u8, len: usize } = null;
+    var child = lxb.lxb_dom_node_first_child(node);
+    while (child) |ch| : (child = lxb.lxb_dom_node_next(ch)) {
+        if (ch.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+        var ch_name_len: usize = 0;
+        const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+        if (ch_name == null) continue;
+        if (!std.mem.eql(u8, ch_name.?[0..ch_name_len], "option")) continue;
+
+        var val_len: usize = 0;
+        const val_ptr = lxb_dom_element_get_attribute(ch_elem, "value", 5, &val_len);
+
+        // Check if this option has "selected" attribute (boolean attribute)
+        if (lxb_dom_element_has_attribute(ch_elem, "selected", 8)) {
+            // This is the selected option
+            if (val_ptr) |vp| {
+                return qjs.JS_NewStringLen(ctx, vp, val_len);
+            }
+            // No value attribute, use textContent
+            var tc_len: usize = 0;
+            const tc = lxb_dom_node_text_content(ch, &tc_len);
+            if (tc) |t| return qjs.JS_NewStringLen(ctx, t, tc_len);
+            return qjs.JS_NewStringLen(ctx, "", 0);
+        }
+
+        // Track first option as default
+        if (first_option_value == null) {
+            if (val_ptr) |vp| {
+                first_option_value = .{ .ptr = vp, .len = val_len };
+            } else {
+                var tc_len: usize = 0;
+                const tc = lxb_dom_node_text_content(ch, &tc_len);
+                if (tc) |t| {
+                    first_option_value = .{ .ptr = t, .len = tc_len };
+                }
+            }
+        }
+    }
+
+    // No selected attribute found, return first option's value
+    if (first_option_value) |v| {
+        return qjs.JS_NewStringLen(ctx, v.ptr, v.len);
+    }
+    return qjs.JS_NewStringLen(ctx, "", 0);
 }
 
 // ── getComputedStyle() ──────────────────────────────────────────────
@@ -3086,6 +3442,20 @@ fn documentGetReadyState(
     return qjs.JS_NewString(c, state_str.ptr);
 }
 
+fn documentGetActiveElement(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (active_element) |node| {
+        return wrapNode(c, node);
+    }
+    // Default: return document.body
+    return documentGetBody(ctx, quickjs.JS_UNDEFINED(), 0, null);
+}
+
 // ── document.createEvent ────────────────────────────────────────────
 
 fn documentCreateEvent(
@@ -3348,6 +3718,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect", qjs.JS_NewCFunction(ctx, &elementGetBoundingClientRect, "getBoundingClientRect", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelector", qjs.JS_NewCFunction(ctx, &elementQuerySelector, "querySelector", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &elementGetElementsByClassName, "getElementsByClassName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagName", 1));
 
     // Element getters
     {
@@ -3440,6 +3812,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, hiddenAtom);
     }
 
+    // input.value / textarea.value / select.value
+    {
+        const valueAtom = qjs.JS_NewAtom(ctx, "value");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, valueAtom, qjs.JS_NewCFunction(ctx, &elementGetValue, "get value", 0), qjs.JS_NewCFunction(ctx, &elementSetValue, "set value", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, valueAtom);
+    }
+
     // Set HTMLElement.prototype as the class prototype (elements get this as their __proto__)
     qjs.JS_SetClassProto(ctx, element_class_id, qjs.JS_DupValue(ctx, html_element_proto));
 
@@ -3492,11 +3871,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &documentCreateEvent, "createEvent", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "write", qjs.JS_NewCFunction(ctx, &documentWrite, "write", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "writeln", qjs.JS_NewCFunction(ctx, &documentWrite, "writeln", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &documentGetElementsByClassName, "getElementsByClassName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByName", qjs.JS_NewCFunction(ctx, &documentGetElementsByName, "getElementsByName", 1));
 
     // document.readyState (getter)
     const readyStateAtom = qjs.JS_NewAtom(ctx, "readyState");
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, readyStateAtom, qjs.JS_NewCFunction(ctx, &documentGetReadyState, "get readyState", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, readyStateAtom);
+
+    // document.activeElement (getter)
+    {
+        const activeElementAtom = qjs.JS_NewAtom(ctx, "activeElement");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, activeElementAtom, qjs.JS_NewCFunction(ctx, &documentGetActiveElement, "get activeElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, activeElementAtom);
+    }
 
     // document.body (getter)
     const bodyAtom = qjs.JS_NewAtom(ctx, "body");
@@ -3563,6 +3952,28 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const innerHeightAtom = qjs.JS_NewAtom(ctx, "innerHeight");
     _ = qjs.JS_DefinePropertyGetSet(ctx, global, innerHeightAtom, qjs.JS_NewCFunction(ctx, &windowGetInnerHeight, "get innerHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, innerHeightAtom);
+
+    // window.scrollX / scrollY / pageXOffset / pageYOffset
+    {
+        const scrollXAtom = qjs.JS_NewAtom(ctx, "scrollX");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, global, scrollXAtom, qjs.JS_NewCFunction(ctx, &jsGetScrollX, "get scrollX", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, scrollXAtom);
+    }
+    {
+        const scrollYAtom = qjs.JS_NewAtom(ctx, "scrollY");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, global, scrollYAtom, qjs.JS_NewCFunction(ctx, &jsGetScrollY, "get scrollY", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, scrollYAtom);
+    }
+    {
+        const pageXOffsetAtom = qjs.JS_NewAtom(ctx, "pageXOffset");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, global, pageXOffsetAtom, qjs.JS_NewCFunction(ctx, &jsGetScrollX, "get pageXOffset", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, pageXOffsetAtom);
+    }
+    {
+        const pageYOffsetAtom = qjs.JS_NewAtom(ctx, "pageYOffset");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, global, pageYOffsetAtom, qjs.JS_NewCFunction(ctx, &jsGetScrollY, "get pageYOffset", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, pageYOffsetAtom);
+    }
 
     // navigator object (minimal)
     const nav_obj = qjs.JS_NewObject(ctx);

@@ -78,6 +78,7 @@ fn hashParentStyle(ps: ?*const ComputedStyle) u32 {
     h ^= @as(u32, @intFromEnum(p.font_style)) *% 31;
     h ^= @as(u32, @intFromEnum(p.white_space)) *% 37;
     h ^= @as(u32, @intFromEnum(p.visibility)) *% 41;
+    h ^= @as(u32, @intFromEnum(p.list_style_type)) *% 43;
     return h;
 }
 
@@ -116,6 +117,7 @@ const ua_stylesheet_text =
     \\colgroup { display: table-column-group; }
     \\caption { display: table-caption; }
     \\ul, ol { display: block; padding-left: 40px; margin-top: 1em; margin-bottom: 1em; }
+    \\ol { list-style-type: decimal; }
     \\li { display: list-item; }
     \\h1 { font-size: 2em; font-weight: bold; margin-top: 0.67em; margin-bottom: 0.67em; }
     \\h2 { font-size: 1.5em; font-weight: bold; margin-top: 0.83em; margin-bottom: 0.83em; }
@@ -128,8 +130,8 @@ const ua_stylesheet_text =
     \\a { color: #0000EE; text-decoration: underline; display: inline; }
     \\span, u, s, del, ins, q, cite, dfn, var, kbd, samp, time, mark,
     \\data, output, wbr, ruby, rt, rp, bdi, bdo, label { display: inline; }
-    \\pre, code { white-space: pre; }
-    \\code { font-family: monospace; }
+    \\pre { white-space: pre; }
+    \\code { font-family: monospace; display: inline; white-space: pre; }
     \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
     \\hr { border-top-width: 1px; margin-top: 8px; margin-bottom: 8px; }
     \\p { margin-top: 1em; margin-bottom: 1em; }

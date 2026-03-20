@@ -112,8 +112,8 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
 
     const gap_total = if (flex_child_count > 1) gap * @as(f32, @floatFromInt(flex_child_count - 1)) else 0;
 
-    // Phase 1.5: Pre-layout children with auto width to determine intrinsic sizes
-    // (needed for anonymous blocks wrapping text nodes, inline elements, etc.)
+    // Phase 1.5: Pre-layout children with auto width to determine intrinsic (content) sizes.
+    // For flex items with auto basis, we need the content width, not the container width.
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
         const has_explicit_width = switch (child.style.width) {
@@ -125,8 +125,13 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
             else => false,
         };
         if (!has_explicit_width and !has_explicit_basis) {
-            // Layout with container width to get intrinsic height/width
+            // Layout at container width first to measure content
             block.layoutBlock(child, container_width, box.content.y, fonts);
+            // Then shrink to fit content (intrinsic width)
+            const fit_w = block.computeShrinkToFitWidthPublic(child);
+            if (fit_w > 0 and fit_w < child.content.width) {
+                child.content.width = fit_w;
+            }
         }
     }
 
@@ -352,7 +357,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
     const children = box.children.items;
     const is_wrap_reverse = style.flex_wrap == .wrap_reverse;
 
-    // Pre-layout auto-width children to determine intrinsic sizes
+    // Pre-layout auto-width children to determine intrinsic (content) sizes
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
         const has_explicit_width = switch (child.style.width) {
@@ -365,6 +370,11 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         };
         if (!has_explicit_width and !has_explicit_basis) {
             block.layoutBlock(child, container_width, box.content.y, fonts);
+            // Shrink to content width
+            const fit_w = block.computeShrinkToFitWidthPublic(child);
+            if (fit_w > 0 and fit_w < child.content.width) {
+                child.content.width = fit_w;
+            }
         }
     }
 

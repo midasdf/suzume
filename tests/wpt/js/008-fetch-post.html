@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fetch() POST & Headers Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 10px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; font-weight: bold; } .fail { color: #e74c3c; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>fetch() POST & Headers Tests</h1>
+
+<h2>1. fetch with method option</h2>
+<div class="test" id="t1">Checking...</div>
+
+<h2>2. fetch with headers option</h2>
+<div class="test" id="t2">Checking...</div>
+
+<h2>3. fetch POST with body</h2>
+<div class="test" id="t3">Checking...</div>
+
+<h2>4. response.headers.get()</h2>
+<div class="test" id="t4">Checking...</div>
+
+<h2>5. fetch returns Promise with then/catch</h2>
+<div class="test" id="t5">Checking...</div>
+
+<h2>6. fetch error handling (invalid URL)</h2>
+<div class="test" id="t6">Checking...</div>
+
+<h2>7. response.ok property</h2>
+<div class="test" id="t7">Waiting...</div>
+
+<h2>8. response.url property</h2>
+<div class="test" id="t8">Waiting...</div>
+
+<script>
+var pass = 0, fail = 0;
+function check(id, cond, msg) {
+  var el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'test ' + (cond ? 'pass' : 'fail');
+  if (cond) pass++; else fail++;
+  console.log((cond ? 'PASS' : 'FAIL') + ': ' + msg);
+}
+
+// Test 1: fetch with method option (doesn't crash)
+(function() {
+  try {
+    var p = fetch('http://httpbin.org/post', { method: 'POST' });
+    check('t1', p && typeof p.then === 'function', 'fetch with method:POST returns Promise');
+  } catch(e) {
+    check('t1', false, 'fetch with method threw: ' + e);
+  }
+})();
+
+// Test 2: fetch with headers
+(function() {
+  try {
+    var p = fetch('http://httpbin.org/headers', {
+      method: 'GET',
+      headers: { 'X-Custom-Header': 'test-value', 'Accept': 'application/json' }
+    });
+    check('t2', p && typeof p.then === 'function', 'fetch with headers returns Promise');
+  } catch(e) {
+    check('t2', false, 'fetch with headers threw: ' + e);
+  }
+})();
+
+// Test 3: fetch POST with body
+(function() {
+  try {
+    var p = fetch('http://httpbin.org/post', {
+      method: 'POST',
+      body: 'key=value&foo=bar',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    });
+    check('t3', p && typeof p.then === 'function', 'fetch POST with body returns Promise');
+  } catch(e) {
+    check('t3', false, 'fetch POST with body threw: ' + e);
+  }
+})();
+
+// Test 4: response.headers.get()
+fetch('http://example.com').then(function(resp) {
+  var ct = resp.headers.get('content-type');
+  check('t4', ct !== null && ct !== undefined, 'headers.get("content-type") = "' + ct + '"');
+}).catch(function(e) {
+  check('t4', false, 'fetch error: ' + e);
+});
+
+// Test 5: fetch then/catch chain
+(function() {
+  var chainWorks = false;
+  fetch('http://example.com').then(function(resp) {
+    return resp.text();
+  }).then(function(text) {
+    chainWorks = text && text.length > 0;
+    check('t5', chainWorks, 'Promise chain works, got ' + text.length + ' bytes');
+  }).catch(function(e) {
+    check('t5', false, 'Promise chain error: ' + e);
+  });
+})();
+
+// Test 6: fetch error handling
+(function() {
+  fetch('ftp://invalid.example.com').then(function() {
+    check('t6', false, 'Should have rejected');
+  }).catch(function(err) {
+    check('t6', true, 'Invalid URL correctly rejected: ' + err);
+  });
+})();
+
+// Test 7 & 8: response properties
+fetch('http://example.com').then(function(resp) {
+  check('t7', resp.ok === true && resp.status === 200, 'response.ok=' + resp.ok + ' status=' + resp.status);
+  check('t8', typeof resp.url === 'string' && resp.url.length > 0, 'response.url="' + resp.url + '"');
+}).catch(function(e) {
+  check('t7', false, 'fetch error: ' + e);
+  check('t8', false, 'fetch error: ' + e);
+});
+
+setTimeout(function() {
+  console.log('SCORE: ' + pass + '/' + (pass + fail));
+}, 3000);
+</script>
+</body>
+</html>

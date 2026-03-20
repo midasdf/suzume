@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Advanced Events Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 10px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; font-weight: bold; } .fail { color: #e74c3c; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Advanced Events Tests</h1>
+
+<h2>1. removeEventListener with correct callback identity</h2>
+<div class="test" id="t1">Checking...</div>
+
+<h2>2. removeEventListener: wrong callback not removed</h2>
+<div class="test" id="t2">Checking...</div>
+
+<h2>3. removeEventListener: only first match removed</h2>
+<div class="test" id="t3">Checking...</div>
+
+<h2>4. mousedown event dispatched</h2>
+<div class="test" id="t4">Checking...</div>
+
+<h2>5. mouseup event dispatched</h2>
+<div class="test" id="t5">Checking...</div>
+
+<h2>6. mousemove event listener works</h2>
+<div class="test" id="t6">Checking...</div>
+
+<h2>7. click event object has type property</h2>
+<div class="test" id="t7">Checking...</div>
+
+<h2>8. multiple removeEventListener calls</h2>
+<div class="test" id="t8">Checking...</div>
+
+<h2>9. addEventListener + removeEventListener + re-add</h2>
+<div class="test" id="t9">Checking...</div>
+
+<h2>10. dispatchEvent with custom event</h2>
+<div class="test" id="t10">Checking...</div>
+
+<script>
+var pass = 0, fail = 0;
+function check(id, cond, msg) {
+  var el = document.getElementById(id);
+  el.textContent = msg;
+  el.className = 'test ' + (cond ? 'pass' : 'fail');
+  if (cond) pass++; else fail++;
+  console.log((cond ? 'PASS' : 'FAIL') + ': ' + msg);
+}
+
+// Test 1: removeEventListener with correct callback
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var count = 0;
+  var fn1 = function() { count += 1; };
+  var fn2 = function() { count += 10; };
+  d.addEventListener('click', fn1);
+  d.addEventListener('click', fn2);
+  d.removeEventListener('click', fn1);
+  d.click();
+  document.body.removeChild(d);
+  check('t1', count === 10, 'After removing fn1: count=' + count + ' (expected 10)');
+})();
+
+// Test 2: removing wrong callback doesn't affect others
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var count = 0;
+  var fn1 = function() { count += 1; };
+  var fn2 = function() { count += 10; };
+  var fn3 = function() { count += 100; }; // never added
+  d.addEventListener('click', fn1);
+  d.addEventListener('click', fn2);
+  d.removeEventListener('click', fn3); // should not remove anything
+  d.click();
+  document.body.removeChild(d);
+  check('t2', count === 11, 'Removing unregistered fn: count=' + count + ' (expected 11)');
+})();
+
+// Test 3: only first match removed (not all)
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var count = 0;
+  var fn = function() { count++; };
+  d.addEventListener('click', fn);
+  d.addEventListener('click', fn); // same fn added twice
+  d.removeEventListener('click', fn); // should remove one
+  d.click();
+  document.body.removeChild(d);
+  check('t3', count === 1, 'After removing one duplicate: count=' + count + ' (expected 1)');
+})();
+
+// Test 4: mousedown
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var fired = false;
+  d.addEventListener('mousedown', function(e) { fired = true; });
+  d.dispatchEvent(new Event('mousedown'));
+  document.body.removeChild(d);
+  check('t4', fired, 'mousedown event fired: ' + fired);
+})();
+
+// Test 5: mouseup
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var fired = false;
+  d.addEventListener('mouseup', function() { fired = true; });
+  d.dispatchEvent(new Event('mouseup'));
+  document.body.removeChild(d);
+  check('t5', fired, 'mouseup event fired: ' + fired);
+})();
+
+// Test 6: mousemove
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var fired = false;
+  d.addEventListener('mousemove', function() { fired = true; });
+  d.dispatchEvent(new Event('mousemove'));
+  document.body.removeChild(d);
+  check('t6', fired, 'mousemove event fired: ' + fired);
+})();
+
+// Test 7: click event type property
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var evtType = '';
+  d.addEventListener('click', function(e) { evtType = e.type; });
+  d.click();
+  document.body.removeChild(d);
+  check('t7', evtType === 'click', 'event.type = "' + evtType + '" (expected "click")');
+})();
+
+// Test 8: multiple removeEventListener
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var count = 0;
+  var fn1 = function() { count += 1; };
+  var fn2 = function() { count += 10; };
+  var fn3 = function() { count += 100; };
+  d.addEventListener('click', fn1);
+  d.addEventListener('click', fn2);
+  d.addEventListener('click', fn3);
+  d.removeEventListener('click', fn2);
+  d.removeEventListener('click', fn1);
+  d.click();
+  document.body.removeChild(d);
+  check('t8', count === 100, 'After removing fn1+fn2: count=' + count + ' (expected 100)');
+})();
+
+// Test 9: remove and re-add
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var count = 0;
+  var fn = function() { count++; };
+  d.addEventListener('click', fn);
+  d.removeEventListener('click', fn);
+  d.addEventListener('click', fn);
+  d.click();
+  document.body.removeChild(d);
+  check('t9', count === 1, 'Remove + re-add: count=' + count + ' (expected 1)');
+})();
+
+// Test 10: dispatchEvent with custom event
+(function() {
+  var d = document.createElement('div');
+  document.body.appendChild(d);
+  var detail = null;
+  d.addEventListener('myevent', function(e) { detail = e.type; });
+  d.dispatchEvent(new Event('myevent'));
+  document.body.removeChild(d);
+  check('t10', detail === 'myevent', 'Custom event type: "' + detail + '"');
+})();
+
+console.log('SCORE: ' + pass + '/' + (pass + fail));
+</script>
+</body>
+</html>
