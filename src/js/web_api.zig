@@ -1,6 +1,7 @@
 const std = @import("std");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
+const HttpClient = @import("../net/http.zig").HttpClient;
 
 // ── Viewport dimensions ─────────────────────────────────────────────
 
@@ -346,6 +347,151 @@ fn jsPerformanceNow(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     return qjs.JS_NewFloat64(c, getPerformanceNow());
+}
+
+// ── fetch() API ─────────────────────────────────────────────────────
+
+/// Global HTTP client for fetch() — initialized lazily.
+var g_http_client: ?HttpClient = null;
+
+fn getOrInitHttpClient() ?*HttpClient {
+    if (g_http_client == null) {
+        g_http_client = HttpClient.init() catch return null;
+    }
+    return &g_http_client.?;
+}
+
+pub fn deinitHttpClient() void {
+    if (g_http_client) |*client| {
+        client.deinit();
+        g_http_client = null;
+    }
+}
+
+fn jsFetch(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    // Get URL string
+    const dom_api = @import("dom_api.zig");
+    const url_s = dom_api.jsStringToSlice(c, args[0]) orelse {
+        // Return rejected Promise
+        return rejectPromise(c, "fetch: invalid URL argument");
+    };
+    defer qjs.JS_FreeCString(c, url_s.ptr);
+    const url = url_s.ptr[0..url_s.len];
+
+    // Get HTTP method from options (default: GET)
+    // TODO: support POST body, headers from options object
+    _ = if (argc >= 2) args[1] else quickjs.JS_UNDEFINED();
+
+    // Validate URL
+    if (!std.mem.startsWith(u8, url, "http://") and !std.mem.startsWith(u8, url, "https://")) {
+        return rejectPromise(c, "fetch: only http/https URLs supported");
+    }
+
+    // Make null-terminated URL
+    const url_z = std.heap.c_allocator.allocSentinel(u8, url.len, 0) catch {
+        return rejectPromise(c, "fetch: out of memory");
+    };
+    defer std.heap.c_allocator.free(url_z);
+    @memcpy(url_z, url);
+
+    std.debug.print("[fetch] {s}\n", .{url_z});
+
+    // Synchronous HTTP fetch
+    const client = getOrInitHttpClient() orelse {
+        return rejectPromise(c, "fetch: failed to initialize HTTP client");
+    };
+
+    var response = client.getWithTimeout(std.heap.c_allocator, url_z, 15) catch {
+        return rejectPromise(c, "fetch: network error");
+    };
+
+    // Build Response object
+    const resp_obj = qjs.JS_NewObject(c);
+    if (quickjs.JS_IsException(resp_obj)) {
+        response.deinit();
+        return rejectPromise(c, "fetch: failed to create response");
+    }
+
+    // Store body as string property
+    _ = qjs.JS_SetPropertyStr(c, resp_obj, "_body", qjs.JS_NewStringLen(c, response.body.ptr, response.body.len));
+    _ = qjs.JS_SetPropertyStr(c, resp_obj, "status", qjs.JS_NewInt32(c, @intCast(response.status_code)));
+    _ = qjs.JS_SetPropertyStr(c, resp_obj, "ok", quickjs.JS_NewBool(response.status_code >= 200 and response.status_code < 300));
+    _ = qjs.JS_SetPropertyStr(c, resp_obj, "statusText", qjs.JS_NewStringLen(c, "OK", 2));
+    _ = qjs.JS_SetPropertyStr(c, resp_obj, "url", qjs.JS_NewStringLen(c, url.ptr, url.len));
+
+    // Headers object
+    const headers_obj = qjs.JS_NewObject(c);
+    if (response.content_type.len > 0) {
+        _ = qjs.JS_SetPropertyStr(c, headers_obj, "content-type", qjs.JS_NewStringLen(c, response.content_type.ptr, response.content_type.len));
+    }
+    _ = qjs.JS_SetPropertyStr(c, resp_obj, "headers", headers_obj);
+
+    response.deinit();
+
+    // Add .text() and .json() methods via JS eval
+    const global = qjs.JS_GetGlobalObject(c);
+    _ = qjs.JS_SetPropertyStr(c, global, "__fetchResp", resp_obj);
+
+    const method_code =
+        \\(function() {
+        \\  var r = globalThis.__fetchResp;
+        \\  delete globalThis.__fetchResp;
+        \\  r.text = function() { return Promise.resolve(r._body || ''); };
+        \\  r.json = function() { try { return Promise.resolve(JSON.parse(r._body || 'null')); } catch(e) { return Promise.reject(e); } };
+        \\  r.blob = function() { return Promise.resolve(new Blob([r._body || ''])); };
+        \\  r.clone = function() { return r; };
+        \\  var hdr = r.headers || {};
+        \\  r.headers = { get: function(n) { return hdr[n.toLowerCase()] || null; }, has: function(n) { return n.toLowerCase() in hdr; }, forEach: function(cb) { for(var k in hdr) cb(hdr[k], k); }, set: function(n,v) { hdr[n.toLowerCase()] = v; } };
+        \\  return r;
+        \\})()
+    ;
+    const result = qjs.JS_Eval(c, method_code, method_code.len, "<fetch>", qjs.JS_EVAL_TYPE_GLOBAL);
+    qjs.JS_FreeValue(c, global);
+
+    if (quickjs.JS_IsException(result)) {
+        const exc = qjs.JS_GetException(c);
+        qjs.JS_FreeValue(c, exc);
+        return rejectPromise(c, "fetch: failed to build response");
+    }
+
+    // Return Promise.resolve(response)
+    return resolvePromise(c, result);
+}
+
+fn resolvePromise(ctx: *qjs.JSContext, value: qjs.JSValue) qjs.JSValue {
+    const global = qjs.JS_GetGlobalObject(ctx);
+    const promise_ctor = qjs.JS_GetPropertyStr(ctx, global, "Promise");
+    const resolve_fn = qjs.JS_GetPropertyStr(ctx, promise_ctor, "resolve");
+    var argv = [_]qjs.JSValue{value};
+    const result = qjs.JS_Call(ctx, resolve_fn, promise_ctor, 1, &argv);
+    qjs.JS_FreeValue(ctx, resolve_fn);
+    qjs.JS_FreeValue(ctx, promise_ctor);
+    qjs.JS_FreeValue(ctx, global);
+    qjs.JS_FreeValue(ctx, value);
+    return result;
+}
+
+fn rejectPromise(ctx: *qjs.JSContext, msg: [*:0]const u8) qjs.JSValue {
+    const global = qjs.JS_GetGlobalObject(ctx);
+    const promise_ctor = qjs.JS_GetPropertyStr(ctx, global, "Promise");
+    const reject_fn = qjs.JS_GetPropertyStr(ctx, promise_ctor, "reject");
+    const err = qjs.JS_NewStringLen(ctx, msg, std.mem.len(msg));
+    var argv = [_]qjs.JSValue{err};
+    const result = qjs.JS_Call(ctx, reject_fn, promise_ctor, 1, &argv);
+    qjs.JS_FreeValue(ctx, reject_fn);
+    qjs.JS_FreeValue(ctx, promise_ctor);
+    qjs.JS_FreeValue(ctx, global);
+    qjs.JS_FreeValue(ctx, err);
+    return result;
 }
 
 /// No-op stub for unimplemented Web APIs that should silently succeed.
@@ -708,6 +854,9 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "getEntriesByType", qjs.JS_NewCFunction(ctx, &jsReturnEmptyArray, "getEntriesByType", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "performance", perf_obj);
 
+    // -- fetch() (native implementation) --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "fetch", qjs.JS_NewCFunction(ctx, &jsFetch, "fetch", 2));
+
     // -- atob() / btoa() --
     _ = qjs.JS_SetPropertyStr(ctx, global, "btoa", qjs.JS_NewCFunction(ctx, &jsBtoa, "btoa", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "atob", qjs.JS_NewCFunction(ctx, &jsAtob, "atob", 1));
@@ -833,7 +982,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof sessionStorage==='undefined'){
         \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
         \\}
-        \\if(typeof fetch==='undefined'){globalThis.fetch=function(url,opts){return Promise.reject(new Error('fetch not supported'));};}
+
         \\if(typeof AbortController==='undefined'){globalThis.AbortController=function(){this.signal={aborted:false,addEventListener:function(){}};this.abort=function(){this.signal.aborted=true;};};}
         \\if(typeof XMLHttpRequest==='undefined'){globalThis.XMLHttpRequest=function(){this.open=function(){};this.send=function(){};this.setRequestHeader=function(){};this.addEventListener=function(){};};}
         \\if(typeof DOMParser==='undefined'){globalThis.DOMParser=function(){this.parseFromString=function(){return null;};};}

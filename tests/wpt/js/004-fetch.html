@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>fetch() API Tests</title>
+<style>
+body { margin: 0; padding: 20px; font-family: sans-serif; background: white; color: black; }
+h2 { font-size: 14px; margin: 10px 0 5px; }
+.test { margin-bottom: 10px; padding: 5px; background: #ecf0f1; }
+.pass { color: #2ecc71; } .fail { color: #e74c3c; }
+</style>
+</head>
+<body>
+<h1>fetch() API Tests</h1>
+
+<h2>1. typeof fetch</h2>
+<div class="test" id="t1">Checking...</div>
+
+<h2>2. fetch() returns Promise</h2>
+<div class="test" id="t2">Checking...</div>
+
+<h2>3. fetch() GET request</h2>
+<div class="test" id="t3">Fetching...</div>
+
+<h2>4. response.text()</h2>
+<div class="test" id="t4">Waiting...</div>
+
+<h2>5. response.json()</h2>
+<div class="test" id="t5">Waiting...</div>
+
+<h2>6. response.status</h2>
+<div class="test" id="t6">Waiting...</div>
+
+<h2>7. async/await fetch</h2>
+<div class="test" id="t7">Waiting...</div>
+
+<script>
+// Test 1: typeof fetch
+document.getElementById('t1').textContent = 'typeof fetch = ' + typeof fetch;
+document.getElementById('t1').className = 'test ' + (typeof fetch === 'function' ? 'pass' : 'fail');
+
+// Test 2: fetch returns Promise
+try {
+  var p = fetch('http://example.com');
+  var isPromise = p && typeof p.then === 'function';
+  document.getElementById('t2').textContent = 'Returns Promise: ' + isPromise;
+  document.getElementById('t2').className = 'test ' + (isPromise ? 'pass' : 'fail');
+
+  // Test 3-6: actual fetch
+  p.then(function(response) {
+    // Test 3: got response
+    document.getElementById('t3').textContent = 'Got response object: ' + (response !== null);
+    document.getElementById('t3').className = 'test pass';
+
+    // Test 6: status
+    document.getElementById('t6').textContent = 'status=' + response.status + ' ok=' + response.ok;
+    document.getElementById('t6').className = 'test ' + (response.status === 200 ? 'pass' : 'fail');
+
+    // Test 4: .text()
+    return response.text();
+  }).then(function(text) {
+    var hasContent = text && text.length > 50;
+    document.getElementById('t4').textContent = 'text() length=' + (text ? text.length : 0) + ' has "Example": ' + (text && text.indexOf('Example') >= 0);
+    document.getElementById('t4').className = 'test ' + (hasContent ? 'pass' : 'fail');
+  }).catch(function(err) {
+    document.getElementById('t3').textContent = 'Error: ' + err;
+    document.getElementById('t3').className = 'test fail';
+  });
+} catch(e) {
+  document.getElementById('t2').textContent = 'Error: ' + e.message;
+  document.getElementById('t2').className = 'test fail';
+}
+
+// Test 5: JSON fetch (using a known JSON API)
+fetch('https://httpbin.org/json').then(function(r) {
+  return r.json();
+}).then(function(data) {
+  document.getElementById('t5').textContent = 'JSON parsed: ' + (data && typeof data === 'object');
+  document.getElementById('t5').className = 'test ' + (data ? 'pass' : 'fail');
+}).catch(function(err) {
+  document.getElementById('t5').textContent = 'JSON fetch error (OK if offline): ' + err;
+  document.getElementById('t5').className = 'test fail';
+});
+
+// Test 7: async/await
+(async function() {
+  try {
+    var resp = await fetch('http://example.com');
+    var text = await resp.text();
+    document.getElementById('t7').textContent = 'async/await works! Got ' + text.length + ' bytes';
+    document.getElementById('t7').className = 'test ' + (text.length > 50 ? 'pass' : 'fail');
+  } catch(e) {
+    document.getElementById('t7').textContent = 'async/await error: ' + e;
+    document.getElementById('t7').className = 'test fail';
+  }
+})();
+</script>
+</body>
+</html>
