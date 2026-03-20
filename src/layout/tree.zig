@@ -266,6 +266,30 @@ fn buildChildren(
                             // Skip hidden inputs entirely
                             continue;
                         }
+                        // Checkbox / radio — render as inline marker
+                        if (std.mem.eql(u8, input_type, "checkbox") or std.mem.eql(u8, input_type, "radio")) {
+                            child_box.box_type = .inline_box;
+                            child_box.style.display = .inline_block;
+                            const is_checked = child.getAttribute("checked") != null;
+                            const is_radio = std.mem.eql(u8, input_type, "radio");
+                            const marker = if (is_radio)
+                                (if (is_checked) "\xe2\x97\x89" else "\xe2\x97\x8b") // ◉ / ○
+                            else
+                                (if (is_checked) "\xe2\x98\x91" else "\xe2\x98\x90"); // ☑ / ☐
+                            const marker_box = try allocator.create(Box);
+                            marker_box.* = Box{};
+                            marker_box.box_type = .inline_text;
+                            marker_box.style = child_box.style;
+                            marker_box.text = marker;
+                            marker_box.parent = child_box;
+                            try child_box.children.append(allocator, marker_box);
+                            child_box.padding = .{ .top = 0, .right = 4, .bottom = 0, .left = 0 };
+                            child_box.border = .{};
+                            // Skip the normal input rendering
+                            try parent_box.children.append(allocator, child_box);
+                            try buildChildren(child_box, child, styles, allocator, link_url, list_counter);
+                            continue;
+                        }
                         {
                             child_box.box_type = .inline_box;
                             child_box.style.display = .inline_block;
@@ -448,6 +472,35 @@ fn buildChildren(
                             child_box.style.border_radius_tr = 4;
                             child_box.style.border_radius_bl = 4;
                             child_box.style.border_radius_br = 4;
+                        }
+                    }
+
+                    // Add selected option text as child of select
+                    if (std.mem.eql(u8, tag, "select")) {
+                        // Find the selected option's text (or first option)
+                        const select_text = blk: {
+                            var first_text: ?[]const u8 = null;
+                            var opt_child = child.firstChild();
+                            while (opt_child) |oc| : (opt_child = oc.nextSibling()) {
+                                if (oc.nodeType() != .element) continue;
+                                const opt_tag = oc.tagName() orelse continue;
+                                if (!std.mem.eql(u8, opt_tag, "option")) continue;
+                                const opt_text = oc.textContent() orelse continue;
+                                if (first_text == null) first_text = opt_text;
+                                if (oc.getAttribute("selected") != null) {
+                                    break :blk opt_text;
+                                }
+                            }
+                            break :blk first_text;
+                        };
+                        if (select_text) |st| {
+                            const text_box = try allocator.create(Box);
+                            text_box.* = Box{};
+                            text_box.box_type = .inline_text;
+                            text_box.style = child_box.style;
+                            text_box.text = st;
+                            text_box.parent = child_box;
+                            try child_box.children.append(allocator, text_box);
                         }
                     }
 
