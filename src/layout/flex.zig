@@ -112,6 +112,24 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
 
     const gap_total = if (flex_child_count > 1) gap * @as(f32, @floatFromInt(flex_child_count - 1)) else 0;
 
+    // Phase 1.5: Pre-layout children with auto width to determine intrinsic sizes
+    // (needed for anonymous blocks wrapping text nodes, inline elements, etc.)
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        const has_explicit_width = switch (child.style.width) {
+            .px, .percent => true,
+            else => false,
+        };
+        const has_explicit_basis = switch (child.style.flex_basis) {
+            .px, .percent => true,
+            else => false,
+        };
+        if (!has_explicit_width and !has_explicit_basis) {
+            // Layout with container width to get intrinsic height/width
+            block.layoutBlock(child, container_width, box.content.y, fonts);
+        }
+    }
+
     // Phase 2: Calculate total main size and distribute free space
     var total_base_size: f32 = 0;
     var total_grow: f32 = 0;
@@ -333,6 +351,22 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
     const container_width = box.content.width;
     const children = box.children.items;
     const is_wrap_reverse = style.flex_wrap == .wrap_reverse;
+
+    // Pre-layout auto-width children to determine intrinsic sizes
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        const has_explicit_width = switch (child.style.width) {
+            .px, .percent => true,
+            else => false,
+        };
+        const has_explicit_basis = switch (child.style.flex_basis) {
+            .px, .percent => true,
+            else => false,
+        };
+        if (!has_explicit_width and !has_explicit_basis) {
+            block.layoutBlock(child, container_width, box.content.y, fonts);
+        }
+    }
 
     // Build a list of flex-participating child indices
     var flex_indices_buf: [256]usize = undefined;

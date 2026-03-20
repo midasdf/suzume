@@ -89,7 +89,19 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
                 anon.* = .{};
                 anon.box_type = .anonymous_block;
                 anon.style = parent.style;
+                anon.style.display = .block; // anonymous blocks are always block-level
                 anon.style.background_color = 0x00000000; // transparent
+                // Reset box-model properties (anonymous blocks don't have their own margins/padding)
+                anon.style.margin_top = 0;
+                anon.style.margin_right = 0;
+                anon.style.margin_bottom = 0;
+                anon.style.margin_left = 0;
+                anon.style.padding_top = 0;
+                anon.style.padding_right = 0;
+                anon.style.padding_bottom = 0;
+                anon.style.padding_left = 0;
+                anon.style.width = .auto;
+                anon.style.height = .auto;
                 anon.parent = parent;
                 current_anon = anon;
                 try new_children.append(allocator, anon);
