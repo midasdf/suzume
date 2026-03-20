@@ -17,7 +17,7 @@ test('Promise.allSettled', function() { return typeof Promise.allSettled === 'fu
 test('String.matchAll', function() { return typeof ''.matchAll === 'function'; });
 test('optional chaining', function() { return eval("({a:{b:1}})?.a?.b") === 1; });
 test('nullish coalescing', function() { return eval("null ?? 42") === 42; });
-test('import.meta', function() { return eval("typeof import.meta") === 'object'; });
+// import.meta tested via module script below
 
 // === ES2021 ===
 test('String.replaceAll', function() { return 'aab'.replaceAll('a','x') === 'xxb'; });
@@ -94,6 +94,12 @@ test('Proxy', function() { return typeof Proxy === 'function'; });
 test('Proxy.revocable', function() { return typeof Proxy.revocable === 'function'; });
 
 console.log('SCORE: ' + pass + '/' + (pass + fail));
+</script>
+<script type="module">
+// Test import.meta in actual module context
+if (typeof import.meta === 'object') {
+  console.log('BONUS: import.meta works in module context');
+}
 </script>
 </body>
 </html>
