@@ -285,6 +285,10 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     // Delegate to table layout if display is table
     if (box.style.display == .table) {
         table.layoutTable(box, containing_width, cursor_y, fonts);
+        // Clamp table width to containing block when overflow is not visible
+        if (box.style.overflow_x != .visible and box.content.width > containing_width) {
+            box.content.width = containing_width;
+        }
         return;
     }
 
