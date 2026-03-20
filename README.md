@@ -51,8 +51,8 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 | Error Handling | 2/2 | try/catch, TypeError |
 
 Additional test suites:
-- **QuickJS ES features**: 61/63 (97%) — ES2024 coverage
-- **DOM API audit**: 74/74 (100%) — TextEncoder, Intl, AbortController, etc.
+- **QuickJS ES features**: 62/62 (100%) — ES2024 full coverage incl. import.meta, Atomics.waitAsync
+- **DOM API audit**: 74/74 (100%) — TextEncoder, Intl, AbortController, TreeWalker, Range, etc.
 - **Real site JS errors**: 0 on HN, Reddit, CNN, Wikipedia, DDG, Lobsters, npm
 
 ## Tested Sites
@@ -97,6 +97,22 @@ src/
 ├── ui/           # Browser chrome (tabs, address bar, input)
 └── features/     # Adblock, config, storage, userscript
 ```
+
+## JavaScript Engine
+
+Powered by QuickJS-ng v0.12.1 with comprehensive Web API layer:
+
+- **ES2024 complete** — BigInt, private fields, top-level await, Array.at, Object.groupBy, etc.
+- **ES Modules** — `<script type="module">`, import/export, HTTP-based module loader
+- **DOM API** — querySelector, createElement, classList, innerHTML, MutationObserver, TreeWalker
+- **Events** — addEventListener/removeEventListener with identity check, mouse/keyboard events, bubbling
+- **Networking** — fetch() with POST/headers/body, XMLHttpRequest, WebSocket (curl-based)
+- **Workers** — Web Worker with separate QuickJS runtime per thread, postMessage/onmessage
+- **Canvas 2D** — getContext('2d'), fillRect/clearRect/strokeRect, software pixel buffer
+- **Storage** — localStorage, sessionStorage, persistent cookies (curl cookie engine)
+- **Navigation** — location.assign/replace, history.pushState/back/forward, SPA routing
+- **Intl** — DateTimeFormat, NumberFormat, PluralRules, Collator, RelativeTimeFormat
+- **Encoding** — TextEncoder/TextDecoder, atob/btoa, Blob, crypto.getRandomValues
 
 ## CSS Engine
 
