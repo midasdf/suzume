@@ -1470,6 +1470,46 @@ fn elementGetAttributeNames(
     return qjs.JS_NewArray(c);
 }
 
+fn elementGetContext(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+
+    // Check if this is a canvas element
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return quickjs.JS_NULL();
+    if (!std.mem.eql(u8, name_ptr.?[0..name_len], "canvas")) return quickjs.JS_NULL();
+
+    // Check context type
+    const type_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, type_s.ptr);
+    if (!std.mem.eql(u8, type_s.ptr[0..type_s.len], "2d")) return quickjs.JS_NULL();
+
+    // Get canvas dimensions from attributes or defaults
+    var width: u32 = 300;
+    var height: u32 = 150;
+    var attr_len: usize = 0;
+    const w_attr = lxb_dom_element_get_attribute(elem, "width", 5, &attr_len);
+    if (w_attr) |wa| {
+        width = std.fmt.parseInt(u32, wa[0..attr_len], 10) catch 300;
+    }
+    var h_attr_len: usize = 0;
+    const h_attr = lxb_dom_element_get_attribute(elem, "height", 6, &h_attr_len);
+    if (h_attr) |ha| {
+        height = std.fmt.parseInt(u32, ha[0..h_attr_len], 10) catch 150;
+    }
+
+    const canvas_mod = @import("canvas.zig");
+    return canvas_mod.createContext2D(c, width, height);
+}
+
 fn elementScrollIntoView(
     _: ?*qjs.JSContext,
     _: qjs.JSValue,
@@ -4011,6 +4051,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &elementToggleAttribute, "toggleAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &elementGetAttributeNames, "getAttributeNames", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &elementScrollIntoView, "scrollIntoView", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getContext", qjs.JS_NewCFunction(ctx, &elementGetContext, "getContext", 1));
 
     // Element getters
     {
