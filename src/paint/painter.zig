@@ -585,12 +585,16 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
     const style = box.style;
     const colour = Surface.argbToColour(style.color);
     const size_px: u32 = @intFromFloat(style.font_size_px);
-    const tr = fonts.getRenderer(size_px) orelse return;
 
-    // Determine marker text
+    // Determine marker text and whether to use a smaller font for bullets
     var marker_buf: [16]u8 = undefined;
+    const is_bullet = style.list_style_type == .disc or style.list_style_type == .circle or
+        style.list_style_type == .square or style.list_style_type == .other;
+    const marker_size: u32 = if (is_bullet) @max(size_px * 2 / 3, 6) else size_px;
+    const tr = fonts.getRenderer(marker_size) orelse return;
+
     const marker_text: []const u8 = switch (style.list_style_type) {
-        .disc => "\xe2\x97\x8f", // black circle: U+25CF (closer to Firefox's disc)
+        .disc => "\xe2\x80\xa2", // bullet: U+2022 (smaller, matches browser default)
         .circle => "\xe2\x97\x8b", // white circle: U+25CB
         .square => "\xe2\x96\xaa", // small black square: U+25AA
         .decimal => blk: {
@@ -598,13 +602,14 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
             break :blk written;
         },
         .none => return,
-        .other => "\xe2\x80\xa2", // fallback to bullet
+        .other => "\xe2\x80\xa2", // bullet: U+2022
     };
 
     const m = tr.measure(marker_text);
-    // Position marker to the left of the content area
+    // Position marker to the left of the content area, vertically centered with text
     const marker_x: i32 = @as(i32, @intFromFloat(box.content.x)) - @as(i32, @intFromFloat(scroll_x)) - m.width - 4;
-    const marker_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent;
+    const y_offset: i32 = if (is_bullet) @as(i32, @intCast((size_px - marker_size) / 2)) else 0;
+    const marker_y: i32 = @as(i32, @intFromFloat(box.content.y - scroll_y)) + m.ascent + y_offset;
 
     if (marker_y - m.ascent > clip_bottom or marker_y + m.height - m.ascent < clip_top) return;
 

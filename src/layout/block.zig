@@ -258,7 +258,9 @@ fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_s
     return switch (style_lh) {
         .px => |px| @max(px, raw_height),
         .number => |n| font_size * n,
-        .normal => raw_height,
+        // CSS "normal" line-height is typically ~1.2x font-size.
+        // Use whichever is larger: font metrics height or 1.2 * font-size.
+        .normal => @max(raw_height, font_size * 1.2),
     };
 }
 
