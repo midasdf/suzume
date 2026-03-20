@@ -3,6 +3,7 @@ const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const HttpClient = @import("../net/http.zig").HttpClient;
 const WebSocket = @import("../net/websocket.zig").WebSocket;
+const worker_mod = @import("worker.zig");
 
 // ── Navigation request (from location.assign/replace/href setter) ────
 
@@ -495,6 +496,144 @@ pub fn deinitWebSockets(ctx: *qjs.JSContext) void {
     }
     ws_list.deinit(std.heap.c_allocator);
     ws_list = .empty;
+}
+
+// ── Worker Management ────────────────────────────────────────────────
+
+const WorkerEntry = struct {
+    handle: *worker_mod.WorkerHandle,
+    js_obj: qjs.JSValue, // JS Worker object (has onmessage)
+};
+
+var worker_list: std.ArrayListUnmanaged(WorkerEntry) = .empty;
+
+fn jsWorkerCreate(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return qjs.JS_NewInt32(ctx orelse unreachable, -1);
+    if (argc < 2) return qjs.JS_NewInt32(c, -1);
+    const args = argv orelse return qjs.JS_NewInt32(c, -1);
+
+    const dom_api = @import("dom_api.zig");
+    const script_s = dom_api.jsStringToSlice(c, args[0]) orelse return qjs.JS_NewInt32(c, -1);
+    defer qjs.JS_FreeCString(c, script_s.ptr);
+
+    std.debug.print("[Worker] Spawning worker ({d} bytes)\n", .{script_s.len});
+
+    const handle = worker_mod.spawnWorker(script_s.ptr[0..script_s.len]) catch {
+        std.debug.print("[Worker] Spawn failed\n", .{});
+        return qjs.JS_NewInt32(c, -1);
+    };
+
+    worker_list.append(std.heap.c_allocator, .{
+        .handle = handle,
+        .js_obj = qjs.JS_DupValue(c, args[1]),
+    }) catch {
+        handle.deinit();
+        std.heap.c_allocator.destroy(handle);
+        return qjs.JS_NewInt32(c, -1);
+    };
+
+    return qjs.JS_NewInt32(c, @intCast(handle.id));
+}
+
+fn jsWorkerPostMessage(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 2) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    var worker_id: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &worker_id, args[0]);
+
+    const dom_api = @import("dom_api.zig");
+    const data_s = dom_api.jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, data_s.ptr);
+
+    for (worker_list.items) |*entry| {
+        if (@as(i32, @intCast(entry.handle.id)) == worker_id) {
+            entry.handle.postToWorker(data_s.ptr[0..data_s.len]) catch {};
+            break;
+        }
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
+fn jsWorkerTerminate(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    var worker_id: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &worker_id, args[0]);
+
+    for (worker_list.items) |*entry| {
+        if (@as(i32, @intCast(entry.handle.id)) == worker_id) {
+            entry.handle.terminate();
+            break;
+        }
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
+/// Poll workers for incoming messages from worker → main.
+pub fn tickWorkers(ctx: *qjs.JSContext) void {
+    var i: usize = 0;
+    while (i < worker_list.items.len) {
+        var entry = &worker_list.items[i];
+
+        // Check for messages from worker
+        while (entry.handle.popFromWorker()) |msg| {
+            var msg_copy = msg;
+            defer msg_copy.deinit();
+
+            const onmessage = qjs.JS_GetPropertyStr(ctx, entry.js_obj, "onmessage");
+            if (qjs.JS_IsFunction(ctx, onmessage)) {
+                const event = qjs.JS_NewObject(ctx);
+                const data_val = qjs.JS_ParseJSON(ctx, msg_copy.data.ptr, msg_copy.data.len, "<worker-msg>");
+                _ = qjs.JS_SetPropertyStr(ctx, event, "data", data_val);
+                _ = qjs.JS_SetPropertyStr(ctx, event, "type", qjs.JS_NewString(ctx, "message"));
+                var argv_msg = [_]qjs.JSValue{event};
+                const ret = qjs.JS_Call(ctx, onmessage, entry.js_obj, 1, &argv_msg);
+                qjs.JS_FreeValue(ctx, ret);
+                qjs.JS_FreeValue(ctx, event);
+            }
+            qjs.JS_FreeValue(ctx, onmessage);
+        }
+
+        // Clean up terminated workers
+        if (entry.handle.state == .terminated) {
+            qjs.JS_FreeValue(ctx, entry.js_obj);
+            entry.handle.deinit();
+            std.heap.c_allocator.destroy(entry.handle);
+            _ = worker_list.swapRemove(i);
+            continue;
+        }
+
+        i += 1;
+    }
+}
+
+pub fn deinitWorkers(ctx: *qjs.JSContext) void {
+    for (worker_list.items) |*entry| {
+        qjs.JS_FreeValue(ctx, entry.js_obj);
+        entry.handle.deinit();
+        std.heap.c_allocator.destroy(entry.handle);
+    }
+    worker_list.deinit(std.heap.c_allocator);
+    worker_list = .empty;
 }
 
 /// Free all timer callbacks. Called during JsRuntime.deinit().
@@ -1223,6 +1362,11 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "__wsSend", qjs.JS_NewCFunction(ctx, &jsWebSocketSend, "__wsSend", 2));
     _ = qjs.JS_SetPropertyStr(ctx, global, "__wsClose", qjs.JS_NewCFunction(ctx, &jsWebSocketClose, "__wsClose", 1));
 
+    // -- Worker native helpers --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__workerCreate", qjs.JS_NewCFunction(ctx, &jsWorkerCreate, "__workerCreate", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__workerPost", qjs.JS_NewCFunction(ctx, &jsWorkerPostMessage, "__workerPost", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__workerTerminate", qjs.JS_NewCFunction(ctx, &jsWorkerTerminate, "__workerTerminate", 1));
+
     // -- atob() / btoa() --
     _ = qjs.JS_SetPropertyStr(ctx, global, "btoa", qjs.JS_NewCFunction(ctx, &jsBtoa, "btoa", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "atob", qjs.JS_NewCFunction(ctx, &jsAtob, "atob", 1));
@@ -1484,6 +1628,21 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  WebSocket.prototype.removeEventListener=function(){};
         \\}
         \\if(typeof CSSStyleDeclaration==='undefined'){globalThis.CSSStyleDeclaration=function(){};CSSStyleDeclaration.prototype.getPropertyValue=function(n){return this[n]||'';};CSSStyleDeclaration.prototype.setProperty=function(n,v){this[n]=v;};CSSStyleDeclaration.prototype.removeProperty=function(n){delete this[n];return'';};}
+        \\if(typeof Worker==='undefined'){
+        \\  globalThis.Worker=function(urlOrBlob){
+        \\    this.onmessage=null;this.onerror=null;this._terminated=false;
+        \\    var script='';
+        \\    if(urlOrBlob instanceof Blob){script=urlOrBlob._data||'';}
+        \\    else if(typeof urlOrBlob==='string'&&urlOrBlob.indexOf('blob:')===0){script='';}
+        \\    else{script='// URL worker: '+urlOrBlob;}
+        \\    var self=this;
+        \\    this._id=__workerCreate(script,this);
+        \\  };
+        \\  Worker.prototype.postMessage=function(data){if(!this._terminated)__workerPost(this._id,JSON.stringify(data));};
+        \\  Worker.prototype.terminate=function(){this._terminated=true;__workerTerminate(this._id);};
+        \\  Worker.prototype.addEventListener=function(type,fn){if(type==='message')this.onmessage=fn;if(type==='error')this.onerror=fn;};
+        \\  Worker.prototype.removeEventListener=function(){};
+        \\}
         \\if(typeof console!=='undefined'&&!console.warn){console.warn=console.log;console.error=console.log;console.info=console.log;console.debug=console.log;console.trace=function(){};}
         \\if(typeof document!=='undefined'){
         \\  if(!document.getElementsByClassName)document.getElementsByClassName=function(n){return document.querySelectorAll('.'+n);};

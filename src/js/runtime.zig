@@ -33,6 +33,7 @@ pub const JsRuntime = struct {
         // Free any remaining timer callbacks and WebSocket connections before destroying the context
         web_api.deinitTimers(self.ctx);
         web_api.deinitWebSockets(self.ctx);
+        web_api.deinitWorkers(self.ctx);
         qjs.JS_FreeContext(self.ctx);
         qjs.JS_FreeRuntime(self.rt);
     }
