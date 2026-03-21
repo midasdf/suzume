@@ -184,7 +184,11 @@ pub fn build(b: *std.Build) void {
         });
     }
 
-    // SVG C++ wrapper
+    // SVG C++ wrapper (bridges lunasvg C++ API to C for Zig)
+    exe.addCSourceFile(.{
+        .file = b.path("src/svg/svg_wrapper.cpp"),
+        .flags = lunasvg_cpp_flags,
+    });
     exe.addIncludePath(b.path("src/svg"));
 
     // System libraries
