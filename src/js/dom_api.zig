@@ -4201,6 +4201,31 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
     }
 
+    // DOM interface constructors (for instanceof checks in frameworks)
+    const window_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Window", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Window", window_ctor);
+
+    const document_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Document", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Document", document_ctor);
+
+    const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
+
+    const nodelist_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "NodeList", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "NodeList", nodelist_ctor);
+
+    const htmlcol_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "HTMLCollection", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLCollection", htmlcol_ctor);
+
+    const range_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Range", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Range", range_ctor);
+
+    const comment_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Comment", comment_ctor);
+
+    const text_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
+
     // window.top / window.parent / window.self / window.frames
     _ = qjs.JS_SetPropertyStr(ctx, global, "top", qjs.JS_DupValue(ctx, global));
     _ = qjs.JS_SetPropertyStr(ctx, global, "parent", qjs.JS_DupValue(ctx, global));
