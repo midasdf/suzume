@@ -1929,15 +1929,15 @@ pub fn main() !void {
                     pg.pending_images_idx += 1;
 
                     const img_url = entry.url;
-                    if (!isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height) and !isSvgUrl(img_url)) {
+                    if (!isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
                         if (pg.base_url) |base| {
                             if (resolveUrl(allocator, base, img_url)) |resolved| {
                                 defer allocator.free(resolved);
-                                if (!isSvgUrl(resolved)) {
+                                {
                                     if (loader.loadBytesWithTimeout(resolved, 3)) |resp_val| {
                                         var resp = resp_val;
                                         defer resp.deinit();
-                                        if (resp.status_code == 200 and resp.body.len > 0 and resp.body.len <= 2 * 1024 * 1024 and !isSvgContentType(resp.content_type)) {
+                                        if (resp.status_code == 200 and resp.body.len > 0 and resp.body.len <= 2 * 1024 * 1024) {
                                             if (decodeImage(resp.body)) |img| {
                                                 const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
                                                 if (px_count <= 4 * 1024 * 1024) {

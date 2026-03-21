@@ -22,7 +22,9 @@ pub const ImageError = error{
     DecodeFailed,
 };
 
-/// Decode image data (PNG, JPEG, GIF, BMP) from memory into RGBA pixels.
+const svg_decoder = @import("../svg/decoder.zig");
+
+/// Decode image data (PNG, JPEG, GIF, BMP, SVG) from memory into RGBA pixels.
 pub fn decodeImage(data: []const u8) ImageError!DecodedImage {
     var w: c_int = 0;
     var h: c_int = 0;
@@ -37,7 +39,13 @@ pub fn decodeImage(data: []const u8) ImageError!DecodedImage {
         4, // force RGBA
     );
 
-    if (pixels == null) return ImageError.DecodeFailed;
+    if (pixels == null) {
+        // STB failed — try SVG decoder (handles .svg files)
+        if (svg_decoder.decodeSvg(data, 0, 0)) |svg_img| {
+            return svg_img;
+        }
+        return ImageError.DecodeFailed;
+    }
 
     return DecodedImage{
         .pixels = pixels,
