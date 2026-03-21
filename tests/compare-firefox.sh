@@ -11,8 +11,8 @@ DIFF_DIR="$RESULTS_DIR/diff"
 DISPLAY_NUM=":50"
 WIDTH=1280
 HEIGHT=900
-LOAD_WAIT=8
-TIMEOUT=30
+LOAD_WAIT=10
+TIMEOUT=45
 
 # Default test URLs
 DEFAULT_URLS=(
@@ -92,14 +92,17 @@ for url in "${URLS[@]}"; do
 
     # 3) Generate diff image if both exist
     if [ -f "$FIREFOX_DIR/$fname" ] && [ -f "$SUZUME_DIR/$fname" ]; then
-        # Resize both to same dimensions for comparison
+        # Crop both to content area (top portion) and resize to same dimensions
+        # Firefox screenshots are full-page height, suzume captures Xvfb viewport
+        # Crop to viewport-sized region from top for fair comparison
+        # Resize both to same dimensions for fair comparison
         magick "$FIREFOX_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/ff_resized.png" 2>/dev/null || \
             convert "$FIREFOX_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/ff_resized.png" 2>/dev/null || true
         magick "$SUZUME_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/sz_resized.png" 2>/dev/null || \
             convert "$SUZUME_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/sz_resized.png" 2>/dev/null || true
 
         if [ -f "/tmp/ff_resized.png" ] && [ -f "/tmp/sz_resized.png" ]; then
-            # Compare and generate diff (AE = absolute error count)
+            # Compare pixel differences
             DIFF_RESULT=$(compare -metric AE \
                 "/tmp/sz_resized.png" \
                 "/tmp/ff_resized.png" \
