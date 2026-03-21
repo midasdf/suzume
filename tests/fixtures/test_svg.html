@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>SVG Test</title>
+<style>
+.bg-svg {
+  width: 100px;
+  height: 100px;
+  background-image: url("https://news.ycombinator.com/triangle.svg");
+  background-repeat: no-repeat;
+  background-size: contain;
+  border: 1px solid #ccc;
+}
+</style>
+</head>
+<body style="background: white; font-family: sans-serif; padding: 20px;">
+  <h2>1. SVG img tag</h2>
+  <img src="https://news.ycombinator.com/triangle.svg" width="32" height="32">
+
+  <h2>2. Background-image SVG (via CSS class)</h2>
+  <div class="bg-svg"></div>
+
+  <h2>3. Background-image SVG (inline style)</h2>
+  <div style="width:100px;height:100px;background-image:url('https://news.ycombinator.com/triangle.svg');background-size:contain;background-repeat:no-repeat;border:1px solid red;"></div>
+</body>
+</html>
