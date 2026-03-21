@@ -316,7 +316,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         const effective_align = resolveAlignment(child, style.align_items);
         switch (effective_align) {
             .auto => {
-                cross_offset = 0;
+                cross_offset = 0; // unreachable: resolveAlignment always resolves auto
             },
             .flex_start => {
                 cross_offset = 0;
@@ -658,7 +658,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
             const effective_align_w = resolveAlignment(child, style.align_items);
             switch (effective_align_w) {
                 .auto => {
-                    cross_offset = 0;
+                    cross_offset = 0; // unreachable: resolveAlignment always resolves auto
                 },
                 .flex_start => {
                     cross_offset = 0;

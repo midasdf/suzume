@@ -272,7 +272,9 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
     // but still recurse into children (which may have visibility:visible).
     const is_visible = box.style.visibility == .visible;
 
-    // position:sticky — adjust scroll_y so element sticks at its top offset
+    // position:sticky — adjust scroll_y so element sticks at its top offset.
+    // Note: only handles "stick to top" case. Bottom boundary clamping
+    // (stop sticking when containing block scrolls past) is not implemented.
     var scroll_y = scroll_y_in;
     if (box.style.position == .sticky) {
         const sticky_top: f32 = switch (box.style.top) {
@@ -370,11 +372,10 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 if (box.style.background_image_url) |bg_url| {
                     if (image_cache) |cache| {
                         if (cache.get(bg_url)) |img| {
-                            const pbox2 = box.paddingBox();
-                            const bg_img_x = @as(i32, @intFromFloat(pbox2.x)) - sx_i;
-                            const bg_img_y: i32 = @intFromFloat(pbox2.y - scroll_y);
-                            const bg_img_w: u32 = @intFromFloat(@max(pbox2.width, 0));
-                            const bg_img_h: u32 = @intFromFloat(@max(pbox2.height, 0));
+                            const bg_img_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
+                            const bg_img_y: i32 = @intFromFloat(pbox.y - scroll_y);
+                            const bg_img_w: u32 = @intFromFloat(@max(pbox.width, 0));
+                            const bg_img_h: u32 = @intFromFloat(@max(pbox.height, 0));
                             if (bg_img_w > 0 and bg_img_h > 0) {
                                 blitImageScaled(surface, bg_img_x, bg_img_y, bg_img_w, bg_img_h, img.pixels, img.width, img.height);
                             }

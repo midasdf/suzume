@@ -141,7 +141,10 @@ pub const ComputedStyle = struct {
     // ═══════════════════════════════════════════════════════════════
 
     background_color: u32 = 0x00000000, // ARGB, transparent default
-    background_image_url: ?[]const u8 = null, // url() value for background-image
+    /// CSS background-image url() value. Points into CSS AST source memory —
+    /// valid as long as the owning CascadeResult (page.styles) is alive.
+    /// Freed when CascadeResult.deinit() is called during restyle.
+    background_image_url: ?[]const u8 = null,
     opacity: f32 = 1.0,
     object_fit: ObjectFit = .fill,
 

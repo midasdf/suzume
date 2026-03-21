@@ -632,14 +632,7 @@ fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry
     if (box.box_type == .replaced) {
         if (box.image_url) |url| {
             // Copy URL to owned memory so it survives DOM/style mutations
-            const url_copy = allocator.alloc(u8, url.len) catch {
-                urls.append(allocator, .{
-                    .url = url,
-                    .intrinsic_width = box.intrinsic_width,
-                    .intrinsic_height = box.intrinsic_height,
-                }) catch {};
-                return;
-            };
+            const url_copy = allocator.alloc(u8, url.len) catch return;
             @memcpy(url_copy, url);
             urls.append(allocator, .{
                 .url = url_copy,
@@ -647,6 +640,7 @@ fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry
                 .intrinsic_height = box.intrinsic_height,
             }) catch {
                 allocator.free(url_copy);
+                return;
             };
         }
     }
