@@ -74,7 +74,7 @@ deps/lunasvg/
         └── plutovg-surface.c
 ```
 
-Zig's build system compiles C++ with `addCSourceFiles(.{ .flags = &.{"-std=c++17"} })`. PlutoVG is pure C, compiled separately.
+Zig's build system compiles C++ with `addCSourceFiles(.{ .flags = &.{"-std=c++17", "-fno-exceptions", "-fno-rtti"} })` to minimize binary size. PlutoVG is pure C, compiled separately. `linkLibCpp()` is already called in build.zig for HarfBuzz.
 
 ### 2. C Wrapper (`deps/lunasvg/svg_wrapper.cpp`)
 
@@ -102,8 +102,9 @@ void svg_add_font(const char* family, int bold, int italic, const char* path);
 The wrapper handles:
 - `Document::loadFromData()` from raw bytes
 - `renderToBitmap(w, h)` with transparent background
-- ARGB premultiplied → RGBA straight alpha conversion (in-place)
-- Memory: `malloc` for pixel buffer, caller frees via `svg_free()`
+- ARGB premultiplied → RGBA straight alpha conversion (in-place on the Bitmap buffer)
+- Memory: pixels allocated via `stbi__malloc` (STB's allocator) so `DecodedImage.deinit()` can call `stbi_image_free()` uniformly. The wrapper copies the lunasvg Bitmap into an STB-allocated buffer and frees the Bitmap. This avoids adding a deallocator tag to DecodedImage.
+- Zero-dimension handling: if target_w=0 and target_h=0, lunasvg uses SVG viewBox. If the SVG lacks both viewBox and width/height, the wrapper returns failure (the caller can fall back to 300x150 per HTML spec for indeterminate replaced elements).
 
 ### 3. SVG Decoder (`src/svg/decoder.zig`)
 
@@ -176,8 +177,10 @@ For `<svg>...</svg>` in HTML:
 1. `tree.zig` detects `<svg>` tag
 2. Serializes the SVG DOM subtree to string via lexbor's `lxb_html_serialize_tree_str()`
 3. Creates a replaced box with `image_url = "data:image/svg+xml,<svg>..."` (or stores SVG data separately)
-4. The image loader detects the `data:image/svg+xml` prefix and passes the SVG text directly to `decodeSvg()`
+4. The image loader detects the `data:image/svg+xml` prefix and passes the SVG text directly to `decodeSvg()`, bypassing HTTP fetch entirely
 5. Intrinsic dimensions come from `<svg width="..." height="...">` or viewBox
+
+**Known limitation — HTML→SVG serialization fidelity:** Lexbor parses `<svg>` as HTML, not XML. This may lowercase case-sensitive SVG attributes (e.g., `viewBox` → `viewbox`), strip self-closing syntax, or lose XML namespaces (`xlink:href`). The wrapper will attempt to fix known cases (e.g., restore `viewBox` casing). Full fidelity would require raw source preservation, which is a future improvement.
 
 ### 6. Size Clamping
 
@@ -186,7 +189,7 @@ SVGs can declare arbitrary dimensions. Clamp rasterization to prevent OOM:
 - Max rasterization size: 1024x1024 pixels (4MB RGBA)
 - If SVG viewBox > 1024 in either axis, scale proportionally to fit
 - For `<img>` with explicit width/height attributes, use those (already handled by tree.zig)
-- For background-image, use the element's padding box dimensions
+- For background-image, rasterize at SVG intrinsic size and scale via `blitImageScaled` (same as raster images). Re-rasterization at target size would improve quality but adds cache complexity — deferred to Phase 2.
 
 ## Memory Budget
 
@@ -197,6 +200,16 @@ SVGs can declare arbitrary dimensions. Clamp rasterization to prevent OOM:
 | Per rasterized SVG (cached) | width × height × 4 bytes |
 | Max single SVG | 1024×1024×4 = 4MB |
 | ImageCache total | 20MB (shared with raster images) |
+
+## Known Limitations
+
+- **No animations** — `<animate>`, `<animateTransform>`, `<set>` are ignored by lunasvg
+- **No filters** — `<filter>`, `<feGaussianBlur>` etc. are not rendered
+- **No scripts** — `<script>` in SVG is ignored
+- **Inline SVG fidelity** — HTML parser may mangle case-sensitive SVG attributes (see section 5)
+- **Background-image SVG quality** — rasterized at intrinsic size, then scaled; not re-rasterized at target size
+- **`.svgz` (gzip-compressed SVG)** — not supported in Phase 1; can be added later via zlib decompression before decode
+- **SVG detection** — primary detection via STB-fail-then-SVG fallback; content-type `image/svg+xml` is also used to route directly to SVG decoder when available
 
 ## Testing
 
