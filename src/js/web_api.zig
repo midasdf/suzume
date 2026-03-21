@@ -1348,7 +1348,7 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- Native MutationObserver (replaces polyfill) --
     const events = @import("events.zig");
     _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver",
-        qjs.JS_NewCFunction(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1));
+        qjs.JS_NewCFunction2(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1, qjs.JS_CFUNC_constructor, 0));
 
     // -- history.pushState URL bar sync --
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url",
