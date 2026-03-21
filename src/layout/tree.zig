@@ -5,6 +5,19 @@ const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 const cascade_mod = @import("../css/cascade.zig");
 const Box = @import("box.zig").Box;
 const BoxType = @import("box.zig").BoxType;
+const lxb = @import("../bindings/lexbor.zig").c;
+
+// Lexbor serialization for inline <svg> outerHTML
+const lxb_html_serialize_cb_f = ?*const fn (data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(.c) lxb.lxb_status_t;
+extern fn lxb_html_serialize_tree_cb(node: *lxb.lxb_dom_node_t, cb: lxb_html_serialize_cb_f, ctx: ?*anyopaque) lxb.lxb_status_t;
+
+fn svgSerializeCallback(data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(.c) lxb.lxb_status_t {
+    if (len == 0) return 0;
+    const list: *std.ArrayListUnmanaged(u8) = @ptrCast(@alignCast(ctx orelse return 1));
+    const d = data orelse return 1;
+    list.appendSlice(std.heap.c_allocator, d[0..len]) catch return 1;
+    return 0;
+}
 
 /// Build a box tree from a DOM node and its resolved styles.
 /// Returns the root Box for the body element.
@@ -225,6 +238,48 @@ fn buildChildren(
                         }
                         child_box.intrinsic_width = img_w;
                         child_box.intrinsic_height = img_h;
+                    }
+
+                    // Handle inline <svg> elements — rasterize via lunasvg
+                    if (std.mem.eql(u8, tag, "svg")) {
+                        // Serialize SVG DOM subtree to string
+                        var svg_buf: std.ArrayListUnmanaged(u8) = .empty;
+                        _ = lxb_html_serialize_tree_cb(child.lxb_node, &svgSerializeCallback, @ptrCast(&svg_buf));
+
+                        if (svg_buf.items.len > 0) {
+                            // Store as data:image/svg+xml, URL
+                            const prefix = "data:image/svg+xml,";
+                            const url_buf = allocator.alloc(u8, prefix.len + svg_buf.items.len) catch {
+                                svg_buf.deinit(std.heap.c_allocator);
+                                continue;
+                            };
+                            @memcpy(url_buf[0..prefix.len], prefix);
+                            @memcpy(url_buf[prefix.len..], svg_buf.items);
+                            svg_buf.deinit(std.heap.c_allocator);
+
+                            child_box.box_type = .replaced;
+                            child_box.image_url = url_buf;
+
+                            // Get intrinsic dimensions from SVG attributes
+                            var svg_w: f32 = 100;
+                            var svg_h: f32 = 100;
+                            if (child.getAttribute("width")) |w_str| {
+                                svg_w = parseFloatAttr(w_str);
+                                if (svg_w <= 0) svg_w = 100;
+                            }
+                            if (child.getAttribute("height")) |h_str| {
+                                svg_h = parseFloatAttr(h_str);
+                                if (svg_h <= 0) svg_h = 100;
+                            }
+                            child_box.intrinsic_width = svg_w;
+                            child_box.intrinsic_height = svg_h;
+                        } else {
+                            svg_buf.deinit(std.heap.c_allocator);
+                        }
+                        // Don't recurse into SVG children
+                        child_box.parent = parent_box;
+                        try parent_box.children.append(allocator, child_box);
+                        continue;
                     }
 
                     // Handle <br> as a line break — empty block with line-height spacing

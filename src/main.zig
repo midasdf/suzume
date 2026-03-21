@@ -1929,7 +1929,26 @@ pub fn main() !void {
                     pg.pending_images_idx += 1;
 
                     const img_url = entry.url;
-                    if (!isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
+                    // Handle data:image/svg+xml, URLs (inline SVGs) — bypass HTTP fetch
+                    const data_svg_prefix = "data:image/svg+xml,";
+                    if (std.mem.startsWith(u8, img_url, data_svg_prefix)) {
+                        const svg_data = img_url[data_svg_prefix.len..];
+                        if (svg_data.len > 0) {
+                            const svg_decoder = @import("svg/decoder.zig");
+                            if (svg_decoder.decodeSvg(@as([]const u8, svg_data), 0, 0)) |img| {
+                                const px_count: u64 = @as(u64, img.width) * @as(u64, img.height);
+                                if (px_count <= 4 * 1024 * 1024) {
+                                    if (pg.image_cache) |*ic| {
+                                        ic.put(img_url, img) catch {
+                                            var mimg = img;
+                                            mimg.deinit();
+                                        };
+                                        pg.pending_images_loaded += 1;
+                                    }
+                                }
+                            }
+                        }
+                    } else if (!isTrackingPixel(img_url, entry.intrinsic_width, entry.intrinsic_height)) {
                         if (pg.base_url) |base| {
                             if (resolveUrl(allocator, base, img_url)) |resolved| {
                                 defer allocator.free(resolved);
