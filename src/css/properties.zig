@@ -781,8 +781,10 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         }
     }
 
+    var gradient_val: ?[]const u8 = null;
     for (tokens[0..token_count]) |tok| {
         // Extract url(...) or linear-gradient(...) as background-image
+        // url() takes priority over gradient (CSS multiple backgrounds: url is primary layer)
         if (startsWithIgnoreCase(tok, "url(")) {
             image_val = tok;
             continue;
@@ -791,7 +793,7 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
             startsWithIgnoreCase(tok, "-webkit-linear-gradient(") or
             startsWithIgnoreCase(tok, "-moz-linear-gradient("))
         {
-            image_val = tok;
+            gradient_val = tok;
             continue;
         }
         // Extract repeat keywords as background-repeat
@@ -812,9 +814,16 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         if (parseLength(tok) != null) continue;
     }
 
+    // Use gradient as image if no url() was found
+    if (image_val == null and gradient_val != null) {
+        image_val = gradient_val;
+    }
+
     // Count how many declarations we need
     var n: usize = 1; // always emit background-color
     if (image_val != null) n += 1;
+    // If we have both url() and gradient, emit gradient separately
+    if (image_val != null and gradient_val != null and image_val.? .ptr != gradient_val.?.ptr) n += 1;
     if (repeat_val != null) n += 1;
 
     const decls = allocator.alloc(ast.Declaration, n) catch return null;
@@ -823,6 +832,11 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
     idx += 1;
     if (image_val) |img| {
         decls[idx] = .{ .property = .background_image, .property_name = "background-image", .value_raw = img, .important = false };
+        idx += 1;
+    }
+    // Also emit gradient if url() took priority
+    if (image_val != null and gradient_val != null and image_val.?.ptr != gradient_val.?.ptr) {
+        decls[idx] = .{ .property = .background_image, .property_name = "background-image", .value_raw = gradient_val.?, .important = false };
         idx += 1;
     }
     if (repeat_val) |rep| {
