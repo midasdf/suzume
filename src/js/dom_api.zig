@@ -2,6 +2,7 @@ const std = @import("std");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
+const events = @import("events.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -223,6 +224,14 @@ fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
     return null;
 }
 
+pub fn wrapNodePublic(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
+    return wrapNode(ctx, node);
+}
+
+pub fn getNodePublic(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
+    return getNode(ctx, val);
+}
+
 fn getElement(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_element_t {
     const node = getNode(ctx, val) orelse return null;
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
@@ -354,6 +363,7 @@ fn elementSetTextContent(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
     _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    events.recordMutation(node, "childList", null, null, null);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -508,6 +518,8 @@ fn elementSetAttribute(
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
     _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, val.ptr, val.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -525,6 +537,8 @@ fn elementRemoveAttribute(
     const name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, name.ptr);
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -541,6 +555,7 @@ fn elementAppendChild(
     const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const child = getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     lxb_dom_node_insert_child(parent, child);
+    events.recordMutation(parent, "childList", child, null, null);
     setDomDirty();
     return qjs.JS_DupValue(c, args[0]);
 }
@@ -559,6 +574,7 @@ fn elementRemoveChild(
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
     if (child.parent != parent) return quickjs.JS_UNDEFINED();
     lxb_dom_node_remove(child);
+    events.recordMutation(parent, "childList", null, child, null);
     setDomDirty();
     return qjs.JS_DupValue(c, args[0]);
 }
@@ -582,6 +598,8 @@ fn elementInsertBefore(
         const ref_node = getNode(c, args[1]) orelse return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_before(ref_node, new_node);
     }
+    const parent_node = getNode(c, this_val) orelse new_node;
+    events.recordMutation(parent_node, "childList", new_node, null, null);
     setDomDirty();
     return qjs.JS_DupValue(c, args[0]);
 }
@@ -900,6 +918,7 @@ fn elementSetInnerHTML(
     // Destroy the fragment container itself
     _ = lxb_dom_node_destroy(frag);
 
+    events.recordMutation(node, "childList", null, null, null);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -3922,8 +3941,6 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // EventTarget.prototype → Node.prototype → Element.prototype → HTMLElement.prototype
     // This mirrors the browser's prototype chain so instanceof checks work.
 
-    const events = @import("events.zig");
-
     // ── EventTarget.prototype ──────────────────────────────────────
     const event_target_proto = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, event_target_proto, "addEventListener", qjs.JS_NewCFunction(ctx, &events.jsAddEventListener, "addEventListener", 2));
@@ -4448,14 +4465,4 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     qjs.JS_FreeValue(ctx, global);
 }
 
-/// Wraps a raw lxb_dom_node_t pointer into a JS value.
-/// Used by the event system to wrap target elements.
-pub fn wrapNodePublic(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
-    return wrapNode(ctx, node);
-}
-
-/// Gets a raw lxb_dom_node_t pointer from a JS value.
-/// Used by the event system to identify elements.
-pub fn getNodePublic(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
-    return getNode(ctx, val);
-}
+// wrapNodePublic/getNodePublic moved to top of file (near wrapNode/getNode)

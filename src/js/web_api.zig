@@ -314,26 +314,16 @@ pub fn tickTimers(ctx: *qjs.JSContext) bool {
     }
 
     // Fire MutationObservers if DOM was mutated
-    const dom_api = @import("dom_api.zig");
-    if (dom_api.mutation_observers_pending) {
-        dom_api.mutation_observers_pending = false;
-        fireMutationObservers(ctx);
+    const dom_api_mod = @import("dom_api.zig");
+    if (dom_api_mod.mutation_observers_pending) {
+        dom_api_mod.mutation_observers_pending = false;
+        const events_mod = @import("events.zig");
+        events_mod.flushMutationObservers(ctx);
     }
 
     return any_active;
 }
 
-/// Call __fireMutationObservers() in JS to notify all registered MutationObservers.
-fn fireMutationObservers(ctx: *qjs.JSContext) void {
-    const global = qjs.JS_GetGlobalObject(ctx);
-    defer qjs.JS_FreeValue(ctx, global);
-    const fn_val = qjs.JS_GetPropertyStr(ctx, global, "__fireMutationObservers");
-    defer qjs.JS_FreeValue(ctx, fn_val);
-    if (qjs.JS_IsFunction(ctx, fn_val)) {
-        const ret = qjs.JS_Call(ctx, fn_val, global, 0, null);
-        qjs.JS_FreeValue(ctx, ret);
-    }
-}
 
 /// Check if any timers are pending.
 pub fn hasTimers() bool {
@@ -1325,6 +1315,11 @@ pub fn registerWebApis(js_rt: anytype) void {
     const global = qjs.JS_GetGlobalObject(ctx);
     defer qjs.JS_FreeValue(ctx, global);
 
+    // -- Native MutationObserver (replaces polyfill) --
+    const events = @import("events.zig");
+    _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver",
+        qjs.JS_NewCFunction(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1));
+
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, console_obj, "log", qjs.JS_NewCFunction(ctx, &consoleLog, "log", 1));
@@ -1458,33 +1453,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof customElements==='undefined'){
         \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
         \\}
-        \\if(typeof MutationObserver==='undefined'){
-        \\  globalThis.__mutationObservers=[];
-        \\  globalThis.MutationObserver=function(cb){this._cb=cb;this._targets=[];this._disconnected=false;};
-        \\  MutationObserver.prototype.observe=function(target,opts){
-        \\    if(this._disconnected)return;
-        \\    this._targets.push({target:target,options:opts||{}});
-        \\    var found=false;for(var i=0;i<__mutationObservers.length;i++){if(__mutationObservers[i]===this){found=true;break;}}
-        \\    if(!found)__mutationObservers.push(this);
-        \\  };
-        \\  MutationObserver.prototype.disconnect=function(){
-        \\    this._disconnected=true;this._targets=[];
-        \\    globalThis.__mutationObservers=__mutationObservers.filter(function(o){return o!==this;}.bind(this));
-        \\  };
-        \\  MutationObserver.prototype.takeRecords=function(){return[];};
-        \\  globalThis.__fireMutationObservers=function(){
-        \\    for(var i=0;i<__mutationObservers.length;i++){
-        \\      var obs=__mutationObservers[i];
-        \\      if(!obs._disconnected&&obs._targets.length>0){
-        \\        var records=[];
-        \\        for(var j=0;j<obs._targets.length;j++){
-        \\          records.push({type:'childList',target:obs._targets[j].target,addedNodes:[],removedNodes:[],attributeName:null,oldValue:null});
-        \\        }
-        \\        try{obs._cb(records,obs);}catch(e){}
-        \\      }
-        \\    }
-        \\  };
-        \\}
+        \\// MutationObserver: registered natively in Zig (events.zig)
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb,opts){
         \\  this._cb=cb;this._disconnected=false;
         \\  this.observe=function(el){

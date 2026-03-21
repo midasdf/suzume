@@ -563,3 +563,247 @@ pub fn deinitEvents(ctx: *qjs.JSContext) void {
 }
 
 // jsStringToSlice is accessed via dom_api.jsStringToSlice
+
+// ── MutationObserver ────────────────────────────────────────────────
+
+const MutationRecord = struct {
+    type_str: []const u8, // "childList" or "attributes" (static, not owned)
+    target: *lxb.lxb_dom_node_t,
+    attribute_name: ?[]const u8, // owned copy, null for childList
+    added_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
+    removed_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
+
+    fn deinit(self: *MutationRecord) void {
+        if (self.attribute_name) |name| allocator.free(@constCast(name));
+        self.added_nodes.deinit(allocator);
+        self.removed_nodes.deinit(allocator);
+    }
+};
+
+const ObserveTarget = struct {
+    node: *lxb.lxb_dom_node_t,
+    child_list: bool,
+    attributes: bool,
+    subtree: bool,
+};
+
+const MutationObserverEntry = struct {
+    callback: qjs.JSValue,
+    targets: std.ArrayListUnmanaged(ObserveTarget),
+    pending_records: std.ArrayListUnmanaged(MutationRecord),
+    disconnected: bool,
+
+    fn deinit(self: *MutationObserverEntry, ctx: *qjs.JSContext) void {
+        qjs.JS_FreeValue(ctx, self.callback);
+        self.targets.deinit(allocator);
+        for (self.pending_records.items) |*r| r.deinit();
+        self.pending_records.deinit(allocator);
+    }
+};
+
+var mutation_observers: std.ArrayListUnmanaged(MutationObserverEntry) = .empty;
+
+/// Record a mutation for any observing MutationObservers.
+pub fn recordMutation(
+    target: *lxb.lxb_dom_node_t,
+    mutation_type: []const u8,
+    added: ?*lxb.lxb_dom_node_t,
+    removed: ?*lxb.lxb_dom_node_t,
+    attr_name: ?[]const u8,
+) void {
+    for (mutation_observers.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            const matches = (t.node == target) or
+                (t.subtree and isDescendant(target, t.node));
+            if (!matches) continue;
+
+            const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list
+            else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes
+            else false;
+            if (!want) continue;
+
+            var record = MutationRecord{
+                .type_str = mutation_type,
+                .target = target,
+                .attribute_name = null,
+                .added_nodes = .empty,
+                .removed_nodes = .empty,
+            };
+            if (attr_name) |n| {
+                const copy = allocator.alloc(u8, n.len) catch null;
+                if (copy) |c| {
+                    @memcpy(c, n);
+                    record.attribute_name = c;
+                }
+            }
+            if (added) |a| record.added_nodes.append(allocator, a) catch {};
+            if (removed) |r| record.removed_nodes.append(allocator, r) catch {};
+            obs.pending_records.append(allocator, record) catch {};
+            break;
+        }
+    }
+}
+
+fn isDescendant(node: *lxb.lxb_dom_node_t, ancestor: *lxb.lxb_dom_node_t) bool {
+    var cur: ?*lxb.lxb_dom_node_t = node.parent;
+    while (cur) |c| {
+        if (c == ancestor) return true;
+        cur = c.parent;
+    }
+    return false;
+}
+
+/// Flush pending mutation records to JS callbacks.
+pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
+    var i: usize = 0;
+    while (i < mutation_observers.items.len) {
+        var obs = &mutation_observers.items[i];
+        if (obs.disconnected or obs.pending_records.items.len == 0) {
+            i += 1;
+            continue;
+        }
+
+        const records_arr = qjs.JS_NewArray(ctx);
+        for (obs.pending_records.items, 0..) |*rec, idx| {
+            const record_obj = qjs.JS_NewObject(ctx);
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "type",
+                qjs.JS_NewStringLen(ctx, rec.type_str.ptr, rec.type_str.len));
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "target",
+                dom_api.wrapNodePublic(ctx, rec.target));
+
+            const added_arr = qjs.JS_NewArray(ctx);
+            for (rec.added_nodes.items, 0..) |node, ai| {
+                _ = qjs.JS_SetPropertyUint32(ctx, added_arr, @intCast(ai),
+                    dom_api.wrapNodePublic(ctx, node));
+            }
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "addedNodes", added_arr);
+
+            const removed_arr = qjs.JS_NewArray(ctx);
+            for (rec.removed_nodes.items, 0..) |node, ri| {
+                _ = qjs.JS_SetPropertyUint32(ctx, removed_arr, @intCast(ri),
+                    dom_api.wrapNodePublic(ctx, node));
+            }
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "removedNodes", removed_arr);
+
+            if (rec.attribute_name) |name| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName",
+                    qjs.JS_NewStringLen(ctx, name.ptr, name.len));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", quickjs.JS_NULL());
+            }
+
+            _ = qjs.JS_SetPropertyUint32(ctx, records_arr, @intCast(idx), record_obj);
+            rec.deinit();
+        }
+        obs.pending_records.clearRetainingCapacity();
+
+        var call_args = [_]qjs.JSValue{ records_arr, quickjs.JS_UNDEFINED() };
+        const ret = qjs.JS_Call(ctx, obs.callback, quickjs.JS_UNDEFINED(), 2, &call_args);
+        qjs.JS_FreeValue(ctx, ret);
+        qjs.JS_FreeValue(ctx, records_arr);
+
+        i += 1;
+    }
+}
+
+// ── MutationObserver JS API ─────────────────────────────────────────
+
+pub fn jsMutationObserverConstructor(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    if (!qjs.JS_IsFunction(c, args[0])) return quickjs.JS_UNDEFINED();
+
+    const obj = qjs.JS_NewObject(c);
+    const idx: u32 = @intCast(mutation_observers.items.len);
+    mutation_observers.append(allocator, .{
+        .callback = qjs.JS_DupValue(c, args[0]),
+        .targets = .empty,
+        .pending_records = .empty,
+        .disconnected = false,
+    }) catch return quickjs.JS_UNDEFINED();
+    _ = qjs.JS_SetPropertyStr(c, obj, "_idx", qjs.JS_NewInt32(c, @intCast(idx)));
+    _ = qjs.JS_SetPropertyStr(c, obj, "observe",
+        qjs.JS_NewCFunction(c, &jsMutationObserverObserve, "observe", 2));
+    _ = qjs.JS_SetPropertyStr(c, obj, "disconnect",
+        qjs.JS_NewCFunction(c, &jsMutationObserverDisconnect, "disconnect", 0));
+    _ = qjs.JS_SetPropertyStr(c, obj, "takeRecords",
+        qjs.JS_NewCFunction(c, &jsMutationObserverTakeRecords, "takeRecords", 0));
+    return obj;
+}
+
+fn getObserverIdx(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?u32 {
+    const idx_val = qjs.JS_GetPropertyStr(ctx, this_val, "_idx");
+    defer qjs.JS_FreeValue(ctx, idx_val);
+    var idx: i32 = 0;
+    if (qjs.JS_ToInt32(ctx, &idx, idx_val) != 0) return null;
+    if (idx < 0 or @as(usize, @intCast(idx)) >= mutation_observers.items.len) return null;
+    return @intCast(idx);
+}
+
+fn jsMutationObserverObserve(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const idx = getObserverIdx(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const target = dom_api.getNodePublic(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+
+    var child_list = false;
+    var attributes_opt = false;
+    var subtree = false;
+
+    if (argc >= 2 and !quickjs.JS_IsUndefined(args[1])) {
+        child_list = jsBoolProp(c, args[1], "childList");
+        attributes_opt = jsBoolProp(c, args[1], "attributes");
+        subtree = jsBoolProp(c, args[1], "subtree");
+    }
+
+    mutation_observers.items[idx].targets.append(allocator, .{
+        .node = target,
+        .child_list = child_list,
+        .attributes = attributes_opt,
+        .subtree = subtree,
+    }) catch {};
+    mutation_observers.items[idx].disconnected = false;
+    return quickjs.JS_UNDEFINED();
+}
+
+fn jsBoolProp(ctx: *qjs.JSContext, obj: qjs.JSValue, name: [*:0]const u8) bool {
+    const val = qjs.JS_GetPropertyStr(ctx, obj, name);
+    defer qjs.JS_FreeValue(ctx, val);
+    return qjs.JS_ToBool(ctx, val) > 0;
+}
+
+fn jsMutationObserverDisconnect(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const idx = getObserverIdx(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    mutation_observers.items[idx].disconnected = true;
+    mutation_observers.items[idx].targets.clearRetainingCapacity();
+    return quickjs.JS_UNDEFINED();
+}
+
+fn jsMutationObserverTakeRecords(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewArray(c);
+}
