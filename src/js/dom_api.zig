@@ -4283,6 +4283,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, activeElementAtom);
     }
 
+    // document.location (alias to window.location)
+    {
+        const loc = qjs.JS_GetPropertyStr(ctx, global, "location");
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "location", loc);
+    }
+
     // document.body (getter)
     const bodyAtom = qjs.JS_NewAtom(ctx, "body");
     _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, bodyAtom, qjs.JS_NewCFunction(ctx, &documentGetBody, "get body", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
