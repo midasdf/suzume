@@ -1,0 +1,18 @@
+<!DOCTYPE html>
+<html>
+<head>
+<div id="head-div" data-test="head-value">in head</div>
+<script type="application/json" id="json-in-head" data-role="test">{"location":"head"}</script>
+</head>
+<body>
+<div id="body-div" data-test="body-value">in body</div>
+<script type="application/json" id="json-in-body" data-role="test">{"location":"body"}</script>
+<script>
+console.log('head-div: ' + (document.querySelector('#head-div') ? 'found' : 'null'));
+console.log('body-div: ' + (document.querySelector('#body-div') ? 'found' : 'null'));
+console.log('json-in-head: ' + (document.querySelector('#json-in-head') ? 'found' : 'null'));
+console.log('json-in-body: ' + (document.querySelector('#json-in-body') ? 'found' : 'null'));
+console.log('all [data-role=test]: ' + document.querySelectorAll('[data-role="test"]').length);
+</script>
+</body>
+</html>

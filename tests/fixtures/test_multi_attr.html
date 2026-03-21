@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html><head></head>
+<body>
+<script type="application/json" data-role="module-args" data-module-name="test/foo">{"k":"v"}</script>
+<script>
+// Test 1: single attr
+var t1 = document.querySelectorAll('script[type="application/json"]');
+console.log('T1 single attr: ' + t1.length);  // expect 1
+
+// Test 2: two attrs
+var t2 = document.querySelectorAll('script[type="application/json"][data-role="module-args"]');
+console.log('T2 two attrs: ' + t2.length);  // expect 1
+
+// Test 3: three attrs
+var t3 = document.querySelectorAll('script[type="application/json"][data-role="module-args"][data-module-name="test/foo"]');
+console.log('T3 three attrs: ' + t3.length);  // expect 1
+
+// Test 4: querySelector (single result)
+var t4 = document.querySelector('script[type="application/json"][data-role="module-args"][data-module-name="test/foo"]');
+console.log('T4 querySelector: ' + (t4 ? 'found' : 'null'));
+
+// Test 5: just data-role
+var t5 = document.querySelectorAll('[data-role="module-args"]');
+console.log('T5 data-role only: ' + t5.length);
+
+// Test 6: check what attributes exist
+var scr = document.querySelectorAll('script[type="application/json"]')[0];
+if (scr) {
+    console.log('T6 type: ' + scr.getAttribute('type'));
+    console.log('T6 data-role: ' + scr.getAttribute('data-role'));
+    console.log('T6 data-module-name: ' + scr.getAttribute('data-module-name'));
+}
+</script>
+</body>
+</html>

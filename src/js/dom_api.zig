@@ -2496,40 +2496,57 @@ fn documentGetElementsByName(
     return arr;
 }
 
-/// Check if an element node matches a single simple selector (#id, .class, tag, tag.class)
+/// Check if an element node matches a single simple selector (#id, .class, tag, tag[attr])
 fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (selector.len == 0) return false;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
+    // #id selector
     if (selector[0] == '#') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
         return val != null and val_len == selector.len - 1 and
             std.mem.eql(u8, val.?[0..val_len], selector[1..]);
-    } else if (selector[0] == '.') {
+    }
+
+    // .class selector
+    if (selector[0] == '.') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
         return val != null and val_len > 0 and classContains(val.?[0..val_len], selector[1..]);
-    } else if (std.mem.indexOfScalar(u8, selector, '.')) |dot_idx| {
-        // tag.class
+    }
+
+    // Find bracket position (attribute selector start)
+    const bracket_idx = std.mem.indexOfScalar(u8, selector, '[');
+
+    // Find dot position ONLY before bracket (dot inside [attr="val.ue"] is not a class)
+    const dot_search_end = bracket_idx orelse selector.len;
+    const dot_idx = std.mem.indexOfScalar(u8, selector[0..dot_search_end], '.');
+
+    // Determine the tag name portion end
+    const tag_end = dot_idx orelse bracket_idx orelse selector.len;
+
+    // Check tag name (if present)
+    if (tag_end > 0) {
         var name_len: usize = 0;
         const name_ptr = lxb_dom_element_local_name(elem, &name_len);
-        if (name_ptr == null or name_len != dot_idx or
-            !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..dot_idx])) return false;
+        if (name_ptr == null or name_len != tag_end or
+            !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..tag_end])) return false;
+    }
+
+    // Check class (tag.class or tag.class[attr])
+    if (dot_idx) |di| {
+        const class_end = bracket_idx orelse selector.len;
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-        return val != null and val_len > 0 and classContains(val.?[0..val_len], selector[dot_idx + 1 ..]);
-    } else if (std.mem.indexOfScalar(u8, selector, '[')) |bracket_idx| {
-        // tag[attr="value"][attr2="value2"]... — multiple attribute selectors
-        var name_len: usize = 0;
-        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
-        if (bracket_idx > 0) {
-            if (name_ptr == null or name_len != bracket_idx or
-                !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..bracket_idx])) return false;
-        }
-        // Iterate through all [attr="value"] pairs
-        var pos: usize = bracket_idx;
+        if (val == null or val_len == 0 or
+            !classContains(val.?[0..val_len], selector[di + 1 .. class_end])) return false;
+    }
+
+    // Check attribute selectors [attr="value"][attr2="value2"]...
+    if (bracket_idx) |bi| {
+        var pos: usize = bi;
         while (pos < selector.len) {
             if (selector[pos] != '[') break;
             const attr_start = pos + 1;
@@ -2542,19 +2559,16 @@ fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
                 const av = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &av_len);
                 if (av == null or av_len != attr_val.len or !std.mem.eql(u8, av.?[0..av_len], attr_val)) return false;
             } else {
-                // [attr] — existence check
                 var av_len: usize = 0;
                 if (lxb_dom_element_get_attribute(elem, attr_inner.ptr, attr_inner.len, &av_len) == null) return false;
             }
             pos = close + 1;
         }
-        return true;
-    } else {
-        var name_len: usize = 0;
-        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
-        return name_ptr != null and name_len == selector.len and
-            std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector);
     }
+
+    // If no bracket and no dot, it was a pure tag match (already checked above)
+    // If bracket or dot present, all checks passed
+    return true;
 }
 
 /// Combinator type between selector parts

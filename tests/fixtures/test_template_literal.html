@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html><head></head>
+<body>
+<script type="application/json" data-role="module-args" data-module-name="args/options.mod">{"options":{"site":"test"}}</script>
+<script>
+// Test with template literal (exactly like SO does)
+var moduleName = "args/options.mod";
+var selector = `script[type="application/json"][data-role="module-args"][data-module-name="${moduleName}"]`;
+console.log('Selector: ' + selector);
+var el = document.querySelector(selector);
+console.log('Result: ' + (el ? 'FOUND' : 'NULL'));
+
+// Compare with string concatenation
+var selector2 = 'script[type="application/json"][data-role="module-args"][data-module-name="' + moduleName + '"]';
+console.log('Selector2: ' + selector2);
+var el2 = document.querySelector(selector2);
+console.log('Result2: ' + (el2 ? 'FOUND' : 'NULL'));
+
+// Are they equal?
+console.log('Selectors equal: ' + (selector === selector2));
+</script>
+</body>
+</html>

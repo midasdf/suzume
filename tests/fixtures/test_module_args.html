@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script type="application/json" data-role="module-args" data-module-name="test/foo.mod">{"key":"value"}</script>
+</head>
+<body>
+<script>
+function readModuleArgs(moduleName) {
+    var selector = 'script[type="application/json"][data-role="module-args"][data-module-name="' + moduleName + '"]';
+    var el = document.querySelector(selector);
+    if (!el) {
+        document.title = 'FAIL: querySelector returned null for ' + moduleName;
+        return null;
+    }
+    var text = el.innerText || el.textContent || '';
+    document.title = 'PASS: ' + text;
+    return JSON.parse(text);
+}
+
+var result = readModuleArgs("test/foo.mod");
+if (result && result.key === "value") {
+    document.title = 'PASS: key=' + result.key;
+} else {
+    document.title = 'FAIL: result=' + JSON.stringify(result);
+}
+</script>
+</body>
+</html>

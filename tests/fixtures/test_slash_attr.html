@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html><head></head>
+<body>
+<script type="application/json" data-role="module-args" data-module-name="test/foo">{"k":"v"}</script>
+<script type="application/json" data-role="module-args" data-module-name="args/options.mod">{"k":"v2"}</script>
+<script>
+// Test with slash in attr value
+var t1 = document.querySelector('[data-module-name="test/foo"]');
+console.log('test/foo: ' + (t1 ? 'found' : 'null'));
+
+var t2 = document.querySelector('[data-module-name="args/options.mod"]');
+console.log('args/options.mod: ' + (t2 ? 'found' : 'null'));
+
+var t3 = document.querySelector('script[data-module-name="args/options.mod"]');
+console.log('script + args/options.mod: ' + (t3 ? 'found' : 'null'));
+
+// Full SO selector
+var t4 = document.querySelector('script[type="application/json"][data-role="module-args"][data-module-name="args/options.mod"]');
+console.log('full SO selector: ' + (t4 ? 'found' : 'null'));
+</script>
+</body>
+</html>

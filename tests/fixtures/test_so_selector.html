@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script type="application/json" data-role="module-args" data-module-name="args/options.mod">{"options":{"site":{"name":"Test"}}}</script>
+<script type="application/json" data-role="module-args" data-module-name="args/settings.mod">{"settings":{}}</script>
+
+<script type="text/javascript">
+    // Exact same code as SO uses
+    function readModuleArgs(moduleName) {
+        var selector = 'script[type="application/json"][data-role="module-args"][data-module-name="' + moduleName + '"]';
+        var el = document.querySelector(selector);
+        if (!el) {
+            console.error('FAIL: querySelector returned null for: ' + moduleName);
+            console.error('Selector was: ' + selector);
+            // Try simpler selectors
+            var all_scripts = document.querySelectorAll('script');
+            console.log('Total script tags: ' + all_scripts.length);
+            var json_scripts = document.querySelectorAll('script[type="application/json"]');
+            console.log('JSON script tags: ' + json_scripts.length);
+            return {};
+        }
+        console.log('PASS: found module args for ' + moduleName);
+        return JSON.parse(el.innerText);
+    }
+
+    var options = readModuleArgs("args/options.mod").options;
+    if (options && options.site) {
+        console.log('SUCCESS: site.name = ' + options.site.name);
+    } else {
+        console.error('FAIL: options not loaded');
+    }
+</script>
+</head>
+<body>
+<p>SO Module Args Test</p>
+</body>
+</html>
