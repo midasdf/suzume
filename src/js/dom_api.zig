@@ -4233,6 +4233,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, global, "frameElement", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(ctx, global, "length", qjs.JS_NewInt32(ctx, 0)); // frames.length
 
+    // Reflected HTML attributes (src, href, etc.) as property getters/setters
+    {
+        const reflected_js =
+            \\(function(){
+            \\  var EP=Element.prototype;
+            \\  ['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','dir','for'].forEach(function(a){
+            \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
+            \\  });
+            \\  ['disabled','checked','selected'].forEach(function(a){
+            \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.hasAttribute(a);},set:function(v){if(v)this.setAttribute(a,'');else this.removeAttribute(a);},configurable:true});}
+            \\  });
+            \\})();
+        ;
+        const r = qjs.JS_Eval(ctx, reflected_js, reflected_js.len, "<reflected-attrs>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
     // ── Text prototype (inherits Node.prototype) ─────────────────────
     // Text nodes get Node methods (textContent, parentNode, etc.) via prototype chain.
     // No need to duplicate them — just set Node.prototype as the text proto's prototype.

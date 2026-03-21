@@ -1650,16 +1650,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  if(!document.getElementsByName)document.getElementsByName=function(n){return document.querySelectorAll('[name=\"'+n+'\"]');};
         \\}
         \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
-        \\(function(){
-        \\  var attrs=['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','dir','for'];
-        \\  var EP=Element.prototype;
-        \\  attrs.forEach(function(a){
-        \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
-        \\  });
-        \\  ['disabled','checked','selected'].forEach(function(a){
-        \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.hasAttribute(a);},set:function(v){if(v)this.setAttribute(a,'');else this.removeAttribute(a);},configurable:true});}
-        \\  });
-        \\})();
+
         \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
         \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
         \\if(typeof Atomics!=='undefined'&&!Atomics.waitAsync){
