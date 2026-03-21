@@ -356,7 +356,7 @@ fn hexDigit(c: u8) ?u4 {
 }
 
 /// Maximum size for a fetched external script (500 KB).
-const max_external_script_size = 1024 * 1024;
+const max_external_script_size = 1024 * 1024; // 1MB
 /// Maximum number of external scripts to fetch per page.
 const max_external_script_count = 50;
 /// Maximum total bytes of external scripts to load per page.
