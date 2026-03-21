@@ -206,6 +206,8 @@ fn setCurrentScript(ctx: *quickjs.c.JSContext, src_url: [:0]const u8) void {
     const script_obj = quickjs.c.JS_NewObject(ctx);
     _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "src", quickjs.c.JS_NewStringLen(ctx, src_url.ptr, src_url.len));
     _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "type", quickjs.c.JS_NewString(ctx, "text/javascript"));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "tagName", quickjs.c.JS_NewString(ctx, "SCRIPT"));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "nodeName", quickjs.c.JS_NewString(ctx, "SCRIPT"));
     _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "getAttribute", quickjs.c.JS_NewCFunction(ctx, &scriptGetAttribute, "getAttribute", 1));
     _ = quickjs.c.JS_SetPropertyStr(ctx, doc_obj, "currentScript", script_obj);
 }
