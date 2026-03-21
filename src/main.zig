@@ -241,11 +241,16 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
     // Execute deferred scripts in document order
     for (deferred.items) |ds| {
         std.debug.print("[JS] Executing deferred <script> ({d} bytes, external={any}, module={any})\n", .{ ds.code.len, ds.is_external, ds.is_module });
+        // Set document.currentScript for external deferred scripts
+        if (ds.is_external and ds.source_url != null) {
+            setCurrentScript(js_rt.ctx, ds.source_url.?);
+        }
         const result = if (ds.is_module)
             js_rt.evalModule(ds.code, ds.source_url orelse "<module>")
         else
             js_rt.eval(ds.code);
         defer result.deinit();
+        if (ds.is_external) clearCurrentScript(js_rt.ctx);
         if (!result.isOk()) {
             std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
         }
@@ -480,8 +485,15 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                         @memcpy(code_copy, response.body);
                         response.deinit();
                         std.debug.print("[JS] Deferring external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code_copy.len });
-                        deferred.append(allocator, .{ .code = code_copy, .is_external = true, .is_module = is_module }) catch {
+                        // Copy source URL for deferred script (for document.currentScript.src)
+                        const src_url_copy = allocator.allocSentinel(u8, resolved_url.len, 0) catch {
                             allocator.free(code_copy);
+                            return;
+                        };
+                        @memcpy(src_url_copy, resolved_url);
+                        deferred.append(allocator, .{ .code = code_copy, .is_external = true, .is_module = is_module, .source_url = src_url_copy }) catch {
+                            allocator.free(code_copy);
+                            allocator.free(src_url_copy);
                             return;
                         };
                     } else {
