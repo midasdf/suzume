@@ -32,7 +32,8 @@ WORKDIR /app
 # Copy the built suzume binary and test script
 COPY zig-out/bin/suzume /app/suzume
 COPY tests/compare-firefox.sh /app/compare-firefox.sh
-RUN chmod +x /app/suzume /app/compare-firefox.sh
+COPY tests/error-check.sh /app/error-check.sh
+RUN chmod +x /app/suzume /app/compare-firefox.sh /app/error-check.sh
 
 # Create output directory
 RUN mkdir -p /app/results/suzume /app/results/firefox /app/results/diff
