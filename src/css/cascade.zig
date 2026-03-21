@@ -2063,13 +2063,28 @@ fn toLowerBuf(s: []const u8, buf: *[64]u8) ?[]const u8 {
 /// Extract the URL string from url("..."), url('...'), or url(...).
 /// Returns the inner URL with quotes stripped, or null on failure.
 fn extractUrl(value: []const u8) ?[]const u8 {
-    // Find opening paren after "url"
+    // Find "url(" prefix
     const open = std.mem.indexOf(u8, value, "(") orelse return null;
-    // Find matching closing paren (last one to handle URLs with parens)
-    const close = std.mem.lastIndexOf(u8, value, ")") orelse return null;
-    if (close <= open + 1) return null;
+    const after_open = open + 1;
+    if (after_open >= value.len) return null;
 
-    var inner = std.mem.trim(u8, value[open + 1 .. close], " \t\r\n");
+    // Find matching closing paren — respect quotes
+    var close: ?usize = null;
+    var in_quote: u8 = 0;
+    for (value[after_open..], after_open..) |ch, idx| {
+        if (in_quote != 0) {
+            if (ch == in_quote) in_quote = 0;
+        } else if (ch == '"' or ch == '\'') {
+            in_quote = ch;
+        } else if (ch == ')') {
+            close = idx;
+            break;
+        }
+    }
+    const close_idx = close orelse return null;
+    if (close_idx <= after_open) return null;
+
+    var inner = std.mem.trim(u8, value[after_open..close_idx], " \t\r\n");
 
     // Strip surrounding quotes if present
     if (inner.len >= 2) {
