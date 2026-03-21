@@ -258,7 +258,7 @@ fn paintBoxShadow(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f
     }
 }
 
-fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32, scroll_x: f32, clip: ClipRect, image_cache: ?*ImageCache, accumulated_opacity: f32) void {
+fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: f32, scroll_x: f32, clip: ClipRect, image_cache: ?*ImageCache, accumulated_opacity: f32) void {
     if (clip.isEmpty()) return;
 
     // Accumulate opacity through the tree (CSS compositing group behavior).
@@ -271,6 +271,22 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
     // Respect visibility:hidden — skip painting this element's own content
     // but still recurse into children (which may have visibility:visible).
     const is_visible = box.style.visibility == .visible;
+
+    // position:sticky — adjust scroll_y so element sticks at its top offset
+    var scroll_y = scroll_y_in;
+    if (box.style.position == .sticky) {
+        const sticky_top: f32 = switch (box.style.top) {
+            .px => |v| v,
+            else => 0,
+        };
+        const pbox_sticky = box.paddingBox();
+        const natural_screen_y = pbox_sticky.y - scroll_y;
+        // If natural position would scroll above the sticky offset, compensate
+        if (natural_screen_y < sticky_top) {
+            // Adjust scroll_y for this element and its children so it appears at sticky_top
+            scroll_y = scroll_y - (sticky_top - natural_screen_y);
+        }
+    }
 
     const clip_top = clip.top;
     const clip_bottom = clip.bottom;
@@ -346,6 +362,22 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f32
                             surface.fillRectBlend(bg_x, bg_y, bg_w, bg_h, bg_colour);
                         } else {
                             surface.fillRect(bg_x, bg_y, bg_w, bg_h, bg_colour);
+                        }
+                    }
+                }
+
+                // Paint CSS background-image url()
+                if (box.style.background_image_url) |bg_url| {
+                    if (image_cache) |cache| {
+                        if (cache.get(bg_url)) |img| {
+                            const pbox2 = box.paddingBox();
+                            const bg_img_x = @as(i32, @intFromFloat(pbox2.x)) - sx_i;
+                            const bg_img_y: i32 = @intFromFloat(pbox2.y - scroll_y);
+                            const bg_img_w: u32 = @intFromFloat(@max(pbox2.width, 0));
+                            const bg_img_h: u32 = @intFromFloat(@max(pbox2.height, 0));
+                            if (bg_img_w > 0 and bg_img_h > 0) {
+                                blitImageScaled(surface, bg_img_x, bg_img_y, bg_img_w, bg_img_h, img.pixels, img.width, img.height);
+                            }
                         }
                     }
                 }

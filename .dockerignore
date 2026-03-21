@@ -1,0 +1,16 @@
+.git
+.zig-cache
+zig-cache
+deps
+sysroot-aarch64
+src
+docs
+screenshots
+tests/screenshots
+tests/fixtures
+tests/wpt
+tests/*.zig
+*.zig
+*.zon
+*.md
+LICENSE

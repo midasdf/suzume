@@ -113,7 +113,7 @@ pub const ComputedStyle = struct {
     justify_content: JustifyContent = .flex_start,
     align_content: AlignContent = .stretch,
     align_items: AlignItems = .stretch,
-    align_self: AlignItems = .stretch,
+    align_self: AlignItems = .auto,
     flex_grow: f32 = 0,
     flex_shrink: f32 = 1,
     flex_basis: Dimension = .auto,
@@ -141,6 +141,7 @@ pub const ComputedStyle = struct {
     // ═══════════════════════════════════════════════════════════════
 
     background_color: u32 = 0x00000000, // ARGB, transparent default
+    background_image_url: ?[]const u8 = null, // url() value for background-image
     opacity: f32 = 1.0,
     object_fit: ObjectFit = .fill,
 
@@ -305,6 +306,7 @@ pub const ComputedStyle = struct {
     };
 
     pub const AlignItems = enum {
+        auto, // align-self default: inherit from parent's align-items
         stretch,
         flex_start,
         flex_end,

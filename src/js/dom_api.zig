@@ -2502,27 +2502,34 @@ fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
         return val != null and val_len > 0 and classContains(val.?[0..val_len], selector[dot_idx + 1 ..]);
     } else if (std.mem.indexOfScalar(u8, selector, '[')) |bracket_idx| {
-        // tag[attr="value"] — basic attribute selector
+        // tag[attr="value"][attr2="value2"]... — multiple attribute selectors
         var name_len: usize = 0;
         const name_ptr = lxb_dom_element_local_name(elem, &name_len);
         if (bracket_idx > 0) {
             if (name_ptr == null or name_len != bracket_idx or
                 !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..bracket_idx])) return false;
         }
-        // Parse [attr="value"]
-        const attr_sel = selector[bracket_idx + 1 ..];
-        const close = std.mem.indexOfScalar(u8, attr_sel, ']') orelse return false;
-        const attr_inner = attr_sel[0..close];
-        if (std.mem.indexOf(u8, attr_inner, "=\"")) |eq_idx| {
-            const attr_name = attr_inner[0..eq_idx];
-            const attr_val = std.mem.trim(u8, attr_inner[eq_idx + 2 ..], "\"'");
-            var av_len: usize = 0;
-            const av = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &av_len);
-            return av != null and av_len == attr_val.len and std.mem.eql(u8, av.?[0..av_len], attr_val);
+        // Iterate through all [attr="value"] pairs
+        var pos: usize = bracket_idx;
+        while (pos < selector.len) {
+            if (selector[pos] != '[') break;
+            const attr_start = pos + 1;
+            const close = std.mem.indexOfScalarPos(u8, selector, attr_start, ']') orelse return false;
+            const attr_inner = selector[attr_start..close];
+            if (std.mem.indexOf(u8, attr_inner, "=\"")) |eq_idx| {
+                const attr_name = attr_inner[0..eq_idx];
+                const attr_val = std.mem.trim(u8, attr_inner[eq_idx + 2 ..], "\"'");
+                var av_len: usize = 0;
+                const av = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &av_len);
+                if (av == null or av_len != attr_val.len or !std.mem.eql(u8, av.?[0..av_len], attr_val)) return false;
+            } else {
+                // [attr] — existence check
+                var av_len: usize = 0;
+                if (lxb_dom_element_get_attribute(elem, attr_inner.ptr, attr_inner.len, &av_len) == null) return false;
+            }
+            pos = close + 1;
         }
-        // [attr] — existence check
-        var av_len: usize = 0;
-        return lxb_dom_element_get_attribute(elem, attr_inner.ptr, attr_inner.len, &av_len) != null;
+        return true;
     } else {
         var name_len: usize = 0;
         const name_ptr = lxb_dom_element_local_name(elem, &name_len);

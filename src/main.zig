@@ -132,7 +132,10 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     page.total_height = painter_mod.contentHeight(new_root_box);
     page.total_width = painter_mod.contentWidth(new_root_box);
 
-    // Re-collect pending images from new box tree
+    // Free owned URL copies from old pending images before re-collecting
+    for (page.pending_images.items) |entry| {
+        allocator.free(@constCast(entry.url));
+    }
     page.pending_images.clearRetainingCapacity();
     page.pending_images_idx = 0;
     collectImageUrls(new_root_box, &page.pending_images, allocator);
@@ -628,11 +631,37 @@ const ImageUrlEntry = struct {
 fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry), allocator: std.mem.Allocator) void {
     if (box.box_type == .replaced) {
         if (box.image_url) |url| {
+            // Copy URL to owned memory so it survives DOM/style mutations
+            const url_copy = allocator.alloc(u8, url.len) catch {
+                urls.append(allocator, .{
+                    .url = url,
+                    .intrinsic_width = box.intrinsic_width,
+                    .intrinsic_height = box.intrinsic_height,
+                }) catch {};
+                return;
+            };
+            @memcpy(url_copy, url);
             urls.append(allocator, .{
-                .url = url,
+                .url = url_copy,
                 .intrinsic_width = box.intrinsic_width,
                 .intrinsic_height = box.intrinsic_height,
-            }) catch {};
+            }) catch {
+                allocator.free(url_copy);
+            };
+        }
+    }
+    // Also collect CSS background-image url() references
+    if (box.style.background_image_url) |url| {
+        if (url.len > 0 and url.len < 4096) {
+            const url_copy = allocator.alloc(u8, url.len) catch return;
+            @memcpy(url_copy, url);
+            urls.append(allocator, .{
+                .url = url_copy,
+                .intrinsic_width = 0,
+                .intrinsic_height = 0,
+            }) catch {
+                allocator.free(url_copy);
+            };
         }
     }
     for (box.children.items) |child| {
@@ -1325,6 +1354,7 @@ fn processUrlInput(allocator: std.mem.Allocator, input: []const u8) ![:0]const u
 /// Check if a URL points to an SVG image (by file extension).
 /// Check if a URL is likely a tracking pixel or beacon image.
 fn isTrackingPixel(url: []const u8, intrinsic_w: f32, intrinsic_h: f32) bool {
+    if (url.len == 0) return false;
     // Skip if HTML attributes indicate tiny dimensions (1x1, 2x1, etc.)
     const is_tiny = intrinsic_w > 0 and intrinsic_h > 0 and intrinsic_w <= 2 and intrinsic_h <= 2;
     if (is_tiny) {

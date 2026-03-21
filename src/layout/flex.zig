@@ -3,6 +3,13 @@ const Box = @import("box.zig").Box;
 const BoxType = @import("box.zig").BoxType;
 const block = @import("block.zig");
 const FontCache = @import("../paint/painter.zig").FontCache;
+const AlignItems = @import("../css/computed.zig").ComputedStyle.AlignItems;
+
+/// Resolve the effective cross-axis alignment for a flex child.
+/// Uses align-self if explicitly set, otherwise falls back to container's align-items.
+fn resolveAlignment(child: *const Box, container_align: AlignItems) AlignItems {
+    return if (child.style.align_self != .auto) child.style.align_self else container_align;
+}
 
 /// Lay out a flex container and its children.
 /// The flex container box should have display: flex.
@@ -306,7 +313,11 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
             child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
         var cross_offset: f32 = 0;
 
-        switch (style.align_items) {
+        const effective_align = resolveAlignment(child, style.align_items);
+        switch (effective_align) {
+            .auto => {
+                cross_offset = 0;
+            },
             .flex_start => {
                 cross_offset = 0;
             },
@@ -644,7 +655,11 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
                 child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
             var cross_offset: f32 = 0;
 
-            switch (style.align_items) {
+            const effective_align_w = resolveAlignment(child, style.align_items);
+            switch (effective_align_w) {
+                .auto => {
+                    cross_offset = 0;
+                },
                 .flex_start => {
                     cross_offset = 0;
                 },
@@ -793,8 +808,9 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
             child.border.left + child.border.right + child.margin.left + child.margin.right;
         var cross_offset: f32 = 0;
 
-        switch (style.align_items) {
-            .flex_start => {},
+        const effective_align_c = resolveAlignment(child, style.align_items);
+        switch (effective_align_c) {
+            .auto, .flex_start => {},
             .flex_end => {
                 cross_offset = container_width - child_cross_size;
             },

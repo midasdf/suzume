@@ -467,8 +467,10 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         }
     }
 
-    // Apply position:relative offset (after normal flow layout)
-    if (box.style.position == .relative) {
+    // Apply position:relative/sticky offset (after normal flow layout)
+    // Sticky elements participate in normal flow like relative; the paint
+    // phase handles scroll-based clamping.
+    if (box.style.position == .relative or box.style.position == .sticky) {
         var dx: f32 = 0;
         var dy: f32 = 0;
         switch (box.style.left) {

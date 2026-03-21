@@ -996,6 +996,11 @@ fn applyDeclaration(
             // Parse linear-gradient(direction, color1, color2)
             if (parseLinearGradient(trimmed, style)) {
                 // gradient_color_start, gradient_color_end, gradient_direction set
+            } else if (startsWithIgnoreCase(trimmed, "url(")) {
+                // Extract URL from url("...") or url('...') or url(...)
+                if (extractUrl(trimmed)) |url| {
+                    style.background_image_url = url;
+                }
             }
         },
         .opacity => {
@@ -1328,7 +1333,7 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center
             else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch
             else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline
-            else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .stretch;
+            else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
         },
         .flex_grow => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_grow = v else |_| {}
@@ -2053,6 +2058,32 @@ fn toLowerBuf(s: []const u8, buf: *[64]u8) ?[]const u8 {
         buf[i] = util.toLower(c);
     }
     return buf[0..s.len];
+}
+
+/// Extract the URL string from url("..."), url('...'), or url(...).
+/// Returns the inner URL with quotes stripped, or null on failure.
+fn extractUrl(value: []const u8) ?[]const u8 {
+    // Find opening paren after "url"
+    const open = std.mem.indexOf(u8, value, "(") orelse return null;
+    // Find matching closing paren (last one to handle URLs with parens)
+    const close = std.mem.lastIndexOf(u8, value, ")") orelse return null;
+    if (close <= open + 1) return null;
+
+    var inner = std.mem.trim(u8, value[open + 1 .. close], " \t\r\n");
+
+    // Strip surrounding quotes if present
+    if (inner.len >= 2) {
+        if ((inner[0] == '"' and inner[inner.len - 1] == '"') or
+            (inner[0] == '\'' and inner[inner.len - 1] == '\''))
+        {
+            inner = inner[1 .. inner.len - 1];
+        }
+    }
+
+    if (inner.len == 0) return null;
+    // Skip data: URIs (too large, not worth caching as background)
+    if (std.mem.startsWith(u8, inner, "data:")) return null;
+    return inner;
 }
 
 /// Parse linear-gradient(direction, color1, color2) and set gradient fields on style.
