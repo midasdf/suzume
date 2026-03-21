@@ -18,9 +18,5 @@
         .harfbuzz = .{
             .path = "deps/harfbuzz-zig",
         },
-        .lunasvg = .{
-            .url = "https://github.com/allyourcodebase/lunasvg/archive/refs/heads/master.tar.gz",
-            .hash = "lunasvg-0.0.0-AAAAAJcPAADwee-El68CxVM3KXAaHWn8c-BW1QaE5A3f",
-        },
     },
 }

@@ -120,6 +120,73 @@ pub fn build(b: *std.Build) void {
         });
     }
 
+    // ── LunaSVG (SVG rasterizer, C++17) + PlutoVG (2D graphics, C) ──
+    const lunasvg_dir = "deps/lunasvg";
+    exe.addIncludePath(b.path(lunasvg_dir ++ "/include"));
+    exe.addIncludePath(b.path(lunasvg_dir ++ "/source"));
+    exe.addIncludePath(b.path(lunasvg_dir ++ "/3rdparty/plutovg"));
+
+    const lunasvg_cpp_flags: []const []const u8 = &.{
+        "-std=c++17",
+        "-fno-exceptions",
+        "-fno-rtti",
+        "-fno-sanitize=undefined",
+        "-DLUNASVG_BUILD_STATIC",
+    };
+
+    const lunasvg_cpp_sources: []const []const u8 = &.{
+        lunasvg_dir ++ "/source/lunasvg.cpp",
+        lunasvg_dir ++ "/source/element.cpp",
+        lunasvg_dir ++ "/source/property.cpp",
+        lunasvg_dir ++ "/source/parser.cpp",
+        lunasvg_dir ++ "/source/layoutcontext.cpp",
+        lunasvg_dir ++ "/source/canvas.cpp",
+        lunasvg_dir ++ "/source/clippathelement.cpp",
+        lunasvg_dir ++ "/source/defselement.cpp",
+        lunasvg_dir ++ "/source/gelement.cpp",
+        lunasvg_dir ++ "/source/geometryelement.cpp",
+        lunasvg_dir ++ "/source/graphicselement.cpp",
+        lunasvg_dir ++ "/source/maskelement.cpp",
+        lunasvg_dir ++ "/source/markerelement.cpp",
+        lunasvg_dir ++ "/source/paintelement.cpp",
+        lunasvg_dir ++ "/source/stopelement.cpp",
+        lunasvg_dir ++ "/source/styledelement.cpp",
+        lunasvg_dir ++ "/source/styleelement.cpp",
+        lunasvg_dir ++ "/source/svgelement.cpp",
+        lunasvg_dir ++ "/source/symbolelement.cpp",
+        lunasvg_dir ++ "/source/useelement.cpp",
+    };
+
+    for (lunasvg_cpp_sources) |src| {
+        exe.addCSourceFile(.{
+            .file = b.path(src),
+            .flags = lunasvg_cpp_flags,
+        });
+    }
+
+    const plutovg_c_flags: []const []const u8 = &.{ "-fno-sanitize=undefined" };
+    const plutovg_c_sources: []const []const u8 = &.{
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-paint.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-geometry.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-blend.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-rle.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-dash.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-ft-raster.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-ft-stroker.c",
+        lunasvg_dir ++ "/3rdparty/plutovg/plutovg-ft-math.c",
+    };
+
+    for (plutovg_c_sources) |src| {
+        exe.addCSourceFile(.{
+            .file = b.path(src),
+            .flags = plutovg_c_flags,
+        });
+    }
+
+    // SVG C++ wrapper
+    exe.addIncludePath(b.path("src/svg"));
+
     // System libraries
     exe.linkSystemLibrary("xcb");
     exe.linkSystemLibrary("xcb-icccm");
