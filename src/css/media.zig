@@ -124,9 +124,9 @@ fn evaluateCondition(cond: []const u8, vw: f32, vh: f32) bool {
         // Find value after ':'
         const colon_pos = std.mem.indexOf(u8, cond, ":") orelse return true;
         const value = std.mem.trim(u8, cond[colon_pos + 1 ..], " \t");
-        // suzume uses dark theme
-        if (eqlIgnoreCase(value, "dark")) return true;
-        if (eqlIgnoreCase(value, "light")) return false;
+        // suzume uses light theme (most sites expect light mode)
+        if (eqlIgnoreCase(value, "light")) return true;
+        if (eqlIgnoreCase(value, "dark")) return false;
         return true;
     }
 
