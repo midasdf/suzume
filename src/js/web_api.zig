@@ -24,6 +24,36 @@ pub fn getPendingNavigation() ?[]const u8 {
     return url;
 }
 
+// ── history.pushState URL bar sync ──────────────────────────────────
+var pending_url_update: ?[]const u8 = null;
+
+pub fn getPendingUrlUpdate() ?[]const u8 {
+    const url = pending_url_update;
+    pending_url_update = null;
+    return url;
+}
+
+fn jsSuzumeUpdateUrl(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const str = qjs.JS_ToCStringLen(c, null, args[0]);
+    if (str == null) return quickjs.JS_UNDEFINED();
+    const s_len = std.mem.len(str);
+    defer qjs.JS_FreeCString(c, str);
+
+    if (pending_url_update) |old| std.heap.c_allocator.free(old);
+    const copy = std.heap.c_allocator.alloc(u8, s_len) catch return quickjs.JS_UNDEFINED();
+    @memcpy(copy, str[0..s_len]);
+    pending_url_update = copy;
+    return quickjs.JS_UNDEFINED();
+}
+
 fn jsLocationAssign(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
@@ -1320,6 +1350,10 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver",
         qjs.JS_NewCFunction(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1));
 
+    // -- history.pushState URL bar sync --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url",
+        qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
+
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, console_obj, "log", qjs.JS_NewCFunction(ctx, &consoleLog, "log", 1));
@@ -1512,7 +1546,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\      return resp.text();
         \\    }).then(function(text){
         \\      self.readyState=3;self._fireReadyState();
-        \\      self.responseText=text;self.response=self.responseType==='json'?JSON.parse(text):text;
+        \\      self.responseText=text;self.response=self.responseType==='json'?(function(){try{return JSON.parse(text);}catch(e){return null;}})():text;
         \\      self.readyState=4;self._fireReadyState();
         \\      if(self.onload)try{self.onload({target:self,type:'load'});}catch(e){}
         \\      self._fire('load',{target:self});
@@ -1527,6 +1561,8 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  XMLHttpRequest.prototype.removeEventListener=function(type,fn){if(!this._listeners[type])return;this._listeners[type]=this._listeners[type].filter(function(f){return f!==fn;});};
         \\  XMLHttpRequest.prototype._fire=function(type,evt){if(!this._listeners[type])return;for(var i=0;i<this._listeners[type].length;i++)try{this._listeners[type][i](evt);}catch(e){}};
         \\  XMLHttpRequest.prototype._fireReadyState=function(){if(this.onreadystatechange)try{this.onreadystatechange({target:this});}catch(e){}this._fire('readystatechange',{target:this});};
+        \\  XMLHttpRequest.prototype.overrideMimeType=function(){};
+        \\  XMLHttpRequest.prototype.dispatchEvent=function(e){this._fire(e.type,e);};
         \\}
         \\if(typeof DOMParser==='undefined'){globalThis.DOMParser=function(){this.parseFromString=function(){return null;};};}
         \\if(typeof history==='undefined'){
@@ -1538,9 +1574,10 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\          location.href=url;location.pathname=url.replace(/^https?:\/\/[^\/]*/,'').replace(/[?#].*/,'');
         \\          location.search=(url.indexOf('?')>=0?url.slice(url.indexOf('?')).replace(/#.*/,''):'');
         \\          location.hash=(url.indexOf('#')>=0?url.slice(url.indexOf('#')):'');
+        \\          if(typeof __suzume_update_url==='function')__suzume_update_url(url);
         \\        }
         \\      },
-        \\      replaceState:function(state,title,url){if(url){stack[idx]={state:state,url:url};location.href=url;}},
+        \\      replaceState:function(state,title,url){if(url){stack[idx]={state:state,url:url};location.href=url;if(typeof __suzume_update_url==='function')__suzume_update_url(url);}},
         \\      back:function(){if(idx>0){idx--;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
         \\      forward:function(){if(idx<stack.length-1){idx++;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
         \\      go:function(n){var ni=idx+n;if(ni>=0&&ni<stack.length){idx=ni;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},

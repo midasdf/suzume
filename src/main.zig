@@ -1880,6 +1880,13 @@ pub fn main() !void {
             }
         }
 
+        // Check for history.pushState URL bar update
+        if (web_api.getPendingUrlUpdate()) |new_url| {
+            defer std.heap.c_allocator.free(new_url);
+            url_input.setText(new_url);
+            needs_repaint = true;
+        }
+
         // Poll XIM for asynchronously committed text (Mozc confirmed input)
         if (surface.xim_initialized) {
             if (surface.pollXimCommitted()) |committed| {
