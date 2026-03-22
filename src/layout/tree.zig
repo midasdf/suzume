@@ -21,11 +21,59 @@ fn svgSerializeCallback(data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callco
 
 /// Build a box tree from a DOM node and its resolved styles.
 /// Returns the root Box for the body element.
+/// Resolve counter() and counters() functions in CSS content values.
+/// Returns a new string with counter values substituted, or null if no counters found.
+fn resolveContentCounters(content: []const u8, allocator: std.mem.Allocator) ?[]const u8 {
+    // Quick check: does it contain "counter("?
+    if (std.mem.indexOf(u8, content, "counter(") == null) return null;
+
+    var result = std.ArrayListUnmanaged(u8).empty;
+    var i: usize = 0;
+
+    while (i < content.len) {
+        // Look for counter(
+        if (i + 8 <= content.len and std.mem.eql(u8, content[i .. i + 8], "counter(")) {
+            i += 8;
+            // Find closing paren
+            const close = std.mem.indexOfScalarPos(u8, content, i, ')') orelse {
+                i += 1;
+                continue;
+            };
+            const counter_name = std.mem.trim(u8, content[i..close], " \t'\"");
+            const val = css_counters.get(counter_name) orelse 0;
+            var buf: [16]u8 = undefined;
+            const num_str = std.fmt.bufPrint(&buf, "{d}", .{val}) catch "0";
+            result.appendSlice(std.heap.c_allocator, num_str) catch {};
+            i = close + 1;
+        } else {
+            result.append(std.heap.c_allocator, content[i]) catch {};
+            i += 1;
+        }
+    }
+
+    if (result.items.len == 0) return null;
+
+    // Copy to allocator
+    const out = allocator.alloc(u8, result.items.len) catch {
+        result.deinit(std.heap.c_allocator);
+        return null;
+    };
+    @memcpy(out, result.items);
+    result.deinit(std.heap.c_allocator);
+    return out;
+}
+
+/// CSS counter state (reset on each buildBoxTree call).
+var css_counters: std.StringHashMapUnmanaged(i32) = .empty;
+
 pub fn buildBoxTree(
     body_node: DomNode,
     styles: *const cascade_mod.CascadeResult,
     allocator: std.mem.Allocator,
 ) !*Box {
+    // Reset CSS counters for this build
+    css_counters.clearRetainingCapacity();
+
     const root_box = try allocator.create(Box);
     root_box.* = .{};
     root_box.box_type = .block;
@@ -633,9 +681,32 @@ fn buildChildren(
                         std.mem.eql(u8, tag, "select"))
                 else
                     false);
+                // Process CSS counters (counter-reset, counter-increment)
+                if (style.counter_reset) |cr| {
+                    const name = std.mem.trim(u8, cr, " \t");
+                    if (name.len > 0) {
+                        css_counters.put(std.heap.c_allocator, name, 0) catch {};
+                    }
+                }
+                if (style.counter_increment) |ci| {
+                    const name = std.mem.trim(u8, ci, " \t");
+                    if (name.len > 0) {
+                        if (css_counters.getPtr(name)) |val| {
+                            val.* += 1;
+                        } else {
+                            css_counters.put(std.heap.c_allocator, name, 1) catch {};
+                        }
+                    }
+                }
+
                 if (!skip_recurse) {
                     // Insert ::before pseudo-element as first child
-                    if (style.before_content) |before_content| {
+                    // Evaluate counter() in content value
+                    const resolved_before = if (style.before_content) |bc|
+                        resolveContentCounters(bc, allocator)
+                    else
+                        null;
+                    if (resolved_before orelse style.before_content) |before_content| {
                         const before_box = try allocator.create(Box);
                         before_box.* = .{};
                         before_box.parent = child_box;
@@ -689,7 +760,11 @@ fn buildChildren(
                     }
 
                     // Insert ::after pseudo-element as last child
-                    if (style.after_content) |after_content| {
+                    const resolved_after = if (style.after_content) |ac|
+                        resolveContentCounters(ac, allocator)
+                    else
+                        null;
+                    if (resolved_after orelse style.after_content) |after_content| {
                         const after_box = try allocator.create(Box);
                         after_box.* = .{};
                         after_box.parent = child_box;

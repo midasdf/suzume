@@ -1753,8 +1753,17 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "backwards")) style.animation_fill_mode = .backwards
             else if (eqlIgnoreCase(trimmed, "both")) style.animation_fill_mode = .both;
         },
+        .transition_property => {
+            if (eqlIgnoreCase(trimmed, "all")) style.transition_property = .all
+            else if (eqlIgnoreCase(trimmed, "none")) style.transition_property = .none
+            else if (eqlIgnoreCase(trimmed, "opacity")) style.transition_property = .opacity
+            else if (eqlIgnoreCase(trimmed, "color")) style.transition_property = .color
+            else if (eqlIgnoreCase(trimmed, "background-color") or eqlIgnoreCase(trimmed, "background")) style.transition_property = .background_color
+            else if (eqlIgnoreCase(trimmed, "transform")) style.transition_property = .transform
+            else style.transition_property = .all; // unknown property → treat as all
+        },
         // Skip these — just parse to avoid unknown property warnings
-        .transition_property, .transition_timing_function,
+        .transition_timing_function,
         .animation_timing_function, .animation_play_state,
         .backdrop_filter, .outline_style => {},
         // Skip border-style — we don't track it but it's needed for border-width to display

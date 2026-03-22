@@ -198,9 +198,10 @@ pub const ComputedStyle = struct {
     transform_scale_y: f32 = 1.0,
     transform_rotate_deg: f32 = 0,
 
-    // Transitions (parsed but not yet animated)
+    // Transitions
     transition_duration: f32 = 0,
     transition_delay: f32 = 0,
+    transition_property: TransitionProperty = .all,
 
     // Animations
     animation_name: ?[]const u8 = null,
@@ -440,6 +441,15 @@ pub const ComputedStyle = struct {
     };
 
     pub const ObjectFit = enum { fill, contain, cover, none, scale_down };
+
+    pub const TransitionProperty = enum {
+        all,
+        none,
+        opacity,
+        color,
+        background_color,
+        transform,
+    };
 
     pub const AnimationFillMode = enum { none, forwards, backwards, both };
     pub const AnimationDirection = enum { normal, reverse, alternate, alternate_reverse };

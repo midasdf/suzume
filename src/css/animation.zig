@@ -20,6 +20,7 @@ pub const TransitionInstance = struct {
     node_ptr: usize, // lxb_dom_node_t pointer as integer (identity key)
     start_time_ms: f64,
     duration_s: f32,
+    property: ComputedStyle.TransitionProperty = .all,
     // Snapshot of the "from" values (before the style change)
     from_opacity: f32,
     from_color: u32,
@@ -80,6 +81,7 @@ pub const AnimationState = struct {
             .node_ptr = node_ptr,
             .start_time_ms = now_ms,
             .duration_s = style.transition_duration,
+            .property = style.transition_property,
             .from_opacity = style.opacity,
             .from_color = style.color,
             .from_bg_color = style.background_color,
@@ -205,13 +207,23 @@ pub fn applyTransition(style: *ComputedStyle, tr: *TransitionInstance, now_ms: f
     const t = easeInOut(raw_t);
 
     // Interpolate from saved values to current (target) values
-    style.opacity = lerpFloat(tr.from_opacity, style.opacity, t);
-    style.color = lerpColor(tr.from_color, style.color, t);
-    style.background_color = lerpColor(tr.from_bg_color, style.background_color, t);
-    style.transform_translate_x = lerpFloat(tr.from_translate_x, style.transform_translate_x, t);
-    style.transform_translate_y = lerpFloat(tr.from_translate_y, style.transform_translate_y, t);
-    style.transform_scale_x = lerpFloat(tr.from_scale_x, style.transform_scale_x, t);
-    style.transform_scale_y = lerpFloat(tr.from_scale_y, style.transform_scale_y, t);
+    // Only interpolate the property specified by transition-property
+    const p = tr.property;
+    if (p == .all or p == .opacity) {
+        style.opacity = lerpFloat(tr.from_opacity, style.opacity, t);
+    }
+    if (p == .all or p == .color) {
+        style.color = lerpColor(tr.from_color, style.color, t);
+    }
+    if (p == .all or p == .background_color) {
+        style.background_color = lerpColor(tr.from_bg_color, style.background_color, t);
+    }
+    if (p == .all or p == .transform) {
+        style.transform_translate_x = lerpFloat(tr.from_translate_x, style.transform_translate_x, t);
+        style.transform_translate_y = lerpFloat(tr.from_translate_y, style.transform_translate_y, t);
+        style.transform_scale_x = lerpFloat(tr.from_scale_x, style.transform_scale_x, t);
+        style.transform_scale_y = lerpFloat(tr.from_scale_y, style.transform_scale_y, t);
+    }
 }
 
 /// Apply animation keyframes to a computed style at the given progress.
