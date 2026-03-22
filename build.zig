@@ -200,6 +200,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("X11");
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("sqlite3");
+    exe.linkSystemLibrary("webp");
 
     // C++ standard library (needed by HarfBuzz)
     exe.linkLibCpp();

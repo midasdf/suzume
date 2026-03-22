@@ -5,6 +5,7 @@ const GlyphBitmap = @import("paint/text.zig").GlyphBitmap;
 const Document = @import("dom/tree.zig").Document;
 const cascade_mod = @import("css/cascade.zig");
 const anim_mod = @import("css/animation.zig");
+const ast_mod = @import("css/ast.zig");
 const box_tree = @import("layout/tree.zig");
 const block_layout = @import("layout/block.zig");
 const painter_mod = @import("paint/painter.zig");
@@ -744,6 +745,40 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
     }
 }
 
+
+/// Walk the box tree and apply CSS animations to elements with animation-name set.
+fn applyAnimationsToBoxTree(
+    box: *Box,
+    anim_state: *anim_mod.AnimationState,
+    keyframes_map: *const std.StringHashMapUnmanaged(ast_mod.KeyframesRule),
+    now_ms: f64,
+) void {
+    // Check if this box has an animation
+    if (box.style.animation_name) |name| {
+        if (name.len > 0 and box.style.animation_duration > 0) {
+            // Register animation if not already running
+            anim_state.startAnimation(box.style, now_ms);
+
+            // Find the animation instance
+            for (anim_state.animations.items) |*anim| {
+                if (std.mem.eql(u8, anim.name, name)) {
+                    if (anim_mod.computeProgress(anim, now_ms)) |progress| {
+                        // Find keyframes rule
+                        if (keyframes_map.get(name)) |kf_rule| {
+                            anim_mod.applyKeyframes(&box.style, kf_rule.keyframes, progress);
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Recurse into children
+    for (box.children.items) |child| {
+        applyAnimationsToBoxTree(child, anim_state, keyframes_map, now_ms);
+    }
+}
 
 /// Download and register @font-face web fonts.
 fn loadWebFonts(
@@ -1791,6 +1826,22 @@ pub fn main() !void {
     var running = true;
     while (running) {
         // Repaint if needed
+        // Apply CSS animations before repaint
+        {
+            const anim_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
+                &page_states.items[tab_mgr.active_index]
+            else
+                null;
+            if (anim_pg) |pg| {
+                if (pg.anim_state) |*as| {
+                    if (pg.root_box != null and pg.styles != null and as.hasActiveAnimations()) {
+                        const now_ms: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp()));
+                        applyAnimationsToBoxTree(pg.root_box.?, as, &pg.styles.?.keyframes, now_ms);
+                    }
+                }
+            }
+        }
+
         if (needs_repaint) {
             // CSS background propagation (per CSS Backgrounds L3 §2.11.2):
             // 1. If html has a background, use it for the canvas

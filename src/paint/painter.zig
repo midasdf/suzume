@@ -503,8 +503,12 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             if (image_cache) |cache| {
                 if (box.image_url) |url| {
                     if (cache.get(url)) |img| {
-                        // Scale: use blitImageScaled
-                        blitImageScaled(surface, dst_x, screen_y, dst_w, dst_h, img.pixels, img.width, img.height);
+                        const rot = box.style.transform_rotate_deg;
+                        if (rot != 0 and dst_w > 0 and dst_h > 0) {
+                            blitImageRotated(surface, dst_x, screen_y, dst_w, dst_h, img.pixels, img.width, img.height, rot);
+                        } else {
+                            blitImageScaled(surface, dst_x, screen_y, dst_w, dst_h, img.pixels, img.width, img.height);
+                        }
                         painted = true;
                     }
                 }
@@ -862,6 +866,71 @@ fn blitImageScaled(surface: *Surface, dst_x: i32, dst_y: i32, dst_w: u32, dst_h:
     }
 
     blitImage(surface, dst_x, dst_y, dst_w, dst_h, buf.ptr);
+}
+
+/// Blit an RGBA image with rotation (in degrees) around the center.
+fn blitImageRotated(surface: *Surface, dst_x: i32, dst_y: i32, dst_w: u32, dst_h: u32, src_pixels: [*]const u8, src_w: u32, src_h: u32, angle_deg: f32) void {
+    if (dst_w == 0 or dst_h == 0 or src_w == 0 or src_h == 0) return;
+
+    // First scale the source to destination size
+    const buf_size = @as(usize, dst_w) * @as(usize, dst_h) * 4;
+    const scaled = std.heap.c_allocator.alloc(u8, buf_size) catch return;
+    defer std.heap.c_allocator.free(scaled);
+
+    // Nearest-neighbor scale
+    var dy: u32 = 0;
+    while (dy < dst_h) : (dy += 1) {
+        const src_y = @min(dy * src_h / dst_h, src_h - 1);
+        var dx: u32 = 0;
+        while (dx < dst_w) : (dx += 1) {
+            const src_x_val = @min(dx * src_w / dst_w, src_w - 1);
+            const src_idx = (@as(usize, src_y) * @as(usize, src_w) + @as(usize, src_x_val)) * 4;
+            const dst_idx = (@as(usize, dy) * @as(usize, dst_w) + @as(usize, dx)) * 4;
+            scaled[dst_idx + 0] = src_pixels[src_idx + 0];
+            scaled[dst_idx + 1] = src_pixels[src_idx + 1];
+            scaled[dst_idx + 2] = src_pixels[src_idx + 2];
+            scaled[dst_idx + 3] = src_pixels[src_idx + 3];
+        }
+    }
+
+    // Now rotate
+    const rotated = std.heap.c_allocator.alloc(u8, buf_size) catch return;
+    defer std.heap.c_allocator.free(rotated);
+    @memset(rotated, 0); // transparent background
+
+    const cx: f32 = @as(f32, @floatFromInt(dst_w)) / 2.0;
+    const cy: f32 = @as(f32, @floatFromInt(dst_h)) / 2.0;
+    const rad = angle_deg * std.math.pi / 180.0;
+    const cos_a = @cos(-rad);
+    const sin_a = @sin(-rad);
+
+    var ry: u32 = 0;
+    while (ry < dst_h) : (ry += 1) {
+        var rx: u32 = 0;
+        while (rx < dst_w) : (rx += 1) {
+            // Map destination pixel back to source (inverse rotation)
+            const fx = @as(f32, @floatFromInt(rx)) - cx;
+            const fy = @as(f32, @floatFromInt(ry)) - cy;
+            const src_fx = fx * cos_a - fy * sin_a + cx;
+            const src_fy = fx * sin_a + fy * cos_a + cy;
+
+            const sx_i: i32 = @intFromFloat(@floor(src_fx));
+            const sy_i: i32 = @intFromFloat(@floor(src_fy));
+
+            if (sx_i >= 0 and sx_i < @as(i32, @intCast(dst_w)) and
+                sy_i >= 0 and sy_i < @as(i32, @intCast(dst_h)))
+            {
+                const si = (@as(usize, @intCast(sy_i)) * @as(usize, dst_w) + @as(usize, @intCast(sx_i))) * 4;
+                const di = (@as(usize, ry) * @as(usize, dst_w) + @as(usize, rx)) * 4;
+                rotated[di + 0] = scaled[si + 0];
+                rotated[di + 1] = scaled[si + 1];
+                rotated[di + 2] = scaled[si + 2];
+                rotated[di + 3] = scaled[si + 3];
+            }
+        }
+    }
+
+    blitImage(surface, dst_x, dst_y, dst_w, dst_h, rotated.ptr);
 }
 
 /// Compute the total content height of a box tree (for scroll limits).

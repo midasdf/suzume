@@ -2,6 +2,9 @@ const std = @import("std");
 const stb = @cImport({
     @cInclude("stb_image.h");
 });
+const webp = @cImport({
+    @cInclude("webp/decode.h");
+});
 const Surface = @import("surface.zig").Surface;
 
 pub const DecodedImage = struct {
@@ -40,7 +43,11 @@ pub fn decodeImage(data: []const u8) ImageError!DecodedImage {
     );
 
     if (pixels == null) {
-        // STB failed — try SVG decoder (handles .svg files)
+        // STB failed — try WebP decoder
+        if (decodeWebP(data)) |webp_img| {
+            return webp_img;
+        }
+        // Try SVG decoder (handles .svg files)
         if (svg_decoder.decodeSvg(data, 0, 0)) |svg_img| {
             return svg_img;
         }
@@ -51,6 +58,37 @@ pub fn decodeImage(data: []const u8) ImageError!DecodedImage {
         .pixels = pixels,
         .width = @intCast(w),
         .height = @intCast(h),
+    };
+}
+
+/// Decode WebP image data to RGBA using libwebp.
+fn decodeWebP(data: []const u8) ?DecodedImage {
+    if (data.len < 12) return null;
+    // Quick RIFF/WEBP header check
+    if (!std.mem.eql(u8, data[0..4], "RIFF") or !std.mem.eql(u8, data[8..12], "WEBP")) return null;
+
+    var w: c_int = 0;
+    var h: c_int = 0;
+    const decoded = webp.WebPDecodeRGBA(data.ptr, data.len, &w, &h);
+    if (decoded == null or w <= 0 or h <= 0) return null;
+
+    const width: u32 = @intCast(w);
+    const height: u32 = @intCast(h);
+    const size = @as(usize, width) * @as(usize, height) * 4;
+
+    // Copy to a malloc'd buffer so stbi_image_free (which calls free()) works
+    const buf = std.c.malloc(size) orelse {
+        webp.WebPFree(decoded);
+        return null;
+    };
+    const dst: [*]u8 = @ptrCast(buf);
+    @memcpy(dst[0..size], decoded[0..size]);
+    webp.WebPFree(decoded);
+
+    return DecodedImage{
+        .pixels = dst,
+        .width = width,
+        .height = height,
     };
 }
 
