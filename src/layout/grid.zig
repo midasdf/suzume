@@ -464,8 +464,10 @@ fn resolveWithAutoRepeat(tracks: []const ComputedStyle.GridTrackSize, total_widt
                 repeat_track_size = if (pct > 0) total_width * pct / 100.0 else 100;
             },
             .auto_repeat_fr => {
-                // fr in auto-repeat: use equal distribution, estimate 200px
-                repeat_track_size = 200;
+                // fr is not valid in repeat(auto-fill/auto-fit) per spec.
+                // Treat as auto: divide space equally. Use 1/4 of remaining as estimate.
+                const avail = @max(total_width - fixed_space, 0);
+                repeat_track_size = @max(avail / 4.0, 100);
             },
             else => { fixed_count += 1; },
         }

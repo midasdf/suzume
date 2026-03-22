@@ -2432,9 +2432,12 @@ fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
                     @memcpy(merge_buf[text_len..][0..next_len], next_ptr.?[0..next_len]);
                     _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
                     text_len = total;
+                    lxb_dom_node_remove(next);
+                    _ = lxb_dom_node_destroy(next);
+                } else {
+                    // Buffer too small — stop merging this run to avoid data loss
+                    break;
                 }
-                lxb_dom_node_remove(next);
-                _ = lxb_dom_node_destroy(next);
                 next_node = after;
             }
             child = ch.next;

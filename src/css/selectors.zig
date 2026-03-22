@@ -948,8 +948,10 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
         .placeholder_shown => {
             const tag = element.tagName() orelse return false;
             if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "textarea")) {
-                // Match if element has a placeholder attribute and value is empty
-                return element.getAttribute("placeholder") != null;
+                // Match if element has a placeholder AND value is empty (per spec)
+                if (element.getAttribute("placeholder") == null) return false;
+                const val = element.getAttribute("value") orelse return true;
+                return val.len == 0;
             }
             return false;
         },
