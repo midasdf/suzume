@@ -107,11 +107,13 @@ pub const TextRenderer = struct {
         var glyph_count: u32 = 0;
         const positions = c.hb_buffer_get_glyph_positions(buf, &glyph_count);
 
-        var total_advance: i32 = 0;
+        // Sum raw 26.6 fixed-point advances first, convert once at the end.
+        // Truncating each glyph individually accumulates rounding error (~0.5px/glyph).
+        var total_advance_26_6: i32 = 0;
         for (0..glyph_count) |i| {
-            // HarfBuzz positions are in 26.6 fixed point
-            total_advance += @divTrunc(positions[i].x_advance, 64);
+            total_advance_26_6 += positions[i].x_advance;
         }
+        const total_advance = @divTrunc(total_advance_26_6, 64);
 
         // Get font metrics from FreeType (in 26.6 fixed point)
         const metrics = self.ft_face.*.size.*.metrics;
@@ -154,19 +156,18 @@ pub const TextRenderer = struct {
         const infos = c.hb_buffer_get_glyph_infos(buf, &glyph_count);
         const positions = c.hb_buffer_get_glyph_positions(buf, &glyph_count);
 
-        var pen_x: i32 = base_x;
+        // Track pen position in 26.6 fixed-point to avoid per-glyph rounding error.
+        var pen_x_26_6: i32 = @as(i32, base_x) * 64;
         var pen_y: i32 = base_y;
 
         for (0..glyph_count) |i| {
             const glyph_index = infos[i].codepoint;
-            const x_offset = @divTrunc(positions[i].x_offset, 64);
             const y_offset = @divTrunc(positions[i].y_offset, 64);
-            const x_advance = @divTrunc(positions[i].x_advance, 64);
             const y_advance = @divTrunc(positions[i].y_advance, 64);
 
             // Load and render the glyph
             if (c.FT_Load_Glyph(self.ft_face, glyph_index, c.FT_LOAD_RENDER) != 0) {
-                pen_x += x_advance;
+                pen_x_26_6 += positions[i].x_advance;
                 pen_y += y_advance;
                 continue;
             }
@@ -175,17 +176,18 @@ pub const TextRenderer = struct {
             const bitmap = glyph.*.bitmap;
 
             if (bitmap.buffer != null and bitmap.width > 0 and bitmap.rows > 0) {
+                const pixel_x = @divTrunc(pen_x_26_6 + positions[i].x_offset, 64);
                 callback(ctx, .{
                     .buffer = bitmap.buffer,
                     .width = bitmap.width,
                     .height = bitmap.rows,
                     .pitch = bitmap.pitch,
-                    .x = pen_x + x_offset + glyph.*.bitmap_left,
+                    .x = pixel_x + glyph.*.bitmap_left,
                     .y = pen_y + y_offset - glyph.*.bitmap_top,
                 });
             }
 
-            pen_x += x_advance;
+            pen_x_26_6 += positions[i].x_advance;
             pen_y += y_advance;
         }
     }
