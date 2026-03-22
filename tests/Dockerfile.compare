@@ -22,7 +22,10 @@ RUN pacman -Syu --noconfirm --disable-download-timeout && \
     libx11 \
     curl \
     sqlite \
-    libssh2
+    libssh2 \
+    woff2 \
+    libwebp \
+    brotli
 
 RUN pacman -S --noconfirm --disable-download-timeout firefox \
     && pacman -Scc --noconfirm

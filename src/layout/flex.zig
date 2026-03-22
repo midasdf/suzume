@@ -206,6 +206,15 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
             child_main += free_space * child.style.flex_shrink / total_shrink;
         }
 
+        // Apply min-width constraint (CSS flex items default min-width: auto)
+        const min_w: f32 = switch (child.style.min_width) {
+            .px => |mw| mw,
+            .percent => |pct| pct * container_width / 100.0,
+            .auto => 0, // true auto would be content min-width, but 0 is safe default
+            else => 0,
+        };
+        if (child_main < min_w) child_main = min_w;
+
         final_widths_buf[final_widths_len] = @max(child_main + child_outer, 0);
         final_widths_len += 1;
     }
@@ -511,6 +520,15 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
             } else if (line_free < 0 and line_shrink > 0) {
                 child_main += line_free * child.style.flex_shrink / line_shrink;
             }
+
+            // Apply min-width constraint
+            const min_w: f32 = switch (child.style.min_width) {
+                .px => |mw| mw,
+                .percent => |pct| pct * container_width / 100.0,
+                .auto => 0,
+                else => 0,
+            };
+            if (child_main < min_w) child_main = min_w;
 
             final_widths_buf[fi] = @max(child_main + child_outer, 0);
         }

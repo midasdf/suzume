@@ -164,7 +164,25 @@ pub fn resolveTrackSizes(tracks: []const ComputedStyle.GridTrackSize, total_widt
     remaining = @max(remaining, 0);
 
     // Second pass: distribute remaining space to fr and auto tracks
-    if (fr_total > 0) {
+    if (fr_total > 0 and auto_count > 0) {
+        // Mixed auto + fr: give auto tracks a minimum size, rest goes to fr
+        const auto_min: f32 = @min(remaining * 0.2 / @as(f32, @floatFromInt(auto_count)), 200); // cap at 200px
+        for (tracks, 0..) |track, i| {
+            if (track == .auto) {
+                result[i] = auto_min;
+                remaining -= auto_min;
+            }
+        }
+        remaining = @max(remaining, 0);
+        for (tracks, 0..) |track, i| {
+            switch (track) {
+                .fr => |fr| {
+                    result[i] = remaining * fr / fr_total;
+                },
+                else => {},
+            }
+        }
+    } else if (fr_total > 0) {
         for (tracks, 0..) |track, i| {
             switch (track) {
                 .fr => |fr| {
