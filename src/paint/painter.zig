@@ -75,13 +75,40 @@ pub const FontCache = struct {
     /// Register a web font loaded via @font-face.
     /// `family_name` is the CSS font-family name (e.g., "Inter", "Roboto").
     /// `font_data` is the raw font file bytes (ownership transferred to FontCache).
+    /// Automatically decompresses WOFF2 format to TTF/OTF.
     pub fn registerWebFont(self: *FontCache, family_name: []const u8, font_data: []const u8) void {
-        // Duplicate the key name
-        const key = self.allocator.dupe(u8, family_name) catch return;
-        self.web_fonts.put(key, .{ .data = font_data }) catch {
+        var actual_data = font_data;
+        var woff2_decoded = false;
+
+        // Check for WOFF2 signature ("wOF2")
+        if (font_data.len >= 4 and std.mem.eql(u8, font_data[0..4], "wOF2")) {
+            var out_len: usize = 0;
+            const decoded = woff2_decode(font_data.ptr, font_data.len, &out_len);
+            if (decoded != null and out_len > 0) {
+                // Copy decoded data to our allocator
+                const buf = self.allocator.alloc(u8, out_len) catch return;
+                @memcpy(buf, decoded.?[0..out_len]);
+                std.c.free(decoded.?);
+                // Free original woff2 data
+                self.allocator.free(font_data);
+                actual_data = buf;
+                woff2_decoded = true;
+            }
+        }
+        // Also handle WOFF1 signature ("wOFF") — FreeType can read WOFF1 natively
+        // so no decompression needed
+
+        const key = self.allocator.dupe(u8, family_name) catch {
+            if (woff2_decoded) self.allocator.free(actual_data);
+            return;
+        };
+        self.web_fonts.put(key, .{ .data = actual_data }) catch {
             self.allocator.free(key);
+            if (woff2_decoded) self.allocator.free(actual_data);
         };
     }
+
+    extern fn woff2_decode(data: [*]const u8, data_len: usize, out_len: *usize) ?[*]u8;
 
     pub fn getRenderer(self: *FontCache, size_px: u32) ?*TextRenderer {
         return self.getRendererForFamily(size_px, .sans_serif);

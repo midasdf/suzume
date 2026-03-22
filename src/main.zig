@@ -6,6 +6,7 @@ const Document = @import("dom/tree.zig").Document;
 const cascade_mod = @import("css/cascade.zig");
 const anim_mod = @import("css/animation.zig");
 const ast_mod = @import("css/ast.zig");
+const ComputedStyle = @import("css/computed.zig").ComputedStyle;
 const box_tree = @import("layout/tree.zig");
 const block_layout = @import("layout/block.zig");
 const painter_mod = @import("paint/painter.zig");
@@ -746,6 +747,59 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
 }
 
 
+/// Temporary storage for pre-hover style snapshots (node_ptr → style).
+var transition_snapshots: std.AutoHashMapUnmanaged(usize, ComputedStyle) = .empty;
+
+/// Save style snapshots for the hovered element and its ancestors before restyle.
+fn saveTransitionSnapshot(pg: *PageState, _: *anim_mod.AnimationState, hover_node: *lxb.lxb_dom_node_t) void {
+    transition_snapshots.clearRetainingCapacity();
+    const styles = &(pg.styles orelse return);
+
+
+    // Save styles for the hover node and ancestors (since :hover propagates up)
+    var cur: ?*lxb.lxb_dom_node_t = hover_node;
+    var depth: u32 = 0;
+    while (cur) |n| : (depth += 1) {
+        if (depth > 20) break;
+        const dn = DomNode{ .lxb_node = n };
+        if (styles.getStyle(dn)) |cs| {
+            if (cs.transition_duration > 0) {
+                transition_snapshots.put(std.heap.c_allocator, @intFromPtr(n), cs) catch {};
+            }
+        }
+        cur = n.parent;
+    }
+}
+
+/// After restyle, compare new styles with saved snapshots and start transitions.
+fn startHoverTransitions(pg: *PageState, anim_state: *anim_mod.AnimationState) void {
+    const styles = &(pg.styles orelse return);
+
+    const now_ms: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp()));
+
+    var it = transition_snapshots.iterator();
+    while (it.next()) |entry| {
+        const node_ptr = entry.key_ptr.*;
+        const old_style = entry.value_ptr.*;
+        const node: *lxb.lxb_dom_node_t = @ptrFromInt(node_ptr);
+        const dn = DomNode{ .lxb_node = node };
+        const new_style = styles.getStyle(dn) orelse continue;
+
+        // Check if any transitional property changed
+        const changed = old_style.opacity != new_style.opacity or
+            old_style.color != new_style.color or
+            old_style.background_color != new_style.background_color or
+            old_style.transform_translate_x != new_style.transform_translate_x or
+            old_style.transform_translate_y != new_style.transform_translate_y or
+            old_style.transform_scale_x != new_style.transform_scale_x or
+            old_style.transform_scale_y != new_style.transform_scale_y;
+
+        if (changed) {
+            anim_state.startTransition(node_ptr, old_style, now_ms);
+        }
+    }
+}
+
 /// Walk the box tree and apply CSS animations to elements with animation-name set.
 fn applyAnimationsToBoxTree(
     box: *Box,
@@ -770,6 +824,16 @@ fn applyAnimationsToBoxTree(
                     }
                     break;
                 }
+            }
+        }
+    }
+
+    // Apply active transitions for this box's DOM node
+    if (box.dom_node) |dn| {
+        const node_ptr = @intFromPtr(dn.lxb_node);
+        for (anim_state.transitions.items) |*tr| {
+            if (tr.node_ptr == node_ptr and !tr.finished) {
+                anim_mod.applyTransition(&box.style, tr, now_ms);
             }
         }
     }
@@ -3023,14 +3087,32 @@ pub fn main() !void {
                                         const mnode: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
                                         // Update hover state for CSS :hover
                                         if (dom_api.hovered_element != mnode) {
+                                            // Save pre-hover styles for transitions
+                                            if (p_move.anim_state) |*as| {
+                                                saveTransitionSnapshot(p_move, as, mnode);
+                                            }
                                             dom_api.hovered_element = mnode;
+                                            // Restyle to apply :hover CSS rules
+                                            restylePage(p_move, allocator, &fonts, surface.width, surface.height);
+                                            // Start transitions for changed properties
+                                            if (p_move.anim_state) |*as| {
+                                                startHoverTransitions(p_move, as);
+                                            }
                                             needs_repaint = true;
                                         }
                                         _ = events.dispatchMouseEvent(js_rt.ctx, mnode, "mousemove", mouse_x, mouse_y - chrome.content_y, 0);
                                         js_rt.executePending();
                                     } else {
                                         if (dom_api.hovered_element != null) {
+                                            // Save pre-unhover styles for transitions
+                                            if (p_move.anim_state) |*as| {
+                                                saveTransitionSnapshot(p_move, as, dom_api.hovered_element.?);
+                                            }
                                             dom_api.hovered_element = null;
+                                            restylePage(p_move, allocator, &fonts, surface.width, surface.height);
+                                            if (p_move.anim_state) |*as| {
+                                                startHoverTransitions(p_move, as);
+                                            }
                                             needs_repaint = true;
                                         }
                                     }

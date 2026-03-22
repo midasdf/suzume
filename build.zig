@@ -191,6 +191,13 @@ pub fn build(b: *std.Build) void {
     });
     exe.addIncludePath(b.path("src/svg"));
 
+    // WOFF2 C++ wrapper (bridges woff2 C++ API to C for Zig)
+    exe.addCSourceFile(.{
+        .file = b.path("src/font/woff2_wrapper.cpp"),
+        .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-fno-sanitize=undefined" },
+    });
+    exe.addIncludePath(b.path("src/font"));
+
     // System libraries
     exe.linkSystemLibrary("xcb");
     exe.linkSystemLibrary("xcb-icccm");
@@ -201,8 +208,11 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("sqlite3");
     exe.linkSystemLibrary("webp");
+    exe.linkSystemLibrary("woff2dec");
+    exe.linkSystemLibrary("woff2common");
+    exe.linkSystemLibrary("brotlidec");
 
-    // C++ standard library (needed by HarfBuzz)
+    // C++ standard library (needed by HarfBuzz + woff2)
     exe.linkLibCpp();
     exe.linkLibC();
 

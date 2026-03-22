@@ -15,28 +15,79 @@ pub const AnimationInstance = struct {
     finished: bool = false,
 };
 
+/// A running CSS transition for a single element.
+pub const TransitionInstance = struct {
+    node_ptr: usize, // lxb_dom_node_t pointer as integer (identity key)
+    start_time_ms: f64,
+    duration_s: f32,
+    // Snapshot of the "from" values (before the style change)
+    from_opacity: f32,
+    from_color: u32,
+    from_bg_color: u32,
+    from_translate_x: f32,
+    from_translate_y: f32,
+    from_scale_x: f32,
+    from_scale_y: f32,
+    // Target values are in the live ComputedStyle
+    finished: bool = false,
+};
+
 /// Active animations for a page.
 pub const AnimationState = struct {
     animations: std.ArrayListUnmanaged(AnimationInstance),
+    transitions: std.ArrayListUnmanaged(TransitionInstance),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) AnimationState {
         return .{
             .animations = .empty,
+            .transitions = .empty,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *AnimationState) void {
         self.animations.deinit(self.allocator);
+        self.transitions.deinit(self.allocator);
     }
 
-    /// Check if there are any active (non-finished) animations.
+    /// Check if there are any active (non-finished) animations or transitions.
     pub fn hasActiveAnimations(self: *const AnimationState) bool {
         for (self.animations.items) |anim| {
             if (!anim.finished) return true;
         }
+        for (self.transitions.items) |tr| {
+            if (!tr.finished) return true;
+        }
         return false;
+    }
+
+    /// Start a transition for a node, saving current style as "from" values.
+    pub fn startTransition(self: *AnimationState, node_ptr: usize, style: ComputedStyle, now_ms: f64) void {
+        if (style.transition_duration <= 0) return;
+
+        // Remove existing transition for same node
+        var i: usize = 0;
+        while (i < self.transitions.items.len) {
+            if (self.transitions.items[i].node_ptr == node_ptr) {
+                _ = self.transitions.swapRemove(i);
+            } else {
+                i += 1;
+            }
+        }
+
+        self.transitions.append(self.allocator, .{
+            .node_ptr = node_ptr,
+            .start_time_ms = now_ms,
+            .duration_s = style.transition_duration,
+            .from_opacity = style.opacity,
+            .from_color = style.color,
+            .from_bg_color = style.background_color,
+            .from_translate_x = style.transform_translate_x,
+            .from_translate_y = style.transform_translate_y,
+            .from_scale_x = style.transform_scale_x,
+            .from_scale_y = style.transform_scale_y,
+        }) catch {};
     }
 
     /// Register a new animation if not already running.
@@ -134,6 +185,33 @@ pub fn lerpColor(from: u32, to: u32, t: f32) u32 {
     const g: u32 = @intFromFloat(lerpFloat(fg, tg, t));
     const b: u32 = @intFromFloat(lerpFloat(fb, tb, t));
     return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+/// Apply active transition to a box's style by interpolating from saved "from" values.
+pub fn applyTransition(style: *ComputedStyle, tr: *TransitionInstance, now_ms: f64) void {
+    if (tr.finished) return;
+
+    const elapsed_ms = now_ms - tr.start_time_ms;
+    const duration_ms: f64 = @as(f64, tr.duration_s) * 1000.0;
+
+    if (elapsed_ms >= duration_ms) {
+        tr.finished = true;
+        return; // Style already has the target values
+    }
+
+    if (elapsed_ms < 0) return;
+
+    const raw_t: f32 = @floatCast(elapsed_ms / duration_ms);
+    const t = easeInOut(raw_t);
+
+    // Interpolate from saved values to current (target) values
+    style.opacity = lerpFloat(tr.from_opacity, style.opacity, t);
+    style.color = lerpColor(tr.from_color, style.color, t);
+    style.background_color = lerpColor(tr.from_bg_color, style.background_color, t);
+    style.transform_translate_x = lerpFloat(tr.from_translate_x, style.transform_translate_x, t);
+    style.transform_translate_y = lerpFloat(tr.from_translate_y, style.transform_translate_y, t);
+    style.transform_scale_x = lerpFloat(tr.from_scale_x, style.transform_scale_x, t);
+    style.transform_scale_y = lerpFloat(tr.from_scale_y, style.transform_scale_y, t);
 }
 
 /// Apply animation keyframes to a computed style at the given progress.
