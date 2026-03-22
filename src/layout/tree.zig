@@ -151,6 +151,12 @@ fn buildChildren(
                 const style = styles.getStyle(child) orelse ComputedStyle{};
                 if (style.display == .none) continue;
 
+                // display: contents — skip box generation, add children directly to parent
+                if (style.display == .contents) {
+                    try buildChildren(parent_box, child, styles, allocator, inherited_link, 0);
+                    continue;
+                }
+
                 // Skip elements with HTML hidden attribute or aria-hidden="true"
                 if (child.getAttribute("hidden") != null) continue;
                 if (child.getAttribute("aria-hidden")) |ah| {
@@ -261,15 +267,50 @@ fn buildChildren(
                             child_box.image_url = url_buf;
 
                             // Get intrinsic dimensions from SVG attributes
-                            var svg_w: f32 = 100;
-                            var svg_h: f32 = 100;
+                            // Priority: CSS width/height > HTML width/height > viewBox > default
+                            var svg_w: f32 = 0;
+                            var svg_h: f32 = 0;
+                            var has_explicit_dims = false;
+
+                            // Check HTML width/height attributes first
                             if (child.getAttribute("width")) |w_str| {
-                                svg_w = parseFloatAttr(w_str);
-                                if (svg_w <= 0) svg_w = 100;
+                                const w = parseFloatAttr(w_str);
+                                if (w > 0) { svg_w = w; has_explicit_dims = true; }
                             }
                             if (child.getAttribute("height")) |h_str| {
-                                svg_h = parseFloatAttr(h_str);
-                                if (svg_h <= 0) svg_h = 100;
+                                const h = parseFloatAttr(h_str);
+                                if (h > 0) { svg_h = h; has_explicit_dims = true; }
+                            }
+
+                            // Fall back to viewBox if no explicit width/height
+                            if (!has_explicit_dims or svg_w <= 0 or svg_h <= 0) {
+                                if (child.getAttribute("viewBox") orelse child.getAttribute("viewbox")) |vb| {
+                                    var vb_it = std.mem.tokenizeAny(u8, vb, " ,");
+                                    _ = vb_it.next(); // min-x
+                                    _ = vb_it.next(); // min-y
+                                    if (vb_it.next()) |w_tok| {
+                                        if (std.fmt.parseFloat(f32, w_tok)) |w| {
+                                            if (svg_w <= 0) svg_w = w;
+                                        } else |_| {}
+                                    }
+                                    if (vb_it.next()) |h_tok| {
+                                        if (std.fmt.parseFloat(f32, h_tok)) |h| {
+                                            if (svg_h <= 0) svg_h = h;
+                                        } else |_| {}
+                                    }
+                                }
+                            }
+
+                            // Default fallback
+                            if (svg_w <= 0) svg_w = 100;
+                            if (svg_h <= 0) svg_h = 100;
+
+                            // CSS width/height override if explicitly set
+                            if (child_box.style.width != .auto) {
+                                if (child_box.style.width == .px) svg_w = child_box.style.width.px;
+                            }
+                            if (child_box.style.height != .auto) {
+                                if (child_box.style.height == .px) svg_h = child_box.style.height.px;
                             }
                             child_box.intrinsic_width = svg_w;
                             child_box.intrinsic_height = svg_h;
@@ -334,12 +375,12 @@ fn buildChildren(
                                 std.mem.eql(u8, input_type, "button") or
                                 std.mem.eql(u8, input_type, "reset");
 
-                            // Add default styling for form inputs
+                            // Add default styling for form inputs (only when CSS hasn't explicitly set)
                             if (child_box.style.background_color == 0x00000000) {
                                 child_box.style.background_color = if (is_button) 0xFFecedee else 0xFFFFFFFF;
                             }
-                            // Default padding for inputs (buttons get more padding)
-                            if (child_box.padding.top == 0 and child_box.padding.bottom == 0) {
+                            // Default padding for inputs (only if CSS didn't set padding)
+                            if (!child_box.style.padding_set_by_css) {
                                 if (is_button) {
                                     child_box.padding.top = 6;
                                     child_box.padding.bottom = 6;
@@ -352,8 +393,8 @@ fn buildChildren(
                                     child_box.padding.right = 4;
                                 }
                             }
-                            // Default border for inputs
-                            if (child_box.border.top == 0 and child_box.border.bottom == 0) {
+                            // Default border for inputs (only if CSS didn't set border)
+                            if (!child_box.style.border_set_by_css) {
                                 child_box.border.top = 1;
                                 child_box.border.bottom = 1;
                                 child_box.border.left = 1;

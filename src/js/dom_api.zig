@@ -47,6 +47,9 @@ pub var mutation_observers_pending: bool = false;
 /// Currently focused element (set from main.zig when input is focused/blurred).
 pub var active_element: ?*lxb.lxb_dom_node_t = null;
 
+/// Currently hovered element (set from main.zig on mouse move).
+pub var hovered_element: ?*lxb.lxb_dom_node_t = null;
+
 /// Scroll position, synced from main.zig.
 pub var scroll_x: f32 = 0;
 pub var scroll_y: f32 = 0;
@@ -103,6 +106,236 @@ var g_current_url: ?[]const u8 = null;
 /// Set the current page URL (called from main on navigation).
 pub fn setCurrentUrl(url: ?[]const u8) void {
     g_current_url = url;
+}
+
+// ── Dynamic script execution support ────────────────────────────────
+const JsRuntime = @import("runtime.zig").JsRuntime;
+const Loader = @import("../net/loader.zig").Loader;
+const resolveUrl = @import("../net/loader.zig").resolveUrl;
+const adblock_mod = @import("../features/adblock.zig");
+
+var g_js_rt: ?*JsRuntime = null;
+var g_loader: ?*Loader = null;
+/// Track loaded script URLs to prevent duplicate execution
+var g_loaded_script_urls: ?*std.StringHashMap(void) = null;
+
+pub fn setJsRuntime(rt: ?*JsRuntime) void {
+    g_js_rt = rt;
+}
+
+pub fn setLoader(loader: ?*Loader) void {
+    g_loader = loader;
+}
+
+pub fn setLoadedScriptUrls(urls: ?*std.StringHashMap(void)) void {
+    g_loaded_script_urls = urls;
+}
+
+/// Check if a node is a <script> element and execute it dynamically.
+/// Called from elementAppendChild/elementInsertBefore when a script is inserted into the DOM.
+fn maybeExecuteDynamicScript(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t, js_val: qjs.JSValue) void {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return;
+
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    var name_len: usize = 0;
+    const name_ptr: ?[*]const u8 = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null or name_len != 6) return;
+    if (!std.mem.eql(u8, name_ptr.?[0..6], "script")) return;
+
+    // Check script type — only execute JS types
+    var type_len: usize = 0;
+    const type_ptr: ?[*]const u8 = lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+    var is_module = false;
+    if (type_ptr != null and type_len > 0) {
+        const script_type = type_ptr.?[0..type_len];
+        if (std.mem.eql(u8, script_type, "module")) {
+            is_module = true;
+        } else {
+            const is_js = script_type.len == 0 or
+                std.mem.eql(u8, script_type, "text/javascript") or
+                std.mem.eql(u8, script_type, "application/javascript");
+            if (!is_js) return;
+        }
+    }
+
+    // Check for src attribute (external script)
+    var src_len: usize = 0;
+    const src_ptr: ?[*]const u8 = lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
+    if (src_ptr != null and src_len > 0) {
+        executeDynamicExternalScript(ctx, src_ptr.?[0..src_len], is_module, js_val);
+    } else {
+        // Inline script: get textContent
+        var content_len: usize = 0;
+        const content_ptr: ?[*]const u8 = lxb_dom_node_text_content(node, &content_len);
+        if (content_ptr != null and content_len > 0 and content_len <= 512 * 1024) {
+            executeDynamicInlineScript(ctx, content_ptr.?[0..content_len], is_module, js_val);
+        }
+    }
+}
+
+fn executeDynamicExternalScript(ctx: *qjs.JSContext, src: []const u8, is_module: bool, js_val: qjs.JSValue) void {
+    const js_rt = g_js_rt orelse return;
+    const ld = g_loader orelse return;
+    const allocator = std.heap.c_allocator;
+
+    // Resolve URL
+    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:"))
+        blk: {
+            const u = allocator.allocSentinel(u8, src.len, 0) catch return;
+            @memcpy(u, src);
+            break :blk u;
+        }
+    else if (g_current_url) |bu|
+        resolveUrl(allocator, bu, src) catch return
+    else
+        return;
+    defer allocator.free(resolved_url);
+
+    // Check duplicate
+    if (g_loaded_script_urls) |urls| {
+        if (urls.contains(resolved_url)) {
+            std.debug.print("[JS:DYN] Skipping duplicate script: {s}\n", .{resolved_url});
+            return;
+        }
+        // Track this URL
+        const key = allocator.alloc(u8, resolved_url.len) catch return;
+        @memcpy(key, resolved_url);
+        urls.put(key, {}) catch {
+            allocator.free(key);
+        };
+    }
+
+    // Handle data: URIs
+    if (std.mem.startsWith(u8, resolved_url, "data:")) {
+        // data: URI scripts — parse and eval inline
+        return;
+    }
+
+    if (!std.mem.startsWith(u8, resolved_url, "http://") and !std.mem.startsWith(u8, resolved_url, "https://")) return;
+
+    // Skip tracking scripts
+    if (ld.adblock_enabled and adblock_mod.isTrackingScript(resolved_url)) {
+        std.debug.print("[JS:DYN] Skipping tracking script: {s}\n", .{resolved_url});
+        return;
+    }
+
+    std.debug.print("[JS:DYN] Fetching dynamic script: {s}\n", .{resolved_url});
+
+    var response = ld.loadBytesWithTimeout(resolved_url, 5) catch |err| {
+        std.debug.print("[JS:DYN] Failed to fetch {s}: {}\n", .{ resolved_url, err });
+        fireDynamicScriptEvent(ctx, js_val, "error");
+        return;
+    };
+
+    if (response.status_code != 200) {
+        std.debug.print("[JS:DYN] Script returned status {d}: {s}\n", .{ response.status_code, resolved_url });
+        response.deinit();
+        fireDynamicScriptEvent(ctx, js_val, "error");
+        return;
+    }
+
+    if (response.body.len > 1024 * 1024) {
+        std.debug.print("[JS:DYN] Script too large ({d} bytes): {s}\n", .{ response.body.len, resolved_url });
+        response.deinit();
+        fireDynamicScriptEvent(ctx, js_val, "error");
+        return;
+    }
+
+    const code = response.body;
+    std.debug.print("[JS:DYN] Executing dynamic script: {s} ({d} bytes, module={any})\n", .{ resolved_url, code.len, is_module });
+
+    // Set document.currentScript
+    setDynamicCurrentScript(ctx, resolved_url);
+
+    const result = if (is_module)
+        js_rt.evalModule(code, resolved_url)
+    else
+        js_rt.evalNamed(code, resolved_url);
+    defer result.deinit();
+
+    // Clear document.currentScript
+    clearDynamicCurrentScript(ctx);
+
+    if (!result.isOk()) {
+        std.debug.print("[JS:DYN:ERROR] {s}\n", .{result.value()});
+        response.deinit();
+        fireDynamicScriptEvent(ctx, js_val, "error");
+        return;
+    }
+
+    js_rt.executePending();
+    response.deinit();
+
+    // Fire onload
+    fireDynamicScriptEvent(ctx, js_val, "load");
+}
+
+fn executeDynamicInlineScript(ctx: *qjs.JSContext, code: []const u8, is_module: bool, js_val: qjs.JSValue) void {
+    const js_rt = g_js_rt orelse return;
+
+    std.debug.print("[JS:DYN] Executing dynamic inline script ({d} bytes, module={any})\n", .{ code.len, is_module });
+
+    const result = if (is_module)
+        js_rt.evalModule(code, "<dynamic-inline>")
+    else
+        js_rt.eval(code);
+    defer result.deinit();
+
+    if (!result.isOk()) {
+        std.debug.print("[JS:DYN:ERROR] {s}\n", .{result.value()});
+        fireDynamicScriptEvent(ctx, js_val, "error");
+        return;
+    }
+
+    js_rt.executePending();
+    fireDynamicScriptEvent(ctx, js_val, "load");
+}
+
+/// Fire 'load' or 'error' event on a script element's JS object.
+fn fireDynamicScriptEvent(ctx: *qjs.JSContext, js_val: qjs.JSValue, event_name: [*:0]const u8) void {
+    // Try onload/onerror property callback
+    const callback_name = if (std.mem.eql(u8, std.mem.span(event_name), "load")) "onload" else "onerror";
+    const cb = qjs.JS_GetPropertyStr(ctx, js_val, callback_name);
+    if (!quickjs.JS_IsUndefined(cb) and !quickjs.JS_IsNull(cb)) {
+        const ret = qjs.JS_Call(ctx, cb, js_val, 0, null);
+        if (quickjs.JS_IsException(ret)) {
+            const exc = qjs.JS_GetException(ctx);
+            defer qjs.JS_FreeValue(ctx, exc);
+            const exc_str = qjs.JS_ToCString(ctx, exc);
+            if (exc_str) |s| {
+                std.debug.print("[JS:DYN] {s} callback error: {s}\n", .{ callback_name, std.mem.span(s) });
+                qjs.JS_FreeCString(ctx, s);
+            }
+        } else {
+            qjs.JS_FreeValue(ctx, ret);
+        }
+    }
+    qjs.JS_FreeValue(ctx, cb);
+}
+
+/// Set document.currentScript for dynamic scripts
+fn setDynamicCurrentScript(ctx: *qjs.JSContext, src_url: [:0]const u8) void {
+    const global = qjs.JS_GetGlobalObject(ctx);
+    defer qjs.JS_FreeValue(ctx, global);
+    const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
+    defer qjs.JS_FreeValue(ctx, doc_obj);
+    if (quickjs.JS_IsUndefined(doc_obj) or quickjs.JS_IsNull(doc_obj)) return;
+
+    const script_obj = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPropertyStr(ctx, script_obj, "src", qjs.JS_NewStringLen(ctx, src_url.ptr, src_url.len));
+    _ = qjs.JS_SetPropertyStr(ctx, script_obj, "type", qjs.JS_NewString(ctx, "text/javascript"));
+    _ = qjs.JS_SetPropertyStr(ctx, script_obj, "tagName", qjs.JS_NewString(ctx, "SCRIPT"));
+    _ = qjs.JS_SetPropertyStr(ctx, script_obj, "nodeName", qjs.JS_NewString(ctx, "SCRIPT"));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "currentScript", script_obj);
+}
+
+fn clearDynamicCurrentScript(ctx: *qjs.JSContext) void {
+    const global = qjs.JS_GetGlobalObject(ctx);
+    defer qjs.JS_FreeValue(ctx, global);
+    const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
+    defer qjs.JS_FreeValue(ctx, doc_obj);
+    if (quickjs.JS_IsUndefined(doc_obj) or quickjs.JS_IsNull(doc_obj)) return;
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "currentScript", quickjs.JS_NULL());
 }
 
 // ── Serialization helper (for innerHTML/outerHTML) ──────────────────
@@ -557,6 +790,8 @@ fn elementAppendChild(
     lxb_dom_node_insert_child(parent, child);
     events.recordMutation(parent, "childList", child, null, null);
     setDomDirty();
+    // Dynamic script execution: if a <script> is appended, fetch and execute it
+    maybeExecuteDynamicScript(c, child, args[0]);
     return qjs.JS_DupValue(c, args[0]);
 }
 
@@ -601,6 +836,8 @@ fn elementInsertBefore(
     const parent_node = getNode(c, this_val) orelse new_node;
     events.recordMutation(parent_node, "childList", new_node, null, null);
     setDomDirty();
+    // Dynamic script execution: if a <script> is inserted, fetch and execute it
+    maybeExecuteDynamicScript(c, new_node, args[0]);
     return qjs.JS_DupValue(c, args[0]);
 }
 
@@ -987,6 +1224,70 @@ fn elementInsertAdjacentHTML(
     _ = lxb_dom_node_destroy(frag);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
+}
+
+// ── element.attachShadow() stub ─────────────────────────────────────
+
+fn elementAttachShadow(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Create a pseudo-shadow root object that delegates to the element
+    const shadow = qjs.JS_NewObject(c);
+    // Copy key methods from the element so querySelector etc. work on shadowRoot
+    const qs = qjs.JS_GetPropertyStr(c, this_val, "querySelector");
+    _ = qjs.JS_SetPropertyStr(c, shadow, "querySelector", qs);
+    const qsa = qjs.JS_GetPropertyStr(c, this_val, "querySelectorAll");
+    _ = qjs.JS_SetPropertyStr(c, shadow, "querySelectorAll", qsa);
+    const ac = qjs.JS_GetPropertyStr(c, this_val, "appendChild");
+    _ = qjs.JS_SetPropertyStr(c, shadow, "appendChild", ac);
+    const ih_get = qjs.JS_GetPropertyStr(c, this_val, "innerHTML");
+    _ = qjs.JS_SetPropertyStr(c, shadow, "innerHTML", ih_get);
+    _ = qjs.JS_SetPropertyStr(c, shadow, "host", qjs.JS_DupValue(c, this_val));
+    _ = qjs.JS_SetPropertyStr(c, shadow, "mode", qjs.JS_NewString(c, "open"));
+    // Store on element as .shadowRoot
+    _ = qjs.JS_SetPropertyStr(c, this_val, "shadowRoot", qjs.JS_DupValue(c, shadow));
+    return shadow;
+}
+
+// ── element.insertAdjacentElement() ─────────────────────────────────
+
+fn elementInsertAdjacentElement(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 2) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const new_node = getNode(c, args[1]) orelse return quickjs.JS_NULL();
+
+    const pos_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, pos_s.ptr);
+    const position = pos_s.ptr[0..pos_s.len];
+
+    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        lxb_dom_node_insert_before(node, new_node);
+    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+        if (node.first_child) |first| {
+            lxb_dom_node_insert_before(first, new_node);
+        } else {
+            lxb_dom_node_insert_child(node, new_node);
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+        lxb_dom_node_insert_child(node, new_node);
+    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        lxb_dom_node_insert_after(node, new_node);
+    } else {
+        return quickjs.JS_NULL();
+    }
+    setDomDirty();
+    return qjs.JS_DupValue(c, args[1]);
 }
 
 // ── outerHTML getter ────────────────────────────────────────────────
@@ -1662,6 +1963,64 @@ fn nodeCompareDocumentPosition(
         walk = w.parent;
     }
     return qjs.JS_NewInt32(c, 1); // DISCONNECTED
+}
+
+// ── node.getRootNode() ──────────────────────────────────────────────
+
+fn nodeGetRootNode(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // Walk up to root (document node)
+    var current: *lxb.lxb_dom_node_t = node;
+    while (current.parent) |p| {
+        current = p;
+    }
+    // If root is document node, return the JS document object
+    if (current.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        return qjs.JS_GetPropertyStr(c, global, "document");
+    }
+    // Otherwise return the root element
+    return wrapNode(c, current);
+}
+
+// ── node.ownerDocument ──────────────────────────────────────────────
+
+fn nodeGetOwnerDocument(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    // Return the global document object
+    const global = qjs.JS_GetGlobalObject(c);
+    defer qjs.JS_FreeValue(c, global);
+    return qjs.JS_GetPropertyStr(c, global, "document");
+}
+
+// ── node.isConnected ────────────────────────────────────────────────
+
+fn nodeGetIsConnected(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    const node = getNode(c, this_val) orelse return quickjs.JS_NewBool(false);
+    // Walk up to root — if root is document, node is connected
+    var current: *lxb.lxb_dom_node_t = node;
+    while (current.parent) |p| {
+        current = p;
+    }
+    return quickjs.JS_NewBool(current.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT);
 }
 
 // ── element.contains(other) ─────────────────────────────────────────
@@ -2747,6 +3106,61 @@ fn documentCreateElement(
     const doc = g_document orelse return quickjs.JS_NULL();
     const elem = lxb_dom_document_create_element(doc, s.ptr, s.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const js_elem = wrapNode(c, node);
+
+    // Custom element upgrade: check __ce_registry for matching tag name
+    upgradeCustomElement(c, js_elem, s.ptr, s.len);
+
+    return js_elem;
+}
+
+fn upgradeCustomElement(ctx: *qjs.JSContext, elem: qjs.JSValue, tag_ptr: [*]const u8, tag_len: usize) void {
+    // Convert tag name to lowercase for registry lookup (null-terminated)
+    var lower_buf: [129]u8 = undefined;
+    if (tag_len >= lower_buf.len) return;
+    for (0..tag_len) |i| {
+        const ch = tag_ptr[i];
+        lower_buf[i] = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+    }
+    lower_buf[tag_len] = 0; // null terminate
+
+    const global = qjs.JS_GetGlobalObject(ctx);
+    defer qjs.JS_FreeValue(ctx, global);
+
+    const registry = qjs.JS_GetPropertyStr(ctx, global, "__ce_registry");
+    defer qjs.JS_FreeValue(ctx, registry);
+    if (quickjs.JS_IsUndefined(registry) or quickjs.JS_IsNull(registry)) return;
+
+    const ctor = qjs.JS_GetPropertyStr(ctx, registry, &lower_buf);
+    defer qjs.JS_FreeValue(ctx, ctor);
+    if (quickjs.JS_IsUndefined(ctor) or quickjs.JS_IsNull(ctor)) return;
+
+    // Call __ce_upgradeEl(elem, ctor)
+    const upgrade_fn = qjs.JS_GetPropertyStr(ctx, global, "__ce_upgradeEl");
+    defer qjs.JS_FreeValue(ctx, upgrade_fn);
+    if (quickjs.JS_IsUndefined(upgrade_fn)) return;
+
+    var call_args = [2]qjs.JSValue{ elem, ctor };
+    const result = qjs.JS_Call(ctx, upgrade_fn, quickjs.JS_UNDEFINED(), 2, &call_args);
+    qjs.JS_FreeValue(ctx, result);
+}
+
+fn documentCreateElementNS(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // createElementNS(namespace, tagName) — ignore namespace, just create element
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 2) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    const doc = g_document orelse return quickjs.JS_NULL();
+    const elem = lxb_dom_document_create_element(doc, s.ptr, s.len, null) orelse return quickjs.JS_NULL();
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     return wrapNode(c, node);
 }
 
@@ -2815,8 +3229,11 @@ fn documentGetHead(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
     const doc_node = getDocumentNode() orelse return quickjs.JS_NULL();
-    const found = walkTreeByTag(doc_node, "head") orelse return quickjs.JS_NULL();
-    return wrapNode(c, found);
+    if (walkTreeByTag(doc_node, "head")) |found| return wrapNode(c, found);
+    // Fallback: if <head> not found, try <html> element (scripts may run before head is parsed)
+    if (walkTreeByTag(doc_node, "html")) |html_node| return wrapNode(c, html_node);
+    // Last resort: return document element itself so .querySelectorAll etc. still work
+    return wrapNode(c, doc_node);
 }
 
 // ── document.cookie ─────────────────────────────────────────────────
@@ -3332,6 +3749,44 @@ fn elementGetChildElementCount(
         child = ch.next;
     }
     return qjs.JS_NewInt32(c, count);
+}
+
+// ── HTMLTemplateElement.content getter ───────────────────────────────
+
+fn templateGetContent(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    // Only <template> elements have a .content property
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null or name_len != 8) return quickjs.JS_UNDEFINED();
+    if (!std.mem.eql(u8, name_ptr.?[0..8], "template")) return quickjs.JS_UNDEFINED();
+
+    // Return cached __content__ if it exists
+    const cache_atom = qjs.JS_NewAtom(c, "__content__");
+    defer qjs.JS_FreeAtom(c, cache_atom);
+    const cached = qjs.JS_GetProperty(c, this_val, cache_atom);
+    if (!quickjs.JS_IsUndefined(cached) and !quickjs.JS_IsException(cached)) {
+        return cached;
+    }
+    qjs.JS_FreeValue(c, cached);
+
+    // Create a DocumentFragment (simplified as a detached div)
+    const doc = g_document orelse return quickjs.JS_UNDEFINED();
+    const frag_elem = lxb_dom_document_create_element(doc, "div", 3, null) orelse return quickjs.JS_UNDEFINED();
+    const frag_node: *lxb.lxb_dom_node_t = @ptrCast(frag_elem);
+    const frag = wrapNode(c, frag_node);
+
+    // Cache it on the element
+    _ = qjs.JS_DefinePropertyValue(c, this_val, cache_atom, qjs.JS_DupValue(c, frag), qjs.JS_PROP_CONFIGURABLE);
+
+    return frag;
 }
 
 // ── HTMLElement.hidden getter/setter ─────────────────────────────────
@@ -3980,6 +4435,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "isEqualNode", qjs.JS_NewCFunction(ctx, &nodeIsEqualNode, "isEqualNode", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "normalize", qjs.JS_NewCFunction(ctx, &jsReturnNull, "normalize", 0));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &nodeCompareDocumentPosition, "compareDocumentPosition", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "getRootNode", qjs.JS_NewCFunction(ctx, &nodeGetRootNode, "getRootNode", 0));
 
     // Node constants
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
@@ -4008,6 +4464,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const parentElementAtom = qjs.JS_NewAtom(ctx, "parentElement");
         _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, parentElementAtom, qjs.JS_NewCFunction(ctx, &elementGetParentElement, "get parentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, parentElementAtom);
+    }
+    {
+        const ownerDocumentAtom = qjs.JS_NewAtom(ctx, "ownerDocument");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, ownerDocumentAtom, qjs.JS_NewCFunction(ctx, &nodeGetOwnerDocument, "get ownerDocument", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, ownerDocumentAtom);
     }
     {
         const firstChildAtom = qjs.JS_NewAtom(ctx, "firstChild");
@@ -4058,6 +4519,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const childElementCountAtom = qjs.JS_NewAtom(ctx, "childElementCount");
         _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, childElementCountAtom, qjs.JS_NewCFunction(ctx, &elementGetChildElementCount, "get childElementCount", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, childElementCountAtom);
+    }
+    {
+        const isConnectedAtom = qjs.JS_NewAtom(ctx, "isConnected");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, isConnectedAtom, qjs.JS_NewCFunction(ctx, &nodeGetIsConnected, "get isConnected", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, isConnectedAtom);
     }
     {
         const nodeTypeAtom = qjs.JS_NewAtom(ctx, "nodeType");
@@ -4130,6 +4596,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // insertAdjacentHTML
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentHTML", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentHTML, "insertAdjacentHTML", 2));
+    // attachShadow stub — returns the element itself as a pseudo-shadow root
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "attachShadow", qjs.JS_NewCFunction(ctx, &elementAttachShadow, "attachShadow", 1));
+    // shadowRoot default = null (not undefined — many libs check `el.shadowRoot &&`)
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "shadowRoot", quickjs.JS_NULL());
+    // HTMLTemplateElement.content getter (returns DocumentFragment for <template> elements)
+    {
+        const contentAtom = qjs.JS_NewAtom(ctx, "content");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, contentAtom, qjs.JS_NewCFunction(ctx, &templateGetContent, "get content", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, contentAtom);
+    }
+    // Popover API stubs (GitHub checks showPopover existence)
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "showPopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "showPopover", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hidePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "hidePopover", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "togglePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "togglePopover", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentElement", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentElement, "insertAdjacentElement", 2));
 
     // ── HTMLElement.prototype (inherits Element.prototype) ──────────
     const html_element_proto = qjs.JS_NewObject(ctx);
@@ -4244,9 +4725,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, global, "Window", window_ctor);
 
     const document_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Document", 0, qjs.JS_CFUNC_constructor, 0);
+    const doc_proto = qjs.JS_NewObject(ctx);
+    // Document.prototype needs DOM query methods (popover polyfill monkey-patches these)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelector", qjs.JS_NewCFunction(ctx, &documentQuerySelector, "querySelector", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &documentQuerySelectorAll, "querySelectorAll", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementById", qjs.JS_NewCFunction(ctx, &documentGetElementById, "getElementById", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &documentGetElementsByClassName, "getElementsByClassName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, document_ctor, "prototype", doc_proto);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Document", document_ctor);
 
     const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
+    {
+        const dfp = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &elementQuerySelector, "querySelector", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_frag_ctor, "prototype", dfp);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
 
     const nodelist_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "NodeList", 0, qjs.JS_CFUNC_constructor, 0);
@@ -4263,6 +4758,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     const text_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
+
+    const shadow_root_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "ShadowRoot", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "ShadowRoot", shadow_root_ctor);
 
     // window.top / window.parent / window.self / window.frames
     _ = qjs.JS_SetPropertyStr(ctx, global, "top", qjs.JS_DupValue(ctx, global));
@@ -4307,6 +4805,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelector", qjs.JS_NewCFunction(ctx, &documentQuerySelector, "querySelector", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelectorAll", qjs.JS_NewCFunction(ctx, &documentQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &documentCreateElementNS, "createElementNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &documentCreateDocumentFragment, "createDocumentFragment", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &documentCreateEvent, "createEvent", 1));
@@ -4423,6 +4922,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
     }
+
+    // document.adoptedStyleSheets (used by CSS-in-JS / popover polyfills)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptedStyleSheets", qjs.JS_NewArray(ctx));
 
     // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);

@@ -31,6 +31,7 @@ pub const LineBox = struct {
     height: f32,
     text: []const u8,
     ascent: f32,
+    ellipsis: bool = false,
 };
 
 pub const ChildList = std.ArrayListUnmanaged(*Box);

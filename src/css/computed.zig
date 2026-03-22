@@ -73,6 +73,7 @@ pub const ComputedStyle = struct {
     padding_right: f32 = 0,
     padding_bottom: f32 = 0,
     padding_left: f32 = 0,
+    padding_set_by_css: bool = false,
 
     // Borders
     border_top_width: f32 = 0,
@@ -83,6 +84,7 @@ pub const ComputedStyle = struct {
     border_right_color: u32 = 0xFF000000,
     border_bottom_color: u32 = 0xFF000000,
     border_left_color: u32 = 0xFF000000,
+    border_set_by_css: bool = false,
     border_radius_tl: f32 = 0, // top-left
     border_radius_tr: f32 = 0, // top-right
     border_radius_bl: f32 = 0, // bottom-left
@@ -145,6 +147,15 @@ pub const ComputedStyle = struct {
     /// valid as long as the owning CascadeResult (page.styles) is alive.
     /// Freed when CascadeResult.deinit() is called during restyle.
     background_image_url: ?[]const u8 = null,
+    background_size: BackgroundSize = .auto,
+    background_size_width: f32 = 0, // px value when background_size == .length
+    background_size_height: f32 = 0, // px value when background_size == .length
+    background_position_x: f32 = 0, // px offset
+    background_position_y: f32 = 0, // px offset
+    background_position_x_percent: f32 = 0, // 0.0-1.0 (0%=left, 50%=center, 100%=right)
+    background_position_y_percent: f32 = 0, // 0.0-1.0 (0%=top, 50%=center, 100%=bottom)
+    background_position_is_percent: bool = true, // true=use percent, false=use px
+    background_repeat: BackgroundRepeat = .repeat,
     opacity: f32 = 1.0,
     object_fit: ObjectFit = .fill,
 
@@ -181,6 +192,9 @@ pub const ComputedStyle = struct {
     // Transforms
     transform_translate_x: f32 = 0,
     transform_translate_y: f32 = 0,
+    transform_scale_x: f32 = 1.0,
+    transform_scale_y: f32 = 1.0,
+    transform_rotate_deg: f32 = 0,
 
     // Transitions (parsed but not yet animated)
     transition_duration: f32 = 0,
@@ -232,6 +246,7 @@ pub const ComputedStyle = struct {
         table_column,
         table_column_group,
         table_caption,
+        contents,
         other,
     };
 
@@ -419,4 +434,18 @@ pub const ComputedStyle = struct {
     };
 
     pub const ObjectFit = enum { fill, contain, cover, none, scale_down };
+
+    pub const BackgroundSize = enum {
+        auto,
+        cover,
+        contain,
+        length, // use background_size_width/height
+    };
+
+    pub const BackgroundRepeat = enum {
+        repeat,
+        no_repeat,
+        repeat_x,
+        repeat_y,
+    };
 };

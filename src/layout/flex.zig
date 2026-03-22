@@ -529,8 +529,10 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
     }
 
     // Compute total cross size (sum of all line heights + gaps between lines)
+    // Use row_gap for cross-axis gaps between wrap lines (gap is column-gap for main axis)
+    const cross_gap = if (style.row_gap > 0) style.row_gap else gap;
     var total_cross: f32 = if (line_count > 1)
-        gap * @as(f32, @floatFromInt(line_count - 1))
+        cross_gap * @as(f32, @floatFromInt(line_count - 1))
     else
         0;
     for (0..line_count) |li| {
@@ -546,7 +548,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
     // align-content: distribute free cross-axis space among lines
     const free_cross = container_cross - total_cross;
     var ac_offset: f32 = 0; // initial offset before first line
-    var ac_line_gap: f32 = gap; // gap between lines
+    var ac_line_gap: f32 = cross_gap; // gap between lines
 
     if (free_cross > 0 and line_count > 0) {
         switch (style.align_content) {

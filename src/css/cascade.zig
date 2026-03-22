@@ -417,6 +417,8 @@ const dom_vtable = selectors.ElementAdapter.VTable{
     .nextElementSibling = domNextSibling,
     .firstChild = domFirstChild,
     .isDocumentNode = domIsDocument,
+    .isHovered = domIsHovered,
+    .isFocused = domIsFocused,
 };
 
 fn domTagName(ptr: *const anyopaque) ?[]const u8 {
@@ -473,6 +475,28 @@ fn domFirstChild(ptr: *const anyopaque) ?selectors.ElementAdapter {
 fn domIsDocument(ptr: *const anyopaque) bool {
     const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
     return node.nodeType() == .document;
+}
+
+fn domIsHovered(ptr: *const anyopaque) bool {
+    const dom_api = @import("../js/dom_api.zig");
+    const lxb = @import("../bindings/lexbor.zig").c;
+    const hover_node = dom_api.hovered_element orelse return false;
+    const self_node: *lxb.lxb_dom_node_t = @constCast(@ptrCast(@alignCast(ptr)));
+    // :hover matches the hovered element AND all its ancestors
+    var cur: ?*lxb.lxb_dom_node_t = hover_node;
+    while (cur) |n| {
+        if (n == self_node) return true;
+        cur = n.parent;
+    }
+    return false;
+}
+
+fn domIsFocused(ptr: *const anyopaque) bool {
+    const dom_api = @import("../js/dom_api.zig");
+    const lxb = @import("../bindings/lexbor.zig").c;
+    const focus_node = dom_api.active_element orelse return false;
+    const self_node: *lxb.lxb_dom_node_t = @constCast(@ptrCast(@alignCast(ptr)));
+    return self_node == focus_node;
 }
 
 // ── Tree walk and style computation ───────────────────────────────────
@@ -999,7 +1023,12 @@ fn applyDeclaration(
             } else if (startsWithIgnoreCase(trimmed, "url(")) {
                 // Extract URL from url("...") or url('...') or url(...)
                 if (extractUrl(trimmed)) |url| {
-                    style.background_image_url = url;
+                    // Copy URL into arena to avoid dangling pointer to CSS text
+                    const url_copy = arena.alloc(u8, url.len) catch null;
+                    if (url_copy) |buf| {
+                        @memcpy(buf, url);
+                        style.background_image_url = buf;
+                    }
                 }
             }
         },
@@ -1195,28 +1224,28 @@ fn applyDeclaration(
             style.margin_left_auto = md.is_auto;
         },
         .padding_top => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_top = px;
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_top = px; style.padding_set_by_css = true; }
         },
         .padding_right => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_right = px;
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_right = px; style.padding_set_by_css = true; }
         },
         .padding_bottom => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_bottom = px;
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_bottom = px; style.padding_set_by_css = true; }
         },
         .padding_left => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.padding_left = px;
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_left = px; style.padding_set_by_css = true; }
         },
         .border_top_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_top_width = px;
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_top_width = px; style.border_set_by_css = true; }
         },
         .border_right_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_right_width = px;
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_right_width = px; style.border_set_by_css = true; }
         },
         .border_bottom_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_bottom_width = px;
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_bottom_width = px; style.border_set_by_css = true; }
         },
         .border_left_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| style.border_left_width = px;
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_left_width = px; style.border_set_by_css = true; }
         },
         .border_top_color => {
             if (eqlIgnoreCase(trimmed, "currentcolor")) {
@@ -1402,7 +1431,7 @@ fn applyDeclaration(
             }
         },
         .transform => {
-            parseTransform(trimmed, &style.transform_translate_x, &style.transform_translate_y, fs, vw, vh);
+            parseTransform(trimmed, &style.transform_translate_x, &style.transform_translate_y, &style.transform_scale_x, &style.transform_scale_y, &style.transform_rotate_deg, fs, vw, vh);
         },
         .counter_reset => style.counter_reset = arena.dupe(u8, trimmed) catch null,
         .counter_increment => style.counter_increment = arena.dupe(u8, trimmed) catch null,
@@ -1438,6 +1467,107 @@ fn applyDeclaration(
         },
         .outline_color => {
             if (properties.parseColor(trimmed)) |c| style.outline_color = c.toArgb();
+        },
+        .background_repeat => {
+            if (eqlIgnoreCase(trimmed, "repeat")) style.background_repeat = .repeat
+            else if (eqlIgnoreCase(trimmed, "no-repeat")) style.background_repeat = .no_repeat
+            else if (eqlIgnoreCase(trimmed, "repeat-x")) style.background_repeat = .repeat_x
+            else if (eqlIgnoreCase(trimmed, "repeat-y")) style.background_repeat = .repeat_y;
+        },
+        .background_size => {
+            if (eqlIgnoreCase(trimmed, "cover")) {
+                style.background_size = .cover;
+            } else if (eqlIgnoreCase(trimmed, "contain")) {
+                style.background_size = .contain;
+            } else if (eqlIgnoreCase(trimmed, "auto")) {
+                style.background_size = .auto;
+            } else {
+                // Parse "width height" or single value
+                var it = std.mem.splitScalar(u8, trimmed, ' ');
+                const w_str = it.first();
+                const h_str = it.next();
+                if (parseLengthValue(w_str, fs, vw, vh)) |w_px| {
+                    style.background_size = .length;
+                    style.background_size_width = w_px;
+                    if (h_str) |hs| {
+                        const hs_trimmed = std.mem.trim(u8, hs, " \t");
+                        if (eqlIgnoreCase(hs_trimmed, "auto")) {
+                            style.background_size_height = 0; // auto = proportional
+                        } else if (parseLengthValue(hs_trimmed, fs, vw, vh)) |h_px| {
+                            style.background_size_height = h_px;
+                        }
+                    } else {
+                        style.background_size_height = 0; // auto
+                    }
+                }
+            }
+        },
+        .background_position => {
+            // Parse background-position: center, left, right, top, bottom, 50%, 10px, or two-value
+            var it = std.mem.splitScalar(u8, trimmed, ' ');
+            const first = it.first();
+            const second = it.next();
+
+            // Parse X component
+            if (eqlIgnoreCase(first, "center")) {
+                style.background_position_x_percent = 0.5;
+                style.background_position_y_percent = 0.5;
+                style.background_position_is_percent = true;
+            } else if (eqlIgnoreCase(first, "left")) {
+                style.background_position_x_percent = 0.0;
+                style.background_position_y_percent = 0.5;
+                style.background_position_is_percent = true;
+            } else if (eqlIgnoreCase(first, "right")) {
+                style.background_position_x_percent = 1.0;
+                style.background_position_y_percent = 0.5;
+                style.background_position_is_percent = true;
+            } else if (eqlIgnoreCase(first, "top")) {
+                style.background_position_x_percent = 0.5;
+                style.background_position_y_percent = 0.0;
+                style.background_position_is_percent = true;
+            } else if (eqlIgnoreCase(first, "bottom")) {
+                style.background_position_x_percent = 0.5;
+                style.background_position_y_percent = 1.0;
+                style.background_position_is_percent = true;
+            } else if (parseLengthValue(first, fs, vw, vh)) |px| {
+                if (std.mem.indexOfScalar(u8, first, '%') != null) {
+                    style.background_position_x_percent = px / 100.0;
+                    style.background_position_y_percent = 0.5;
+                    style.background_position_is_percent = true;
+                } else {
+                    style.background_position_x = px;
+                    style.background_position_y = 0;
+                    style.background_position_is_percent = false;
+                }
+            }
+
+            // Parse Y component if present
+            if (second) |s| {
+                const s_trimmed = std.mem.trim(u8, s, " \t");
+                if (eqlIgnoreCase(s_trimmed, "center")) {
+                    if (style.background_position_is_percent) {
+                        style.background_position_y_percent = 0.5;
+                    }
+                } else if (eqlIgnoreCase(s_trimmed, "top")) {
+                    style.background_position_y_percent = 0.0;
+                    style.background_position_is_percent = true;
+                } else if (eqlIgnoreCase(s_trimmed, "bottom")) {
+                    style.background_position_y_percent = 1.0;
+                    style.background_position_is_percent = true;
+                } else if (parseLengthValue(s_trimmed, fs, vw, vh)) |py| {
+                    if (std.mem.indexOfScalar(u8, s_trimmed, '%') != null) {
+                        style.background_position_y_percent = py / 100.0;
+                        style.background_position_is_percent = true;
+                    } else {
+                        style.background_position_y = py;
+                        if (style.background_position_is_percent) {
+                            // Mixed: first was percent, second is px — convert first to px
+                            style.background_position_is_percent = false;
+                            style.background_position_x = 0;
+                        }
+                    }
+                }
+            }
         },
         // Skip these — just parse to avoid unknown property warnings
         .transition_property, .transition_timing_function,
@@ -1491,27 +1621,35 @@ fn parseFilter(s: []const u8, style: *ComputedStyle, font_size: f32, vw: f32, vh
     }
 }
 
-fn parseTransform(s: []const u8, tx: *f32, ty: *f32, font_size: f32, vw: f32, vh: f32) void {
+fn parseTransform(s: []const u8, tx: *f32, ty: *f32, sx: *f32, sy: *f32, rot: *f32, font_size: f32, vw: f32, vh: f32) void {
     if (eqlIgnoreCase(s, "none")) {
         tx.* = 0;
         ty.* = 0;
+        sx.* = 1.0;
+        sy.* = 1.0;
+        rot.* = 0;
         return;
     }
     var pos: usize = 0;
     while (pos < s.len) {
-        if (std.mem.indexOfPos(u8, s, pos, "translateX(")) |idx| {
+        // Find next function call
+        const rest = s[pos..];
+        if (indexOfFuncCI(rest, "translateX(")) |rel_idx| {
+            const idx = pos + rel_idx;
             const start = idx + "translateX(".len;
             const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
             const val = std.mem.trim(u8, s[start..end], " \t");
             if (parseLengthValue(val, font_size, vw, vh)) |px| tx.* = px;
             pos = end + 1;
-        } else if (std.mem.indexOfPos(u8, s, pos, "translateY(")) |idx| {
+        } else if (indexOfFuncCI(rest, "translateY(")) |rel_idx| {
+            const idx = pos + rel_idx;
             const start = idx + "translateY(".len;
             const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
             const val = std.mem.trim(u8, s[start..end], " \t");
             if (parseLengthValue(val, font_size, vw, vh)) |px| ty.* = px;
             pos = end + 1;
-        } else if (std.mem.indexOfPos(u8, s, pos, "translate(")) |idx| {
+        } else if (indexOfFuncCI(rest, "translate(")) |rel_idx| {
+            const idx = pos + rel_idx;
             const start = idx + "translate(".len;
             const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
             const inner = std.mem.trim(u8, s[start..end], " \t");
@@ -1521,11 +1659,92 @@ fn parseTransform(s: []const u8, tx: *f32, ty: *f32, font_size: f32, vw: f32, vh
                 if (parseLengthValue(x_str, font_size, vw, vh)) |px| tx.* = px;
                 if (parseLengthValue(y_str, font_size, vw, vh)) |px| ty.* = px;
             } else {
-                // Single value — translateX only
                 if (parseLengthValue(inner, font_size, vw, vh)) |px| tx.* = px;
             }
             pos = end + 1;
+        } else if (indexOfFuncCI(rest, "scaleX(")) |rel_idx| {
+            const idx = pos + rel_idx;
+            const start = idx + "scaleX(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t");
+            if (std.fmt.parseFloat(f32, val)) |v| {
+                sx.* = v;
+            } else |_| {}
+            pos = end + 1;
+        } else if (indexOfFuncCI(rest, "scaleY(")) |rel_idx| {
+            const idx = pos + rel_idx;
+            const start = idx + "scaleY(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t");
+            if (std.fmt.parseFloat(f32, val)) |v| {
+                sy.* = v;
+            } else |_| {}
+            pos = end + 1;
+        } else if (indexOfFuncCI(rest, "scale(")) |rel_idx| {
+            const idx = pos + rel_idx;
+            const start = idx + "scale(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const inner = std.mem.trim(u8, s[start..end], " \t");
+            if (std.mem.indexOfScalar(u8, inner, ',')) |comma| {
+                const x_str = std.mem.trim(u8, inner[0..comma], " \t");
+                const y_str = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+                if (std.fmt.parseFloat(f32, x_str)) |v| sx.* = v else |_| {}
+                if (std.fmt.parseFloat(f32, y_str)) |v| sy.* = v else |_| {}
+            } else {
+                if (std.fmt.parseFloat(f32, inner)) |v| {
+                    sx.* = v;
+                    sy.* = v;
+                } else |_| {}
+            }
+            pos = end + 1;
+        } else if (indexOfFuncCI(rest, "rotate(")) |rel_idx| {
+            const idx = pos + rel_idx;
+            const start = idx + "rotate(".len;
+            const end = std.mem.indexOfScalarPos(u8, s, start, ')') orelse break;
+            const val = std.mem.trim(u8, s[start..end], " \t");
+            rot.* = parseAngle(val);
+            pos = end + 1;
         } else break;
+    }
+}
+
+/// Case-insensitive function name search (e.g., find "Scale(" in "scale(2)")
+fn indexOfFuncCI(haystack: []const u8, comptime needle: []const u8) ?usize {
+    if (haystack.len < needle.len) return null;
+    const search_end = haystack.len - needle.len + 1;
+    var i: usize = 0;
+    while (i < search_end) : (i += 1) {
+        var match = true;
+        for (needle, 0..) |nc, j| {
+            const hc = haystack[i + j];
+            const lower_hc = if (hc >= 'A' and hc <= 'Z') hc + 32 else hc;
+            const lower_nc = if (nc >= 'A' and nc <= 'Z') nc + 32 else nc;
+            if (lower_hc != lower_nc) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return i;
+    }
+    return null;
+}
+
+/// Parse angle value (supports deg, rad, turn, grad; defaults to deg)
+fn parseAngle(s: []const u8) f32 {
+    if (std.mem.endsWith(u8, s, "deg")) {
+        return std.fmt.parseFloat(f32, s[0 .. s.len - 3]) catch 0;
+    } else if (std.mem.endsWith(u8, s, "rad")) {
+        const radians = std.fmt.parseFloat(f32, s[0 .. s.len - 3]) catch 0;
+        return radians * 180.0 / std.math.pi;
+    } else if (std.mem.endsWith(u8, s, "turn")) {
+        const turns = std.fmt.parseFloat(f32, s[0 .. s.len - 4]) catch 0;
+        return turns * 360.0;
+    } else if (std.mem.endsWith(u8, s, "grad")) {
+        const grads = std.fmt.parseFloat(f32, s[0 .. s.len - 4]) catch 0;
+        return grads * 0.9;
+    } else {
+        // Unitless or deg
+        return std.fmt.parseFloat(f32, s) catch 0;
     }
 }
 
@@ -1884,6 +2103,7 @@ fn mapDisplay(s: []const u8) ?ComputedStyle.Display {
     if (eqlIgnoreCase(s, "table-column")) return .table_column;
     if (eqlIgnoreCase(s, "table-column-group")) return .table_column_group;
     if (eqlIgnoreCase(s, "table-caption")) return .table_caption;
+    if (eqlIgnoreCase(s, "contents")) return .contents;
     return null;
 }
 

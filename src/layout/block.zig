@@ -503,6 +503,15 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         box.content.x += box.style.transform_translate_x;
         box.content.y += box.style.transform_translate_y;
     }
+    // Apply CSS scale transform (visual scaling around center)
+    if (box.style.transform_scale_x != 1.0 or box.style.transform_scale_y != 1.0) {
+        const cx = box.content.x + box.content.width / 2.0;
+        const cy = box.content.y + box.content.height / 2.0;
+        box.content.width *= box.style.transform_scale_x;
+        box.content.height *= box.style.transform_scale_y;
+        box.content.x = cx - box.content.width / 2.0;
+        box.content.y = cy - box.content.height / 2.0;
+    }
 }
 
 /// Returns true if this element's style creates a new Block Formatting Context.
@@ -811,18 +820,66 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 const remaining_width = container_width - cursor_x;
 
                 if ((text_width <= remaining_width or is_nowrap) and remaining_width > 0) {
-                    // Fits on current line
+                    // Check for text-overflow: ellipsis when text overflows nowrap container
+                    const use_ellipsis = is_nowrap and text_width > remaining_width and
+                        box.style.text_overflow == .ellipsis and
+                        (box.style.overflow_x == .hidden or box.style.overflow_x == .scroll);
+                    var display_text = text;
+                    var display_width = text_width;
+                    var has_ellipsis = false;
+
+                    if (use_ellipsis and remaining_width > 0) {
+                        // Measure "…" width
+                        const ellipsis_metrics = text_renderer.measure("\xe2\x80\xa6");
+                        const ellipsis_w: f32 = @floatFromInt(ellipsis_metrics.width);
+                        const target_w = remaining_width - ellipsis_w;
+
+                        if (target_w > 0) {
+                            // Find how many bytes fit within target_w
+                            var byte_end: usize = 0;
+                            var acc_w: f32 = 0;
+                            while (byte_end < text.len) {
+                                const char_start = byte_end;
+                                const first_byte = text[byte_end];
+                                const char_len: usize = if (first_byte < 0x80) 1
+                                    else if (first_byte < 0xE0) 2
+                                    else if (first_byte < 0xF0) 3
+                                    else 4;
+                                byte_end = @min(byte_end + char_len, text.len);
+                                const char_metrics = text_renderer.measure(text[char_start..byte_end]);
+                                acc_w += @as(f32, @floatFromInt(char_metrics.width));
+                                if (acc_w > target_w) {
+                                    byte_end = char_start;
+                                    break;
+                                }
+                            }
+                            if (byte_end > 0) {
+                                // Use a slice of the original text (no heap allocation)
+                                display_text = text[0..byte_end];
+                                display_width = acc_w - @as(f32, @floatFromInt(
+                                    if (byte_end < text.len) text_renderer.measure(text[byte_end..text.len]).width else 0,
+                                ));
+                                // Recalculate width from the truncated slice
+                                const trunc_metrics = text_renderer.measure(display_text);
+                                display_width = @as(f32, @floatFromInt(trunc_metrics.width)) + ellipsis_w;
+                                has_ellipsis = true;
+                            }
+                        }
+                    }
+
+                    // Fits on current line (or nowrap)
                     child.lines.append(allocator, .{
                         .x = base_x + cursor_x,
                         .y = base_y + cursor_y,
-                        .width = text_width,
+                        .width = display_width,
                         .height = text_line_height,
-                        .text = text,
+                        .text = display_text,
                         .ascent = ascent,
+                        .ellipsis = has_ellipsis,
                     }) catch {};
-                    child.content.width = text_width;
+                    child.content.width = display_width;
                     child.content.height = text_line_height;
-                    cursor_x += text_width;
+                    cursor_x += display_width;
                     if (text_line_height > line_height) line_height = text_line_height;
                 } else {
                     // Need to word-wrap using CJK-aware + break-word logic, possibly starting mid-line

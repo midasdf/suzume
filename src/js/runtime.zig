@@ -84,6 +84,10 @@ pub const JsRuntime = struct {
 
     /// Evaluate JavaScript code. Returns the result as a string, or an error string.
     pub fn eval(self: *JsRuntime, code: []const u8) EvalResult {
+        return self.evalNamed(code, "<eval>");
+    }
+
+    pub fn evalNamed(self: *JsRuntime, code: []const u8, source_name: [*:0]const u8) EvalResult {
         resetScriptTimer();
         // Sanitize invalid UTF-8 sequences before QuickJS eval
         const clean = sanitizeUtf8(code) catch code;
@@ -101,7 +105,7 @@ pub const JsRuntime = struct {
             self.ctx,
             eval_buf.ptr,
             eval_buf.len,
-            "<eval>",
+            source_name,
             qjs.JS_EVAL_TYPE_GLOBAL,
         );
 

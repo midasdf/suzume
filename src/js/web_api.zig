@@ -1482,10 +1482,81 @@ pub fn registerWebApis(js_rt: anytype) void {
     // matchMedia is improved to evaluate simple width queries using innerWidth.
     const compat_stubs =
         \\function Image(w,h){this.width=w||0;this.height=h||0;this.src='';this.onload=null;this.onerror=null;}
+        \\
+        \\(function(){
+        \\  var origDefProp=Object.defineProperty;
+        \\  Object.defineProperty=function(obj,prop,desc){
+        \\    try{return origDefProp.call(Object,obj,prop,desc);}
+        \\    catch(e){
+        \\      if(e instanceof TypeError&&e.message&&e.message.indexOf('configurable')!==-1){
+        \\        if(desc){
+        \\          var newDesc={configurable:true,enumerable:!!desc.enumerable};
+        \\          if('value'in desc){newDesc.value=desc.value;newDesc.writable=true;}
+        \\          else{if(desc.get)newDesc.get=desc.get;if(desc.set)newDesc.set=desc.set;}
+        \\          try{return origDefProp.call(Object,obj,prop,newDesc);}catch(e3){
+        \\            try{if('value'in desc)obj[prop]=desc.value;}catch(e4){}
+        \\          }
+        \\        }
+        \\        return obj;
+        \\      }
+        \\      throw e;
+        \\    }
+        \\  };
+        \\})();
+        \\if(typeof CSSStyleSheet==='undefined'||!CSSStyleSheet.prototype.replaceSync){
+        \\  globalThis.CSSStyleSheet=globalThis.CSSStyleSheet||function(){this.cssRules=[];};
+        \\  CSSStyleSheet.prototype.replaceSync=function(css){this._css=css;};
+        \\  CSSStyleSheet.prototype.replace=function(css){this._css=css;return Promise.resolve(this);};
+        \\}
+        \\if(typeof CSSLayerBlockRule==='undefined'){globalThis.CSSLayerBlockRule=function(){};}
+        \\if(typeof document!=='undefined'&&!document.adoptedStyleSheets){document.adoptedStyleSheets=[];}
         \\if(typeof self==='undefined'){globalThis.self=globalThis;}
         \\if(typeof window==='undefined'){globalThis.window=globalThis;}
+        \\(function(){var _origGPO=Object.getPrototypeOf;Object.getPrototypeOf=function(o){if(o==null)return{};if(typeof o!=='object'&&typeof o!=='function')return _origGPO(Object(o));return _origGPO(o);};})();
         \\if(typeof customElements==='undefined'){
-        \\  globalThis.customElements={define:function(){},get:function(){return undefined},whenDefined:function(){return Promise.resolve()},upgrade:function(){}};
+        \\  (function(){
+        \\    var registry={};
+        \\    function upgradeEl(el,ctor){
+        \\      if(!el||el.__ce_upgraded)return;
+        \\      el.__ce_upgraded=true;
+        \\      var proto=ctor.prototype;
+        \\      var names=Object.getOwnPropertyNames(proto);
+        \\      for(var i=0;i<names.length;i++){
+        \\        var k=names[i];
+        \\        if(k==='constructor')continue;
+        \\        try{var d=Object.getOwnPropertyDescriptor(proto,k);if(d&&(d.get||d.set)){Object.defineProperty(el,k,d);}else{el[k]=proto[k];}}catch(e){}
+        \\      }
+        \\      if(typeof el.connectedCallback==='function'&&el.isConnected){try{el.connectedCallback();}catch(e){}}
+        \\    }
+        \\    globalThis.__ce_registry=registry;
+        \\    globalThis.__ce_upgradeEl=upgradeEl;
+        \\    globalThis.customElements={
+        \\      define:function(name,ctor,opts){
+        \\        registry[name]=ctor;
+        \\        try{
+        \\          if(typeof document!=='undefined'&&document.querySelectorAll){
+        \\            var els=document.querySelectorAll(name);
+        \\            for(var i=0;i<els.length;i++)upgradeEl(els[i],ctor);
+        \\          }
+        \\        }catch(e){}
+        \\      },
+        \\      get:function(name){return registry[name];},
+        \\      whenDefined:function(name){
+        \\        if(registry[name])return Promise.resolve(registry[name]);
+        \\        return new Promise(function(r){
+        \\          var iv=setInterval(function(){if(registry[name]){clearInterval(iv);r(registry[name]);}},50);
+        \\          setTimeout(function(){clearInterval(iv);r(undefined);},5000);
+        \\        });
+        \\      },
+        \\      upgrade:function(el){
+        \\        if(!el||!el.tagName)return;
+        \\        var name=el.tagName.toLowerCase();
+        \\        var ctor=registry[name];
+        \\        if(ctor)upgradeEl(el,ctor);
+        \\      }
+        \\    };
+        \\
+        \\  })();
         \\}
         \\// MutationObserver: registered natively in Zig (events.zig)
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb,opts){

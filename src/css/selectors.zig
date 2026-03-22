@@ -83,13 +83,24 @@ pub const PseudoElement = enum {
     after,
 };
 
+pub const NthParams = struct {
+    a: i32 = 0,
+    b: i32 = 0,
+};
+
+pub const PseudoClassSel = struct {
+    pc: PseudoClass,
+    nth: ?NthParams = null,
+    not_inner: ?[]const u8 = null, // Raw inner selector string for :not()
+};
+
 pub const SimpleSelector = union(enum) {
     type_sel: []const u8,
     class: []const u8,
     id: []const u8,
     universal,
     attribute: AttributeSel,
-    pseudo_class: PseudoClass,
+    pseudo_class: PseudoClassSel,
 };
 
 pub const SelectorComponent = union(enum) {
@@ -320,8 +331,10 @@ const SelectorParser = struct {
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
                 if (PseudoClass.fromString(name)) |pc| {
-                    // nth-child, nth-last-child, nth-of-type take (an+b) args — skip them
+                    var nth: ?NthParams = null;
+                    // nth-child, nth-last-child, nth-of-type take (an+b) args
                     if (self.peek() == '(') {
+                        const arg_start = self.pos + 1;
                         var depth: u32 = 1;
                         self.advance();
                         while (self.pos < self.source.len and depth > 0) {
@@ -329,8 +342,32 @@ const SelectorParser = struct {
                             if (self.source[self.pos] == ')') depth -= 1;
                             self.pos += 1;
                         }
+                        const arg_end = if (self.pos > 0) self.pos - 1 else self.pos;
+                        if (arg_end > arg_start) {
+                            const arg = std.mem.trim(u8, self.source[arg_start..arg_end], " \t");
+                            if (pc == .nth_child or pc == .nth_last_child or pc == .nth_of_type) {
+                                nth = parseAnB(arg);
+                            }
+                        }
                     }
-                    try self.components.append(self.allocator,.{ .simple = .{ .pseudo_class = pc } });
+                    try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{ .pc = pc, .nth = nth } } });
+                    self.specificity.b += 1;
+                } else if (self.peek() == '(' and eqlIgnoreCase(name, "not")) {
+                    // :not() pseudo-class
+                    self.advance(); // skip '('
+                    const inner_start = self.pos;
+                    var paren_depth_not: u32 = 1;
+                    while (self.pos < self.source.len and paren_depth_not > 0) {
+                        if (self.source[self.pos] == '(') paren_depth_not += 1;
+                        if (self.source[self.pos] == ')') paren_depth_not -= 1;
+                        if (paren_depth_not > 0) self.pos += 1;
+                    }
+                    const not_inner = self.source[inner_start..self.pos];
+                    if (self.pos < self.source.len) self.advance(); // skip ')'
+                    try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                        .pc = .hover, // placeholder — not used, matching uses not_inner
+                        .not_inner = not_inner,
+                    } } });
                     self.specificity.b += 1;
                 } else if (self.peek() == '(' and (eqlIgnoreCase(name, "where") or eqlIgnoreCase(name, "is"))) {
                     // Handle :where() and :is() — parse inner selector classes/ids
@@ -554,6 +591,8 @@ pub const ElementAdapter = struct {
         nextElementSibling: *const fn (ptr: *const anyopaque) ?ElementAdapter,
         firstChild: *const fn (ptr: *const anyopaque) ?ElementAdapter,
         isDocumentNode: *const fn (ptr: *const anyopaque) bool,
+        isHovered: *const fn (ptr: *const anyopaque) bool,
+        isFocused: *const fn (ptr: *const anyopaque) bool,
     };
 
     pub fn tagName(self: ElementAdapter) ?[]const u8 {
@@ -582,6 +621,14 @@ pub const ElementAdapter = struct {
 
     pub fn isDocumentNode(self: ElementAdapter) bool {
         return self.vtable.isDocumentNode(self.ptr);
+    }
+
+    pub fn isHovered(self: ElementAdapter) bool {
+        return self.vtable.isHovered(self.ptr);
+    }
+
+    pub fn isFocused(self: ElementAdapter) bool {
+        return self.vtable.isFocused(self.ptr);
     }
 };
 
@@ -749,7 +796,12 @@ fn matchAttribute(attr: AttributeSel, element: ElementAdapter) bool {
     }
 }
 
-fn matchPseudoClass(pc: PseudoClass, element: ElementAdapter) bool {
+fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
+    // Handle :not() — match if inner selector does NOT match
+    if (pcs.not_inner) |inner| {
+        return !matchNotInner(inner, element);
+    }
+    const pc = pcs.pc;
     switch (pc) {
         .first_child => return element.previousElementSibling() == null,
         .last_child => return element.nextElementSibling() == null,
@@ -802,8 +854,37 @@ fn matchPseudoClass(pc: PseudoClass, element: ElementAdapter) bool {
             }
             return false;
         },
-        // nth-child/nth-last-child/nth-of-type: return true for now (full an+b parsing not yet implemented)
-        .nth_child, .nth_last_child, .nth_of_type => return true,
+        .nth_child => {
+            const params = pcs.nth orelse return true;
+            var position: i32 = 1;
+            var sib = element.previousElementSibling();
+            while (sib != null) : (sib = sib.?.previousElementSibling()) {
+                position += 1;
+            }
+            return matchesNthFormula(position, params.a, params.b);
+        },
+        .nth_last_child => {
+            const params = pcs.nth orelse return true;
+            var position: i32 = 1;
+            var sib = element.nextElementSibling();
+            while (sib != null) : (sib = sib.?.nextElementSibling()) {
+                position += 1;
+            }
+            return matchesNthFormula(position, params.a, params.b);
+        },
+        .nth_of_type => {
+            const params = pcs.nth orelse return true;
+            const tag = element.tagName() orelse return false;
+            var position: i32 = 1;
+            var sib = element.previousElementSibling();
+            while (sib) |s| {
+                if (s.tagName()) |st| {
+                    if (eqlIgnoreCase(st, tag)) position += 1;
+                }
+                sib = s.previousElementSibling();
+            }
+            return matchesNthFormula(position, params.a, params.b);
+        },
         // :link matches <a> elements with href attribute (unvisited)
         .link => {
             const tag = element.tagName() orelse "";
@@ -814,9 +895,107 @@ fn matchPseudoClass(pc: PseudoClass, element: ElementAdapter) bool {
         },
         // :visited — we don't track visit history, so never matches
         .visited => return false,
-        // Interactive pseudo-classes: always false for static rendering
-        .hover, .focus, .active => return false,
+        // Interactive pseudo-classes
+        .hover => return element.isHovered(),
+        .focus => return element.isFocused(),
+        .active => return false,
     }
+}
+
+/// Check if position matches an+b formula
+fn matchesNthFormula(position: i32, a: i32, b: i32) bool {
+    if (a == 0) return position == b;
+    const diff = position - b;
+    if (a > 0) {
+        return diff >= 0 and @mod(diff, a) == 0;
+    } else {
+        return diff <= 0 and @mod(diff, -a) == 0;
+    }
+}
+
+/// Parse an+b expression (e.g., "2n+1", "odd", "even", "3", "-n+3")
+pub fn parseAnB(s: []const u8) NthParams {
+    const trimmed = std.mem.trim(u8, s, " \t");
+    if (eqlIgnoreCase(trimmed, "odd")) return .{ .a = 2, .b = 1 };
+    if (eqlIgnoreCase(trimmed, "even")) return .{ .a = 2, .b = 0 };
+
+    // Try pure number first
+    if (std.fmt.parseInt(i32, trimmed, 10)) |n| {
+        return .{ .a = 0, .b = n };
+    } else |_| {}
+
+    // Find 'n' position
+    var n_pos: ?usize = null;
+    for (trimmed, 0..) |ch, i| {
+        if (ch == 'n' or ch == 'N') {
+            n_pos = i;
+            break;
+        }
+    }
+    const np = n_pos orelse return .{ .a = 0, .b = 0 };
+
+    // Parse 'a' (before 'n')
+    var a: i32 = 1;
+    if (np > 0) {
+        const a_str = std.mem.trim(u8, trimmed[0..np], " \t");
+        if (std.mem.eql(u8, a_str, "-")) {
+            a = -1;
+        } else if (std.mem.eql(u8, a_str, "+")) {
+            a = 1;
+        } else {
+            a = std.fmt.parseInt(i32, a_str, 10) catch 1;
+        }
+    }
+
+    // Parse 'b' (after 'n')
+    var b: i32 = 0;
+    if (np + 1 < trimmed.len) {
+        const b_str = std.mem.trim(u8, trimmed[np + 1 ..], " \t");
+        if (b_str.len > 0) {
+            b = std.fmt.parseInt(i32, b_str, 10) catch 0;
+        }
+    }
+
+    return .{ .a = a, .b = b };
+}
+
+/// Match :not() inner selector against an element
+fn matchNotInner(inner: []const u8, element: ElementAdapter) bool {
+    // Simple matching for common :not() patterns
+    const trimmed = std.mem.trim(u8, inner, " \t");
+    if (trimmed.len == 0) return false;
+
+    // :not(.class)
+    if (trimmed[0] == '.') {
+        const cls = trimmed[1..];
+        const class_attr = element.getAttribute("class") orelse return false;
+        return containsWord(class_attr, cls);
+    }
+    // :not(#id)
+    if (trimmed[0] == '#') {
+        const id = trimmed[1..];
+        const id_attr = element.getAttribute("id") orelse return false;
+        return std.mem.eql(u8, id_attr, id);
+    }
+    // :not([attr])
+    if (trimmed[0] == '[') {
+        if (std.mem.indexOfScalar(u8, trimmed, ']')) |close| {
+            const attr_name = std.mem.trim(u8, trimmed[1..close], " \t");
+            return element.getAttribute(attr_name) != null;
+        }
+        return false;
+    }
+    // :not(:pseudo)
+    if (trimmed[0] == ':') {
+        const pseudo_name = trimmed[1..];
+        if (PseudoClass.fromString(pseudo_name)) |pc| {
+            return matchPseudoClass(.{ .pc = pc }, element);
+        }
+        return false;
+    }
+    // :not(tagname)
+    const tag = element.tagName() orelse return false;
+    return eqlIgnoreCase(tag, trimmed);
 }
 
 fn containsWord(haystack: []const u8, needle: []const u8) bool {

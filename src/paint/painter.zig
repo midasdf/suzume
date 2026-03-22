@@ -6,6 +6,7 @@ const TextRenderer = @import("text.zig").TextRenderer;
 const GlyphBitmap = @import("text.zig").GlyphBitmap;
 const ImageCache = @import("image.zig").ImageCache;
 const blitImage = @import("image.zig").blitImage;
+const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 
 const BlitCtx = struct {
     surface: *Surface,
@@ -319,7 +320,6 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     const bg_y = screen_y;
                     const bg_w: i32 = @intFromFloat(@max(pbox.width, 0));
                     const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
-                    const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
                     const horizontal = (box.style.gradient_direction == ComputedStyle.GradientDirection.to_right or
                         box.style.gradient_direction == ComputedStyle.GradientDirection.to_left);
                     var start_color = Surface.argbToColour(box.style.gradient_color_start);
@@ -372,12 +372,12 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 if (box.style.background_image_url) |bg_url| {
                     if (image_cache) |cache| {
                         if (cache.get(bg_url)) |img| {
-                            const bg_img_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
-                            const bg_img_y: i32 = @intFromFloat(pbox.y - scroll_y);
-                            const bg_img_w: u32 = @intFromFloat(@max(pbox.width, 0));
-                            const bg_img_h: u32 = @intFromFloat(@max(pbox.height, 0));
-                            if (bg_img_w > 0 and bg_img_h > 0) {
-                                blitImageScaled(surface, bg_img_x, bg_img_y, bg_img_w, bg_img_h, img.pixels, img.width, img.height);
+                            const box_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
+                            const box_y: i32 = @intFromFloat(pbox.y - scroll_y);
+                            const box_w: u32 = @intFromFloat(@max(pbox.width, 0));
+                            const box_h: u32 = @intFromFloat(@max(pbox.height, 0));
+                            if (box_w > 0 and box_h > 0 and img.width > 0 and img.height > 0) {
+                                paintBackgroundImage(surface, box.style, box_x, box_y, box_w, box_h, img.pixels, img.width, img.height);
                             }
                         }
                     }
@@ -551,6 +551,20 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     blitGlyphClipped,
                 );
 
+                // Draw ellipsis "…" after truncated text
+                if (line.ellipsis) {
+                    const text_metrics = tr.measure(line.text);
+                    const ellipsis_x = draw_x + @as(i32, @intCast(text_metrics.width));
+                    tr.renderGlyphs(
+                        "\xe2\x80\xa6",
+                        ellipsis_x,
+                        draw_y,
+                        BlitCtx,
+                        .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom, .offset_x = 0 },
+                        blitGlyphClipped,
+                    );
+                }
+
                 // Draw underline based on CSS text-decoration only
                 const draw_underline = box.style.text_decoration.underline;
                 if (draw_underline) {
@@ -654,6 +668,113 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
         .{ .surface = surface, .colour = colour, .clip_top = clip_top, .clip_bottom = clip_bottom },
         blitGlyphClipped,
     );
+}
+
+/// Paint a background image with CSS background-size, background-position, and background-repeat.
+fn paintBackgroundImage(
+    surface: *Surface,
+    style: ComputedStyle,
+    box_x: i32,
+    box_y: i32,
+    box_w: u32,
+    box_h: u32,
+    src_pixels: [*]const u8,
+    src_w: u32,
+    src_h: u32,
+) void {
+    const box_wf: f32 = @floatFromInt(box_w);
+    const box_hf: f32 = @floatFromInt(box_h);
+    const src_wf: f32 = @floatFromInt(src_w);
+    const src_hf: f32 = @floatFromInt(src_h);
+
+    // Compute rendered image dimensions based on background-size
+    var img_w: f32 = 0;
+    var img_h: f32 = 0;
+
+    switch (style.background_size) {
+        .auto => {
+            // Use natural image dimensions
+            img_w = src_wf;
+            img_h = src_hf;
+        },
+        .cover => {
+            // Scale to cover entire box, maintaining aspect ratio
+            const scale_x = box_wf / src_wf;
+            const scale_y = box_hf / src_hf;
+            const scale = @max(scale_x, scale_y);
+            img_w = src_wf * scale;
+            img_h = src_hf * scale;
+        },
+        .contain => {
+            // Scale to fit within box, maintaining aspect ratio
+            const scale_x = box_wf / src_wf;
+            const scale_y = box_hf / src_hf;
+            const scale = @min(scale_x, scale_y);
+            img_w = src_wf * scale;
+            img_h = src_hf * scale;
+        },
+        .length => {
+            img_w = if (style.background_size_width > 0) style.background_size_width else src_wf;
+            img_h = if (style.background_size_height > 0) style.background_size_height else blk: {
+                // Auto height: maintain aspect ratio
+                if (style.background_size_width > 0 and src_wf > 0) {
+                    break :blk src_hf * (style.background_size_width / src_wf);
+                }
+                break :blk src_hf;
+            };
+        },
+    }
+
+    // Compute position offset
+    var off_x: f32 = 0;
+    var off_y: f32 = 0;
+
+    if (style.background_position_is_percent) {
+        // Percent positioning: offset = (box_size - img_size) * percent
+        off_x = (box_wf - img_w) * style.background_position_x_percent;
+        off_y = (box_hf - img_h) * style.background_position_y_percent;
+    } else {
+        off_x = style.background_position_x;
+        off_y = style.background_position_y;
+    }
+
+    // Clamp minimum to 1px to prevent infinite loop in repeat tiling
+    if (img_w < 1.0) img_w = 1.0;
+    if (img_h < 1.0) img_h = 1.0;
+
+    const dst_img_w: u32 = @intFromFloat(img_w);
+    const dst_img_h: u32 = @intFromFloat(img_h);
+
+    // Determine repeat behavior
+    const repeat_x = style.background_repeat == .repeat or style.background_repeat == .repeat_x;
+    const repeat_y = style.background_repeat == .repeat or style.background_repeat == .repeat_y;
+
+    if (!repeat_x and !repeat_y) {
+        // No repeat: single blit at position
+        const dx = box_x + @as(i32, @intFromFloat(off_x));
+        const dy = box_y + @as(i32, @intFromFloat(off_y));
+        blitImageScaled(surface, dx, dy, dst_img_w, dst_img_h, src_pixels, src_w, src_h);
+    } else {
+        // Repeat: tile the image
+        const start_x_f = if (repeat_x) -img_w + @mod(off_x, img_w) else off_x;
+        const start_y_f = if (repeat_y) -img_h + @mod(off_y, img_h) else off_y;
+        const end_x_f = box_wf;
+        const end_y_f = box_hf;
+
+        var ty: f32 = start_y_f;
+        while (ty < end_y_f) {
+            var tx: f32 = start_x_f;
+            while (tx < end_x_f) {
+                const dx = box_x + @as(i32, @intFromFloat(tx));
+                const dy = box_y + @as(i32, @intFromFloat(ty));
+                blitImageScaled(surface, dx, dy, dst_img_w, dst_img_h, src_pixels, src_w, src_h);
+                if (!repeat_x) break;
+                tx += img_w;
+            }
+            if (!repeat_y) break;
+            ty += img_h;
+        }
+    }
 }
 
 /// Blit an RGBA image scaled to a destination rectangle.

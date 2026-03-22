@@ -71,7 +71,7 @@ for url in "${URLS[@]}"; do
 
     # 2) Suzume screenshot — run in Xvfb then capture root window
     echo "  [Suzume]  Taking screenshot..."
-    /app/suzume --url "$url" &
+    /app/suzume "$url" &
     SUZUME_PID=$!
 
     # Wait for page to load and render

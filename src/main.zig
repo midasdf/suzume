@@ -169,12 +169,23 @@ const PageState = struct {
     /// Error message to display when page load fails.
     error_message: ?[]const u8 = null,
     error_alloc: ?[]u8 = null,
+    /// Loaded script URLs for dynamic script dedup.
+    loaded_script_urls: ?std.StringHashMap(void) = null,
 
     fn deinit(self: *PageState) void {
         if (self.js_rt) |*jrt| {
             dom_api.clearNodeCache(jrt.ctx);
             events.deinitEvents(jrt.ctx);
             jrt.deinit();
+        }
+        // Clear dynamic script execution globals
+        dom_api.setJsRuntime(null);
+        dom_api.setLoader(null);
+        dom_api.setLoadedScriptUrls(null);
+        if (self.loaded_script_urls) |*urls| {
+            var it = urls.keyIterator();
+            while (it.next()) |key| std.heap.c_allocator.free(@constCast(key.*));
+            urls.deinit();
         }
         if (self.image_cache) |*ic| ic.deinit();
         self.pending_images.deinit(std.heap.c_allocator);
@@ -209,6 +220,8 @@ fn setCurrentScript(ctx: *quickjs.c.JSContext, src_url: [:0]const u8) void {
     _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "tagName", quickjs.c.JS_NewString(ctx, "SCRIPT"));
     _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "nodeName", quickjs.c.JS_NewString(ctx, "SCRIPT"));
     _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "getAttribute", quickjs.c.JS_NewCFunction(ctx, &scriptGetAttribute, "getAttribute", 1));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "hasAttribute", quickjs.c.JS_NewCFunction(ctx, &scriptHasAttribute, "hasAttribute", 1));
+    _ = quickjs.c.JS_SetPropertyStr(ctx, script_obj, "parentElement", quickjs.JS_NULL());
     _ = quickjs.c.JS_SetPropertyStr(ctx, doc_obj, "currentScript", script_obj);
 }
 
@@ -218,6 +231,16 @@ fn scriptGetAttribute(ctx: ?*quickjs.c.JSContext, this_val: quickjs.c.JSValue, a
     const args = argv orelse return quickjs.JS_NULL();
     // Return the property value directly (src, type, etc.)
     return quickjs.c.JS_GetProperty(c, this_val, quickjs.c.JS_ValueToAtom(c, args[0]));
+}
+
+fn scriptHasAttribute(ctx: ?*quickjs.c.JSContext, this_val: quickjs.c.JSValue, argc: c_int, argv: ?[*]quickjs.c.JSValue) callconv(.c) quickjs.c.JSValue {
+    _ = ctx;
+    if (argc < 1) return quickjs.JS_NewBool(false);
+    const args = argv orelse return quickjs.JS_NewBool(false);
+    _ = args;
+    _ = this_val;
+    // Pseudo-script objects don't have real attributes
+    return quickjs.JS_NewBool(false);
 }
 
 /// Clear document.currentScript (set to null).
@@ -253,7 +276,7 @@ fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, l
         const result = if (ds.is_module)
             js_rt.evalModule(ds.code, ds.source_url orelse "<module>")
         else
-            js_rt.eval(ds.code);
+            js_rt.evalNamed(ds.code, ds.source_url orelse "<deferred>");
         defer result.deinit();
         if (ds.is_external) clearCurrentScript(js_rt.ctx);
         if (!result.isOk()) {
@@ -586,6 +609,12 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Set current URL for location object and cookie domain
     dom_api.setCurrentUrl(base_url);
 
+    // Set JsRuntime and Loader for dynamic script execution
+    dom_api.setJsRuntime(&js_rt);
+    dom_api.setLoader(loader);
+    page.loaded_script_urls = std.StringHashMap(void).init(allocator);
+    dom_api.setLoadedScriptUrls(&page.loaded_script_urls.?);
+
     // readyState = "loading" during script execution
     dom_api.setReadyState(.loading);
 
@@ -621,6 +650,8 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     }
 
     page.js_rt = js_rt;
+    // Re-set JsRuntime pointer to page-owned copy (stack var is about to go away)
+    dom_api.setJsRuntime(&page.js_rt.?);
 }
 
 /// Recursively collect image URLs from the box tree.
@@ -679,16 +710,21 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
                         (if (box.dom_node.?.getAttribute("width")) |_| true else false);
                     const has_html_h = box.dom_node != null and
                         (if (box.dom_node.?.getAttribute("height")) |_| true else false);
+                    // Also check CSS width/height
+                    const has_css_w = box.style.width != .auto;
+                    const has_css_h = box.style.height != .auto;
+                    const has_w = has_html_w or has_css_w;
+                    const has_h = has_html_h or has_css_h;
 
-                    if (has_html_w and !has_html_h) {
+                    if (has_w and !has_h) {
                         // Width specified, compute height from aspect ratio
                         box.intrinsic_height = box.intrinsic_width * actual_h / actual_w;
                         updated.* = true;
-                    } else if (!has_html_w and has_html_h) {
+                    } else if (!has_w and has_h) {
                         // Height specified, compute width from aspect ratio
                         box.intrinsic_width = box.intrinsic_height * actual_w / actual_h;
                         updated.* = true;
-                    } else if (!has_html_w and !has_html_h) {
+                    } else if (!has_w and !has_h) {
                         // Neither specified, use actual image dimensions
                         box.intrinsic_width = actual_w;
                         box.intrinsic_height = actual_h;
@@ -2889,11 +2925,26 @@ pub fn main() !void {
                                     const ly_m = @as(f32, @floatFromInt(mouse_y - chrome.content_y)) + scroll_y;
                                     if (painter_mod.hitTestNode(root, lx_m, ly_m)) |node_ptr| {
                                         const mnode: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
+                                        // Update hover state for CSS :hover
+                                        if (dom_api.hovered_element != mnode) {
+                                            dom_api.hovered_element = mnode;
+                                            needs_repaint = true;
+                                        }
                                         _ = events.dispatchMouseEvent(js_rt.ctx, mnode, "mousemove", mouse_x, mouse_y - chrome.content_y, 0);
                                         js_rt.executePending();
+                                    } else {
+                                        if (dom_api.hovered_element != null) {
+                                            dom_api.hovered_element = null;
+                                            needs_repaint = true;
+                                        }
                                     }
                                 }
                             }
+                        }
+                    } else {
+                        if (dom_api.hovered_element != null) {
+                            dom_api.hovered_element = null;
+                            needs_repaint = true;
                         }
                     }
 
