@@ -621,6 +621,11 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     page.loaded_script_urls = std.StringHashMap(void).init(allocator);
     dom_api.setLoadedScriptUrls(&page.loaded_script_urls.?);
 
+    // Signal that JavaScript is enabled by replacing "nojs" class patterns
+    // Many sites (Wikipedia, etc.) use class="client-nojs" on <html> and change
+    // it to "client-js" to activate JS-dependent CSS rules.
+    signalJsEnabled(doc);
+
     // readyState = "loading" during script execution
     dom_api.setReadyState(.loading);
 
@@ -746,6 +751,55 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
     }
 }
 
+
+/// Signal that JavaScript is enabled by modifying CSS classes on <html> element.
+/// Replaces common "nojs" patterns with "js" equivalents so CSS rules activate.
+fn signalJsEnabled(doc: *Document) void {
+    const html_node = doc.root() orelse return;
+    const html_elem: *lxb.lxb_dom_element_t = @ptrCast(html_node.lxb_node);
+
+    var class_len: usize = 0;
+    const class_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(html_elem, "class", 5, &class_len);
+    if (class_ptr == null or class_len == 0) return;
+
+    const old_class = class_ptr.?[0..class_len];
+
+    // Replace known nojs patterns
+    // "client-nojs" → "client-js" (Wikipedia, MediaWiki)
+    // "no-js" → "js" (generic pattern used by many sites)
+    var buf: [2048]u8 = undefined;
+    if (class_len > buf.len) return;
+    @memcpy(buf[0..class_len], old_class);
+    var new_class: []u8 = buf[0..class_len];
+    var changed = false;
+
+    // Replace "client-nojs" with "client-js"
+    if (std.mem.indexOf(u8, new_class, "client-nojs")) |pos| {
+        // "client-nojs" (11 chars) → "client-js" (9 chars) — shift left by 2
+        const remove_start = pos + 7; // position of "no" in "nojs"
+        const remove_len: usize = 2;
+        std.mem.copyForwards(u8, new_class[remove_start..], new_class[remove_start + remove_len .. class_len]);
+        new_class = new_class[0 .. class_len - remove_len];
+        changed = true;
+    }
+    // Replace standalone "no-js" with "js"
+    else if (std.mem.indexOf(u8, new_class, "no-js")) |pos| {
+        // Check it's a class boundary (space or start/end)
+        const is_start = pos == 0 or new_class[pos - 1] == ' ';
+        const end = pos + 5;
+        const is_end = end >= new_class.len or new_class[end] == ' ';
+        if (is_start and is_end) {
+            // "no-js" (5 chars) → "js" (2 chars)
+            std.mem.copyForwards(u8, new_class[pos..], new_class[pos + 3 .. new_class.len]);
+            new_class = new_class[0 .. new_class.len - 3];
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        _ = lxb.lxb_dom_element_set_attribute(html_elem, "class", 5, new_class.ptr, new_class.len);
+    }
+}
 
 /// Temporary storage for pre-hover style snapshots (node_ptr → style).
 var transition_snapshots: std.AutoHashMapUnmanaged(usize, ComputedStyle) = .empty;

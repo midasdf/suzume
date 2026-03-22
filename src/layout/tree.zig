@@ -21,6 +21,32 @@ fn svgSerializeCallback(data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callco
 
 /// Build a box tree from a DOM node and its resolved styles.
 /// Returns the root Box for the body element.
+/// Replace "currentColor" in SVG markup with an actual hex color value.
+/// lunasvg doesn't support the CSS currentColor keyword.
+fn replaceSvgCurrentColor(buf: *std.ArrayListUnmanaged(u8), color: u32) void {
+    const r: u8 = @intCast((color >> 16) & 0xFF);
+    const g: u8 = @intCast((color >> 8) & 0xFF);
+    const b: u8 = @intCast(color & 0xFF);
+    var hex_buf: [7]u8 = undefined;
+    _ = std.fmt.bufPrint(&hex_buf, "#{x:0>2}{x:0>2}{x:0>2}", .{ r, g, b }) catch return;
+
+    // Search and replace all occurrences of "currentColor" (12 chars) with "#rrggbb" (7 chars)
+    const needle = "currentColor";
+    var i: usize = 0;
+    while (i + needle.len <= buf.items.len) {
+        if (std.mem.eql(u8, buf.items[i .. i + needle.len], needle)) {
+            // Replace in-place: "currentColor" (12) → "#rrggbb" (7) + shift left by 5
+            @memcpy(buf.items[i .. i + 7], &hex_buf);
+            const shift = needle.len - 7;
+            std.mem.copyForwards(u8, buf.items[i + 7 ..], buf.items[i + needle.len .. buf.items.len]);
+            buf.items.len -= shift;
+            i += 7;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 /// Resolve counter() and counters() functions in CSS content values.
 /// Returns a new string with counter values substituted, or null if no counters found.
 fn resolveContentCounters(content: []const u8, allocator: std.mem.Allocator) ?[]const u8 {
@@ -299,6 +325,12 @@ fn buildChildren(
                         // Serialize SVG DOM subtree to string
                         var svg_buf: std.ArrayListUnmanaged(u8) = .empty;
                         _ = lxb_html_serialize_tree_cb(child.lxb_node, &svgSerializeCallback, @ptrCast(&svg_buf));
+
+                        // Replace fill="currentColor" with actual CSS color value
+                        // lunasvg doesn't understand currentColor
+                        if (svg_buf.items.len > 0) {
+                            replaceSvgCurrentColor(&svg_buf, style.color);
+                        }
 
                         if (svg_buf.items.len > 0) {
                             // Store as data:image/svg+xml, URL

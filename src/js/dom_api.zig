@@ -792,6 +792,8 @@ fn elementAppendChild(
     setDomDirty();
     // Dynamic script execution: if a <script> is appended, fetch and execute it
     maybeExecuteDynamicScript(c, child, args[0]);
+    // Upgrade custom elements in the inserted subtree
+    upgradeSubtreeCustomElements(c, child);
     return qjs.JS_DupValue(c, args[0]);
 }
 
@@ -838,6 +840,8 @@ fn elementInsertBefore(
     setDomDirty();
     // Dynamic script execution: if a <script> is inserted, fetch and execute it
     maybeExecuteDynamicScript(c, new_node, args[0]);
+    // Upgrade custom elements in the inserted subtree
+    upgradeSubtreeCustomElements(c, new_node);
     return qjs.JS_DupValue(c, args[0]);
 }
 
@@ -1157,6 +1161,10 @@ fn elementSetInnerHTML(
 
     events.recordMutation(node, "childList", null, null, null);
     setDomDirty();
+
+    // Upgrade custom elements in newly parsed subtree
+    upgradeSubtreeCustomElements(c, node);
+
     return quickjs.JS_UNDEFINED();
 }
 
@@ -3143,6 +3151,32 @@ fn upgradeCustomElement(ctx: *qjs.JSContext, elem: qjs.JSValue, tag_ptr: [*]cons
     var call_args = [2]qjs.JSValue{ elem, ctor };
     const result = qjs.JS_Call(ctx, upgrade_fn, quickjs.JS_UNDEFINED(), 2, &call_args);
     qjs.JS_FreeValue(ctx, result);
+}
+
+/// Walk a DOM subtree and upgrade any custom elements (elements with '-' in tag name).
+fn upgradeSubtreeCustomElements(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) void {
+    // Check if this node is an element with a custom tag name (contains '-')
+    if (node.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        var name_len: usize = 0;
+        const name_ptr: ?[*]const u8 = lxb.lxb_dom_element_local_name(elem, &name_len);
+        if (name_ptr != null and name_len > 0) {
+            const tag = name_ptr.?[0..name_len];
+            // Custom elements must contain a hyphen
+            if (std.mem.indexOfScalar(u8, tag, '-') != null) {
+                const js_elem = wrapNode(ctx, node);
+                upgradeCustomElement(ctx, js_elem, tag.ptr, tag.len);
+                qjs.JS_FreeValue(ctx, js_elem);
+            }
+        }
+    }
+
+    // Recurse into children
+    var child: ?*lxb.lxb_dom_node_t = node.*.first_child;
+    while (child) |ch| {
+        upgradeSubtreeCustomElements(ctx, ch);
+        child = ch.*.next;
+    }
 }
 
 fn documentCreateElementNS(
