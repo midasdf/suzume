@@ -125,6 +125,9 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
                 .percent => |pct| box.content.width * pct / 100.0,
                 .fr => |fr| available * fr / @as(f32, @floatFromInt(num_cols)),
                 .auto => available / @as(f32, @floatFromInt(num_cols)),
+                .auto_repeat_px => |px| if (px > 0) px else available / @as(f32, @floatFromInt(num_cols)),
+                .auto_repeat_percent => |pct| if (pct > 0) box.content.width * pct / 100.0 else available / @as(f32, @floatFromInt(num_cols)),
+                .auto_repeat_fr => |fr| available * fr / @as(f32, @floatFromInt(num_cols)),
             };
             col_widths = fonts.allocator.alloc(f32, num_cols) catch &.{};
             if (col_widths.len > 0) {
@@ -344,6 +347,22 @@ fn layoutSequential(
 pub fn resolveTrackSizes(tracks: []const ComputedStyle.GridTrackSize, total_width: f32, gap: f32, allocator: std.mem.Allocator) []f32 {
     if (tracks.len == 0) return &.{};
 
+    // Check for auto-repeat tracks and expand them first
+    var has_auto_repeat = false;
+    for (tracks) |track| {
+        switch (track) {
+            .auto_repeat_px, .auto_repeat_fr, .auto_repeat_percent => {
+                has_auto_repeat = true;
+                break;
+            },
+            else => {},
+        }
+    }
+
+    if (has_auto_repeat) {
+        return resolveWithAutoRepeat(tracks, total_width, gap, allocator);
+    }
+
     const result = allocator.alloc(f32, tracks.len) catch return &.{};
 
     // First pass: resolve fixed sizes (px, percent)
@@ -368,6 +387,11 @@ pub fn resolveTrackSizes(tracks: []const ComputedStyle.GridTrackSize, total_widt
                 result[i] = 0;
             },
             .auto => {
+                auto_count += 1;
+                result[i] = 0;
+            },
+            .auto_repeat_px, .auto_repeat_fr, .auto_repeat_percent => {
+                // Should not reach here (handled above), treat as auto
                 auto_count += 1;
                 result[i] = 0;
             },
@@ -409,6 +433,77 @@ pub fn resolveTrackSizes(tracks: []const ComputedStyle.GridTrackSize, total_widt
             if (track == .auto) {
                 result[i] = auto_width;
             }
+        }
+    }
+
+    return result;
+}
+
+/// Resolve tracks that contain auto-repeat (auto-fill/auto-fit).
+/// Expands the auto-repeat into N copies that fit within the container width.
+fn resolveWithAutoRepeat(tracks: []const ComputedStyle.GridTrackSize, total_width: f32, gap: f32, allocator: std.mem.Allocator) []f32 {
+    // Calculate how much space is used by fixed tracks
+    var fixed_space: f32 = 0;
+    var fixed_count: usize = 0;
+    var repeat_track_size: f32 = 0;
+
+    for (tracks) |track| {
+        switch (track) {
+            .px => |px| {
+                fixed_space += px;
+                fixed_count += 1;
+            },
+            .percent => |pct| {
+                fixed_space += total_width * pct / 100.0;
+                fixed_count += 1;
+            },
+            .auto_repeat_px => |px| {
+                repeat_track_size = if (px > 0) px else 100; // fallback to 100px
+            },
+            .auto_repeat_percent => |pct| {
+                repeat_track_size = if (pct > 0) total_width * pct / 100.0 else 100;
+            },
+            .auto_repeat_fr => {
+                // fr in auto-repeat: use equal distribution, estimate 200px
+                repeat_track_size = 200;
+            },
+            else => { fixed_count += 1; },
+        }
+    }
+
+    if (repeat_track_size <= 0) repeat_track_size = 100;
+
+    // Calculate how many repeated tracks fit
+    const available = @max(total_width - fixed_space, 0);
+    // Account for gaps: each repeat adds (track_size + gap), minus one gap
+    var repeat_count: usize = 1;
+    if (repeat_track_size > 0) {
+        repeat_count = @intFromFloat(@max(@floor((available + gap) / (repeat_track_size + gap)), 1));
+    }
+
+    const total_tracks = fixed_count + repeat_count;
+    const result = allocator.alloc(f32, total_tracks) catch return &.{};
+
+    var ri: usize = 0;
+    for (tracks) |track| {
+        switch (track) {
+            .px => |px| {
+                if (ri < result.len) { result[ri] = px; ri += 1; }
+            },
+            .percent => |pct| {
+                if (ri < result.len) { result[ri] = total_width * pct / 100.0; ri += 1; }
+            },
+            .fr => |fr| {
+                if (ri < result.len) { result[ri] = fr; ri += 1; } // will be re-distributed below
+            },
+            .auto => {
+                if (ri < result.len) { result[ri] = 0; ri += 1; }
+            },
+            .auto_repeat_px, .auto_repeat_percent, .auto_repeat_fr => {
+                for (0..repeat_count) |_| {
+                    if (ri < result.len) { result[ri] = repeat_track_size; ri += 1; }
+                }
+            },
         }
     }
 

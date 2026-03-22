@@ -132,11 +132,71 @@ fn evaluateCondition(cond: []const u8, vw: f32, vh: f32) bool {
 
     // Check for min-width, max-width, min-height, max-height
     const colon_pos = std.mem.indexOf(u8, cond, ":") orelse {
-        // No colon — could be e.g. "(color)" — fail-open
+        // No colon — could be e.g. "(color)" — boolean feature, fail-open (true)
+        if (eqlIgnoreCase(cond, "color")) return true;
         return true;
     };
     const prop = std.mem.trim(u8, cond[0..colon_pos], " \t");
     const value = std.mem.trim(u8, cond[colon_pos + 1 ..], " \t");
+
+    // Interaction media features
+    if (eqlIgnoreCase(prop, "hover")) {
+        if (eqlIgnoreCase(value, "hover")) return true;
+        if (eqlIgnoreCase(value, "none")) return false;
+        return true;
+    }
+    if (eqlIgnoreCase(prop, "any-hover")) {
+        if (eqlIgnoreCase(value, "hover")) return true;
+        if (eqlIgnoreCase(value, "none")) return false;
+        return true;
+    }
+    if (eqlIgnoreCase(prop, "pointer")) {
+        if (eqlIgnoreCase(value, "fine")) return true;
+        if (eqlIgnoreCase(value, "coarse")) return false;
+        if (eqlIgnoreCase(value, "none")) return false;
+        return true;
+    }
+    if (eqlIgnoreCase(prop, "any-pointer")) {
+        if (eqlIgnoreCase(value, "fine")) return true;
+        if (eqlIgnoreCase(value, "coarse")) return false;
+        if (eqlIgnoreCase(value, "none")) return false;
+        return true;
+    }
+    // User preference media features
+    if (eqlIgnoreCase(prop, "prefers-reduced-motion")) {
+        if (eqlIgnoreCase(value, "reduce")) return false;
+        if (eqlIgnoreCase(value, "no-preference")) return true;
+        return true;
+    }
+    if (eqlIgnoreCase(prop, "prefers-contrast")) {
+        if (eqlIgnoreCase(value, "no-preference")) return true;
+        return false;
+    }
+    // Scripting and display mode
+    if (eqlIgnoreCase(prop, "scripting")) {
+        if (eqlIgnoreCase(value, "enabled")) return true;
+        return false;
+    }
+    if (eqlIgnoreCase(prop, "display-mode")) {
+        if (eqlIgnoreCase(value, "browser")) return true;
+        return false;
+    }
+    // Orientation
+    if (eqlIgnoreCase(prop, "orientation")) {
+        if (eqlIgnoreCase(value, "landscape")) return vw > vh;
+        if (eqlIgnoreCase(value, "portrait")) return vw <= vh;
+        return true;
+    }
+    // Color features
+    if (eqlIgnoreCase(prop, "color")) return true;
+    if (eqlIgnoreCase(prop, "color-index")) {
+        if (eqlIgnoreCase(value, "0")) return true;
+        return false;
+    }
+    if (eqlIgnoreCase(prop, "color-gamut")) {
+        if (eqlIgnoreCase(value, "srgb")) return true;
+        return false;
+    }
 
     const px_val = parsePixelValue(value) orelse return true; // unknown unit — fail-open
 

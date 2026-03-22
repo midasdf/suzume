@@ -438,6 +438,9 @@ pub const ComputedStyle = struct {
         fr: f32,
         percent: f32,
         auto,
+        auto_repeat_px: f32, // repeat(auto-fill/auto-fit, Npx) — stores the track size in px
+        auto_repeat_fr: f32, // repeat(auto-fill/auto-fit, Nfr)
+        auto_repeat_percent: f32, // repeat(auto-fill/auto-fit, N%)
     };
 
     pub const GridAutoFlow = enum {

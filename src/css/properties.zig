@@ -612,6 +612,36 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     if (std.mem.eql(u8, name, "outline")) {
         return expandOutline(trimmed, allocator);
     }
+    // border-top, border-right, border-bottom, border-left shorthands
+    if (std.mem.eql(u8, name, "border-top")) {
+        return expandBorderSide(trimmed, .border_top_width, "border-top-width", .border_top_style, "border-top-style", .border_top_color, "border-top-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-right")) {
+        return expandBorderSide(trimmed, .border_right_width, "border-right-width", .border_right_style, "border-right-style", .border_right_color, "border-right-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-bottom")) {
+        return expandBorderSide(trimmed, .border_bottom_width, "border-bottom-width", .border_bottom_style, "border-bottom-style", .border_bottom_color, "border-bottom-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-left")) {
+        return expandBorderSide(trimmed, .border_left_width, "border-left-width", .border_left_style, "border-left-style", .border_left_color, "border-left-color", allocator);
+    }
+    // inset shorthand: top/right/bottom/left
+    if (std.mem.eql(u8, name, "inset")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .top, .name = "top" },
+            .{ .id = .right, .name = "right" },
+            .{ .id = .bottom, .name = "bottom" },
+            .{ .id = .left, .name = "left" },
+        }, allocator);
+    }
+    // font shorthand
+    if (std.mem.eql(u8, name, "font")) {
+        return expandFont(trimmed, allocator);
+    }
+    // text-decoration shorthand
+    if (std.mem.eql(u8, name, "text-decoration")) {
+        return expandTextDecoration(trimmed, allocator);
+    }
     return null;
 }
 
@@ -1185,6 +1215,185 @@ fn expandOutline(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declara
     decls[0] = .{ .property = .outline_width, .property_name = "outline-width", .value_raw = width, .important = false };
     decls[1] = .{ .property = .outline_style, .property_name = "outline-style", .value_raw = style, .important = false };
     decls[2] = .{ .property = .outline_color, .property_name = "outline-color", .value_raw = color_val, .important = false };
+    return decls;
+}
+
+fn expandBorderSide(
+    value: []const u8,
+    w_id: ast.PropertyId,
+    w_name: []const u8,
+    s_id: ast.PropertyId,
+    s_name: []const u8,
+    c_id: ast.PropertyId,
+    c_name: []const u8,
+    allocator: std.mem.Allocator,
+) ?[]ast.Declaration {
+    if (isCssWideKeyword(value)) {
+        const decls = allocator.alloc(ast.Declaration, 3) catch return null;
+        decls[0] = .{ .property = w_id, .property_name = w_name, .value_raw = value, .important = false };
+        decls[1] = .{ .property = s_id, .property_name = s_name, .value_raw = value, .important = false };
+        decls[2] = .{ .property = c_id, .property_name = c_name, .value_raw = value, .important = false };
+        return decls;
+    }
+
+    var width: []const u8 = "medium";
+    var style: []const u8 = "none";
+    var color_val: []const u8 = "currentcolor";
+
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (isBorderStyle(tok)) {
+            style = tok;
+        } else if (parseLength(tok) != null or eqlIgnoreCase(tok, "thin") or eqlIgnoreCase(tok, "medium") or eqlIgnoreCase(tok, "thick")) {
+            width = tok;
+        } else {
+            color_val = tok;
+        }
+    }
+
+    const decls = allocator.alloc(ast.Declaration, 3) catch return null;
+    decls[0] = .{ .property = w_id, .property_name = w_name, .value_raw = width, .important = false };
+    decls[1] = .{ .property = s_id, .property_name = s_name, .value_raw = style, .important = false };
+    decls[2] = .{ .property = c_id, .property_name = c_name, .value_raw = color_val, .important = false };
+    return decls;
+}
+
+fn expandFont(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    // System font keywords — ignore (return null)
+    const system_fonts = [_][]const u8{ "caption", "icon", "menu", "message-box", "small-caption", "status-bar" };
+    for (system_fonts) |sf| {
+        if (eqlIgnoreCase(value, sf)) return null;
+    }
+
+    if (isCssWideKeyword(value)) {
+        const decls = allocator.alloc(ast.Declaration, 5) catch return null;
+        decls[0] = .{ .property = .font_style, .property_name = "font-style", .value_raw = value, .important = false };
+        decls[1] = .{ .property = .font_weight, .property_name = "font-weight", .value_raw = value, .important = false };
+        decls[2] = .{ .property = .font_size, .property_name = "font-size", .value_raw = value, .important = false };
+        decls[3] = .{ .property = .line_height, .property_name = "line-height", .value_raw = value, .important = false };
+        decls[4] = .{ .property = .font_family, .property_name = "font-family", .value_raw = value, .important = false };
+        return decls;
+    }
+
+    // Parse: [font-style] [font-variant] [font-weight] font-size[/line-height] font-family
+    // Tokenize respecting quoted strings
+    var tokens: [16][]const u8 = undefined;
+    var token_count: usize = 0;
+    {
+        var i: usize = 0;
+        while (i < value.len and token_count < tokens.len) {
+            while (i < value.len and (value[i] == ' ' or value[i] == '\t')) i += 1;
+            if (i >= value.len) break;
+            const start = i;
+            if (value[i] == '"' or value[i] == '\'') {
+                const quote = value[i];
+                i += 1;
+                while (i < value.len and value[i] != quote) i += 1;
+                if (i < value.len) i += 1; // skip closing quote
+            } else {
+                while (i < value.len and value[i] != ' ' and value[i] != '\t') i += 1;
+            }
+            if (i > start) {
+                tokens[token_count] = value[start..i];
+                token_count += 1;
+            }
+        }
+    }
+    if (token_count < 2) return null; // Need at least font-size and font-family
+
+    var font_style: []const u8 = "normal";
+    var font_weight: []const u8 = "normal";
+    var font_size: []const u8 = "medium";
+    var line_height: []const u8 = "normal";
+    var family_start: usize = 0;
+
+    // Scan tokens left to right for optional style/variant/weight, then size, then family
+    var ti: usize = 0;
+    // Parse optional font-style
+    if (ti < token_count) {
+        if (eqlIgnoreCase(tokens[ti], "italic") or eqlIgnoreCase(tokens[ti], "oblique")) {
+            font_style = tokens[ti];
+            ti += 1;
+        } else if (eqlIgnoreCase(tokens[ti], "normal")) {
+            ti += 1; // could be style, variant, or weight — skip
+        }
+    }
+    // Parse optional font-variant (small-caps) — skip it
+    if (ti < token_count and eqlIgnoreCase(tokens[ti], "small-caps")) {
+        ti += 1;
+    }
+    // Parse optional font-weight
+    if (ti < token_count) {
+        const w = tokens[ti];
+        if (eqlIgnoreCase(w, "bold") or eqlIgnoreCase(w, "bolder") or eqlIgnoreCase(w, "lighter")) {
+            font_weight = w;
+            ti += 1;
+        } else if (w.len > 0 and w[0] >= '1' and w[0] <= '9') {
+            // Could be a numeric weight (100-900) or could be font-size
+            // Numeric weights are 100,200,...900 — check if it's a round hundred
+            if (std.fmt.parseInt(u32, w, 10)) |n| {
+                if (n >= 100 and n <= 900 and n % 100 == 0) {
+                    font_weight = w;
+                    ti += 1;
+                }
+            } else |_| {}
+        }
+    }
+    // Next token must be font-size (possibly with /line-height)
+    if (ti >= token_count) return null;
+    const size_tok = tokens[ti];
+    ti += 1;
+    // Check for font-size/line-height
+    if (std.mem.indexOf(u8, size_tok, "/")) |slash| {
+        font_size = size_tok[0..slash];
+        line_height = size_tok[slash + 1 ..];
+    } else {
+        font_size = size_tok;
+    }
+    // Rest is font-family
+    family_start = ti;
+    if (family_start >= token_count) return null;
+
+    // Reconstruct font-family from remaining tokens (join with spaces)
+    // Use the original value slice from the start of family_start token to end
+    const family_begin = @intFromPtr(tokens[family_start].ptr) - @intFromPtr(value.ptr);
+    const font_family = value[family_begin..];
+
+    var decl_count: usize = 3; // font-size, font-family, font-style always
+    decl_count += 1; // font-weight
+    if (!std.mem.eql(u8, line_height, "normal")) decl_count += 1;
+
+    const decls = allocator.alloc(ast.Declaration, decl_count) catch return null;
+    var di: usize = 0;
+    decls[di] = .{ .property = .font_style, .property_name = "font-style", .value_raw = font_style, .important = false };
+    di += 1;
+    decls[di] = .{ .property = .font_weight, .property_name = "font-weight", .value_raw = font_weight, .important = false };
+    di += 1;
+    decls[di] = .{ .property = .font_size, .property_name = "font-size", .value_raw = font_size, .important = false };
+    di += 1;
+    if (!std.mem.eql(u8, line_height, "normal")) {
+        decls[di] = .{ .property = .line_height, .property_name = "line-height", .value_raw = line_height, .important = false };
+        di += 1;
+    }
+    decls[di] = .{ .property = .font_family, .property_name = "font-family", .value_raw = font_family, .important = false };
+    return decls;
+}
+
+fn expandTextDecoration(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    // text-decoration: underline red wavy → extract line value (underline/line-through/overline/none)
+    // We only support the line sub-property for now; pass through to text_decoration
+    var line_val: []const u8 = value;
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    while (iter.next()) |tok| {
+        if (eqlIgnoreCase(tok, "none") or eqlIgnoreCase(tok, "underline") or
+            eqlIgnoreCase(tok, "line-through") or eqlIgnoreCase(tok, "overline"))
+        {
+            line_val = tok;
+            break;
+        }
+    }
+    const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+    decls[0] = .{ .property = .text_decoration, .property_name = "text-decoration", .value_raw = line_val, .important = false };
     return decls;
 }
 

@@ -2160,20 +2160,32 @@ fn parseGridTemplate(s: []const u8, alloc: std.mem.Allocator) ?[]const ComputedS
                 if (s[end] == ')') depth -= 1;
             }
             const inner = s[start..if (end > start and s[end - 1] == ')') end - 1 else end];
-            // Parse repeat(N, size)
+            // Parse repeat(N, size) or repeat(auto-fill/auto-fit, size)
             if (std.mem.indexOfScalar(u8, inner, ',')) |comma| {
                 const count_str = std.mem.trim(u8, inner[0..comma], " \t");
-                const count = std.fmt.parseInt(usize, count_str, 10) catch {
-                    pos = end;
-                    continue;
-                };
                 const size_str = std.mem.trim(u8, inner[comma + 1 ..], " \t");
                 const track = parseOneTrack(size_str) orelse {
                     pos = end;
                     continue;
                 };
-                for (0..count) |_| {
-                    tracks.append(alloc, track) catch return null;
+                if (eqlIgnoreCase(count_str, "auto-fill") or eqlIgnoreCase(count_str, "auto-fit")) {
+                    // Store as auto_repeat marker with the track size info
+                    const auto_track: ComputedStyle.GridTrackSize = switch (track) {
+                        .px => |v| .{ .auto_repeat_px = v },
+                        .percent => |v| .{ .auto_repeat_percent = v },
+                        .fr => |v| .{ .auto_repeat_fr = v },
+                        .auto => .{ .auto_repeat_px = 0 }, // auto in repeat = treat as 0
+                        else => .{ .auto_repeat_px = 0 },
+                    };
+                    tracks.append(alloc, auto_track) catch return null;
+                } else {
+                    const count = std.fmt.parseInt(usize, count_str, 10) catch {
+                        pos = end;
+                        continue;
+                    };
+                    for (0..count) |_| {
+                        tracks.append(alloc, track) catch return null;
+                    }
                 }
             }
             pos = end;
@@ -2375,14 +2387,50 @@ fn parseShadow(
         return;
     }
 
+    // For multiple shadows (comma-separated), parse only the first one.
+    // Find the first top-level comma (not inside parentheses).
+    var first_shadow = s;
+    {
+        var depth: usize = 0;
+        for (s, 0..) |c, i| {
+            if (c == '(') depth += 1
+            else if (c == ')') { if (depth > 0) depth -= 1; }
+            else if (c == ',' and depth == 0) {
+                first_shadow = s[0..i];
+                break;
+            }
+        }
+    }
+
+    // Tokenize respecting parentheses (for rgba(), etc.)
     var tokens: [8][]const u8 = undefined;
     var token_count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, s, " \t");
-    while (iter.next()) |tok| {
-        if (token_count >= 8) break;
-        if (eqlIgnoreCase(tok, "inset")) continue;
-        tokens[token_count] = tok;
-        token_count += 1;
+    {
+        var i: usize = 0;
+        while (i < first_shadow.len and token_count < 8) {
+            while (i < first_shadow.len and (first_shadow[i] == ' ' or first_shadow[i] == '\t')) i += 1;
+            if (i >= first_shadow.len) break;
+            const start = i;
+            var depth: usize = 0;
+            while (i < first_shadow.len) {
+                if (first_shadow[i] == '(') {
+                    depth += 1;
+                } else if (first_shadow[i] == ')') {
+                    if (depth > 0) depth -= 1;
+                    if (depth == 0) { i += 1; break; }
+                } else if ((first_shadow[i] == ' ' or first_shadow[i] == '\t') and depth == 0) {
+                    break;
+                }
+                i += 1;
+            }
+            if (i > start) {
+                const tok = first_shadow[start..i];
+                if (!eqlIgnoreCase(tok, "inset")) {
+                    tokens[token_count] = tok;
+                    token_count += 1;
+                }
+            }
+        }
     }
 
     if (token_count < 2) return;

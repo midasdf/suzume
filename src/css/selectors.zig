@@ -37,14 +37,20 @@ pub const PseudoClass = enum {
     only_child,
     first_of_type,
     last_of_type,
+    only_of_type,
     nth_child,
     nth_last_child,
     nth_of_type,
+    nth_last_of_type,
     root,
     empty,
     checked,
     disabled,
     enabled,
+    focus_visible,
+    focus_within,
+    target,
+    placeholder_shown,
 
     const map = std.StaticStringMap(PseudoClass).initComptime(.{
         .{ "hover", .hover },
@@ -57,11 +63,16 @@ pub const PseudoClass = enum {
         .{ "only-child", .only_child },
         .{ "first-of-type", .first_of_type },
         .{ "last-of-type", .last_of_type },
+        .{ "only-of-type", .only_of_type },
         .{ "root", .root },
         .{ "empty", .empty },
         .{ "checked", .checked },
         .{ "disabled", .disabled },
         .{ "enabled", .enabled },
+        .{ "focus-visible", .focus_visible },
+        .{ "focus-within", .focus_within },
+        .{ "target", .target },
+        .{ "placeholder-shown", .placeholder_shown },
     });
 
     pub fn fromString(name: []const u8) ?PseudoClass {
@@ -74,6 +85,7 @@ pub const PseudoClass = enum {
         if (std.mem.eql(u8, lower, "nth-child")) return .nth_child;
         if (std.mem.eql(u8, lower, "nth-last-child")) return .nth_last_child;
         if (std.mem.eql(u8, lower, "nth-of-type")) return .nth_of_type;
+        if (std.mem.eql(u8, lower, "nth-last-of-type")) return .nth_last_of_type;
         return map.get(lower);
     }
 };
@@ -345,7 +357,7 @@ const SelectorParser = struct {
                         const arg_end = if (self.pos > 0) self.pos - 1 else self.pos;
                         if (arg_end > arg_start) {
                             const arg = std.mem.trim(u8, self.source[arg_start..arg_end], " \t");
-                            if (pc == .nth_child or pc == .nth_last_child or pc == .nth_of_type) {
+                            if (pc == .nth_child or pc == .nth_last_child or pc == .nth_of_type or pc == .nth_last_of_type) {
                                 nth = parseAnB(arg);
                             }
                         }
@@ -885,6 +897,37 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             }
             return matchesNthFormula(position, params.a, params.b);
         },
+        .only_of_type => {
+            const tag = element.tagName() orelse return false;
+            var prev_sib = element.previousElementSibling();
+            while (prev_sib) |s| {
+                if (s.tagName()) |st| {
+                    if (eqlIgnoreCase(st, tag)) return false;
+                }
+                prev_sib = s.previousElementSibling();
+            }
+            var next_sib = element.nextElementSibling();
+            while (next_sib) |s| {
+                if (s.tagName()) |st| {
+                    if (eqlIgnoreCase(st, tag)) return false;
+                }
+                next_sib = s.nextElementSibling();
+            }
+            return true;
+        },
+        .nth_last_of_type => {
+            const params = pcs.nth orelse return true;
+            const tag = element.tagName() orelse return false;
+            var position: i32 = 1;
+            var sib = element.nextElementSibling();
+            while (sib) |s| {
+                if (s.tagName()) |st| {
+                    if (eqlIgnoreCase(st, tag)) position += 1;
+                }
+                sib = s.nextElementSibling();
+            }
+            return matchesNthFormula(position, params.a, params.b);
+        },
         // :link matches <a> elements with href attribute (unvisited)
         .link => {
             const tag = element.tagName() orelse "";
@@ -898,7 +941,18 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
         // Interactive pseudo-classes
         .hover => return element.isHovered(),
         .focus => return element.isFocused(),
+        .focus_visible => return element.isFocused(), // treat same as :focus
+        .focus_within => return element.isFocused(), // approximate: check self only
         .active => return false,
+        .target => return false, // no URL fragment tracking
+        .placeholder_shown => {
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "textarea")) {
+                // Match if element has a placeholder attribute and value is empty
+                return element.getAttribute("placeholder") != null;
+            }
+            return false;
+        },
     }
 }
 
