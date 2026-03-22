@@ -106,7 +106,7 @@ pub const CascadeResult = struct {
 
 /// Minimal user-agent default stylesheet (standard browser defaults).
 const ua_stylesheet_text =
-    \\html { color: #000000; }
+    \\html { color: #000000; background-color: #ffffff; }
     \\body { margin: 8px; color: #000000; }
     \\html, body, div, section, article, aside, nav, main,
     \\header, footer, h1, h2, h3, h4, h5, h6, p, blockquote,
@@ -743,6 +743,7 @@ fn walkAndCompute(
 
         // Sort by cascade priority
         std.mem.sort(CascadeEntry, entries.items, {}, cascadeEntryLessThan);
+
 
         // Build per-element VarMap: collect --* declarations from matching rules.
         // If this element declares custom properties, create a child VarMap inheriting
@@ -1578,6 +1579,12 @@ fn applyDeclaration(
                 style.grid_row_span = std.fmt.parseInt(u16, num, 10) catch 1;
             } else style.grid_row_end = parseGridLine(trimmed);
         },
+        .grid_template_areas => {
+            style.grid_template_areas = parseGridTemplateAreas(trimmed, arena);
+        },
+        .grid_area => {
+            style.grid_area = trimmed;
+        },
         .content => {
             // Parse CSS content property value (for ::before/::after)
             if (trimmed.len >= 2 and (trimmed[0] == '"' or trimmed[0] == '\'')) {
@@ -2238,6 +2245,52 @@ fn parseOneTrack(t: []const u8) ?ComputedStyle.GridTrackSize {
 
 fn parseGridLine(s: []const u8) i16 {
     return std.fmt.parseInt(i16, s, 10) catch 0;
+}
+
+/// Parse CSS grid-template-areas value.
+/// Input: "'siteNotice siteNotice' 'columnStart pageContent' 'footer footer'"
+/// Returns: [["siteNotice","siteNotice"],["columnStart","pageContent"],["footer","footer"]]
+fn parseGridTemplateAreas(s: []const u8, arena: std.mem.Allocator) ?[]const []const []const u8 {
+    var rows: std.ArrayListUnmanaged([]const []const u8) = .empty;
+    var pos: usize = 0;
+    while (pos < s.len) {
+        // Skip whitespace
+        while (pos < s.len and (s[pos] == ' ' or s[pos] == '\t' or s[pos] == '\n')) pos += 1;
+        if (pos >= s.len) break;
+
+        // Find quoted string
+        if (s[pos] == '\'' or s[pos] == '"') {
+            const quote = s[pos];
+            pos += 1;
+            const row_start = pos;
+            while (pos < s.len and s[pos] != quote) pos += 1;
+            const row_str = s[row_start..pos];
+            if (pos < s.len) pos += 1; // skip closing quote
+
+            // Split row by whitespace to get area names
+            var names: std.ArrayListUnmanaged([]const u8) = .empty;
+            var rpos: usize = 0;
+            while (rpos < row_str.len) {
+                while (rpos < row_str.len and (row_str[rpos] == ' ' or row_str[rpos] == '\t')) rpos += 1;
+                if (rpos >= row_str.len) break;
+                const name_start = rpos;
+                while (rpos < row_str.len and row_str[rpos] != ' ' and row_str[rpos] != '\t') rpos += 1;
+                const name = row_str[name_start..rpos];
+                if (name.len > 0 and !std.mem.eql(u8, name, ".")) {
+                    names.append(arena, name) catch return null;
+                } else if (std.mem.eql(u8, name, ".")) {
+                    names.append(arena, ".") catch return null;
+                }
+            }
+            if (names.items.len > 0) {
+                rows.append(arena, names.toOwnedSlice(arena) catch return null) catch return null;
+            }
+        } else {
+            pos += 1; // skip unexpected char
+        }
+    }
+    if (rows.items.len == 0) return null;
+    return rows.toOwnedSlice(arena) catch null;
 }
 
 fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle.Dimension {

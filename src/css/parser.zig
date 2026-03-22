@@ -306,6 +306,10 @@ pub const Parser = struct {
             return try self.parseFontFaceRule();
         } else if (eqlIgnoreCase(name, "supports")) {
             return try self.parseSupportsRule();
+        } else if (eqlIgnoreCase(name, "layer")) {
+            // CSS Layers (@layer): parse inner rules as if unwrapped.
+            // We don't implement layer ordering, but we need to parse the content.
+            return try self.parseLayerRule();
         } else {
             self.skipAtRule();
             return null;
@@ -420,6 +424,51 @@ pub const Parser = struct {
         return .{ .font_face = .{
             .declarations = declarations,
         } };
+    }
+
+    fn parseLayerRule(self: *Parser) ParseError!?ast.Rule {
+        // @layer can be:
+        //   @layer name { rules }  — named layer with content
+        //   @layer { rules }       — anonymous layer
+        //   @layer name;           — layer declaration (no content)
+        //   @layer name, name2;    — layer ordering statement
+        // We treat layers as transparent: parse inner rules and flatten them.
+        const first_t = self.skipWhitespace();
+        if (first_t.type == .eof) return null;
+
+        if (first_t.type == .open_curly) {
+            // @layer { rules } — anonymous layer, parse inner rules
+            const rules = try self.parseRuleList();
+            // Return as media rule with empty query (always matches)
+            return .{ .media = .{
+                .query = .{ .raw = "" },
+                .rules = rules,
+            } };
+        }
+
+        if (first_t.type == .semicolon) {
+            // @layer name; — declaration only, skip
+            return null;
+        }
+
+        // Skip layer name tokens until '{' or ';'
+        while (true) {
+            const t = self.peekToken();
+            if (t.type == .open_curly or t.type == .semicolon or t.type == .eof) break;
+            _ = self.nextToken();
+        }
+
+        const next = self.nextToken();
+        if (next.type == .open_curly) {
+            // @layer name { rules }
+            const rules = try self.parseRuleList();
+            return .{ .media = .{
+                .query = .{ .raw = "" },
+                .rules = rules,
+            } };
+        }
+        // @layer name; — semicolon ends it
+        return null;
     }
 
     fn parseSupportsRule(self: *Parser) ParseError!?ast.Rule {

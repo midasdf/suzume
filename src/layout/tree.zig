@@ -143,10 +143,75 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
     // Only wrap if this is a block-level container
     if (parent.box_type != .block and parent.box_type != .anonymous_block) return;
 
-    // For flex/grid containers, ALL inline children must be wrapped in anonymous blocks
-    // (CSS spec: "Each in-flow child of a flex container becomes a flex item")
+    // For flex/grid containers, element children become flex/grid items directly.
+    // Only bare text runs (inline_text) need wrapping in anonymous blocks.
+    // For block containers, mixed inline+block children need wrapping.
     const is_flex_or_grid = parent.style.display == .flex or parent.style.display == .inline_flex or
         parent.style.display == .grid or parent.style.display == .inline_grid;
+
+    if (is_flex_or_grid) {
+        // Flex/grid: promote inline element children to block (flex items),
+        // and wrap consecutive inline_text runs in anonymous blocks.
+        var has_text = false;
+        for (parent.children.items) |child| {
+            if (child.box_type == .inline_text) {
+                has_text = true;
+                break;
+            }
+        }
+
+        // Promote inline_box children to block (they become flex items)
+        for (parent.children.items) |child| {
+            if (child.box_type == .inline_box) {
+                child.box_type = .block;
+            }
+        }
+
+        if (!has_text) return;
+
+        // Wrap consecutive inline_text runs in anonymous blocks
+        var new_children: @TypeOf(parent.children) = .empty;
+        var current_anon: ?*Box = null;
+
+        for (parent.children.items) |child| {
+            if (child.box_type == .inline_text) {
+                if (current_anon == null) {
+                    const anon = try allocator.create(Box);
+                    anon.* = .{};
+                    anon.box_type = .anonymous_block;
+                    anon.style = parent.style;
+                    anon.style.display = .block;
+                    anon.style.background_color = 0x00000000;
+                    anon.style.margin_top = 0;
+                    anon.style.margin_right = 0;
+                    anon.style.margin_bottom = 0;
+                    anon.style.margin_left = 0;
+                    anon.style.padding_top = 0;
+                    anon.style.padding_right = 0;
+                    anon.style.padding_bottom = 0;
+                    anon.style.padding_left = 0;
+                    anon.style.width = .auto;
+                    anon.style.height = .auto;
+                    anon.parent = parent;
+                    current_anon = anon;
+                }
+                child.parent = current_anon.?;
+                try current_anon.?.children.append(allocator, child);
+            } else {
+                if (current_anon) |anon| {
+                    try new_children.append(allocator, anon);
+                    current_anon = null;
+                }
+                try new_children.append(allocator, child);
+            }
+        }
+        if (current_anon) |anon| {
+            try new_children.append(allocator, anon);
+        }
+
+        parent.children = new_children;
+        return;
+    }
 
     // Check if we have a mix of inline and block children
     var has_inline = false;
@@ -159,10 +224,9 @@ fn wrapInlineChildren(parent: *Box, allocator: std.mem.Allocator) !void {
         }
     }
 
-    // For flex/grid: force wrapping if any inline children exist
     // For block: only wrap if mixed inline+block
     if (!has_inline) return;
-    if (!is_flex_or_grid and !has_block) return;
+    if (!has_block) return;
 
     // Mixed: wrap consecutive inline runs in anonymous blocks
     var new_children: @TypeOf(parent.children) = .empty;
@@ -231,11 +295,10 @@ fn buildChildren(
                     continue;
                 }
 
-                // Skip elements with HTML hidden attribute or aria-hidden="true"
+                // Skip elements with HTML hidden attribute
                 if (child.getAttribute("hidden") != null) continue;
-                if (child.getAttribute("aria-hidden")) |ah| {
-                    if (std.mem.eql(u8, ah, "true")) continue;
-                }
+                // Note: aria-hidden="true" is for screen readers only, NOT visual hiding.
+                // Elements with aria-hidden should still be rendered visually.
 
                 // Skip closed <details> children (except <summary>)
                 if (child.tagName()) |tag| {

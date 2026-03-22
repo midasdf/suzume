@@ -150,7 +150,10 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
         page.total_height, page.total_width, new_root_box.children.items.len,
     });
+
+
 }
+
 
 /// Browser state holding the current page's data.
 const PageState = struct {
@@ -1048,7 +1051,7 @@ fn navigateTo(
     const content_w: f32 = @floatFromInt(layout_width);
     block_layout.layoutBlockVp(root_box, content_w, 0, fonts, @floatFromInt(layout_height));
 
-    // Collect image URLs for incremental loading (loaded 1 per event loop tick)
+    // Collect image URLs for incremental loading
     const img_cache = ImageCache.init(allocator);
     var pending_imgs: std.ArrayListUnmanaged(ImageUrlEntry) = .empty;
     collectImageUrls(root_box, &pending_imgs, allocator);
@@ -2183,7 +2186,9 @@ pub fn main() !void {
             else
                 null;
             if (active_img_pg) |pg| {
-                if (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 30) {
+                // Load up to 5 images per tick (batch for performance)
+                var batch: usize = 0;
+                while (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 200 and batch < 5) : (batch += 1) {
                     const entry = pg.pending_images.items[pg.pending_images_idx];
                     pg.pending_images_idx += 1;
 
@@ -2203,6 +2208,7 @@ pub fn main() !void {
                                             mimg.deinit();
                                         };
                                         pg.pending_images_loaded += 1;
+                                        needs_repaint = true;
                                     }
                                 }
                             }
@@ -2212,7 +2218,7 @@ pub fn main() !void {
                             if (resolveUrl(allocator, base, img_url)) |resolved| {
                                 defer allocator.free(resolved);
                                 {
-                                    if (loader.loadBytesWithTimeout(resolved, 3)) |resp_val| {
+                                    if (loader.loadBytesWithTimeout(resolved, 5)) |resp_val| {
                                         var resp = resp_val;
                                         defer resp.deinit();
                                         if (resp.status_code == 200 and resp.body.len > 0 and resp.body.len <= 2 * 1024 * 1024) {

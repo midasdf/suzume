@@ -98,6 +98,8 @@ pub const PropertyId = enum(u16) {
     grid_column_end,
     grid_row_start,
     grid_row_end,
+    grid_template_areas,
+    grid_area,
     // Shadows
     box_shadow,
     text_shadow,
@@ -226,6 +228,8 @@ pub const PropertyId = enum(u16) {
         .{ "grid-column-end", .grid_column_end },
         .{ "grid-row-start", .grid_row_start },
         .{ "grid-row-end", .grid_row_end },
+        .{ "grid-template-areas", .grid_template_areas },
+        .{ "grid-area", .grid_area },
         .{ "box-shadow", .box_shadow },
         .{ "text-shadow", .text_shadow },
         .{ "transform", .transform },

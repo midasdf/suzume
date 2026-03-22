@@ -71,7 +71,7 @@ for url in "${URLS[@]}"; do
 
     # 2) Suzume screenshot — run in Xvfb then capture root window
     echo "  [Suzume]  Taking screenshot..."
-    /app/suzume "$url" &
+    SUZUME_WIDTH=$WIDTH SUZUME_HEIGHT=$HEIGHT /app/suzume "$url" &
     SUZUME_PID=$!
 
     # Wait for page to load and render
@@ -92,14 +92,12 @@ for url in "${URLS[@]}"; do
 
     # 3) Generate diff image if both exist
     if [ -f "$FIREFOX_DIR/$fname" ] && [ -f "$SUZUME_DIR/$fname" ]; then
-        # Crop both to content area (top portion) and resize to same dimensions
-        # Firefox screenshots are full-page height, suzume captures Xvfb viewport
-        # Crop to viewport-sized region from top for fair comparison
-        # Resize both to same dimensions for fair comparison
-        magick "$FIREFOX_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/ff_resized.png" 2>/dev/null || \
-            convert "$FIREFOX_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/ff_resized.png" 2>/dev/null || true
-        magick "$SUZUME_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/sz_resized.png" 2>/dev/null || \
-            convert "$SUZUME_DIR/$fname" -resize "${WIDTH}x${HEIGHT}!" "/tmp/sz_resized.png" 2>/dev/null || true
+        # Crop Firefox's full-page screenshot to viewport size (top portion)
+        # and ensure suzume's capture is the same size for fair comparison.
+        magick "$FIREFOX_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/ff_resized.png" 2>/dev/null || \
+            convert "$FIREFOX_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/ff_resized.png" 2>/dev/null || true
+        magick "$SUZUME_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/sz_resized.png" 2>/dev/null || \
+            convert "$SUZUME_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/sz_resized.png" 2>/dev/null || true
 
         if [ -f "/tmp/ff_resized.png" ] && [ -f "/tmp/sz_resized.png" ]; then
             # Compare pixel differences

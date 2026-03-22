@@ -583,6 +583,11 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     if (std.mem.eql(u8, name, "grid-row")) {
         return expandGridSlash(trimmed, .grid_row_start, "grid-row-start", .grid_row_end, "grid-row-end", allocator);
     }
+    // grid-template shorthand: "rows / columns" or with areas
+    // e.g. "min-content 1fr min-content / 12.25rem minmax(0,1fr)"
+    if (std.mem.eql(u8, name, "grid-template")) {
+        return expandGridTemplate(trimmed, allocator);
+    }
     if (std.mem.eql(u8, name, "grid-gap")) {
         const decls = allocator.alloc(ast.Declaration, 1) catch return null;
         decls[0] = .{ .property = .gap, .property_name = "gap", .value_raw = trimmed, .important = false };
@@ -895,10 +900,25 @@ fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaratio
     }
 
     if (count == 1) {
-        // flex: <number> → grow=number, shrink=1, basis=0%
-        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
-        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
-        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
+        // Single value: if it has units (%, px, em, etc.), it's flex-basis
+        // Otherwise it's flex-grow
+        const is_basis = blk: {
+            for (parts[0]) |c| {
+                if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '%') break :blk true;
+            }
+            break :blk false;
+        };
+        if (is_basis) {
+            // flex: <basis> → grow=1, shrink=1, basis=value
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = "1", .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[0], .important = false };
+        } else {
+            // flex: <number> → grow=number, shrink=1, basis=0%
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
+        }
     } else if (count == 2) {
         // flex: <grow> <shrink|basis>
         // If parts[1] contains a letter or '%', treat as basis (grow=parts[0], shrink=1, basis=parts[1])
@@ -991,6 +1011,78 @@ fn expandGridSlash(
         decls[1] = .{ .property = end_id, .property_name = end_name, .value_raw = "auto", .important = false };
     }
     return decls;
+}
+
+/// Expand grid-template shorthand.
+/// Format: "rows / columns" — possibly with quoted area strings interspersed.
+/// Wikipedia example: "min-content 1fr min-content / 12.25rem minmax(0,1fr)"
+/// When areas are present: "'header header' 1fr 'sidebar content' auto / 200px 1fr"
+fn expandGridTemplate(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    // Find the slash that separates rows from columns.
+    // Need to skip slashes inside parentheses (e.g. minmax()) and quotes.
+    var depth: usize = 0;
+    var in_quote: u8 = 0;
+    var slash_pos: ?usize = null;
+    for (value, 0..) |c, i| {
+        if (in_quote != 0) {
+            if (c == in_quote) in_quote = 0;
+            continue;
+        }
+        if (c == '\'' or c == '"') {
+            in_quote = c;
+            continue;
+        }
+        if (c == '(') depth += 1;
+        if (c == ')' and depth > 0) depth -= 1;
+        if (c == '/' and depth == 0) {
+            slash_pos = i;
+            break;
+        }
+    }
+
+    if (slash_pos) |sp| {
+        const rows_part = std.mem.trim(u8, value[0..sp], " \t");
+        const cols_part = std.mem.trim(u8, value[sp + 1 ..], " \t");
+
+        // Check if rows_part contains quoted strings (grid-template-areas)
+        const has_areas = std.mem.indexOf(u8, rows_part, "'") != null or std.mem.indexOf(u8, rows_part, "\"") != null;
+
+        if (has_areas) {
+            // Extract area strings and row sizes
+            // For now, just pass the areas part and columns part
+            const decls = allocator.alloc(ast.Declaration, 3) catch return null;
+            decls[0] = .{ .property = .grid_template_columns, .property_name = "grid-template-columns", .value_raw = cols_part, .important = false };
+            decls[1] = .{ .property = .grid_template_rows, .property_name = "grid-template-rows", .value_raw = extractRowSizes(rows_part), .important = false };
+            decls[2] = .{ .property = .grid_template_areas, .property_name = "grid-template-areas", .value_raw = rows_part, .important = false };
+            return decls;
+        } else {
+            const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+            decls[0] = .{ .property = .grid_template_rows, .property_name = "grid-template-rows", .value_raw = rows_part, .important = false };
+            decls[1] = .{ .property = .grid_template_columns, .property_name = "grid-template-columns", .value_raw = cols_part, .important = false };
+            return decls;
+        }
+    } else {
+        // No slash — could be just areas or just columns
+        // If it has quotes, treat as areas only
+        if (std.mem.indexOf(u8, value, "'") != null or std.mem.indexOf(u8, value, "\"") != null) {
+            const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+            decls[0] = .{ .property = .grid_template_areas, .property_name = "grid-template-areas", .value_raw = value, .important = false };
+            return decls;
+        }
+        // Otherwise treat as columns
+        const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+        decls[0] = .{ .property = .grid_template_columns, .property_name = "grid-template-columns", .value_raw = value, .important = false };
+        return decls;
+    }
+}
+
+/// Extract row sizes from a grid-template value that has areas.
+/// e.g. "'header' auto 'content' 1fr" → "auto 1fr"
+fn extractRowSizes(rows_part: []const u8) []const u8 {
+    // For the simple case, the row sizes are the non-quoted tokens
+    // Since the grid-template rows parsing already handles skipping named lines,
+    // we can just pass through and let parseGridTemplate handle it
+    return rows_part;
 }
 
 fn isCssWideKeyword(value: []const u8) bool {

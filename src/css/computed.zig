@@ -139,6 +139,11 @@ pub const ComputedStyle = struct {
     grid_row_end: i16 = 0,
     grid_column_span: u16 = 1,
     grid_row_span: u16 = 1,
+    grid_area: ?[]const u8 = null, // Named grid area (e.g. "pageContent")
+    /// Grid template areas defined on grid container.
+    /// Each row is a slice of area name strings.
+    /// E.g. [["siteNotice","siteNotice"],["columnStart","pageContent"]]
+    grid_template_areas: ?[]const []const []const u8 = null,
 
     // ═══════════════════════════════════════════════════════════════
     // Visual Effects

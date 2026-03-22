@@ -390,10 +390,15 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         };
         if (!has_explicit_width and !has_explicit_basis) {
             block.layoutBlock(child, container_width, box.content.y, fonts);
-            // Shrink to content width
-            const fit_w = block.computeShrinkToFitWidthPublic(child);
-            if (fit_w > 0 and fit_w < child.content.width) {
-                child.content.width = fit_w;
+            // Only shrink to fit for inline-level children, not nested flex/grid containers
+            // Nested flex containers have no intrinsic width and would collapse to 0
+            if (child.style.display != .flex and child.style.display != .inline_flex and
+                child.style.display != .grid and child.style.display != .inline_grid)
+            {
+                const fit_w = block.computeShrinkToFitWidthPublic(child);
+                if (fit_w > 0 and fit_w < child.content.width) {
+                    child.content.width = fit_w;
+                }
             }
         }
     }
