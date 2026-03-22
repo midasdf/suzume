@@ -198,6 +198,13 @@ pub fn build(b: *std.Build) void {
     });
     exe.addIncludePath(b.path("src/font"));
 
+    // Cross-compile: add sysroot library/include paths for aarch64 target
+    const resolved = target.result;
+    if (resolved.cpu.arch == .aarch64 and resolved.os.tag == .linux) {
+        exe.addLibraryPath(.{ .cwd_relative = "sysroot/usr/lib" });
+        exe.addIncludePath(.{ .cwd_relative = "sysroot/usr/include" });
+    }
+
     // System libraries
     exe.linkSystemLibrary("xcb");
     exe.linkSystemLibrary("xcb-icccm");
