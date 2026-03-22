@@ -22,6 +22,12 @@ extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_element_has_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) bool;
 extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
+// Lexbor attribute iteration (using _noi ABI-safe non-inline variants)
+extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
+extern fn lxb_dom_element_next_attribute_noi(attr: *anyopaque) ?*anyopaque;
+extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
+extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
+
 // Lexbor HTML serialization (for innerHTML/outerHTML)
 const lxb_html_serialize_cb_f = ?*const fn (data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(.c) lxb.lxb_status_t;
 extern fn lxb_html_serialize_tree_cb(node: *lxb.lxb_dom_node_t, cb: lxb_html_serialize_cb_f, ctx: ?*anyopaque) lxb.lxb_status_t;
@@ -1057,6 +1063,117 @@ fn classContains(class_str: []const u8, needle: []const u8) bool {
     return false;
 }
 
+fn classListItem(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    var idx: i32 = 0;
+    if (qjs.JS_ToInt32(c, &idx, args[0]) < 0) return quickjs.JS_NULL();
+    if (idx < 0) return quickjs.JS_NULL();
+
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return quickjs.JS_NULL();
+
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &attr_len);
+    if (attr_ptr == null or attr_len == 0) return quickjs.JS_NULL();
+
+    const class_str = attr_ptr.?[0..attr_len];
+    var i: i32 = 0;
+    var iter = std.mem.splitSequence(u8, class_str, " ");
+    while (iter.next()) |cls| {
+        if (cls.len == 0) continue;
+        if (i == idx) return qjs.JS_NewStringLen(c, cls.ptr, cls.len);
+        i += 1;
+    }
+    return quickjs.JS_NULL();
+}
+
+fn classListForEach(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const callback = args[0];
+
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
+
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &attr_len);
+    if (attr_ptr == null or attr_len == 0) return quickjs.JS_UNDEFINED();
+
+    const class_str = attr_ptr.?[0..attr_len];
+    var i: i32 = 0;
+    var iter = std.mem.splitSequence(u8, class_str, " ");
+    while (iter.next()) |cls| {
+        if (cls.len == 0) continue;
+        var cb_args = [_]qjs.JSValue{
+            qjs.JS_NewStringLen(c, cls.ptr, cls.len),
+            qjs.JS_NewInt32(c, i),
+            this_val,
+        };
+        const ret = qjs.JS_Call(c, callback, this_val, 3, &cb_args);
+        qjs.JS_FreeValue(c, cb_args[0]);
+        qjs.JS_FreeValue(c, cb_args[1]);
+        qjs.JS_FreeValue(c, ret);
+        i += 1;
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
+fn classListGetLength(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewInt32(c, 0);
+
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &attr_len);
+    if (attr_ptr == null or attr_len == 0) return qjs.JS_NewInt32(c, 0);
+
+    const class_str = attr_ptr.?[0..attr_len];
+    var count: i32 = 0;
+    var iter = std.mem.splitSequence(u8, class_str, " ");
+    while (iter.next()) |cls| {
+        if (cls.len > 0) count += 1;
+    }
+    return qjs.JS_NewInt32(c, count);
+}
+
+fn classListGetValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &attr_len);
+    if (attr_ptr == null or attr_len == 0) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, attr_ptr.?, attr_len);
+}
+
 /// Create a classList object for the given element JS value.
 fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue {
     const obj = qjs.JS_NewObject(ctx);
@@ -1067,6 +1184,44 @@ fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue {
     _ = qjs.JS_SetPropertyStr(ctx, obj, "contains", qjs.JS_NewCFunction(ctx, &classListContains, "contains", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toggle", qjs.JS_NewCFunction(ctx, &classListToggle, "toggle", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "replace", qjs.JS_NewCFunction(ctx, &classListReplace, "replace", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "item", qjs.JS_NewCFunction(ctx, &classListItem, "item", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "forEach", qjs.JS_NewCFunction(ctx, &classListForEach, "forEach", 1));
+
+    // length getter
+    {
+        const lengthAtom = qjs.JS_NewAtom(ctx, "length");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, obj, lengthAtom, qjs.JS_NewCFunction(ctx, &classListGetLength, "get length", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, lengthAtom);
+    }
+    // value getter
+    {
+        const valueAtom = qjs.JS_NewAtom(ctx, "value");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, obj, valueAtom, qjs.JS_NewCFunction(ctx, &classListGetValue, "get value", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, valueAtom);
+    }
+
+    // Set indexed properties and Symbol.iterator via JS eval
+    const iter_js =
+        \\(function(cl){
+        \\  var elem=cl.__element;
+        \\  if(elem){
+        \\    var c=elem.getAttribute('class');
+        \\    if(c){
+        \\      var parts=c.split(/\s+/).filter(function(s){return s.length>0;});
+        \\      for(var i=0;i<parts.length;i++)Object.defineProperty(cl,i,{value:parts[i],configurable:true,enumerable:true});
+        \\    }
+        \\  }
+        \\  cl[Symbol.iterator]=function(){var idx=0,self=this;return{next:function(){var v=self.item(idx++);return v===null?{done:true}:{done:false,value:v};}};};
+        \\})
+    ;
+    const iter_fn = qjs.JS_Eval(ctx, iter_js, iter_js.len, "<classList>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(iter_fn)) {
+        var call_args = [_]qjs.JSValue{obj};
+        const ret = qjs.JS_Call(ctx, iter_fn, quickjs.JS_UNDEFINED(), 1, &call_args);
+        qjs.JS_FreeValue(ctx, ret);
+        qjs.JS_FreeValue(ctx, iter_fn);
+    }
+
     return obj;
 }
 
@@ -1298,6 +1453,48 @@ fn elementInsertAdjacentElement(
     return qjs.JS_DupValue(c, args[1]);
 }
 
+// ── element.insertAdjacentText() ────────────────────────────────────
+
+fn elementInsertAdjacentText(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 2) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const doc = g_document orelse return quickjs.JS_UNDEFINED();
+
+    const pos_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, pos_s.ptr);
+    const position = pos_s.ptr[0..pos_s.len];
+
+    const text_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, text_s.ptr);
+
+    const text_node = lxb_dom_document_create_text_node(doc, text_s.ptr, text_s.len) orelse return quickjs.JS_UNDEFINED();
+
+    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        lxb_dom_node_insert_before(node, text_node);
+    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+        if (node.first_child) |first| {
+            lxb_dom_node_insert_before(first, text_node);
+        } else {
+            lxb_dom_node_insert_child(node, text_node);
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+        lxb_dom_node_insert_child(node, text_node);
+    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        lxb_dom_node_insert_after(node, text_node);
+    } else {
+        return quickjs.JS_UNDEFINED();
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 // ── outerHTML getter ────────────────────────────────────────────────
 
 fn elementGetOuterHTML(
@@ -1314,6 +1511,44 @@ fn elementGetOuterHTML(
     _ = lxb_html_serialize_tree_cb(node, &serializeCallback, @ptrCast(&accum));
     const result = accum.result();
     return qjs.JS_NewStringLen(c, result.ptr, result.len);
+}
+
+// ── outerHTML setter ────────────────────────────────────────────────
+
+fn elementSetOuterHTML(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const parent_node = node.parent orelse return quickjs.JS_UNDEFINED();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    // Parse the HTML fragment using parent element as context
+    const doc = g_document orelse return quickjs.JS_UNDEFINED();
+    const parent_elem: *lxb.lxb_dom_element_t = @ptrCast(parent_node);
+    const frag = lxb_html_document_parse_fragment(doc, parent_elem, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
+
+    // Insert parsed nodes before the current element
+    while (frag.first_child) |child| {
+        lxb_dom_node_remove(child);
+        lxb_dom_node_insert_before(node, child);
+    }
+    _ = lxb_dom_node_destroy(frag);
+
+    // Remove the current element
+    lxb_dom_node_remove(node);
+    _ = lxb_dom_node_destroy(node);
+
+    events.recordMutation(parent_node, "childList", null, null, null);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
 }
 
 // ── element.style (CSSStyleDeclaration) ─────────────────────────────
@@ -1792,10 +2027,94 @@ fn elementGetAttributeNames(
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Return empty array — full attribute enumeration requires lexbor iteration
     const c = ctx orelse return quickjs.JS_NULL();
-    _ = this_val;
-    return qjs.JS_NewArray(c);
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewArray(c);
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+
+    var idx: u32 = 0;
+    var attr: ?*anyopaque = lxb_dom_element_first_attribute_noi(elem);
+    while (attr) |a| {
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_attr_qualified_name(a, &name_len);
+        if (name_ptr) |np| {
+            _ = qjs.JS_SetPropertyUint32(c, arr, idx, qjs.JS_NewStringLen(c, np, name_len));
+            idx += 1;
+        }
+        attr = lxb_dom_element_next_attribute_noi(a);
+    }
+    return arr;
+}
+
+// ── element.attributes (NamedNodeMap) ───────────────────────────────
+
+fn elementGetAttributes(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewObject(c);
+    const obj = qjs.JS_NewObject(c);
+    if (quickjs.JS_IsException(obj)) return obj;
+
+    var count: u32 = 0;
+    var attr: ?*anyopaque = lxb_dom_element_first_attribute_noi(elem);
+    while (attr) |a| {
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_attr_qualified_name(a, &name_len);
+        var val_len: usize = 0;
+        const val_ptr = lxb_dom_attr_value_noi(a, &val_len);
+
+        if (name_ptr) |np| {
+            const name_str = np[0..name_len];
+            const val_str = if (val_ptr) |vp| vp[0..val_len] else "";
+
+            // Create Attr-like object
+            const attr_obj = qjs.JS_NewObject(c);
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "name", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "value", qjs.JS_NewStringLen(c, val_str.ptr, val_str.len));
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeName", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeValue", qjs.JS_NewStringLen(c, val_str.ptr, val_str.len));
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
+
+            // Indexed access
+            _ = qjs.JS_SetPropertyUint32(c, obj, count, qjs.JS_DupValue(c, attr_obj));
+            // Named access
+            _ = qjs.JS_SetPropertyStr(c, obj, name_str.ptr, attr_obj);
+            count += 1;
+        }
+        attr = lxb_dom_element_next_attribute_noi(a);
+    }
+
+    _ = qjs.JS_SetPropertyStr(c, obj, "length", qjs.JS_NewInt32(c, @intCast(count)));
+
+    // getNamedItem method
+    const gni_js =
+        \\(function(){var m=this;return function(n){for(var i=0;i<m.length;i++)if(m[i]&&m[i].name===n)return m[i];return null;};})()
+    ;
+    const gni_fn = qjs.JS_Eval(c, gni_js, gni_js.len, "<attributes>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(gni_fn)) {
+        var this_arg = [_]qjs.JSValue{obj};
+        const bound = qjs.JS_Call(c, gni_fn, obj, 0, &this_arg);
+        _ = qjs.JS_SetPropertyStr(c, obj, "getNamedItem", bound);
+        qjs.JS_FreeValue(c, gni_fn);
+    }
+
+    // item method
+    const item_js =
+        \\(function(){var m=this;return function(i){return m[i]||null;};})()
+    ;
+    const item_fn = qjs.JS_Eval(c, item_js, item_js.len, "<attributes>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(item_fn)) {
+        var item_arg = [_]qjs.JSValue{obj};
+        const bound_item = qjs.JS_Call(c, item_fn, obj, 0, &item_arg);
+        _ = qjs.JS_SetPropertyStr(c, obj, "item", bound_item);
+        qjs.JS_FreeValue(c, item_fn);
+    }
+
+    return obj;
 }
 
 fn elementGetContext(
@@ -1910,18 +2229,146 @@ fn documentCreateRange(
 fn documentCreateTreeWalker(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const walker = qjs.JS_NewObject(c);
-    _ = qjs.JS_SetPropertyStr(c, walker, "currentNode", quickjs.JS_NULL());
-    _ = qjs.JS_SetPropertyStr(c, walker, "nextNode", qjs.JS_NewCFunction(c, &jsReturnNull, "nextNode", 0));
-    _ = qjs.JS_SetPropertyStr(c, walker, "previousNode", qjs.JS_NewCFunction(c, &jsReturnNull, "previousNode", 0));
-    _ = qjs.JS_SetPropertyStr(c, walker, "firstChild", qjs.JS_NewCFunction(c, &jsReturnNull, "firstChild", 0));
-    _ = qjs.JS_SetPropertyStr(c, walker, "lastChild", qjs.JS_NewCFunction(c, &jsReturnNull, "lastChild", 0));
-    _ = qjs.JS_SetPropertyStr(c, walker, "parentNode", qjs.JS_NewCFunction(c, &jsReturnNull, "parentNode", 0));
-    return walker;
+    const args = argv orelse return quickjs.JS_NULL();
+
+    // Get root node
+    const root_val = if (argc >= 1) args[0] else return quickjs.JS_NULL();
+
+    // Get whatToShow (default: SHOW_ALL = 0xFFFFFFFF)
+    var what_to_show: i32 = -1; // 0xFFFFFFFF as signed
+    if (argc >= 2) {
+        _ = qjs.JS_ToInt32(c, &what_to_show, args[1]);
+    }
+
+    // Build TreeWalker as a JS polyfill that uses native DOM traversal
+    const walker_js =
+        \\(function(root, whatToShow) {
+        \\  var tw = {
+        \\    root: root,
+        \\    currentNode: root,
+        \\    whatToShow: whatToShow,
+        \\    _accepts: function(node) {
+        \\      if (whatToShow === -1 || whatToShow === 0xFFFFFFFF) return true;
+        \\      var nt = node.nodeType;
+        \\      if (nt === 1 && (whatToShow & 0x1)) return true;
+        \\      if (nt === 3 && (whatToShow & 0x4)) return true;
+        \\      if (nt === 8 && (whatToShow & 0x80)) return true;
+        \\      if (nt === 9 && (whatToShow & 0x100)) return true;
+        \\      if (nt === 11 && (whatToShow & 0x400)) return true;
+        \\      return false;
+        \\    },
+        \\    nextNode: function() {
+        \\      var node = this.currentNode;
+        \\      // Try first child
+        \\      if (node.firstChild) {
+        \\        node = node.firstChild;
+        \\        while (node) {
+        \\          if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\          if (node.firstChild) { node = node.firstChild; continue; }
+        \\          while (node && !node.nextSibling) {
+        \\            node = node.parentNode;
+        \\            if (!node || node === this.root) return null;
+        \\          }
+        \\          if (node) node = node.nextSibling;
+        \\        }
+        \\        return null;
+        \\      }
+        \\      // No children, try siblings
+        \\      while (node && node !== this.root) {
+        \\        if (node.nextSibling) {
+        \\          node = node.nextSibling;
+        \\          if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\          if (node.firstChild) {
+        \\            node = node.firstChild;
+        \\            while (node) {
+        \\              if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\              if (node.firstChild) { node = node.firstChild; continue; }
+        \\              while (node && !node.nextSibling) {
+        \\                node = node.parentNode;
+        \\                if (!node || node === this.root) return null;
+        \\              }
+        \\              if (node) node = node.nextSibling;
+        \\            }
+        \\          }
+        \\          continue;
+        \\        }
+        \\        node = node.parentNode;
+        \\      }
+        \\      return null;
+        \\    },
+        \\    previousNode: function() {
+        \\      var node = this.currentNode;
+        \\      if (node === this.root) return null;
+        \\      if (node.previousSibling) {
+        \\        node = node.previousSibling;
+        \\        while (node.lastChild) node = node.lastChild;
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\      }
+        \\      var parent = node.parentNode;
+        \\      if (!parent || parent === this.root) return null;
+        \\      if (this._accepts(parent)) { this.currentNode = parent; return parent; }
+        \\      return null;
+        \\    },
+        \\    firstChild: function() {
+        \\      var node = this.currentNode.firstChild;
+        \\      while (node) {
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\        node = node.nextSibling;
+        \\      }
+        \\      return null;
+        \\    },
+        \\    lastChild: function() {
+        \\      var node = this.currentNode.lastChild;
+        \\      while (node) {
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\        node = node.previousSibling;
+        \\      }
+        \\      return null;
+        \\    },
+        \\    parentNode: function() {
+        \\      var node = this.currentNode.parentNode;
+        \\      if (node && node !== this.root && this._accepts(node)) {
+        \\        this.currentNode = node;
+        \\        return node;
+        \\      }
+        \\      return null;
+        \\    },
+        \\    nextSibling: function() {
+        \\      var node = this.currentNode.nextSibling;
+        \\      while (node) {
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\        node = node.nextSibling;
+        \\      }
+        \\      return null;
+        \\    },
+        \\    previousSibling: function() {
+        \\      var node = this.currentNode.previousSibling;
+        \\      while (node) {
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\        node = node.previousSibling;
+        \\      }
+        \\      return null;
+        \\    }
+        \\  };
+        \\  return tw;
+        \\})
+    ;
+    const walker_fn = qjs.JS_Eval(c, walker_js, walker_js.len, "<treeWalker>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(walker_fn)) return quickjs.JS_NULL();
+    defer qjs.JS_FreeValue(c, walker_fn);
+
+    var call_args = [_]qjs.JSValue{
+        qjs.JS_DupValue(c, root_val),
+        qjs.JS_NewInt32(c, what_to_show),
+    };
+    const result = qjs.JS_Call(c, walker_fn, quickjs.JS_UNDEFINED(), 2, &call_args);
+    qjs.JS_FreeValue(c, call_args[0]);
+    qjs.JS_FreeValue(c, call_args[1]);
+    return result;
 }
 
 fn jsReturnNull(
@@ -1931,6 +2378,71 @@ fn jsReturnNull(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     return quickjs.JS_NULL();
+}
+
+// ── node.normalize() ────────────────────────────────────────────────
+// Merge adjacent text nodes, remove empty text nodes.
+
+fn nodeNormalize(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    normalizeNode(node);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+/// Internal normalize helper that works directly on DOM nodes (no JS context needed).
+fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
+            var text_len: usize = 0;
+            const text_ptr = lxb_dom_node_text_content(ch, &text_len);
+
+            if (text_len == 0 or text_ptr == null) {
+                const next_sib: ?*lxb.lxb_dom_node_t = ch.next;
+                lxb_dom_node_remove(ch);
+                _ = lxb_dom_node_destroy(ch);
+                child = next_sib;
+                continue;
+            }
+
+            var next_node: ?*lxb.lxb_dom_node_t = ch.next;
+            while (next_node) |next| {
+                if (next.type != lxb.LXB_DOM_NODE_TYPE_TEXT) break;
+                var next_len: usize = 0;
+                const next_ptr = lxb_dom_node_text_content(next, &next_len);
+                const after: ?*lxb.lxb_dom_node_t = next.next;
+                if (next_len == 0 or next_ptr == null) {
+                    lxb_dom_node_remove(next);
+                    _ = lxb_dom_node_destroy(next);
+                    next_node = after;
+                    continue;
+                }
+                var merge_buf: [16384]u8 = undefined;
+                const total = text_len + next_len;
+                if (total <= merge_buf.len) {
+                    @memcpy(merge_buf[0..text_len], text_ptr.?[0..text_len]);
+                    @memcpy(merge_buf[text_len..][0..next_len], next_ptr.?[0..next_len]);
+                    _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
+                    text_len = total;
+                }
+                lxb_dom_node_remove(next);
+                _ = lxb_dom_node_destroy(next);
+                next_node = after;
+            }
+            child = ch.next;
+        } else {
+            if (ch.first_child != null) normalizeNode(ch);
+            child = ch.next;
+        }
+    }
 }
 
 fn nodeIsEqualNode(
@@ -4472,7 +4984,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "append", qjs.JS_NewCFunction(ctx, &elementAppend, "append", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "prepend", qjs.JS_NewCFunction(ctx, &elementPrepend, "prepend", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "isEqualNode", qjs.JS_NewCFunction(ctx, &nodeIsEqualNode, "isEqualNode", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "normalize", qjs.JS_NewCFunction(ctx, &jsReturnNull, "normalize", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "normalize", qjs.JS_NewCFunction(ctx, &nodeNormalize, "normalize", 0));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &nodeCompareDocumentPosition, "compareDocumentPosition", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "getRootNode", qjs.JS_NewCFunction(ctx, &nodeGetRootNode, "getRootNode", 0));
 
@@ -4596,6 +5108,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &elementScrollIntoView, "scrollIntoView", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getContext", qjs.JS_NewCFunction(ctx, &elementGetContext, "getContext", 1));
 
+    // attributes (NamedNodeMap) getter
+    {
+        const attributesAtom = qjs.JS_NewAtom(ctx, "attributes");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, attributesAtom, qjs.JS_NewCFunction(ctx, &elementGetAttributes, "get attributes", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, attributesAtom);
+    }
+
     // Element getters
     {
         const tagNameAtom = qjs.JS_NewAtom(ctx, "tagName");
@@ -4624,7 +5143,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     {
         const outerHTMLAtom = qjs.JS_NewAtom(ctx, "outerHTML");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, outerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetOuterHTML, "get outerHTML", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, outerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetOuterHTML, "get outerHTML", 0), qjs.JS_NewCFunction(ctx, &elementSetOuterHTML, "set outerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, outerHTMLAtom);
     }
     {
@@ -4650,6 +5169,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hidePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "hidePopover", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "togglePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "togglePopover", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentElement", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentElement, "insertAdjacentElement", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentText", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentText, "insertAdjacentText", 2));
 
     // ── HTMLElement.prototype (inherits Element.prototype) ──────────
     const html_element_proto = qjs.JS_NewObject(ctx);
@@ -4859,9 +5379,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &documentImportNode, "importNode", 2));
     // document.createRange (stub)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &documentCreateRange, "createRange", 0));
-    // document.createTreeWalker (stub)
+    // document.createTreeWalker
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &documentCreateTreeWalker, "createTreeWalker", 3));
-    // document.createNodeIterator (stub)
+    // document.createNodeIterator
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createNodeIterator", qjs.JS_NewCFunction(ctx, &documentCreateTreeWalker, "createNodeIterator", 3));
 
     // document.readyState (getter)

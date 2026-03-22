@@ -24,9 +24,17 @@ const ListenerKey = struct {
     }
 };
 
-const ListenerList = std.ArrayListUnmanaged(qjs.JSValue);
+/// A listener record stores callback + addEventListener options (capture/passive/once).
+const ListenerRecord = struct {
+    callback: qjs.JSValue,
+    capture: bool = false,
+    passive: bool = false,
+    once: bool = false,
+};
 
-/// Map from (node_ptr, event_type) -> list of callbacks.
+const ListenerList = std.ArrayListUnmanaged(ListenerRecord);
+
+/// Map from (node_ptr, event_type) -> list of listener records.
 /// We use a simple array of entries since the number is typically small.
 const ListenerEntry = struct {
     key: ListenerKey,
@@ -41,7 +49,7 @@ var window_listener_entries: std.ArrayListUnmanaged(WindowListenerEntry) = .empt
 
 const WindowListenerEntry = struct {
     event_type: []const u8, // Owned copy
-    callbacks: ListenerList,
+    callbacks: ListenerList, // ListenerRecord list
 };
 
 fn findOrCreateWindowEntry(event_type: []const u8) ?*WindowListenerEntry {
@@ -100,15 +108,46 @@ pub fn jsAddEventListener(
     // Check if callback is a function
     if (!qjs.JS_IsFunction(c, args[1])) return quickjs.JS_UNDEFINED();
 
+    // Parse 3rd argument: options object or boolean (legacy useCapture)
+    var capture: bool = false;
+    var passive: bool = false;
+    var once: bool = false;
+    if (argc >= 3) {
+        if (args[2].tag == qjs.JS_TAG_BOOL) {
+            // Legacy: addEventListener(type, cb, useCapture)
+            capture = qjs.JS_ToBool(c, args[2]) > 0;
+        } else if (args[2].tag == qjs.JS_TAG_OBJECT) {
+            // Options object: {capture, passive, once}
+            const cap_val = qjs.JS_GetPropertyStr(c, args[2], "capture");
+            if (cap_val.tag != qjs.JS_TAG_UNDEFINED) capture = qjs.JS_ToBool(c, cap_val) > 0;
+            qjs.JS_FreeValue(c, cap_val);
+
+            const pass_val = qjs.JS_GetPropertyStr(c, args[2], "passive");
+            if (pass_val.tag != qjs.JS_TAG_UNDEFINED) passive = qjs.JS_ToBool(c, pass_val) > 0;
+            qjs.JS_FreeValue(c, pass_val);
+
+            const once_val = qjs.JS_GetPropertyStr(c, args[2], "once");
+            if (once_val.tag != qjs.JS_TAG_UNDEFINED) once = qjs.JS_ToBool(c, once_val) > 0;
+            qjs.JS_FreeValue(c, once_val);
+        }
+    }
+
+    const record = ListenerRecord{
+        .callback = qjs.JS_DupValue(c, args[1]),
+        .capture = capture,
+        .passive = passive,
+        .once = once,
+    };
+
     // Check if this is a window/document object (no opaque node)
     const node = dom_api.getNodePublic(c, this_val);
     if (node) |n| {
         const entry = findOrCreateEntry(n, event_type) orelse return quickjs.JS_UNDEFINED();
-        entry.callbacks.append(allocator, qjs.JS_DupValue(c, args[1])) catch {};
+        entry.callbacks.append(allocator, record) catch {};
     } else {
         // Could be window or document addEventListener
         const wentry = findOrCreateWindowEntry(event_type) orelse return quickjs.JS_UNDEFINED();
-        wentry.callbacks.append(allocator, qjs.JS_DupValue(c, args[1])) catch {};
+        wentry.callbacks.append(allocator, record) catch {};
     }
     return quickjs.JS_UNDEFINED();
 }
@@ -129,15 +168,28 @@ pub fn jsRemoveEventListener(
 
     const callback = args[1];
 
+    // Parse capture flag from 3rd argument (per spec, removeEventListener matches on capture)
+    var capture: bool = false;
+    if (argc >= 3) {
+        if (args[2].tag == qjs.JS_TAG_BOOL) {
+            capture = qjs.JS_ToBool(c, args[2]) > 0;
+        } else if (args[2].tag == qjs.JS_TAG_OBJECT) {
+            const cap_val = qjs.JS_GetPropertyStr(c, args[2], "capture");
+            if (cap_val.tag != qjs.JS_TAG_UNDEFINED) capture = qjs.JS_ToBool(c, cap_val) > 0;
+            qjs.JS_FreeValue(c, cap_val);
+        }
+    }
+
     const node = dom_api.getNodePublic(c, this_val);
     if (node) |n| {
         for (listener_entries.items) |*entry| {
             if (entry.key.node == n and std.mem.eql(u8, entry.key.event_type, event_type)) {
-                // Find and remove the callback that matches by JS object identity
+                // Find and remove the callback that matches by JS object identity AND capture flag
                 var i: usize = 0;
                 while (i < entry.callbacks.items.len) {
-                    if (jsValueEqual(entry.callbacks.items[i], callback)) {
-                        qjs.JS_FreeValue(c, entry.callbacks.items[i]);
+                    const rec = entry.callbacks.items[i];
+                    if (jsValueEqual(rec.callback, callback) and rec.capture == capture) {
+                        qjs.JS_FreeValue(c, rec.callback);
                         _ = entry.callbacks.orderedRemove(i);
                         break;
                     }
@@ -152,8 +204,9 @@ pub fn jsRemoveEventListener(
             if (std.mem.eql(u8, entry.event_type, event_type)) {
                 var i: usize = 0;
                 while (i < entry.callbacks.items.len) {
-                    if (jsValueEqual(entry.callbacks.items[i], callback)) {
-                        qjs.JS_FreeValue(c, entry.callbacks.items[i]);
+                    const rec = entry.callbacks.items[i];
+                    if (jsValueEqual(rec.callback, callback) and rec.capture == capture) {
+                        qjs.JS_FreeValue(c, rec.callback);
                         _ = entry.callbacks.orderedRemove(i);
                         break;
                     }
@@ -171,6 +224,7 @@ pub fn jsRemoveEventListener(
 const EventFlags = struct {
     prevent_default: bool = false,
     stop_propagation: bool = false,
+    stop_immediate_propagation: bool = false,
 };
 
 /// Thread-local event flags for the current dispatch.
@@ -196,11 +250,26 @@ fn jsStopPropagation(
     return quickjs.JS_UNDEFINED();
 }
 
+fn jsStopImmediatePropagation(
+    _: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    current_event_flags.stop_propagation = true;
+    current_event_flags.stop_immediate_propagation = true;
+    return quickjs.JS_UNDEFINED();
+}
+
 fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.lxb_dom_node_t, current_target: ?*lxb.lxb_dom_node_t) qjs.JSValue {
     const event = qjs.JS_NewObject(ctx);
     if (quickjs.JS_IsException(event)) return event;
 
     _ = qjs.JS_SetPropertyStr(ctx, event, "type", qjs.JS_NewStringLen(ctx, event_type.ptr, event_type.len));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "bubbles", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "cancelable", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "defaultPrevented", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "eventPhase", qjs.JS_NewInt32(ctx, 0));
 
     if (target) |t| {
         _ = qjs.JS_SetPropertyStr(ctx, event, "target", dom_api.wrapNodePublic(ctx, t));
@@ -216,8 +285,33 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
 
     _ = qjs.JS_SetPropertyStr(ctx, event, "preventDefault", qjs.JS_NewCFunction(ctx, &jsPreventDefault, "preventDefault", 0));
     _ = qjs.JS_SetPropertyStr(ctx, event, "stopPropagation", qjs.JS_NewCFunction(ctx, &jsStopPropagation, "stopPropagation", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "stopImmediatePropagation", qjs.JS_NewCFunction(ctx, &jsStopImmediatePropagation, "stopImmediatePropagation", 0));
 
     return event;
+}
+
+/// Update target/currentTarget/eventPhase on an existing JS event object during dispatch.
+fn updateEventObjectForDispatch(ctx: *qjs.JSContext, event: qjs.JSValue, target: ?*lxb.lxb_dom_node_t, current_target: ?*lxb.lxb_dom_node_t, phase: i32) void {
+    if (target) |t| {
+        _ = qjs.JS_SetPropertyStr(ctx, event, "target", dom_api.wrapNodePublic(ctx, t));
+    } else {
+        _ = qjs.JS_SetPropertyStr(ctx, event, "target", quickjs.JS_NULL());
+    }
+    if (current_target) |ct| {
+        _ = qjs.JS_SetPropertyStr(ctx, event, "currentTarget", dom_api.wrapNodePublic(ctx, ct));
+    } else {
+        _ = qjs.JS_SetPropertyStr(ctx, event, "currentTarget", quickjs.JS_NULL());
+    }
+    _ = qjs.JS_SetPropertyStr(ctx, event, "eventPhase", qjs.JS_NewInt32(ctx, phase));
+}
+
+/// Ensure a JS event object has preventDefault/stopPropagation/stopImmediatePropagation methods
+/// that interact with our dispatch flags. This is used when dispatching user-created Event objects.
+fn ensureEventMethods(ctx: *qjs.JSContext, event: qjs.JSValue) void {
+    // Always overwrite with our native implementations so they interact with current_event_flags
+    _ = qjs.JS_SetPropertyStr(ctx, event, "preventDefault", qjs.JS_NewCFunction(ctx, &jsPreventDefault, "preventDefault", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "stopPropagation", qjs.JS_NewCFunction(ctx, &jsStopPropagation, "stopPropagation", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "stopImmediatePropagation", qjs.JS_NewCFunction(ctx, &jsStopImmediatePropagation, "stopImmediatePropagation", 0));
 }
 
 /// Create a mouse event object with clientX, clientY, button, pageX, pageY.
@@ -237,11 +331,70 @@ fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?
     return event;
 }
 
+/// Call listeners on a specific node for the given event type and phase.
+/// `is_target` means we're at the target element (phase 2) — call ALL listeners.
+/// Otherwise only call listeners matching the `capture_phase` flag.
+/// Handles `once` removal and `stopImmediatePropagation`.
+fn callListenersOnNode(ctx: *qjs.JSContext, entry: *ListenerEntry, event_obj: qjs.JSValue, node: *lxb.lxb_dom_node_t, is_target: bool, capture_phase: bool) void {
+    var i: usize = 0;
+    while (i < entry.callbacks.items.len) {
+        if (current_event_flags.stop_immediate_propagation) break;
+
+        const rec = entry.callbacks.items[i];
+        // At target: call all listeners; during capture/bubble: only matching phase
+        if (!is_target and rec.capture != capture_phase) {
+            i += 1;
+            continue;
+        }
+
+        const this = dom_api.wrapNodePublic(ctx, node);
+        var argv = [_]qjs.JSValue{event_obj};
+        const ret = qjs.JS_Call(ctx, rec.callback, this, 1, &argv);
+        qjs.JS_FreeValue(ctx, ret);
+        qjs.JS_FreeValue(ctx, this);
+
+        if (rec.once) {
+            qjs.JS_FreeValue(ctx, rec.callback);
+            _ = entry.callbacks.orderedRemove(i);
+            // Don't increment i, next item shifted into current position
+        } else {
+            i += 1;
+        }
+    }
+}
+
+/// Call window-level listeners for a given event type.
+fn callWindowListeners(ctx: *qjs.JSContext, event_type: []const u8, event_obj: qjs.JSValue) void {
+    for (window_listener_entries.items) |*entry| {
+        if (std.mem.eql(u8, entry.event_type, event_type)) {
+            var i: usize = 0;
+            while (i < entry.callbacks.items.len) {
+                if (current_event_flags.stop_immediate_propagation) break;
+                const rec = entry.callbacks.items[i];
+                const global = qjs.JS_GetGlobalObject(ctx);
+                var argv = [_]qjs.JSValue{event_obj};
+                const ret = qjs.JS_Call(ctx, rec.callback, global, 1, &argv);
+                qjs.JS_FreeValue(ctx, ret);
+                qjs.JS_FreeValue(ctx, global);
+                if (rec.once) {
+                    qjs.JS_FreeValue(ctx, rec.callback);
+                    _ = entry.callbacks.orderedRemove(i);
+                } else {
+                    i += 1;
+                }
+            }
+            break;
+        }
+    }
+}
+
 /// Dispatch a mouse event (mousedown/mouseup/mousemove/mouseover/mouseout) with coordinates.
+/// Implements full 3-phase dispatch: capture (root->target), target, bubble (target->root).
 pub fn dispatchMouseEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, client_x: i32, client_y: i32, button: i32) bool {
     const saved_flags = current_event_flags;
     current_event_flags = .{};
 
+    // Build path: path[0] = target, path[path_len-1] = root
     var path: [64]*lxb.lxb_dom_node_t = undefined;
     var path_len: usize = 0;
     var current: ?*lxb.lxb_dom_node_t = target;
@@ -253,44 +406,57 @@ pub fn dispatchMouseEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, even
         current = node.parent;
     }
 
-    for (path[0..path_len]) |node| {
-        if (current_event_flags.stop_propagation) break;
+    // Create a single event object reused across all phases
+    const event_obj = createMouseEventObject(ctx, event_type, target, target, client_x, client_y, button);
+    defer qjs.JS_FreeValue(ctx, event_obj);
 
-        for (listener_entries.items) |*entry| {
-            if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
-                for (entry.callbacks.items) |callback| {
-                    const event_obj = createMouseEventObject(ctx, event_type, target, node, client_x, client_y, button);
-                    var argv = [_]qjs.JSValue{event_obj};
-                    const this = dom_api.wrapNodePublic(ctx, node);
-                    const ret = qjs.JS_Call(ctx, callback, this, 1, &argv);
-                    qjs.JS_FreeValue(ctx, ret);
-                    qjs.JS_FreeValue(ctx, this);
-                    qjs.JS_FreeValue(ctx, event_obj);
-
-                    if (current_event_flags.stop_propagation) break;
+    // Phase 1: Capture (root -> target, excluding target)
+    if (path_len > 1) {
+        var ci: usize = path_len - 1;
+        while (ci > 0) : (ci -= 1) {
+            if (current_event_flags.stop_propagation) break;
+            const node = path[ci];
+            updateEventObjectForDispatch(ctx, event_obj, target, node, 1); // CAPTURING_PHASE
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(ctx, entry, event_obj, node, false, true);
+                    break;
                 }
+            }
+        }
+    }
+
+    // Phase 2: At Target
+    if (!current_event_flags.stop_propagation) {
+        updateEventObjectForDispatch(ctx, event_obj, target, target, 2); // AT_TARGET
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == target and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                callListenersOnNode(ctx, entry, event_obj, target, true, false);
                 break;
+            }
+        }
+    }
+
+    // Phase 3: Bubble (target -> root, excluding target)
+    if (path_len > 1) {
+        var bi: usize = 1;
+        while (bi < path_len) : (bi += 1) {
+            if (current_event_flags.stop_propagation) break;
+            const node = path[bi];
+            updateEventObjectForDispatch(ctx, event_obj, target, node, 3); // BUBBLING_PHASE
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(ctx, entry, event_obj, node, false, false);
+                    break;
+                }
             }
         }
     }
 
     // Also fire window/document-level listeners (bubbles to window)
     if (!current_event_flags.stop_propagation) {
-        for (window_listener_entries.items) |*entry| {
-            if (std.mem.eql(u8, entry.event_type, event_type)) {
-                for (entry.callbacks.items) |callback| {
-                    const event_obj = createMouseEventObject(ctx, event_type, target, null, client_x, client_y, button);
-                    var argv = [_]qjs.JSValue{event_obj};
-                    const global = qjs.JS_GetGlobalObject(ctx);
-                    const ret = qjs.JS_Call(ctx, callback, global, 1, &argv);
-                    qjs.JS_FreeValue(ctx, ret);
-                    qjs.JS_FreeValue(ctx, global);
-                    qjs.JS_FreeValue(ctx, event_obj);
-                    if (current_event_flags.stop_propagation) break;
-                }
-                break;
-            }
-        }
+        updateEventObjectForDispatch(ctx, event_obj, target, null, 3);
+        callWindowListeners(ctx, event_type, event_obj);
     }
 
     const result = !current_event_flags.prevent_default;
@@ -326,11 +492,12 @@ fn keyCodeToKeyName(buf: *[16]u8, key_code: u32) []const u8 {
 
 /// Dispatch a keyboard event (keydown/keyup) with key and keyCode properties.
 /// Returns true if preventDefault was NOT called.
+/// Implements full 3-phase dispatch: capture (root->target), target, bubble (target->root).
 pub fn dispatchKeyboardEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, key_code: u32) bool {
     const saved_flags = current_event_flags;
     current_event_flags = .{};
 
-    // Collect ancestors for bubbling (target -> ... -> document)
+    // Build path: path[0] = target, path[path_len-1] = root
     var path: [64]*lxb.lxb_dom_node_t = undefined;
     var path_len: usize = 0;
     var current: ?*lxb.lxb_dom_node_t = target;
@@ -346,28 +513,52 @@ pub fn dispatchKeyboardEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, e
     var key_buf: [16]u8 = undefined;
     const key_name = keyCodeToKeyName(&key_buf, key_code);
 
-    // Bubble: from target up to root
-    for (path[0..path_len]) |node| {
-        if (current_event_flags.stop_propagation) break;
+    // Create a single event object reused across all phases
+    const event_obj = createEventObject(ctx, event_type, target, target);
+    defer qjs.JS_FreeValue(ctx, event_obj);
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "keyCode", qjs.JS_NewInt32(ctx, @intCast(key_code)));
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "which", qjs.JS_NewInt32(ctx, @intCast(key_code)));
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "key", qjs.JS_NewStringLen(ctx, key_name.ptr, key_name.len));
 
-        for (listener_entries.items) |*entry| {
-            if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
-                for (entry.callbacks.items) |callback| {
-                    const event_obj = createEventObject(ctx, event_type, target, node);
-                    // Add keyboard-specific properties
-                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "keyCode", qjs.JS_NewInt32(ctx, @intCast(key_code)));
-                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "which", qjs.JS_NewInt32(ctx, @intCast(key_code)));
-                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "key", qjs.JS_NewStringLen(ctx, key_name.ptr, key_name.len));
-                    var argv = [_]qjs.JSValue{event_obj};
-                    const this = dom_api.wrapNodePublic(ctx, node);
-                    const ret = qjs.JS_Call(ctx, callback, this, 1, &argv);
-                    qjs.JS_FreeValue(ctx, ret);
-                    qjs.JS_FreeValue(ctx, this);
-                    qjs.JS_FreeValue(ctx, event_obj);
-
-                    if (current_event_flags.stop_propagation) break;
+    // Phase 1: Capture (root -> target, excluding target)
+    if (path_len > 1) {
+        var ci: usize = path_len - 1;
+        while (ci > 0) : (ci -= 1) {
+            if (current_event_flags.stop_propagation) break;
+            const node = path[ci];
+            updateEventObjectForDispatch(ctx, event_obj, target, node, 1);
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(ctx, entry, event_obj, node, false, true);
+                    break;
                 }
+            }
+        }
+    }
+
+    // Phase 2: At Target
+    if (!current_event_flags.stop_propagation) {
+        updateEventObjectForDispatch(ctx, event_obj, target, target, 2);
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == target and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                callListenersOnNode(ctx, entry, event_obj, target, true, false);
                 break;
+            }
+        }
+    }
+
+    // Phase 3: Bubble (target -> root, excluding target)
+    if (path_len > 1) {
+        var bi: usize = 1;
+        while (bi < path_len) : (bi += 1) {
+            if (current_event_flags.stop_propagation) break;
+            const node = path[bi];
+            updateEventObjectForDispatch(ctx, event_obj, target, node, 3);
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(ctx, entry, event_obj, node, false, false);
+                    break;
+                }
             }
         }
     }
@@ -377,13 +568,20 @@ pub fn dispatchKeyboardEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, e
     return kb_result;
 }
 
-/// Dispatch an event to a target element with bubbling.
+/// Dispatch an event to a target element with full 3-phase dispatch.
 /// Returns true if preventDefault was NOT called.
 pub fn dispatchEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8) bool {
+    return dispatchEventWithObj(ctx, target, event_type, null);
+}
+
+/// Dispatch an event, optionally using a pre-existing JS event object.
+/// If `existing_event` is non-null, that object is passed to listeners (for dispatchEvent(event)).
+/// Otherwise a new event object is created internally.
+fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_type: []const u8, existing_event: ?qjs.JSValue) bool {
     const saved_flags = current_event_flags;
     current_event_flags = .{};
 
-    // Collect ancestors for bubbling (target -> ... -> document)
+    // Build path: path[0] = target, path[path_len-1] = root
     var path: [64]*lxb.lxb_dom_node_t = undefined;
     var path_len: usize = 0;
     var current: ?*lxb.lxb_dom_node_t = target;
@@ -395,26 +593,66 @@ pub fn dispatchEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_typ
         current = node.parent;
     }
 
-    // Bubble: from target up to root
-    for (path[0..path_len]) |node| {
-        if (current_event_flags.stop_propagation) break;
+    // Use existing event or create a new one
+    var owns_event = false;
+    const event_obj = if (existing_event) |ev| blk: {
+        // Inject our native methods so preventDefault/stopPropagation interact with dispatch
+        ensureEventMethods(ctx, ev);
+        break :blk ev;
+    } else blk: {
+        owns_event = true;
+        break :blk createEventObject(ctx, event_type, target, target);
+    };
+    defer {
+        if (owns_event) qjs.JS_FreeValue(ctx, event_obj);
+    }
 
-        // Find listeners for this node + event type
-        for (listener_entries.items) |*entry| {
-            if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
-                // Call each callback
-                for (entry.callbacks.items) |callback| {
-                    const event_obj = createEventObject(ctx, event_type, target, node);
-                    var argv = [_]qjs.JSValue{event_obj};
-                    const this = dom_api.wrapNodePublic(ctx, node);
-                    const ret = qjs.JS_Call(ctx, callback, this, 1, &argv);
-                    qjs.JS_FreeValue(ctx, ret);
-                    qjs.JS_FreeValue(ctx, this);
-                    qjs.JS_FreeValue(ctx, event_obj);
-
-                    if (current_event_flags.stop_propagation) break;
+    // Phase 1: Capture (root -> target, excluding target)
+    if (path_len > 1) {
+        var ci: usize = path_len - 1;
+        while (ci > 0) : (ci -= 1) {
+            if (current_event_flags.stop_propagation) break;
+            const node = path[ci];
+            updateEventObjectForDispatch(ctx, event_obj, target, node, 1);
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(ctx, entry, event_obj, node, false, true);
+                    break;
                 }
+            }
+        }
+    }
+
+    // Phase 2: At Target
+    if (!current_event_flags.stop_propagation) {
+        updateEventObjectForDispatch(ctx, event_obj, target, target, 2);
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == target and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                callListenersOnNode(ctx, entry, event_obj, target, true, false);
                 break;
+            }
+        }
+    }
+
+    // Phase 3: Bubble (target -> root, excluding target)
+    // Only bubble if the event has bubbles:true (check for user-created events)
+    var should_bubble = true;
+    if (existing_event != null) {
+        const bubbles_val = qjs.JS_GetPropertyStr(ctx, event_obj, "bubbles");
+        should_bubble = qjs.JS_ToBool(ctx, bubbles_val) > 0;
+        qjs.JS_FreeValue(ctx, bubbles_val);
+    }
+    if (should_bubble and path_len > 1) {
+        var bi: usize = 1;
+        while (bi < path_len) : (bi += 1) {
+            if (current_event_flags.stop_propagation) break;
+            const node = path[bi];
+            updateEventObjectForDispatch(ctx, event_obj, target, node, 3);
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(ctx, entry, event_obj, node, false, false);
+                    break;
+                }
             }
         }
     }
@@ -428,14 +666,22 @@ pub fn dispatchEvent(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_typ
 pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     for (window_listener_entries.items) |*entry| {
         if (std.mem.eql(u8, entry.event_type, event_type)) {
-            for (entry.callbacks.items) |callback| {
-                const event_obj = createEventObject(ctx, event_type, null, null);
+            const event_obj = createEventObject(ctx, event_type, null, null);
+            defer qjs.JS_FreeValue(ctx, event_obj);
+            var i: usize = 0;
+            while (i < entry.callbacks.items.len) {
+                const rec = entry.callbacks.items[i];
                 var argv = [_]qjs.JSValue{event_obj};
                 const global = qjs.JS_GetGlobalObject(ctx);
-                const ret = qjs.JS_Call(ctx, callback, global, 1, &argv);
+                const ret = qjs.JS_Call(ctx, rec.callback, global, 1, &argv);
                 qjs.JS_FreeValue(ctx, ret);
                 qjs.JS_FreeValue(ctx, global);
-                qjs.JS_FreeValue(ctx, event_obj);
+                if (rec.once) {
+                    qjs.JS_FreeValue(ctx, rec.callback);
+                    _ = entry.callbacks.orderedRemove(i);
+                } else {
+                    i += 1;
+                }
             }
             break;
         }
@@ -458,14 +704,14 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
     defer qjs.JS_FreeValue(ctx, global);
 
     // Add addEventListener/removeEventListener to window (global)
-    _ = qjs.JS_SetPropertyStr(ctx, global, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, global, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 3));
 
     // Also add to document
     const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
     if (!quickjs.JS_IsUndefined(doc_obj) and !quickjs.JS_IsNull(doc_obj)) {
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 2));
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 2));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 3));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 3));
     }
     qjs.JS_FreeValue(ctx, doc_obj);
 
@@ -481,8 +727,8 @@ pub fn injectElementEventMethods(ctx: *qjs.JSContext, class_id: qjs.JSClassID) v
         qjs.JS_FreeValue(ctx, proto);
         return;
     }
-    _ = qjs.JS_SetPropertyStr(ctx, proto, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, proto, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, proto, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, proto, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 3));
     _ = qjs.JS_SetPropertyStr(ctx, proto, "click", qjs.JS_NewCFunction(ctx, &jsElementClick, "click", 0));
     _ = qjs.JS_SetPropertyStr(ctx, proto, "dispatchEvent", qjs.JS_NewCFunction(ctx, &jsElementDispatchEvent, "dispatchEvent", 1));
     qjs.JS_FreeValue(ctx, proto);
@@ -501,7 +747,7 @@ fn jsElementClick(
     return quickjs.JS_UNDEFINED();
 }
 
-/// element.dispatchEvent(event) — fire a custom event
+/// element.dispatchEvent(event) — fire a custom event, passing the ORIGINAL event object to listeners
 fn jsElementDispatchEvent(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -522,8 +768,8 @@ fn jsElementDispatchEvent(
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'");
     };
     defer qjs.JS_FreeCString(c, type_str.ptr);
-    // W3C: returns false if preventDefault() was called, true otherwise
-    const not_cancelled = dispatchEvent(c, node, type_str.ptr[0..type_str.len]);
+    // W3C: pass the original event object through dispatch, returns false if preventDefault() was called
+    const not_cancelled = dispatchEventWithObj(c, node, type_str.ptr[0..type_str.len], args[0]);
     return quickjs.JS_NewBool(not_cancelled);
 }
 
@@ -540,8 +786,8 @@ pub fn getTextClassId() qjs.JSClassID {
 /// Clean up all event listeners. Called when navigating to a new page.
 pub fn deinitEvents(ctx: *qjs.JSContext) void {
     for (listener_entries.items) |*entry| {
-        for (entry.callbacks.items) |cb| {
-            qjs.JS_FreeValue(ctx, cb);
+        for (entry.callbacks.items) |rec| {
+            qjs.JS_FreeValue(ctx, rec.callback);
         }
         entry.callbacks.deinit(allocator);
         entry.key.deinit();
@@ -550,8 +796,8 @@ pub fn deinitEvents(ctx: *qjs.JSContext) void {
     listener_entries = .empty;
 
     for (window_listener_entries.items) |*entry| {
-        for (entry.callbacks.items) |cb| {
-            qjs.JS_FreeValue(ctx, cb);
+        for (entry.callbacks.items) |rec| {
+            qjs.JS_FreeValue(ctx, rec.callback);
         }
         entry.callbacks.deinit(allocator);
         allocator.free(entry.event_type);
