@@ -4032,8 +4032,13 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
         const result = std.fmt.bufPrint(&buf, "{d}", .{style.font_weight}) catch return qjs.JS_NewStringLen(c, "400", 3);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
     } else if (std.mem.eql(u8, prop, "font-family")) {
+        if (style.font_family == .web_font) {
+            if (style.font_family_name) |name| {
+                return qjs.JS_NewStringLen(c, name.ptr, name.len);
+            }
+        }
         const s = switch (style.font_family) {
-            .sans_serif => "sans-serif",
+            .sans_serif, .web_font => "sans-serif",
             .serif => "serif",
             .monospace => "monospace",
         };

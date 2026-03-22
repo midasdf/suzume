@@ -11,6 +11,7 @@ pub const FontFamily = enum(u8) {
     sans_serif, // Verdana, Arial, Helvetica, system-ui, sans-serif
     serif, // Times, Georgia, serif
     monospace, // Courier, monospace
+    web_font, // @font-face custom font (name stored in font_family_name)
 };
 
 pub const ComputedStyle = struct {
@@ -24,6 +25,7 @@ pub const ComputedStyle = struct {
     color_set_by_css: bool = false, // true when CSS explicitly set color
     font_size_px: f32 = 16.0,
     font_family: FontFamily = .sans_serif,
+    font_family_name: ?[]const u8 = null, // for web_font: the @font-face family name
     font_weight: u16 = 400,
     font_style: FontStyle = .normal,
     line_height: LineHeight = .normal,
@@ -200,9 +202,13 @@ pub const ComputedStyle = struct {
     transition_duration: f32 = 0,
     transition_delay: f32 = 0,
 
-    // Animations (parsed but not yet animated)
+    // Animations
     animation_name: ?[]const u8 = null,
     animation_duration: f32 = 0,
+    animation_delay: f32 = 0,
+    animation_iteration_count: f32 = 1, // 0 = infinite
+    animation_fill_mode: AnimationFillMode = .none,
+    animation_direction: AnimationDirection = .normal,
 
     // ═══════════════════════════════════════════════════════════════
     // Counters & Generated Content
@@ -434,6 +440,9 @@ pub const ComputedStyle = struct {
     };
 
     pub const ObjectFit = enum { fill, contain, cover, none, scale_down };
+
+    pub const AnimationFillMode = enum { none, forwards, backwards, both };
+    pub const AnimationDirection = enum { normal, reverse, alternate, alternate_reverse };
 
     pub const BackgroundSize = enum {
         auto,

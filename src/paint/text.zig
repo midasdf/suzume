@@ -57,6 +57,35 @@ pub const TextRenderer = struct {
         };
     }
 
+    /// Initialize from raw font data in memory (for @font-face web fonts).
+    /// The caller must keep `font_data` alive for the lifetime of this TextRenderer.
+    pub fn initFromMemory(font_data: []const u8, font_size_px: u32) !TextRenderer {
+        var library: c.FT_Library = undefined;
+        if (c.FT_Init_FreeType(&library) != 0) {
+            return error.FreeTypeInitFailed;
+        }
+        errdefer _ = c.FT_Done_FreeType(library);
+
+        var face: c.FT_Face = undefined;
+        if (c.FT_New_Memory_Face(library, font_data.ptr, @intCast(font_data.len), 0, &face) != 0) {
+            return error.FontLoadFailed;
+        }
+        errdefer _ = c.FT_Done_Face(face);
+
+        if (c.FT_Set_Pixel_Sizes(face, 0, font_size_px) != 0) {
+            return error.SetSizeFailed;
+        }
+
+        const hb_font = c.hb_ft_font_create_referenced(face) orelse return error.HarfBuzzFontFailed;
+
+        return .{
+            .ft_library = library,
+            .ft_face = face,
+            .hb_font = hb_font,
+            .font_size_px = font_size_px,
+        };
+    }
+
     pub fn deinit(self: *TextRenderer) void {
         c.hb_font_destroy(self.hb_font);
         _ = c.FT_Done_Face(self.ft_face);

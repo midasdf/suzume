@@ -82,9 +82,17 @@ fn hashParentStyle(ps: ?*const ComputedStyle) u32 {
     return h;
 }
 
+/// A @font-face rule's extracted data.
+pub const FontFaceInfo = struct {
+    family: []const u8, // font-family name
+    src_url: []const u8, // URL to fetch
+};
+
 pub const CascadeResult = struct {
     styles: StyleMap,
     arena: std.heap.ArenaAllocator,
+    font_faces: std.ArrayListUnmanaged(FontFaceInfo) = .empty,
+    keyframes: std.StringHashMapUnmanaged(ast.KeyframesRule) = .empty,
 
     pub fn getStyle(self: *const CascadeResult, node: DomNode) ?ComputedStyle {
         return self.styles.get(@intFromPtr(node.lxb_node));
@@ -262,6 +270,12 @@ pub fn cascade(
     var author_parser = parser_mod.Parser.init(combined_css, arena);
     const author_sheet = try author_parser.parse();
 
+    // 4b. Extract @font-face rules from author stylesheet
+    extractFontFaces(author_sheet.rules, &result.font_faces, arena);
+
+    // 4c. Extract @keyframes rules
+    extractKeyframes(author_sheet.rules, &result.keyframes, arena);
+
     // 5. Flatten @media rules and collect applicable style rules
     var ua_rules: std.ArrayList(FlatRule) = .empty;
     try flattenRules(ua_sheet.rules, vw, vh, &ua_rules, arena);
@@ -329,6 +343,140 @@ fn flattenRules(
             else => {},
         }
     }
+}
+
+/// Extract @font-face rules from the stylesheet, collecting family names and src URLs.
+fn extractFontFaces(rules: []const ast.Rule, out: *std.ArrayListUnmanaged(FontFaceInfo), arena: std.mem.Allocator) void {
+    for (rules) |rule| {
+        switch (rule) {
+            .font_face => |ff| {
+                var family: ?[]const u8 = null;
+                var src_url: ?[]const u8 = null;
+
+                for (ff.declarations) |decl| {
+                    const name = decl.property_name;
+                    const val = decl.value_raw;
+                    if (val.len == 0) continue;
+
+                    if (eqlIgnoreCase(name, "font-family")) {
+                        // Strip quotes
+                        family = stripQuotes(val);
+                    } else if (eqlIgnoreCase(name, "src")) {
+                        // Parse src: url("...") format(...), url("..."), local("...")
+                        // We only handle url() — skip local(), format()
+                        src_url = extractFontSrcUrl(val);
+                    }
+                }
+
+                if (family != null and src_url != null) {
+                    out.append(arena, .{
+                        .family = family.?,
+                        .src_url = src_url.?,
+                    }) catch {};
+                }
+            },
+            .media => |mr| {
+                // Recurse into media rules (some @font-face may be inside @media)
+                extractFontFaces(mr.rules, out, arena);
+            },
+            else => {},
+        }
+    }
+}
+
+/// Extract @keyframes rules from the stylesheet.
+fn extractKeyframes(rules: []const ast.Rule, out: *std.StringHashMapUnmanaged(ast.KeyframesRule), arena: std.mem.Allocator) void {
+    for (rules) |rule| {
+        switch (rule) {
+            .keyframes => |kf| {
+                if (kf.name.len > 0) {
+                    out.put(arena, kf.name, kf) catch {};
+                }
+            },
+            .media => |mr| {
+                extractKeyframes(mr.rules, out, arena);
+            },
+            else => {},
+        }
+    }
+}
+
+fn parseTimeValue(s: []const u8) ?f32 {
+    if (properties.parseLength(s)) |len| {
+        if (len.unit == .s) return len.value;
+        if (len.unit == .ms) return len.value / 1000.0;
+    }
+    return null;
+}
+
+fn stripQuotes(s: []const u8) []const u8 {
+    if (s.len >= 2 and (s[0] == '"' or s[0] == '\'') and s[s.len - 1] == s[0]) {
+        return s[1 .. s.len - 1];
+    }
+    return s;
+}
+
+/// Extract the first url() from a @font-face src value, preferring woff2/woff/ttf.
+fn extractFontSrcUrl(src: []const u8) ?[]const u8 {
+    var best_url: ?[]const u8 = null;
+    var best_priority: u8 = 0;
+
+    var remaining = src;
+    while (remaining.len > 0) {
+        // Find next url(
+        const url_pos = indexOfIgnoreCase(remaining, "url(") orelse break;
+        remaining = remaining[url_pos + 4 ..];
+
+        if (extractUrl(remaining[0 .. @min(remaining.len, 2048)])) |_| {
+            // Reconstruct full url() string to pass to extractUrl
+        }
+        // Manual URL extraction from current position
+        var url_end: usize = 0;
+        const in_quote = remaining.len > 0 and (remaining[0] == '"' or remaining[0] == '\'');
+        const quote_char = if (in_quote) remaining[0] else @as(u8, 0);
+        if (in_quote) {
+            remaining = remaining[1..];
+        }
+        while (url_end < remaining.len) {
+            if (in_quote and remaining[url_end] == quote_char) break;
+            if (!in_quote and remaining[url_end] == ')') break;
+            url_end += 1;
+        }
+        if (url_end > 0) {
+            const url = remaining[0..url_end];
+            // Determine priority by format
+            var priority: u8 = 1; // default
+            // Check if followed by format("woff2") etc.
+            const after_url = remaining[url_end..];
+            if (std.mem.indexOf(u8, url, ".woff2") != null or containsIgnoreCase(after_url, "woff2")) {
+                priority = 4; // highest
+            } else if (std.mem.indexOf(u8, url, ".woff") != null or containsIgnoreCase(after_url, "\"woff\"")) {
+                priority = 3;
+            } else if (std.mem.indexOf(u8, url, ".ttf") != null or containsIgnoreCase(after_url, "truetype")) {
+                priority = 2;
+            }
+            if (priority > best_priority) {
+                best_priority = priority;
+                best_url = url;
+            }
+        }
+        if (url_end < remaining.len) {
+            remaining = remaining[url_end + 1 ..];
+        } else break;
+    }
+    return best_url;
+}
+
+fn indexOfIgnoreCase(haystack: []const u8, needle: []const u8) ?usize {
+    if (needle.len > haystack.len) return null;
+    for (0..haystack.len - needle.len + 1) |i| {
+        if (eqlIgnoreCase(haystack[i .. i + needle.len], needle)) return i;
+    }
+    return null;
+}
+
+fn containsIgnoreCase(haystack: []const u8, needle: []const u8) bool {
+    return indexOfIgnoreCase(haystack, needle) != null;
 }
 
 // ── Simple flat rule index ────────────────────────────────────────────
@@ -865,6 +1013,7 @@ fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
     style.color = parent.color;
     style.color_set_by_css = parent.color_set_by_css;
     style.font_family = parent.font_family;
+    style.font_family_name = parent.font_family_name;
     style.font_size_px = parent.font_size_px;
     style.font_weight = parent.font_weight;
     style.font_style = parent.font_style;
@@ -885,7 +1034,10 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
     switch (prop) {
         .color => style.color = parent.color,
         .font_size => style.font_size_px = parent.font_size_px,
-        .font_family => style.font_family = parent.font_family,
+        .font_family => {
+            style.font_family = parent.font_family;
+            style.font_family_name = parent.font_family_name;
+        },
         .font_weight => style.font_weight = parent.font_weight,
         .font_style => style.font_style = parent.font_style,
         .line_height => style.line_height = parent.line_height,
@@ -1120,7 +1272,17 @@ fn applyDeclaration(
                     style.font_family = .monospace;
                     break;
                 }
-                // Unknown font name — try next in list
+                // Unknown font name — treat as potential web font
+                else {
+                    // Copy the name into arena for lifetime safety
+                    const name_copy = arena.alloc(u8, family.len) catch null;
+                    if (name_copy) |buf| {
+                        @memcpy(buf, family);
+                        style.font_family = .web_font;
+                        style.font_family_name = buf;
+                        break;
+                    }
+                }
             }
         },
         .text_align => {
@@ -1569,11 +1731,31 @@ fn applyDeclaration(
                 }
             }
         },
+        .animation_delay => {
+            if (parseTimeValue(trimmed)) |secs| style.animation_delay = secs;
+        },
+        .animation_iteration_count => {
+            if (eqlIgnoreCase(trimmed, "infinite")) {
+                style.animation_iteration_count = 0; // 0 = infinite
+            } else if (std.fmt.parseFloat(f32, trimmed)) |n| {
+                style.animation_iteration_count = n;
+            } else |_| {}
+        },
+        .animation_direction => {
+            if (eqlIgnoreCase(trimmed, "normal")) style.animation_direction = .normal
+            else if (eqlIgnoreCase(trimmed, "reverse")) style.animation_direction = .reverse
+            else if (eqlIgnoreCase(trimmed, "alternate")) style.animation_direction = .alternate
+            else if (eqlIgnoreCase(trimmed, "alternate-reverse")) style.animation_direction = .alternate_reverse;
+        },
+        .animation_fill_mode => {
+            if (eqlIgnoreCase(trimmed, "none")) style.animation_fill_mode = .none
+            else if (eqlIgnoreCase(trimmed, "forwards")) style.animation_fill_mode = .forwards
+            else if (eqlIgnoreCase(trimmed, "backwards")) style.animation_fill_mode = .backwards
+            else if (eqlIgnoreCase(trimmed, "both")) style.animation_fill_mode = .both;
+        },
         // Skip these — just parse to avoid unknown property warnings
         .transition_property, .transition_timing_function,
-        .animation_timing_function, .animation_delay,
-        .animation_iteration_count, .animation_direction,
-        .animation_fill_mode, .animation_play_state,
+        .animation_timing_function, .animation_play_state,
         .backdrop_filter, .outline_style => {},
         // Skip border-style — we don't track it but it's needed for border-width to display
         .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},

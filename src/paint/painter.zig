@@ -39,6 +39,12 @@ pub const FontCache = struct {
     font_path_serif: [*:0]const u8,
     font_path_mono: [*:0]const u8,
     allocator: std.mem.Allocator,
+    /// Web fonts loaded via @font-face: family name → font data (kept alive for FreeType)
+    web_fonts: std.StringHashMap(WebFont),
+
+    const WebFont = struct {
+        data: []const u8, // raw font file bytes (must stay alive)
+    };
 
     pub fn init(allocator: std.mem.Allocator, font_path: [*:0]const u8) FontCache {
         return .{
@@ -47,6 +53,7 @@ pub const FontCache = struct {
             .font_path_serif = font_path, // fallback to same font
             .font_path_mono = font_path,
             .allocator = allocator,
+            .web_fonts = std.StringHashMap(WebFont).init(allocator),
         };
     }
 
@@ -57,6 +64,23 @@ pub const FontCache = struct {
             self.allocator.destroy(tr_ptr.*);
         }
         self.renderers.deinit();
+        // Free web font data
+        var wf_it = self.web_fonts.iterator();
+        while (wf_it.next()) |entry| {
+            self.allocator.free(entry.value_ptr.data);
+        }
+        self.web_fonts.deinit();
+    }
+
+    /// Register a web font loaded via @font-face.
+    /// `family_name` is the CSS font-family name (e.g., "Inter", "Roboto").
+    /// `font_data` is the raw font file bytes (ownership transferred to FontCache).
+    pub fn registerWebFont(self: *FontCache, family_name: []const u8, font_data: []const u8) void {
+        // Duplicate the key name
+        const key = self.allocator.dupe(u8, family_name) catch return;
+        self.web_fonts.put(key, .{ .data = font_data }) catch {
+            self.allocator.free(key);
+        };
     }
 
     pub fn getRenderer(self: *FontCache, size_px: u32) ?*TextRenderer {
@@ -64,6 +88,32 @@ pub const FontCache = struct {
     }
 
     const FontFamily = @import("../css/computed.zig").FontFamily;
+
+    /// Get a renderer for a specific web font family name (from @font-face).
+    pub fn getRendererForWebFont(self: *FontCache, size_px: u32, family_name: []const u8) ?*TextRenderer {
+        const clamped = if (size_px < 6) @as(u32, 6) else if (size_px > 72) @as(u32, 72) else size_px;
+        // Use a hash of family name + size as key (high bits for web font ID)
+        var hasher = std.hash.Wyhash.init(0xf0f0face);
+        hasher.update(family_name);
+        const name_hash: u64 = hasher.final();
+        const key: u64 = @as(u64, clamped) | (name_hash & 0xFFFFFFFF00000000);
+
+        if (self.renderers.get(key)) |tr| return tr;
+
+        const wf = self.web_fonts.get(family_name) orelse return null;
+
+        const tr = self.allocator.create(TextRenderer) catch return null;
+        tr.* = TextRenderer.initFromMemory(wf.data, clamped) catch {
+            self.allocator.destroy(tr);
+            return null;
+        };
+        self.renderers.put(key, tr) catch {
+            tr.deinit();
+            self.allocator.destroy(tr);
+            return null;
+        };
+        return tr;
+    }
 
     pub fn getRendererForFamily(self: *FontCache, size_px: u32, family: FontFamily) ?*TextRenderer {
         const clamped = if (size_px < 6) @as(u32, 6) else if (size_px > 72) @as(u32, 72) else size_px;
@@ -74,7 +124,7 @@ pub const FontCache = struct {
         const path = switch (family) {
             .serif => self.font_path_serif,
             .monospace => self.font_path_mono,
-            .sans_serif => self.font_path,
+            .sans_serif, .web_font => self.font_path, // web_font falls back to sans-serif
         };
 
         // Create new renderer for this size + family
@@ -491,7 +541,11 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             if (!is_visible) return;
             const colour = Surface.argbToColour(box.style.color);
             const size_px: u32 = @intFromFloat(box.style.font_size_px);
-            const tr = fonts.getRendererForFamily(size_px, box.style.font_family) orelse return;
+            const tr = if (box.style.font_family == .web_font and box.style.font_family_name != null)
+                (fonts.getRendererForWebFont(size_px, box.style.font_family_name.?) orelse
+                    fonts.getRendererForFamily(size_px, .sans_serif) orelse return)
+            else
+                (fonts.getRendererForFamily(size_px, box.style.font_family) orelse return);
 
             // Paint background on inline text if set
             const ibg = box.style.background_color;

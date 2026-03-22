@@ -4,6 +4,7 @@ const TextRenderer = @import("paint/text.zig").TextRenderer;
 const GlyphBitmap = @import("paint/text.zig").GlyphBitmap;
 const Document = @import("dom/tree.zig").Document;
 const cascade_mod = @import("css/cascade.zig");
+const anim_mod = @import("css/animation.zig");
 const box_tree = @import("layout/tree.zig");
 const block_layout = @import("layout/block.zig");
 const painter_mod = @import("paint/painter.zig");
@@ -171,6 +172,8 @@ const PageState = struct {
     error_alloc: ?[]u8 = null,
     /// Loaded script URLs for dynamic script dedup.
     loaded_script_urls: ?std.StringHashMap(void) = null,
+    /// CSS animation state.
+    anim_state: ?anim_mod.AnimationState = null,
 
     fn deinit(self: *PageState) void {
         if (self.js_rt) |*jrt| {
@@ -187,6 +190,7 @@ const PageState = struct {
             while (it.next()) |key| std.heap.c_allocator.free(@constCast(key.*));
             urls.deinit();
         }
+        if (self.anim_state) |*as| as.deinit();
         if (self.image_cache) |*ic| ic.deinit();
         self.pending_images.deinit(std.heap.c_allocator);
         if (self.base_url) |bu| std.heap.c_allocator.free(bu);
@@ -741,6 +745,34 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
 }
 
 
+/// Download and register @font-face web fonts.
+fn loadWebFonts(
+    font_faces: []const cascade_mod.FontFaceInfo,
+    fonts: *painter_mod.FontCache,
+    loader: *Loader,
+    allocator: std.mem.Allocator,
+    base_url: [:0]const u8,
+) void {
+    for (font_faces) |ff| {
+        // Skip if already registered
+        if (fonts.web_fonts.get(ff.family) != null) continue;
+
+        // Resolve relative URL
+        const resolved = resolveUrl(allocator, base_url, ff.src_url) catch continue;
+        defer allocator.free(resolved);
+
+        // Download font file (with short timeout)
+        const response = loader.loadBytesWithTimeout(resolved, 10) catch continue;
+        if (response.body.len == 0) {
+            allocator.free(response.body);
+            continue;
+        }
+
+        // Transfer ownership of font data to FontCache
+        fonts.registerWebFont(ff.family, response.body);
+    }
+}
+
 /// Navigate to a URL: fetch, parse, style, layout.
 /// Returns true on success, false on failure.
 fn navigateTo(
@@ -844,6 +876,11 @@ fn navigateTo(
         return false;
     };
 
+    // Download and register @font-face web fonts
+    if (styles.font_faces.items.len > 0) {
+        loadWebFonts(styles.font_faces.items, fonts, loader, allocator, url_z);
+    }
+
     // Build box tree from html root for proper CSS background propagation
     const root_box = box_tree.buildBoxTree(root_node, &styles, allocator) catch {
         styles.deinit();
@@ -895,6 +932,7 @@ fn navigateTo(
         .pending_images_idx = 0,
         .pending_images_loaded = 0,
         .base_url = base_url_copy,
+        .anim_state = anim_mod.AnimationState.init(allocator),
     };
 
     // Set root box and styles pointers for JS layout/style queries
@@ -1887,6 +1925,13 @@ pub fn main() !void {
                         scroll_x = @max(0, @min(sx, max_scroll_x));
                         dom_api.pending_scroll_x = null;
                         needs_repaint = true;
+                    }
+                }
+
+                // Tick CSS animations
+                if (pg.anim_state) |*as| {
+                    if (as.hasActiveAnimations()) {
+                        needs_repaint = true; // Continuous repaint while animations run
                     }
                 }
             }
