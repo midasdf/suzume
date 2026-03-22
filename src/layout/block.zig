@@ -251,6 +251,15 @@ fn breakFlagsFromStyle(style: ComputedStyle) BreakFlags {
     };
 }
 
+/// Count space characters in text for word-spacing calculation.
+fn countSpaces(text: []const u8) usize {
+    var count: usize = 0;
+    for (text) |c| {
+        if (c == ' ') count += 1;
+    }
+    return count;
+}
+
 /// Compute effective line height from CSS line-height property and raw font metrics height.
 /// CSS spec: line-height:normal is UA-dependent, typically 1.0-1.2x font metrics.
 /// Using raw_height directly (1.0x) matches Firefox's tight rendering for body text.
@@ -272,6 +281,17 @@ pub fn layoutBlock(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
 
 /// Layout a block box with viewport height for resolving percent heights.
 pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache, viewport_height: f32) void {
+    // Resolve percentage margins/padding against containing block width (CSS Box Model spec:
+    // percentage margins and padding are always relative to containing block WIDTH, even vertical ones).
+    if (box.style.margin_top_is_pct) box.margin.top = box.style.margin_top * containing_width / 100.0;
+    if (box.style.margin_right_is_pct) box.margin.right = box.style.margin_right * containing_width / 100.0;
+    if (box.style.margin_bottom_is_pct) box.margin.bottom = box.style.margin_bottom * containing_width / 100.0;
+    if (box.style.margin_left_is_pct) box.margin.left = box.style.margin_left * containing_width / 100.0;
+    if (box.style.padding_top_is_pct) box.padding.top = box.style.padding_top * containing_width / 100.0;
+    if (box.style.padding_right_is_pct) box.padding.right = box.style.padding_right * containing_width / 100.0;
+    if (box.style.padding_bottom_is_pct) box.padding.bottom = box.style.padding_bottom * containing_width / 100.0;
+    if (box.style.padding_left_is_pct) box.padding.left = box.style.padding_left * containing_width / 100.0;
+
     // Delegate to flex layout if display is flex
     if (box.style.display == .flex or box.style.display == .inline_flex) {
         flex.layoutFlex(box, containing_width, cursor_y, fonts);
@@ -291,6 +311,16 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         if (box.style.overflow_x != .visible and box.content.width > containing_width) {
             box.content.width = containing_width;
         }
+        // Apply margin:auto centering for tables (e.g. <center><table width="85%">)
+        if (box.style.margin_left_auto and box.style.margin_right_auto) {
+            const remaining = @max(containing_width - box.content.width -
+                box.padding.left - box.padding.right -
+                box.border.left - box.border.right, 0);
+            const auto_margin = remaining / 2.0;
+            box.margin.left = auto_margin;
+            box.margin.right = auto_margin;
+            adjustXPositions(box, auto_margin);
+        }
         return;
     }
 
@@ -309,14 +339,12 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         .px => |w| w,
         .percent => |pct| pct * containing_width / 100.0,
         .min_content => blk: {
-            // Minimum content width: layout children with 0 available width,
-            // then use their natural shrink-to-fit width
-            break :blk computeShrinkToFitWidth(box);
+            // CSS Sizing L3: minimum width — widest word or atomic inline
+            break :blk computeMinContentWidth(box, fonts);
         },
         .max_content => blk: {
-            // Maximum content width: use a very large available width,
-            // limited by containing width for practical purposes
-            break :blk computeShrinkToFitWidth(box);
+            // CSS Sizing L3: maximum width — no wrapping, all text on one line
+            break :blk computeMaxContentWidth(box, fonts);
         },
         .fit_content => blk: {
             // fit-content = min(max-content, max(min-content, available-width))
@@ -567,6 +595,14 @@ fn createsBfc(style: ComputedStyle) bool {
 fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
     var child_y: f32 = 0;
     var prev_margin_bottom: f32 = 0;
+    var is_first_child = true; // Track first in-flow child for parent-child margin collapsing
+
+    // CSS 2.1 §8.3.1: Parent-child margin collapsing
+    // If parent has no top border AND no top padding AND doesn't create BFC,
+    // the first child's top margin collapses with the parent's top margin.
+    // The collapsed margin = max(parent_margin, child_margin).
+    const parent_blocks_collapse = box.border.top > 0 or box.padding.top > 0 or
+        createsBfc(box.style);
 
     // Track floats for basic float support
     var float_left_bottom: f32 = 0;
@@ -600,6 +636,7 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 if (child.style.float_ != .none) {
                     const float_w: f32 = switch (child.style.width) {
                         .px => |w| w,
+                        .percent => |pct| pct * box.content.width / 100.0,
                         else => 0,
                     };
                     if (float_w <= box.content.width) {
@@ -609,12 +646,26 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                     // else: fall through to normal block layout
                 }
 
-                // Margin collapsing: BFC elements do not participate in margin collapsing
-                // with their siblings — they use their full margin instead.
+                // CSS 2.1 §8.3.1: Margin collapsing
+                var child_margin_top = child.margin.top;
+
+                // Parent-child collapsing: first in-flow child's top margin collapses
+                // with parent's top margin if parent has no top border/padding/BFC.
+                // Collapsed margin = max(parent, child). Parent absorbs the larger value.
+                if (is_first_child and !parent_blocks_collapse) {
+                    if (child_margin_top > box.margin.top) {
+                        box.margin.top = child_margin_top;
+                    }
+                    // Child's top margin is absorbed by parent — zero it out
+                    child_margin_top = 0;
+                }
+                is_first_child = false;
+
+                // Sibling margin collapsing: BFC elements do not participate
                 const collapsed_margin = if (createsBfc(child.style))
-                    prev_margin_bottom + child.margin.top // full margins, no collapsing
+                    prev_margin_bottom + child_margin_top // full margins, no collapsing
                 else
-                    @max(prev_margin_bottom, child.margin.top); // normal collapsing
+                    @max(prev_margin_bottom, child_margin_top); // normal collapsing
                 child_y += collapsed_margin;
 
                 // Reset expired float widths — once child_y is past a float's bottom,
@@ -678,7 +729,21 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 const collapsed_margin = @max(prev_margin_bottom, child.margin.top);
                 child_y += collapsed_margin;
 
-                layoutInlineText(child, box.content.width, box.content.x, box.content.y + child_y, fonts);
+                // Pass float context for per-line width calculation (CSS 2.1 §9.5)
+                const text_left_w = if (child_y < float_left_bottom) float_left_width else 0;
+                const text_right_w = if (child_y < float_right_bottom) float_right_width else 0;
+                const text_avail = @max(box.content.width - text_left_w - text_right_w, 0);
+                const text_base_x = box.content.x + text_left_w;
+                const abs_y = box.content.y + child_y;
+                const fctx: ?FloatContext = if (float_left_width > 0 or float_right_width > 0) .{
+                    .left_width = float_left_width,
+                    .left_bottom = box.content.y + float_left_bottom,
+                    .right_width = float_right_width,
+                    .right_bottom = box.content.y + float_right_bottom,
+                    .full_width = box.content.width,
+                    .parent_x = box.content.x,
+                } else null;
+                layoutInlineText(child, text_avail, text_base_x, abs_y, fonts, fctx);
 
                 child_y += child.content.height;
                 prev_margin_bottom = child.margin.bottom;
@@ -690,17 +755,77 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
 
                 child.content.y = box.content.y + child_y + child.padding.top + child.border.top;
 
-                // Scale down if wider than container, preserving aspect ratio
+                // Apply CSS width/height to replaced elements, falling back to intrinsic size
                 var img_w = child.intrinsic_width;
                 var img_h = child.intrinsic_height;
-                const max_w = box.content.width - child.margin.left - child.margin.right -
+                const avail_w = box.content.width - child.margin.left - child.margin.right -
                     child.padding.left - child.padding.right -
                     child.border.left - child.border.right;
-                if (img_w > max_w and max_w > 0 and img_w > 0) {
-                    const scale = max_w / img_w;
-                    img_w = max_w;
+
+                // Apply CSS width
+                const css_w: ?f32 = switch (child.style.width) {
+                    .px => |w| w,
+                    .percent => |pct| pct * avail_w / 100.0,
+                    else => null,
+                };
+                if (css_w) |w| {
+                    if (img_w > 0) {
+                        const scale = w / img_w;
+                        img_h = img_h * scale;
+                    }
+                    img_w = w;
+                }
+
+                // Apply CSS height
+                const css_h: ?f32 = switch (child.style.height) {
+                    .px => |h| h,
+                    else => null,
+                };
+                if (css_h) |h| {
+                    img_h = h;
+                }
+
+                // Apply CSS max-width
+                const css_max_w: f32 = switch (child.style.max_width) {
+                    .px => |mw| mw,
+                    .percent => |pct| pct * avail_w / 100.0,
+                    else => avail_w,
+                };
+                if (img_w > css_max_w and css_max_w > 0 and img_w > 0) {
+                    const scale = css_max_w / img_w;
+                    img_w = css_max_w;
                     img_h = img_h * scale;
                 }
+
+                // Scale down if wider than container, preserving aspect ratio
+                if (img_w > avail_w and avail_w > 0 and img_w > 0) {
+                    const scale = avail_w / img_w;
+                    img_w = avail_w;
+                    img_h = img_h * scale;
+                }
+
+                // Apply CSS max-height constraint
+                const css_max_h: ?f32 = switch (child.style.max_height) {
+                    .px => |mh| mh,
+                    else => null,
+                };
+                if (css_max_h) |mh| {
+                    if (img_h > mh and img_w > 0) {
+                        const scale_h = mh / img_h;
+                        img_h = mh;
+                        img_w = img_w * scale_h;
+                    }
+                }
+
+                // Apply CSS min-height constraint
+                const css_min_h: ?f32 = switch (child.style.min_height) {
+                    .px => |mh| mh,
+                    else => null,
+                };
+                if (css_min_h) |mh| {
+                    if (img_h < mh) img_h = mh;
+                }
+
                 child.content.width = img_w;
 
                 // Apply text-align for replaced elements (images centered by parent text-align)
@@ -721,8 +846,20 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
         }
     }
 
-    // Add last child's margin bottom
-    child_y += prev_margin_bottom;
+    // CSS 2.1 §8.3.1: Last child's bottom margin collapsing with parent
+    // If parent has no bottom border/padding and doesn't create BFC,
+    // the last child's bottom margin collapses with parent's bottom margin.
+    const parent_blocks_bottom_collapse = box.border.bottom > 0 or box.padding.bottom > 0 or
+        createsBfc(box.style);
+    if (parent_blocks_bottom_collapse) {
+        child_y += prev_margin_bottom;
+    } else {
+        // Last child's bottom margin collapses with parent's — take the max
+        if (prev_margin_bottom > box.margin.bottom) {
+            box.margin.bottom = prev_margin_bottom;
+        }
+        // Don't add prev_margin_bottom to child_y — it "escapes" downward
+    }
 
     // Ensure we contain floats
     if (float_left_bottom > child_y) child_y = float_left_bottom;
@@ -771,6 +908,72 @@ pub fn computeShrinkToFitWidthPublic(box: *Box) f32 {
     return computeShrinkToFitWidth(box);
 }
 
+/// CSS Sizing L3: min-content width — the narrowest the box can be without overflow.
+/// For text, this is the widest word. For block children, the widest child's min-content.
+fn computeMinContentWidth(box: *Box, fonts: *FontCache) f32 {
+    var max_word: f32 = 0;
+    for (box.children.items) |child| {
+        switch (child.box_type) {
+            .inline_text => {
+                const text = child.text orelse continue;
+                const size_px: u32 = @intFromFloat(child.style.font_size_px);
+                const tr = if (child.style.font_family == .web_font and child.style.font_family_name != null)
+                    (fonts.getRendererForWebFont(size_px, child.style.font_family_name.?) orelse
+                        fonts.getRendererForFamily(size_px, .sans_serif) orelse continue)
+                else
+                    (fonts.getRendererForFamily(size_px, child.style.font_family) orelse continue);
+                // Measure each word separately to find the widest
+                var iter = std.mem.splitScalar(u8, text, ' ');
+                while (iter.next()) |word| {
+                    if (word.len == 0) continue;
+                    const m = tr.measure(word);
+                    const w: f32 = @floatFromInt(m.width);
+                    if (w > max_word) max_word = w;
+                }
+            },
+            else => {
+                const w = child.content.width + child.padding.left + child.padding.right +
+                    child.border.left + child.border.right + child.margin.left + child.margin.right;
+                if (w > max_word) max_word = w;
+            },
+        }
+    }
+    return max_word;
+}
+
+/// CSS Sizing L3: max-content width — the widest the box would be with infinite available width.
+/// Inline children accumulate on the same line (sum). Block children each take their own line (max).
+fn computeMaxContentWidth(box: *Box, fonts: *FontCache) f32 {
+    var max_line: f32 = 0;
+    var inline_accum: f32 = 0;
+    for (box.children.items) |child| {
+        switch (child.box_type) {
+            .inline_text => {
+                const text = child.text orelse continue;
+                const size_px: u32 = @intFromFloat(child.style.font_size_px);
+                const tr = if (child.style.font_family == .web_font and child.style.font_family_name != null)
+                    (fonts.getRendererForWebFont(size_px, child.style.font_family_name.?) orelse
+                        fonts.getRendererForFamily(size_px, .sans_serif) orelse continue)
+                else
+                    (fonts.getRendererForFamily(size_px, child.style.font_family) orelse continue);
+                const m = tr.measure(text);
+                inline_accum += @floatFromInt(m.width);
+            },
+            else => {
+                // Flush accumulated inline width before block boundary
+                if (inline_accum > max_line) max_line = inline_accum;
+                inline_accum = 0;
+                const w = child.content.width + child.padding.left + child.padding.right +
+                    child.border.left + child.border.right + child.margin.left + child.margin.right;
+                if (w > max_line) max_line = w;
+            },
+        }
+    }
+    // Flush trailing inline content
+    if (inline_accum > max_line) max_line = inline_accum;
+    return max_line;
+}
+
 fn computeShrinkToFitWidth(box: *Box) f32 {
     const origin_x = box.content.x;
     var max_right: f32 = 0;
@@ -804,7 +1007,8 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
     const base_y = box.content.y;
     const allocator = fonts.allocator;
 
-    var cursor_x: f32 = 0; // Current x position within the line (relative to content)
+    // Apply text-indent to first line (CSS spec: text-indent affects only the first line)
+    var cursor_x: f32 = if (box.style.text_indent != 0) box.style.text_indent else 0;
     var cursor_y: f32 = 0; // Current y position for lines
     var line_height: f32 = 0; // Max height of current line
 
@@ -831,19 +1035,24 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 else
                     (fonts.getRendererForFamily(size_px, child.style.font_family) orelse continue);
 
-                // Measure text
+                // Measure text (with word-spacing adjustment)
                 const full_metrics = text_renderer.measure(text);
                 const raw_height: f32 = @floatFromInt(full_metrics.height);
                 const text_line_height: f32 = computeLineHeight(child.style.line_height, raw_height, child.style.font_size_px);
                 const ascent: f32 = @floatFromInt(full_metrics.ascent);
-                const text_width: f32 = @floatFromInt(full_metrics.width);
+                const base_text_width: f32 = @floatFromInt(full_metrics.width);
+                // Apply word-spacing: count spaces and add extra width
+                const text_width: f32 = if (child.style.word_spacing != 0)
+                    base_text_width + child.style.word_spacing * @as(f32, @floatFromInt(countSpaces(text)))
+                else
+                    base_text_width;
 
                 child.lines = .empty;
                 child.content.x = base_x;
                 child.content.y = base_y + cursor_y;
 
                 // Handle pre mode
-                const is_pre = child.style.white_space == .pre or child.style.white_space == .pre_wrap;
+                const is_pre = child.style.white_space == .pre or child.style.white_space == .pre_wrap or child.style.white_space == .break_spaces;
                 if (is_pre) {
                     layoutPreText(child, text, base_x + cursor_x, base_y + cursor_y, container_width, text_renderer, text_line_height, ascent, allocator);
                     cursor_y += child.content.height;
@@ -1047,7 +1256,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     }
                 }
 
-                // Position the child
+                // Position the child with vertical-align support
                 const dx = base_x + cursor_x - child.content.x + child.padding.left + child.border.left + child.margin.left;
                 adjustXPositions(child, dx);
 
@@ -1055,6 +1264,9 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 const final_total_w = child.content.width + child_h_extra;
                 cursor_x += final_total_w;
                 if (child_total_h > line_height) line_height = child_total_h;
+
+                // vertical-align for inline-block: adjust Y within line after line_height is known
+                // (deferred to post-pass in alignInlineFormattingContextLines)
             },
             .replaced => {
                 // Inline replaced element (e.g., img with inline display)
@@ -1067,7 +1279,40 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                     child.padding.top + child.padding.bottom +
                     child.border.top + child.border.bottom;
 
-                // Scale down if needed
+                // Apply CSS width/height
+                const css_iw: ?f32 = switch (child.style.width) {
+                    .px => |w| w,
+                    .percent => |pct| pct * container_width / 100.0,
+                    else => null,
+                };
+                if (css_iw) |w| {
+                    if (img_w > 0) {
+                        const iscale = w / img_w;
+                        img_h = img_h * iscale;
+                    }
+                    img_w = w;
+                }
+                const css_ih: ?f32 = switch (child.style.height) {
+                    .px => |h| h,
+                    else => null,
+                };
+                if (css_ih) |h| {
+                    img_h = h;
+                }
+
+                // Apply CSS max-width
+                const css_imw: f32 = switch (child.style.max_width) {
+                    .px => |mw| mw,
+                    .percent => |pct| pct * container_width / 100.0,
+                    else => container_width - child_extra_w,
+                };
+                if (img_w > css_imw and css_imw > 0 and img_w > 0) {
+                    const iscale = css_imw / img_w;
+                    img_w = css_imw;
+                    img_h = img_h * iscale;
+                }
+
+                // Scale down if needed (container constraint)
                 const max_w = container_width - child_extra_w;
                 if (img_w > max_w and max_w > 0 and img_w > 0) {
                     const scale = max_w / img_w;
@@ -1109,8 +1354,11 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
     box.content.height = cursor_y;
 
-    // Post-pass: apply text-align to all visual lines (Line Box alignment)
+    // Post-pass: apply text-align and vertical-align to all visual lines
     alignInlineFormattingContextLines(box, container_width, base_x);
+
+    // Post-pass: apply vertical-align to replaced/inline-block elements within lines
+    applyVerticalAlignInIFC(box, line_height);
 }
 
 const LineRecord = struct { y: f32, right_edge: f32 };
@@ -1224,6 +1472,85 @@ fn computeLineAlignOffset(line_infos: []const LineRecord, y: f32, base_x: f32, c
     return 0;
 }
 
+/// CSS 2.1 §10.8: Apply vertical-align to inline replaced/inline-block elements.
+/// This is a post-pass after line heights are determined, adjusting Y positions
+/// of inline elements based on their vertical-align property within each line.
+fn applyVerticalAlignInIFC(box: *Box, last_line_height: f32) void {
+    _ = last_line_height;
+    // Build line map: group children by visual line (y-position)
+    // For each line, find max line height, then adjust each element's Y
+    const children = box.children.items;
+
+    // Collect line info: for each line (by y), track max height
+    var line_ys: [128]f32 = undefined;
+    var line_heights_arr: [128]f32 = undefined;
+    var n_lines: usize = 0;
+
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        const child_y = switch (child.box_type) {
+            .replaced, .inline_box => child.content.y - child.padding.top - child.border.top - child.margin.top,
+            .inline_text => if (child.lines.items.len > 0) child.lines.items[0].y else continue,
+            else => continue,
+        };
+        const child_h: f32 = switch (child.box_type) {
+            .replaced => child.content.height + child.padding.top + child.padding.bottom + child.border.top + child.border.bottom + child.margin.top + child.margin.bottom,
+            .inline_box => child.content.height + child.padding.top + child.padding.bottom + child.border.top + child.border.bottom + child.margin.top + child.margin.bottom,
+            .inline_text => if (child.lines.items.len > 0) child.lines.items[0].height else 0,
+            else => 0,
+        };
+
+        // Find or add line
+        var found = false;
+        for (0..n_lines) |li| {
+            if (@abs(line_ys[li] - child_y) < 0.5) {
+                if (child_h > line_heights_arr[li]) line_heights_arr[li] = child_h;
+                found = true;
+                break;
+            }
+        }
+        if (!found and n_lines < 128) {
+            line_ys[n_lines] = child_y;
+            line_heights_arr[n_lines] = child_h;
+            n_lines += 1;
+        }
+    }
+
+    if (n_lines == 0) return;
+
+    // Apply vertical-align adjustments to replaced and inline-block elements
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        if (child.box_type != .replaced and child.box_type != .inline_box) continue;
+        if (child.style.vertical_align == .baseline) continue; // baseline is default, no adjustment
+
+        const child_y = child.content.y - child.padding.top - child.border.top - child.margin.top;
+        const child_h = child.content.height + child.padding.top + child.padding.bottom +
+            child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+
+        // Find line height for this element's line
+        var lh: f32 = child_h;
+        for (0..n_lines) |li| {
+            if (@abs(line_ys[li] - child_y) < 0.5) {
+                lh = line_heights_arr[li];
+                break;
+            }
+        }
+
+        const dy: f32 = switch (child.style.vertical_align) {
+            .middle => (lh - child_h) / 2,
+            .bottom, .text_bottom => lh - child_h,
+            .top, .text_top => 0,
+            .sub => child.style.font_size_px * 0.3, // subscript offset
+            .super => -child.style.font_size_px * 0.4, // superscript offset
+            .baseline => 0,
+        };
+        if (@abs(dy) > 0.5) {
+            adjustYPositions(child, dy);
+        }
+    }
+}
+
 /// Recursively adjust x positions of a box and all its descendants.
 pub fn adjustXPositions(box: *Box, offset_x: f32) void {
     box.content.x += offset_x;
@@ -1268,32 +1595,61 @@ pub fn adjustYPositions(box: *Box, offset_y: f32) void {
     }
 }
 
+/// Find the nearest positioned ancestor (position != static) for absolute positioning.
+/// For position:fixed, returns null (use viewport).
+/// For position:absolute, walks up the parent chain.
+fn findContainingBlock(child: *Box) ?*Box {
+    var ancestor = child.parent;
+    while (ancestor) |a| {
+        if (a.style.position != .static_) return a;
+        ancestor = a.parent;
+    }
+    return null; // No positioned ancestor found — use viewport/root
+}
+
 /// Apply CSS position offsets (top/left/right/bottom) to an absolutely positioned child.
 /// The child has already been laid out via layoutBlock. This computes the desired absolute
-/// position based on the containing block (parent) and adjusts the child's position tree.
+/// position based on the containing block and adjusts the child's position tree.
+/// For position:absolute — containing block is nearest positioned ancestor.
+/// For position:fixed — containing block is the viewport (root).
 pub fn applyAbsolutePositionOffsets(child: *Box, parent: *Box) void {
+    // Determine the containing block based on position type
+    const cb: struct { x: f32, y: f32, w: f32, h: f32 } = if (child.style.position == .fixed) blk: {
+        // Fixed: use root box (walk to top of tree) as viewport proxy
+        var root = parent;
+        while (root.parent) |p| root = p;
+        break :blk .{ .x = root.content.x, .y = root.content.y, .w = root.content.width, .h = root.content.height };
+    } else blk: {
+        // Absolute: find nearest positioned ancestor
+        if (findContainingBlock(child)) |positioned| {
+            break :blk .{ .x = positioned.content.x, .y = positioned.content.y, .w = positioned.content.width, .h = positioned.content.height };
+        }
+        // No positioned ancestor — use immediate parent (fallback to root-like behavior)
+        break :blk .{ .x = parent.content.x, .y = parent.content.y, .w = parent.content.width, .h = parent.content.height };
+    };
+
     // Compute desired absolute position
-    var abs_x: f32 = parent.content.x;
-    var abs_y: f32 = parent.content.y;
+    var abs_x: f32 = cb.x;
+    var abs_y: f32 = cb.y;
 
     // Horizontal: left takes priority over right
     switch (child.style.left) {
         .px => |v| {
-            abs_x = parent.content.x + v;
+            abs_x = cb.x + v;
         },
         .percent => |p| {
-            abs_x = parent.content.x + p * parent.content.width / 100.0;
+            abs_x = cb.x + p * cb.w / 100.0;
         },
         else => {
             // No left specified, check right
             switch (child.style.right) {
                 .px => |v| {
                     const child_w = child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right;
-                    abs_x = parent.content.x + parent.content.width - child_w - v;
+                    abs_x = cb.x + cb.w - child_w - v;
                 },
                 .percent => |p| {
                     const child_w = child.content.width + child.padding.left + child.padding.right + child.border.left + child.border.right;
-                    abs_x = parent.content.x + parent.content.width - child_w - p * parent.content.width / 100.0;
+                    abs_x = cb.x + cb.w - child_w - p * cb.w / 100.0;
                 },
                 else => {},
             }
@@ -1303,21 +1659,21 @@ pub fn applyAbsolutePositionOffsets(child: *Box, parent: *Box) void {
     // Vertical: top takes priority over bottom
     switch (child.style.top) {
         .px => |v| {
-            abs_y = parent.content.y + v;
+            abs_y = cb.y + v;
         },
         .percent => |p| {
-            abs_y = parent.content.y + p * parent.content.height / 100.0;
+            abs_y = cb.y + p * cb.h / 100.0;
         },
         else => {
             // No top specified, check bottom
             switch (child.style.bottom) {
                 .px => |v| {
                     const child_h = child.content.height + child.padding.top + child.padding.bottom + child.border.top + child.border.bottom;
-                    abs_y = parent.content.y + parent.content.height - child_h - v;
+                    abs_y = cb.y + cb.h - child_h - v;
                 },
                 .percent => |p| {
                     const child_h = child.content.height + child.padding.top + child.padding.bottom + child.border.top + child.border.bottom;
-                    abs_y = parent.content.y + parent.content.height - child_h - p * parent.content.height / 100.0;
+                    abs_y = cb.y + cb.h - child_h - p * cb.h / 100.0;
                 },
                 else => {},
             }
@@ -1337,8 +1693,28 @@ pub fn applyAbsolutePositionOffsets(child: *Box, parent: *Box) void {
     if (dy != 0) adjustYPositions(child, dy);
 }
 
+/// Float context for per-line width calculation (CSS 2.1 §9.5 float exclusion).
+const FloatContext = struct {
+    left_width: f32 = 0,
+    left_bottom: f32 = 0, // absolute Y
+    right_width: f32 = 0,
+    right_bottom: f32 = 0, // absolute Y
+    full_width: f32 = 0, // container width without float constraint
+    parent_x: f32 = 0,
+
+    /// Compute available width and x offset for a line at the given absolute Y.
+    fn lineWidth(self: FloatContext, line_y: f32) struct { width: f32, x: f32 } {
+        const lw = if (line_y < self.left_bottom) self.left_width else 0;
+        const rw = if (line_y < self.right_bottom) self.right_width else 0;
+        return .{
+            .width = @max(self.full_width - lw - rw, 0),
+            .x = self.parent_x + lw,
+        };
+    }
+};
+
 /// Break text into lines and compute line boxes (for standalone text in block context).
-fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, fonts: *FontCache) void {
+fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, fonts: *FontCache, float_ctx: ?FloatContext) void {
     const text = box.text orelse return;
     if (text.len == 0) return;
     // Skip text layout in containers too narrow to display anything meaningful
@@ -1363,7 +1739,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
     const ascent: f32 = @floatFromInt(full_metrics.ascent);
 
     // Handle white-space: pre — preserve all whitespace and newlines
-    const is_pre = box.style.white_space == .pre or box.style.white_space == .pre_wrap;
+    const is_pre = box.style.white_space == .pre or box.style.white_space == .pre_wrap or box.style.white_space == .break_spaces;
     if (is_pre) {
         layoutPreText(box, text, base_x, base_y, container_width, text_renderer, line_height, ascent, allocator);
         return;
@@ -1401,13 +1777,23 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
             continue;
         }
 
-        if (findBreakPoint(text, line_start, container_width, text_renderer, break_flags)) |break_pos| {
+        // Per-line float exclusion: recompute available width for each line
+        const line_abs_y = base_y + total_height;
+        var line_avail = container_width;
+        var line_x = base_x;
+        if (float_ctx) |fc| {
+            const fl = fc.lineWidth(line_abs_y);
+            line_avail = fl.width;
+            line_x = fl.x;
+        }
+
+        if (findBreakPoint(text, line_start, line_avail, text_renderer, break_flags)) |break_pos| {
             const line_text = text[line_start..break_pos];
             if (line_text.len > 0) {
                 const lm = text_renderer.measure(line_text);
                 const lw: f32 = @floatFromInt(lm.width);
                 box.lines.append(allocator, .{
-                    .x = applyTextAlign(base_x, lw, container_width, box.style.text_align),
+                    .x = applyTextAlign(line_x, lw, line_avail, box.style.text_align),
                     .y = base_y + total_height,
                     .width = lw,
                     .height = line_height,
@@ -1428,7 +1814,7 @@ fn layoutInlineText(box: *Box, container_width: f32, base_x: f32, base_y: f32, f
             const lm = text_renderer.measure(line_text);
             const lw: f32 = @floatFromInt(lm.width);
             box.lines.append(allocator, .{
-                .x = applyTextAlign(base_x, lw, container_width, box.style.text_align),
+                .x = applyTextAlign(line_x, lw, line_avail, box.style.text_align),
                 .y = base_y + total_height,
                 .width = lw,
                 .height = line_height,

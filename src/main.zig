@@ -673,6 +673,7 @@ const ImageUrlEntry = struct {
     url: []const u8,
     intrinsic_width: f32,
     intrinsic_height: f32,
+    is_retry: bool = false, // true if this is a retry attempt (don't retry again)
 };
 
 fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry), allocator: std.mem.Allocator) void {
@@ -2179,20 +2180,29 @@ pub fn main() !void {
             }
         }
 
-        // Incremental image loading: load 1 image per event loop tick
+        // Incremental image loading: load multiple images per event loop tick
         {
             const active_img_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
                 &page_states.items[tab_mgr.active_index]
             else
                 null;
             if (active_img_pg) |pg| {
-                // Load up to 5 images per tick (batch for performance)
+                // Load up to 10 images per tick, but cap total time at 3 seconds
+                // to keep the event loop responsive
                 var batch: usize = 0;
-                while (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 200 and batch < 5) : (batch += 1) {
+                const tick_start = std.time.milliTimestamp();
+                const max_tick_ms: i64 = 3000; // max 3 seconds per tick for image loading
+                while (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 300 and batch < 10) : (batch += 1) {
+                    // Check per-tick time budget
+                    if (batch > 0 and std.time.milliTimestamp() - tick_start > max_tick_ms) break;
                     const entry = pg.pending_images.items[pg.pending_images_idx];
                     pg.pending_images_idx += 1;
 
                     const img_url = entry.url;
+                    // Skip if already cached (dedup — same URL may appear multiple times)
+                    if (pg.image_cache) |*ic| {
+                        if (ic.get(img_url) != null) continue;
+                    }
                     // Handle data:image/svg+xml, URLs (inline SVGs) — bypass HTTP fetch
                     const data_svg_prefix = "data:image/svg+xml,";
                     if (std.mem.startsWith(u8, img_url, data_svg_prefix)) {
@@ -2218,7 +2228,7 @@ pub fn main() !void {
                             if (resolveUrl(allocator, base, img_url)) |resolved| {
                                 defer allocator.free(resolved);
                                 {
-                                    if (loader.loadBytesWithTimeout(resolved, 5)) |resp_val| {
+                                    if (loader.loadBytesWithTimeout(resolved, 3)) |resp_val| {
                                         var resp = resp_val;
                                         defer resp.deinit();
                                         if (resp.status_code == 200 and resp.body.len > 0 and resp.body.len <= 2 * 1024 * 1024) {
@@ -2251,7 +2261,17 @@ pub fn main() !void {
                                                 }
                                             } else |_| {}
                                         }
-                                    } else |_| {}
+                                    } else |_| {
+                                        // HTTP fetch failed — retry once if not already a retry
+                                        if (!entry.is_retry) {
+                                            pg.pending_images.append(allocator, .{
+                                                .url = img_url,
+                                                .intrinsic_width = entry.intrinsic_width,
+                                                .intrinsic_height = entry.intrinsic_height,
+                                                .is_retry = true,
+                                            }) catch {};
+                                        }
+                                    }
                                 }
                             } else |_| {}
                         }

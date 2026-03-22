@@ -92,6 +92,45 @@ fn resolveContentCounters(content: []const u8, allocator: std.mem.Allocator) ?[]
 /// CSS counter state (reset on each buildBoxTree call).
 var css_counters: std.StringHashMapUnmanaged(i32) = .empty;
 
+/// Pick the best URL from an HTML srcset attribute value.
+/// Prefers 1x descriptor, falls back to first URL.
+/// srcset format: "url1 1x, url2 2x" or "url1 300w, url2 600w"
+fn pickSrcsetUrl(srcset: []const u8) ?[]const u8 {
+    var best_url: ?[]const u8 = null;
+    var best_density: f32 = 999;
+    var iter = std.mem.splitScalar(u8, srcset, ',');
+    while (iter.next()) |candidate| {
+        const trimmed = std.mem.trim(u8, candidate, " \t\r\n");
+        if (trimmed.len == 0) continue;
+        // Split into URL and descriptor
+        var parts = std.mem.splitBackwardsScalar(u8, trimmed, ' ');
+        const maybe_desc = parts.first();
+        const url_part = parts.rest();
+        const url = if (url_part.len > 0) std.mem.trim(u8, url_part, " \t") else trimmed;
+        if (url.len == 0) continue;
+
+        // Parse descriptor (1x, 2x, 300w, etc.)
+        var density: f32 = 1.0;
+        if (maybe_desc.len > 1) {
+            const last = maybe_desc[maybe_desc.len - 1];
+            if (last == 'x') {
+                density = std.fmt.parseFloat(f32, maybe_desc[0 .. maybe_desc.len - 1]) catch 1.0;
+            } else if (last == 'w') {
+                // Width descriptor: prefer smaller (300w < 600w for low-res device)
+                const w = std.fmt.parseFloat(f32, maybe_desc[0 .. maybe_desc.len - 1]) catch 1000;
+                density = w / 720.0; // normalize to device width
+            }
+        }
+
+        // Prefer 1x or closest to 1x
+        if (best_url == null or @abs(density - 1.0) < @abs(best_density - 1.0)) {
+            best_url = url;
+            best_density = density;
+        }
+    }
+    return best_url;
+}
+
 pub fn buildBoxTree(
     body_node: DomNode,
     styles: *const cascade_mod.CascadeResult,
@@ -364,7 +403,12 @@ fn buildChildren(
 
                     // Handle <img> elements as replaced boxes
                     if (std.mem.eql(u8, tag, "img")) {
-                        const img_src = child.getAttribute("src");
+                        var img_src = child.getAttribute("src");
+
+                        // Support srcset: pick the 1x URL (or first URL if no descriptor)
+                        if (child.getAttribute("srcset")) |srcset| {
+                            img_src = pickSrcsetUrl(srcset) orelse img_src;
+                        }
 
                         child_box.box_type = .replaced;
                         child_box.image_url = img_src;

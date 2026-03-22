@@ -625,6 +625,33 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     if (std.mem.eql(u8, name, "border-left")) {
         return expandBorderSide(trimmed, .border_left_width, "border-left-width", .border_left_style, "border-left-style", .border_left_color, "border-left-color", allocator);
     }
+    // border-width shorthand: top right bottom left
+    if (std.mem.eql(u8, name, "border-width")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .border_top_width, .name = "border-top-width" },
+            .{ .id = .border_right_width, .name = "border-right-width" },
+            .{ .id = .border_bottom_width, .name = "border-bottom-width" },
+            .{ .id = .border_left_width, .name = "border-left-width" },
+        }, allocator);
+    }
+    // border-style shorthand: top right bottom left
+    if (std.mem.eql(u8, name, "border-style")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .border_top_style, .name = "border-top-style" },
+            .{ .id = .border_right_style, .name = "border-right-style" },
+            .{ .id = .border_bottom_style, .name = "border-bottom-style" },
+            .{ .id = .border_left_style, .name = "border-left-style" },
+        }, allocator);
+    }
+    // border-color shorthand: top right bottom left
+    if (std.mem.eql(u8, name, "border-color")) {
+        return expandBoxShorthand(trimmed, &.{
+            .{ .id = .border_top_color, .name = "border-top-color" },
+            .{ .id = .border_right_color, .name = "border-right-color" },
+            .{ .id = .border_bottom_color, .name = "border-bottom-color" },
+            .{ .id = .border_left_color, .name = "border-left-color" },
+        }, allocator);
+    }
     // inset shorthand: top/right/bottom/left
     if (std.mem.eql(u8, name, "inset")) {
         return expandBoxShorthand(trimmed, &.{
@@ -633,6 +660,91 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
             .{ .id = .bottom, .name = "bottom" },
             .{ .id = .left, .name = "left" },
         }, allocator);
+    }
+    // CSS Logical Properties — map to physical properties (LTR assumed)
+    // margin-inline: shorthand for margin-inline-start + margin-inline-end
+    if (std.mem.eql(u8, name, "margin-inline")) {
+        return expandTwoValueShorthand(trimmed, .margin_left, "margin-left", .margin_right, "margin-right", allocator);
+    }
+    if (std.mem.eql(u8, name, "margin-block")) {
+        return expandTwoValueShorthand(trimmed, .margin_top, "margin-top", .margin_bottom, "margin-bottom", allocator);
+    }
+    if (std.mem.eql(u8, name, "padding-inline")) {
+        return expandTwoValueShorthand(trimmed, .padding_left, "padding-left", .padding_right, "padding-right", allocator);
+    }
+    if (std.mem.eql(u8, name, "padding-block")) {
+        return expandTwoValueShorthand(trimmed, .padding_top, "padding-top", .padding_bottom, "padding-bottom", allocator);
+    }
+    if (std.mem.eql(u8, name, "inset-inline")) {
+        return expandTwoValueShorthand(trimmed, .left, "left", .right, "right", allocator);
+    }
+    if (std.mem.eql(u8, name, "inset-block")) {
+        return expandTwoValueShorthand(trimmed, .top, "top", .bottom, "bottom", allocator);
+    }
+    // Single-value logical properties → physical equivalents (LTR)
+    if (std.mem.eql(u8, name, "margin-inline-start") or std.mem.eql(u8, name, "margin-inline-end") or
+        std.mem.eql(u8, name, "margin-block-start") or std.mem.eql(u8, name, "margin-block-end") or
+        std.mem.eql(u8, name, "padding-inline-start") or std.mem.eql(u8, name, "padding-inline-end") or
+        std.mem.eql(u8, name, "padding-block-start") or std.mem.eql(u8, name, "padding-block-end") or
+        std.mem.eql(u8, name, "border-inline-start-width") or std.mem.eql(u8, name, "border-inline-end-width") or
+        std.mem.eql(u8, name, "border-block-start-width") or std.mem.eql(u8, name, "border-block-end-width") or
+        std.mem.eql(u8, name, "inset-inline-start") or std.mem.eql(u8, name, "inset-inline-end") or
+        std.mem.eql(u8, name, "inset-block-start") or std.mem.eql(u8, name, "inset-block-end") or
+        std.mem.eql(u8, name, "inline-size") or std.mem.eql(u8, name, "block-size") or
+        std.mem.eql(u8, name, "min-inline-size") or std.mem.eql(u8, name, "max-inline-size") or
+        std.mem.eql(u8, name, "min-block-size") or std.mem.eql(u8, name, "max-block-size"))
+    {
+        return expandLogicalSingle(name, trimmed, allocator);
+    }
+    // border-inline / border-block (logical border shorthands)
+    if (std.mem.eql(u8, name, "border-inline")) {
+        // Expand to border-left + border-right
+        const left = expandBorderSide(trimmed, .border_left_width, "border-left-width", .border_left_style, "border-left-style", .border_left_color, "border-left-color", allocator);
+        const right = expandBorderSide(trimmed, .border_right_width, "border-right-width", .border_right_style, "border-right-style", .border_right_color, "border-right-color", allocator);
+        if (left != null and right != null) {
+            const merged = allocator.alloc(ast.Declaration, 6) catch return left;
+            @memcpy(merged[0..3], left.?);
+            @memcpy(merged[3..6], right.?);
+            return merged;
+        }
+        return left;
+    }
+    if (std.mem.eql(u8, name, "border-block")) {
+        const top = expandBorderSide(trimmed, .border_top_width, "border-top-width", .border_top_style, "border-top-style", .border_top_color, "border-top-color", allocator);
+        const bottom = expandBorderSide(trimmed, .border_bottom_width, "border-bottom-width", .border_bottom_style, "border-bottom-style", .border_bottom_color, "border-bottom-color", allocator);
+        if (top != null and bottom != null) {
+            const merged = allocator.alloc(ast.Declaration, 6) catch return top;
+            @memcpy(merged[0..3], top.?);
+            @memcpy(merged[3..6], bottom.?);
+            return merged;
+        }
+        return top;
+    }
+    // border-inline-start, border-inline-end, border-block-start, border-block-end
+    if (std.mem.eql(u8, name, "border-inline-start")) {
+        return expandBorderSide(trimmed, .border_left_width, "border-left-width", .border_left_style, "border-left-style", .border_left_color, "border-left-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-inline-end")) {
+        return expandBorderSide(trimmed, .border_right_width, "border-right-width", .border_right_style, "border-right-style", .border_right_color, "border-right-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-block-start")) {
+        return expandBorderSide(trimmed, .border_top_width, "border-top-width", .border_top_style, "border-top-style", .border_top_color, "border-top-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-block-end")) {
+        return expandBorderSide(trimmed, .border_bottom_width, "border-bottom-width", .border_bottom_style, "border-bottom-style", .border_bottom_color, "border-bottom-color", allocator);
+    }
+    // border-inline-width, border-block-width etc shorthands
+    if (std.mem.eql(u8, name, "border-inline-width")) {
+        return expandTwoValueShorthand(trimmed, .border_left_width, "border-left-width", .border_right_width, "border-right-width", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-block-width")) {
+        return expandTwoValueShorthand(trimmed, .border_top_width, "border-top-width", .border_bottom_width, "border-bottom-width", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-inline-color")) {
+        return expandTwoValueShorthand(trimmed, .border_left_color, "border-left-color", .border_right_color, "border-right-color", allocator);
+    }
+    if (std.mem.eql(u8, name, "border-block-color")) {
+        return expandTwoValueShorthand(trimmed, .border_top_color, "border-top-color", .border_bottom_color, "border-bottom-color", allocator);
     }
     // font shorthand
     if (std.mem.eql(u8, name, "font")) {
@@ -712,6 +824,63 @@ fn makeFourDecls(
             .important = false,
         };
     }
+    return decls;
+}
+
+/// Expand a 2-value shorthand (e.g., margin-inline: 10px 20px → start end)
+fn expandTwoValueShorthand(
+    value: []const u8,
+    start_id: ast.PropertyId,
+    start_name: []const u8,
+    end_id: ast.PropertyId,
+    end_name: []const u8,
+    allocator: std.mem.Allocator,
+) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    const first = iter.next() orelse value;
+    const second = iter.next() orelse first; // single value = both same
+    decls[0] = .{ .property = start_id, .property_name = start_name, .value_raw = first, .important = false };
+    decls[1] = .{ .property = end_id, .property_name = end_name, .value_raw = second, .important = false };
+    return decls;
+}
+
+/// Map a single CSS logical property to its physical equivalent (LTR mode).
+fn expandLogicalSingle(name: []const u8, value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    const decls = allocator.alloc(ast.Declaration, 1) catch return null;
+    // Map logical → physical (LTR: inline-start=left, inline-end=right, block-start=top, block-end=bottom)
+    const mapping = struct {
+        fn get(n: []const u8) ?struct { id: ast.PropertyId, pname: []const u8 } {
+            if (eql(n, "margin-inline-start")) return .{ .id = .margin_left, .pname = "margin-left" };
+            if (eql(n, "margin-inline-end")) return .{ .id = .margin_right, .pname = "margin-right" };
+            if (eql(n, "margin-block-start")) return .{ .id = .margin_top, .pname = "margin-top" };
+            if (eql(n, "margin-block-end")) return .{ .id = .margin_bottom, .pname = "margin-bottom" };
+            if (eql(n, "padding-inline-start")) return .{ .id = .padding_left, .pname = "padding-left" };
+            if (eql(n, "padding-inline-end")) return .{ .id = .padding_right, .pname = "padding-right" };
+            if (eql(n, "padding-block-start")) return .{ .id = .padding_top, .pname = "padding-top" };
+            if (eql(n, "padding-block-end")) return .{ .id = .padding_bottom, .pname = "padding-bottom" };
+            if (eql(n, "border-inline-start-width")) return .{ .id = .border_left_width, .pname = "border-left-width" };
+            if (eql(n, "border-inline-end-width")) return .{ .id = .border_right_width, .pname = "border-right-width" };
+            if (eql(n, "border-block-start-width")) return .{ .id = .border_top_width, .pname = "border-top-width" };
+            if (eql(n, "border-block-end-width")) return .{ .id = .border_bottom_width, .pname = "border-bottom-width" };
+            if (eql(n, "inset-inline-start")) return .{ .id = .left, .pname = "left" };
+            if (eql(n, "inset-inline-end")) return .{ .id = .right, .pname = "right" };
+            if (eql(n, "inset-block-start")) return .{ .id = .top, .pname = "top" };
+            if (eql(n, "inset-block-end")) return .{ .id = .bottom, .pname = "bottom" };
+            if (eql(n, "inline-size")) return .{ .id = .width, .pname = "width" };
+            if (eql(n, "block-size")) return .{ .id = .height, .pname = "height" };
+            if (eql(n, "min-inline-size")) return .{ .id = .min_width, .pname = "min-width" };
+            if (eql(n, "max-inline-size")) return .{ .id = .max_width, .pname = "max-width" };
+            if (eql(n, "min-block-size")) return .{ .id = .min_height, .pname = "min-height" };
+            if (eql(n, "max-block-size")) return .{ .id = .max_height, .pname = "max-height" };
+            return null;
+        }
+        fn eql(a: []const u8, b: []const u8) bool {
+            return std.mem.eql(u8, a, b);
+        }
+    };
+    const m = mapping.get(name) orelse return null;
+    decls[0] = .{ .property = m.id, .property_name = m.pname, .value_raw = value, .important = false };
     return decls;
 }
 

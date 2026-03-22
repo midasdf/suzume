@@ -1560,41 +1560,63 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\}
         \\// MutationObserver: registered natively in Zig (events.zig)
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb,opts){
-        \\  this._cb=cb;this._opts=opts||{};this._observed=[];this._prevState=new Map();
-        \\  this._disconnected=false;this._timer=null;
+        \\  this._cb=cb;this._opts=opts||{};this._observed=[];this._prevRatio=new Map();
+        \\  this._disconnected=false;this._timer=null;this._scrollBound=false;
+        \\  var threshold=this._opts.threshold;
+        \\  if(typeof threshold==='number')threshold=[threshold];
+        \\  if(!threshold||!threshold.length)threshold=[0];
+        \\  this._thresholds=threshold.slice().sort();
+        \\  var rmStr=this._opts.rootMargin||'0px';
+        \\  var rmParts=rmStr.match(/-?\d+/g)||[0];
+        \\  var t=parseInt(rmParts[0])||0,r=parseInt(rmParts[1]!==undefined?rmParts[1]:rmParts[0])||0;
+        \\  var b=parseInt(rmParts[2]!==undefined?rmParts[2]:rmParts[0])||0,l=parseInt(rmParts[3]!==undefined?rmParts[3]:rmParts[1]!==undefined?rmParts[1]:rmParts[0])||0;
+        \\  this._rm={t:t,r:r,b:b,l:l};
         \\  var self=this;
+        \\  this._crossedThreshold=function(prevRatio,newRatio){
+        \\    for(var i=0;i<self._thresholds.length;i++){
+        \\      var th=self._thresholds[i];
+        \\      if((prevRatio<th&&newRatio>=th)||(prevRatio>=th&&newRatio<th))return true;
+        \\    }
+        \\    return false;
+        \\  };
         \\  this._check=function(){
         \\    if(self._disconnected||self._observed.length===0)return;
         \\    var entries=[];var vw=innerWidth||800,vh=innerHeight||600;
-        \\    var rootMargin=self._opts.rootMargin||'0px';
-        \\    var rm=parseInt(rootMargin)||0;
-        \\    var threshold=self._opts.threshold;
-        \\    if(typeof threshold==='number')threshold=[threshold];
-        \\    if(!threshold)threshold=[0];
+        \\    var rm=self._rm;
         \\    for(var i=0;i<self._observed.length;i++){
         \\      var el=self._observed[i];
         \\      var rect=el.getBoundingClientRect?el.getBoundingClientRect():{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0};
-        \\      var isIn=rect.bottom>=(0-rm)&&rect.top<=(vh+rm)&&rect.right>=(0-rm)&&rect.left<=(vw+rm);
+        \\      var rootT=0-rm.t,rootL=0-rm.l,rootB=vh+rm.b,rootR=vw+rm.r;
+        \\      var isIn=rect.bottom>=rootT&&rect.top<=rootB&&rect.right>=rootL&&rect.left<=rootR;
         \\      var ratio=0;
         \\      if(isIn&&rect.width>0&&rect.height>0){
-        \\        var overlapX=Math.max(0,Math.min(rect.right,vw)-Math.max(rect.left,0));
-        \\        var overlapY=Math.max(0,Math.min(rect.bottom,vh)-Math.max(rect.top,0));
+        \\        var overlapX=Math.max(0,Math.min(rect.right,rootR)-Math.max(rect.left,rootL));
+        \\        var overlapY=Math.max(0,Math.min(rect.bottom,rootB)-Math.max(rect.top,rootT));
         \\        ratio=Math.min((overlapX*overlapY)/(rect.width*rect.height),1);
         \\      }
-        \\      var prev=self._prevState.get(el);
-        \\      if(prev===undefined||prev!==isIn){
-        \\        self._prevState.set(el,isIn);
+        \\      var prevR=self._prevRatio.get(el);
+        \\      if(prevR===undefined||self._crossedThreshold(prevR,ratio)){
+        \\        self._prevRatio.set(el,ratio);
+        \\        var ir=isIn?{x:Math.max(rect.x,rootL),y:Math.max(rect.y,rootT),
+        \\          width:isIn?Math.max(0,Math.min(rect.right,rootR)-Math.max(rect.left,rootL)):0,
+        \\          height:isIn?Math.max(0,Math.min(rect.bottom,rootB)-Math.max(rect.top,rootT)):0}:{x:0,y:0,width:0,height:0};
+        \\        ir.top=ir.y;ir.left=ir.x;ir.right=ir.x+ir.width;ir.bottom=ir.y+ir.height;
         \\        entries.push({target:el,isIntersecting:isIn,intersectionRatio:ratio,
-        \\          boundingClientRect:rect,intersectionRect:isIn?rect:{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0},
+        \\          boundingClientRect:rect,intersectionRect:ir,
         \\          rootBounds:{x:0,y:0,width:vw,height:vh,top:0,left:0,right:vw,bottom:vh},
         \\          time:(typeof performance!=='undefined'?performance.now():Date.now())});
         \\      }
         \\    }
         \\    if(entries.length>0){try{self._cb(entries,self);}catch(e){}}
         \\  };
+        \\  this._scrollHandler=function(){if(!self._disconnected)setTimeout(self._check,0);};
         \\  this._startPolling=function(){
+        \\    if(!self._scrollBound){
+        \\      self._scrollBound=true;
+        \\      addEventListener('scroll',self._scrollHandler,{passive:true});
+        \\    }
         \\    if(self._timer)return;
-        \\    self._timer=setInterval(self._check,200);
+        \\    self._timer=setInterval(self._check,250);
         \\  };
         \\  this.observe=function(el){
         \\    if(this._disconnected||!el)return;
@@ -1604,12 +1626,13 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  };
         \\  this.unobserve=function(el){
         \\    this._observed=this._observed.filter(function(e){return e!==el;});
-        \\    this._prevState.delete(el);
+        \\    this._prevRatio.delete(el);
         \\    if(this._observed.length===0&&this._timer){clearInterval(this._timer);this._timer=null;}
         \\  };
         \\  this.disconnect=function(){
-        \\    this._disconnected=true;this._observed=[];this._prevState.clear();
+        \\    this._disconnected=true;this._observed=[];this._prevRatio.clear();
         \\    if(this._timer){clearInterval(this._timer);this._timer=null;}
+        \\    if(this._scrollBound){removeEventListener('scroll',this._scrollHandler);this._scrollBound=false;}
         \\  };
         \\  this.takeRecords=function(){return[];};
         \\};}
@@ -1723,19 +1746,20 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof history==='undefined'){
         \\  globalThis.history=(function(){
         \\    var stack=[{state:null,url:location.href}],idx=0;
+        \\    function syncLoc(url){
+        \\      location.href=url;location.pathname=url.replace(/^https?:\/\/[^\/]*/,'').replace(/[?#].*/,'');
+        \\      location.search=(url.indexOf('?')>=0?url.slice(url.indexOf('?')).replace(/#.*/,''):'');
+        \\      location.hash=(url.indexOf('#')>=0?url.slice(url.indexOf('#')):'');
+        \\      if(typeof __suzume_update_url==='function')__suzume_update_url(url);
+        \\    }
         \\    return {
         \\      pushState:function(state,title,url){
-        \\        if(url){stack=stack.slice(0,idx+1);stack.push({state:state,url:url});idx=stack.length-1;
-        \\          location.href=url;location.pathname=url.replace(/^https?:\/\/[^\/]*/,'').replace(/[?#].*/,'');
-        \\          location.search=(url.indexOf('?')>=0?url.slice(url.indexOf('?')).replace(/#.*/,''):'');
-        \\          location.hash=(url.indexOf('#')>=0?url.slice(url.indexOf('#')):'');
-        \\          if(typeof __suzume_update_url==='function')__suzume_update_url(url);
-        \\        }
+        \\        if(url){stack=stack.slice(0,idx+1);stack.push({state:state,url:url});idx=stack.length-1;syncLoc(url);}
         \\      },
-        \\      replaceState:function(state,title,url){if(url){stack[idx]={state:state,url:url};location.href=url;if(typeof __suzume_update_url==='function')__suzume_update_url(url);}},
-        \\      back:function(){if(idx>0){idx--;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
-        \\      forward:function(){if(idx<stack.length-1){idx++;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
-        \\      go:function(n){var ni=idx+n;if(ni>=0&&ni<stack.length){idx=ni;var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
+        \\      replaceState:function(state,title,url){if(url){stack[idx]={state:state,url:url};syncLoc(url);}},
+        \\      back:function(){if(idx>0){idx--;syncLoc(stack[idx].url);var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
+        \\      forward:function(){if(idx<stack.length-1){idx++;syncLoc(stack[idx].url);var e=new Event('popstate');e.state=stack[idx].state;dispatchEvent(e);}},
+        \\      go:function(n){var ni=idx+n;if(ni>=0&&ni<stack.length){idx=ni;syncLoc(stack[ni].url);var e=new Event('popstate');e.state=stack[ni].state;dispatchEvent(e);}},
         \\      get length(){return stack.length;},
         \\      get state(){return stack[idx].state;}
         \\    };

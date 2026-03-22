@@ -207,10 +207,23 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         }
 
         // Apply min-width constraint (CSS flex items default min-width: auto)
+        // Per CSS Flexbox spec: min-width:auto = min(content size, flex-basis)
+        // for items with overflow:visible. For overflow:hidden, min-width:auto = 0.
         const min_w: f32 = switch (child.style.min_width) {
             .px => |mw| mw,
             .percent => |pct| pct * container_width / 100.0,
-            .auto => 0, // true auto would be content min-width, but 0 is safe default
+            .auto => blk: {
+                // min-width:auto for flex items: use content minimum width
+                // only when overflow is visible (default)
+                if (child.style.overflow_x == .visible and child.style.overflow_y == .visible) {
+                    // Use the intrinsic content width as minimum
+                    const content_min = block.computeShrinkToFitWidthPublic(child);
+                    // Clamp to flex-basis or explicit width to avoid expanding beyond intended size
+                    const base = basis orelse (explicit_child_w orelse content_min);
+                    break :blk @min(content_min, base);
+                }
+                break :blk 0;
+            },
             else => 0,
         };
         if (child_main < min_w) child_main = min_w;
@@ -526,11 +539,18 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
                 child_main += line_free * child.style.flex_shrink / line_shrink;
             }
 
-            // Apply min-width constraint
+            // Apply min-width constraint (same auto logic as nowrap path)
             const min_w: f32 = switch (child.style.min_width) {
                 .px => |mw| mw,
                 .percent => |pct| pct * container_width / 100.0,
-                .auto => 0,
+                .auto => blk: {
+                    if (child.style.overflow_x == .visible and child.style.overflow_y == .visible) {
+                        const content_min = block.computeShrinkToFitWidthPublic(child);
+                        const base = basis orelse (explicit_child_w orelse content_min);
+                        break :blk @min(content_min, base);
+                    }
+                    break :blk 0;
+                },
                 else => 0,
             };
             if (child_main < min_w) child_main = min_w;

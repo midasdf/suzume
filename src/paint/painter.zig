@@ -204,6 +204,135 @@ pub fn paint(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y: f3
 }
 
 /// Paint borders around a box.
+/// Paint a single border edge with the given style.
+/// `horizontal` = true for top/bottom borders, false for left/right.
+/// `is_start_edge` = true for top/left edges, false for bottom/right (used by inset/outset).
+fn paintBorderEdge(surface: *Surface, x: i32, y: i32, w: i32, h: i32, colour: u32, border_style: ComputedStyle.BorderStyle, horizontal: bool, is_start_edge: bool) void {
+    switch (border_style) {
+        .dotted => {
+            // Draw dots along the border
+            if (horizontal) {
+                const dot_size = @max(h, 1);
+                var pos: i32 = x;
+                var draw = true;
+                while (pos < x + w) {
+                    if (draw) surface.fillRect(pos, y, @min(dot_size, x + w - pos), h, colour);
+                    pos += dot_size;
+                    draw = !draw;
+                }
+            } else {
+                const dot_size = @max(w, 1);
+                var pos: i32 = y;
+                var draw = true;
+                while (pos < y + h) {
+                    if (draw) surface.fillRect(x, pos, w, @min(dot_size, y + h - pos), colour);
+                    pos += dot_size;
+                    draw = !draw;
+                }
+            }
+        },
+        .dashed => {
+            // Draw dashes (3x width/height pattern)
+            if (horizontal) {
+                const dash_len = @max(h * 3, 3);
+                const gap_len = dash_len;
+                var pos: i32 = x;
+                var draw = true;
+                while (pos < x + w) {
+                    const seg = if (draw) dash_len else gap_len;
+                    if (draw) surface.fillRect(pos, y, @min(seg, x + w - pos), h, colour);
+                    pos += seg;
+                    draw = !draw;
+                }
+            } else {
+                const dash_len = @max(w * 3, 3);
+                const gap_len = dash_len;
+                var pos: i32 = y;
+                var draw = true;
+                while (pos < y + h) {
+                    const seg = if (draw) dash_len else gap_len;
+                    if (draw) surface.fillRect(x, pos, w, @min(seg, y + h - pos), colour);
+                    pos += seg;
+                    draw = !draw;
+                }
+            }
+        },
+        .double_ => {
+            // Draw two lines with a gap in between
+            if (horizontal) {
+                const line_w = @max(@divTrunc(h, 3), 1);
+                surface.fillRect(x, y, w, line_w, colour);
+                surface.fillRect(x, y + h - line_w, w, line_w, colour);
+            } else {
+                const line_w = @max(@divTrunc(w, 3), 1);
+                surface.fillRect(x, y, line_w, h, colour);
+                surface.fillRect(x + w - line_w, y, line_w, h, colour);
+            }
+        },
+        .groove => {
+            // 3D groove: dark on top-left, light on bottom-right
+            const dark = darkenColour(colour);
+            const light = lightenColour(colour);
+            const half = @max(@divTrunc(if (horizontal) h else w, 2), 1);
+            if (horizontal) {
+                surface.fillRect(x, y, w, half, dark);
+                surface.fillRect(x, y + half, w, h - half, light);
+            } else {
+                surface.fillRect(x, y, half, h, dark);
+                surface.fillRect(x + half, y, w - half, h, light);
+            }
+        },
+        .ridge => {
+            // 3D ridge: light on top-left, dark on bottom-right (opposite of groove)
+            const dark = darkenColour(colour);
+            const light = lightenColour(colour);
+            const half = @max(@divTrunc(if (horizontal) h else w, 2), 1);
+            if (horizontal) {
+                surface.fillRect(x, y, w, half, light);
+                surface.fillRect(x, y + half, w, h - half, dark);
+            } else {
+                surface.fillRect(x, y, half, h, light);
+                surface.fillRect(x + half, y, w - half, h, dark);
+            }
+        },
+        .inset => {
+            // inset: top/left are dark, bottom/right are light
+            const c = if (is_start_edge) darkenColour(colour) else lightenColour(colour);
+            surface.fillRect(x, y, w, h, c);
+        },
+        .outset => {
+            // outset: top/left are light, bottom/right are dark
+            const c = if (is_start_edge) lightenColour(colour) else darkenColour(colour);
+            surface.fillRect(x, y, w, h, c);
+        },
+        else => {
+            // solid, none, hidden — solid fallback
+            surface.fillRect(x, y, w, h, colour);
+        },
+    }
+}
+
+/// Darken a colour by reducing RGB components by ~40%.
+fn darkenColour(colour: u32) u32 {
+    const a: u32 = (colour >> 24) & 0xFF;
+    const r: u32 = @intFromFloat(@as(f32, @floatFromInt((colour >> 16) & 0xFF)) * 0.6);
+    const g: u32 = @intFromFloat(@as(f32, @floatFromInt((colour >> 8) & 0xFF)) * 0.6);
+    const b: u32 = @intFromFloat(@as(f32, @floatFromInt(colour & 0xFF)) * 0.6);
+    return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+/// Lighten a colour by blending with white (~40%).
+fn lightenColour(colour: u32) u32 {
+    const a: u32 = (colour >> 24) & 0xFF;
+    const rf: f32 = @as(f32, @floatFromInt((colour >> 16) & 0xFF)) * 0.6 + 255.0 * 0.4;
+    const gf: f32 = @as(f32, @floatFromInt((colour >> 8) & 0xFF)) * 0.6 + 255.0 * 0.4;
+    const bf: f32 = @as(f32, @floatFromInt(colour & 0xFF)) * 0.6 + 255.0 * 0.4;
+    const r: u32 = @intFromFloat(@min(rf, 255.0));
+    const g: u32 = @intFromFloat(@min(gf, 255.0));
+    const b: u32 = @intFromFloat(@min(bf, 255.0));
+    return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
 fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32) void {
     const style = box.style;
     const bbox = box.borderBox();
@@ -254,22 +383,26 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
             }
         }
     } else {
-        // Straight borders (no radius)
-        if (style.border_top_width > 0) {
+        // Straight borders (no radius) — with border-style support
+        if (style.border_top_width > 0 and style.border_top_style != .none and style.border_top_style != .hidden) {
             const bw: i32 = @intFromFloat(style.border_top_width);
-            surface.fillRect(sx, sy, sw, bw, Surface.argbToColour(style.border_top_color));
+            const colour = Surface.argbToColour(style.border_top_color);
+            paintBorderEdge(surface, sx, sy, sw, bw, colour, style.border_top_style, true, true);
         }
-        if (style.border_bottom_width > 0) {
+        if (style.border_bottom_width > 0 and style.border_bottom_style != .none and style.border_bottom_style != .hidden) {
             const bw: i32 = @intFromFloat(style.border_bottom_width);
-            surface.fillRect(sx, sy + sh - bw, sw, bw, Surface.argbToColour(style.border_bottom_color));
+            const colour = Surface.argbToColour(style.border_bottom_color);
+            paintBorderEdge(surface, sx, sy + sh - bw, sw, bw, colour, style.border_bottom_style, true, false);
         }
-        if (style.border_left_width > 0) {
+        if (style.border_left_width > 0 and style.border_left_style != .none and style.border_left_style != .hidden) {
             const bw: i32 = @intFromFloat(style.border_left_width);
-            surface.fillRect(sx, sy, bw, sh, Surface.argbToColour(style.border_left_color));
+            const colour = Surface.argbToColour(style.border_left_color);
+            paintBorderEdge(surface, sx, sy, bw, sh, colour, style.border_left_style, false, true);
         }
-        if (style.border_right_width > 0) {
+        if (style.border_right_width > 0 and style.border_right_style != .none and style.border_right_style != .hidden) {
             const bw: i32 = @intFromFloat(style.border_right_width);
-            surface.fillRect(sx + sw - bw, sy, bw, sh, Surface.argbToColour(style.border_right_color));
+            const colour = Surface.argbToColour(style.border_right_color);
+            paintBorderEdge(surface, sx + sw - bw, sy, bw, sh, colour, style.border_right_style, false, false);
         }
     }
 }
@@ -350,33 +483,46 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
     // but still recurse into children (which may have visibility:visible).
     const is_visible = box.style.visibility == .visible;
 
+    // position:fixed — element is fixed relative to the viewport, ignore scroll.
     // position:sticky — adjust scroll_y so element sticks at its top offset.
     // Note: only handles "stick to top" case. Bottom boundary clamping
     // (stop sticking when containing block scrolls past) is not implemented.
     var scroll_y = scroll_y_in;
-    if (box.style.position == .sticky) {
+    var scroll_x_eff = scroll_x;
+    if (box.style.position == .fixed) {
+        scroll_y = 0;
+        scroll_x_eff = 0;
+    } else if (box.style.position == .sticky) {
         const sticky_top: f32 = switch (box.style.top) {
             .px => |v| v,
             else => 0,
         };
         const pbox_sticky = box.paddingBox();
         const natural_screen_y = pbox_sticky.y - scroll_y;
-        // If natural position would scroll above the sticky offset, compensate
+        // If natural position would scroll above the sticky offset, stick it
         if (natural_screen_y < sticky_top) {
-            // Adjust scroll_y for this element and its children so it appears at sticky_top
-            scroll_y = scroll_y - (sticky_top - natural_screen_y);
+            // Containing block boundary: stop sticking when parent scrolls past
+            if (box.parent) |p| {
+                const parent_pbox = p.paddingBox();
+                const parent_bottom_screen = parent_pbox.y + parent_pbox.height - scroll_y;
+                const max_sticky_y = parent_bottom_screen - pbox_sticky.height;
+                // Clamp: stick at sticky_top but don't exceed containing block
+                scroll_y = pbox_sticky.y - @min(sticky_top, max_sticky_y);
+            } else {
+                scroll_y = pbox_sticky.y - sticky_top;
+            }
         }
     }
 
     const clip_top = clip.top;
     const clip_bottom = clip.bottom;
-    const sx_i: i32 = @intFromFloat(scroll_x);
+    const sx_i: i32 = @intFromFloat(scroll_x_eff);
     switch (box.box_type) {
         .block, .anonymous_block, .inline_box => {
             // Quick culling: skip boxes entirely outside viewport
             const pbox = box.paddingBox();
             const screen_y = @as(i32, @intFromFloat(pbox.y - scroll_y));
-            const screen_x = @as(i32, @intFromFloat(pbox.x - scroll_x));
+            const screen_x = @as(i32, @intFromFloat(pbox.x - scroll_x_eff));
             const screen_bottom = screen_y + @as(i32, @intFromFloat(@max(pbox.height, 0)));
             const screen_right = screen_x + @as(i32, @intFromFloat(@max(pbox.width, 0)));
             if (screen_bottom < clip.top or screen_y > clip.bottom) return;
@@ -384,7 +530,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
 
             if (is_visible) {
                 // Paint box-shadow behind the element
-                paintBoxShadow(box, surface, scroll_y, scroll_x);
+                paintBoxShadow(box, surface, scroll_y, scroll_x_eff);
 
                 // Paint background — gradient or solid color
                 const has_gradient = (box.style.gradient_color_start >> 24) > 0 or
@@ -399,17 +545,42 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     const bg_h: i32 = @intFromFloat(@max(pbox.height, 0));
                     const horizontal = (box.style.gradient_direction == ComputedStyle.GradientDirection.to_right or
                         box.style.gradient_direction == ComputedStyle.GradientDirection.to_left);
-                    var start_color = Surface.argbToColour(box.style.gradient_color_start);
-                    var end_color = Surface.argbToColour(box.style.gradient_color_end);
-                    // Reverse for to_top and to_left
-                    if (box.style.gradient_direction == ComputedStyle.GradientDirection.to_top or
-                        box.style.gradient_direction == ComputedStyle.GradientDirection.to_left)
-                    {
-                        const tmp = start_color;
-                        start_color = end_color;
-                        end_color = tmp;
+                    const reversed = (box.style.gradient_direction == ComputedStyle.GradientDirection.to_top or
+                        box.style.gradient_direction == ComputedStyle.GradientDirection.to_left);
+
+                    if (box.style.gradient_stop_count >= 2) {
+                        // Multi-stop gradient: render each segment between consecutive stops
+                        const stop_count = box.style.gradient_stop_count;
+                        const total_len: f32 = if (horizontal) @floatFromInt(bg_w) else @floatFromInt(bg_h);
+                        var i: u8 = 0;
+                        while (i + 1 < stop_count) : (i += 1) {
+                            const idx0: u8 = if (reversed) stop_count - 1 - i else i;
+                            const idx1: u8 = if (reversed) stop_count - 2 - i else i + 1;
+                            const p0 = box.style.gradient_stops[idx0].position;
+                            const p1 = box.style.gradient_stops[idx1].position;
+                            const c0 = Surface.argbToColour(box.style.gradient_stops[idx0].color);
+                            const c1 = Surface.argbToColour(box.style.gradient_stops[idx1].color);
+                            const seg_start: i32 = @intFromFloat(p0 * total_len);
+                            const seg_end: i32 = @intFromFloat(p1 * total_len);
+                            const seg_len = seg_end - seg_start;
+                            if (seg_len <= 0) continue;
+                            if (horizontal) {
+                                surface.fillGradientRect(bg_x + seg_start, bg_y, seg_len, bg_h, c0, c1, true);
+                            } else {
+                                surface.fillGradientRect(bg_x, bg_y + seg_start, bg_w, seg_len, c0, c1, false);
+                            }
+                        }
+                    } else {
+                        // Legacy 2-color gradient
+                        var start_color = Surface.argbToColour(box.style.gradient_color_start);
+                        var end_color = Surface.argbToColour(box.style.gradient_color_end);
+                        if (reversed) {
+                            const tmp = start_color;
+                            start_color = end_color;
+                            end_color = tmp;
+                        }
+                        surface.fillGradientRect(bg_x, bg_y, bg_w, bg_h, start_color, end_color, horizontal);
                     }
-                    surface.fillGradientRect(bg_x, bg_y, bg_w, bg_h, start_color, end_color, horizontal);
                 } else if (alpha > 0) {
                     const bg_x = @as(i32, @intFromFloat(pbox.x)) - sx_i;
                     const bg_y = screen_y;
@@ -461,16 +632,16 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 }
 
                 // Paint borders
-                paintBorders(box, surface, scroll_y, scroll_x);
+                paintBorders(box, surface, scroll_y, scroll_x_eff);
 
                 // Paint <hr> line
                 if (box.is_hr) {
-                    paintHr(box, surface, scroll_y, scroll_x, clip_top, clip_bottom);
+                    paintHr(box, surface, scroll_y, scroll_x_eff, clip_top, clip_bottom);
                 }
 
                 // Paint list item marker
                 if (box.style.display == .list_item and box.list_index > 0) {
-                    paintListMarker(box, surface, fonts, scroll_y, scroll_x, clip_top, clip_bottom);
+                    paintListMarker(box, surface, fonts, scroll_y, scroll_x_eff, clip_top, clip_bottom);
                 }
             }
 
@@ -489,29 +660,39 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 };
                 child_clip = clip.intersect(box_clip);
             }
-            // Paint children sorted by z-index: negative first, then zero, then positive
-            const has_nonzero_z = blk: {
+            // Paint children sorted by z-index (ascending order, tree order as tiebreaker).
+            // Each parent box acts as a stacking context — children's z-index values
+            // are compared only within the same parent, matching CSS stacking behavior.
+            // Multi-pass approach: iterate through distinct z-index levels (allocation-free).
+            var min_z: i32 = 0;
+            var max_z: i32 = 0;
+            for (box.children.items) |child| {
+                min_z = @min(min_z, child.style.z_index);
+                max_z = @max(max_z, child.style.z_index);
+            }
+            if (min_z == max_z) {
+                // All children share same z-index — paint in tree order
                 for (box.children.items) |child| {
-                    if (child.style.z_index != 0) break :blk true;
-                }
-                break :blk false;
-            };
-            if (has_nonzero_z) {
-                // Pass 1: negative z-index
-                for (box.children.items) |child| {
-                    if (child.style.z_index < 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
-                }
-                // Pass 2: zero z-index (normal flow)
-                for (box.children.items) |child| {
-                    if (child.style.z_index == 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
-                }
-                // Pass 3: positive z-index
-                for (box.children.items) |child| {
-                    if (child.style.z_index > 0) paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
+                    paintBox(child, surface, fonts, scroll_y, scroll_x_eff, child_clip, image_cache, effective_opacity);
                 }
             } else {
-                for (box.children.items) |child| {
-                    paintBox(child, surface, fonts, scroll_y, scroll_x, child_clip, image_cache, effective_opacity);
+                // Paint from lowest z-index to highest
+                var current_z = min_z;
+                while (true) {
+                    for (box.children.items) |child| {
+                        if (child.style.z_index == current_z) {
+                            paintBox(child, surface, fonts, scroll_y, scroll_x_eff, child_clip, image_cache, effective_opacity);
+                        }
+                    }
+                    if (current_z == max_z) break;
+                    // Find next distinct z-index level
+                    var next_z: i32 = max_z;
+                    for (box.children.items) |child| {
+                        if (child.style.z_index > current_z and child.style.z_index < next_z) {
+                            next_z = child.style.z_index;
+                        }
+                    }
+                    current_z = next_z;
                 }
             }
         },
@@ -530,11 +711,50 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             if (image_cache) |cache| {
                 if (box.image_url) |url| {
                     if (cache.get(url)) |img| {
+                        // Apply object-fit to determine actual render area
+                        var render_x = dst_x;
+                        var render_y = screen_y;
+                        var render_w: u32 = dst_w;
+                        var render_h: u32 = dst_h;
+                        if (img.width > 0 and img.height > 0 and dst_w > 0 and dst_h > 0) {
+                            const img_aspect = @as(f32, @floatFromInt(img.width)) / @as(f32, @floatFromInt(img.height));
+                            const box_aspect = @as(f32, @floatFromInt(dst_w)) / @as(f32, @floatFromInt(dst_h));
+                            switch (box.style.object_fit) {
+                                .contain => {
+                                    if (img_aspect > box_aspect) {
+                                        render_h = @intFromFloat(@as(f32, @floatFromInt(dst_w)) / img_aspect);
+                                        render_y += @divTrunc(@as(i32, @intCast(dst_h -| render_h)), 2);
+                                    } else {
+                                        render_w = @intFromFloat(@as(f32, @floatFromInt(dst_h)) * img_aspect);
+                                        render_x += @divTrunc(@as(i32, @intCast(dst_w -| render_w)), 2);
+                                    }
+                                },
+                                .cover => {
+                                    if (img_aspect > box_aspect) {
+                                        render_w = @intFromFloat(@as(f32, @floatFromInt(dst_h)) * img_aspect);
+                                    } else {
+                                        render_h = @intFromFloat(@as(f32, @floatFromInt(dst_w)) / img_aspect);
+                                    }
+                                },
+                                .none => {
+                                    render_w = img.width;
+                                    render_h = img.height;
+                                },
+                                .scale_down => {
+                                    if (img.width <= dst_w and img.height <= dst_h) {
+                                        render_w = img.width;
+                                        render_h = img.height;
+                                    }
+                                    // else: same as contain (default render_w/h)
+                                },
+                                .fill => {}, // stretch to fill
+                            }
+                        }
                         const rot = box.style.transform_rotate_deg;
-                        if (rot != 0 and dst_w > 0 and dst_h > 0) {
-                            blitImageRotated(surface, dst_x, screen_y, dst_w, dst_h, img.pixels, img.width, img.height, rot);
+                        if (rot != 0 and render_w > 0 and render_h > 0) {
+                            blitImageRotated(surface, render_x, render_y, render_w, render_h, img.pixels, img.width, img.height, rot);
                         } else {
-                            blitImageScaled(surface, dst_x, screen_y, dst_w, dst_h, img.pixels, img.width, img.height);
+                            blitImageScaled(surface, render_x, render_y, render_w, render_h, img.pixels, img.width, img.height);
                         }
                         painted = true;
                     }
@@ -566,7 +786,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             }
 
             // Paint borders
-            paintBorders(box, surface, scroll_y, scroll_x);
+            paintBorders(box, surface, scroll_y, scroll_x_eff);
         },
         .inline_text => {
             if (!is_visible) return;
@@ -722,7 +942,8 @@ fn paintListMarker(box: *const Box, surface: *Surface, fonts: *FontCache, scroll
     var marker_buf: [16]u8 = undefined;
     const is_bullet = style.list_style_type == .disc or style.list_style_type == .circle or
         style.list_style_type == .square or style.list_style_type == .other;
-    const marker_size: u32 = if (is_bullet) @max(size_px * 2 / 3, 6) else size_px;
+    // Use smaller size for bullet markers to match browser default bullet size
+    const marker_size: u32 = if (is_bullet) @max(size_px * 3 / 4, 7) else size_px;
     const tr = fonts.getRenderer(marker_size) orelse return;
 
     const marker_text: []const u8 = switch (style.list_style_type) {

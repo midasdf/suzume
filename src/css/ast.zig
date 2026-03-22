@@ -94,6 +94,7 @@ pub const PropertyId = enum(u16) {
     grid_template_rows,
     grid_auto_flow,
     grid_auto_columns,
+    grid_auto_rows,
     grid_column_start,
     grid_column_end,
     grid_row_start,
@@ -134,6 +135,10 @@ pub const PropertyId = enum(u16) {
     // Place shorthands (justify-items, justify-self mapped to align equivalents)
     justify_items,
     justify_self,
+    // Table
+    border_collapse,
+    border_spacing,
+    table_layout,
     // Outline
     outline_width,
     outline_color,
@@ -197,6 +202,23 @@ pub const PropertyId = enum(u16) {
         .{ "text-indent", .text_indent },
         .{ "text-align", .text_align },
         .{ "text-decoration", .text_decoration },
+        .{ "text-decoration-line", .text_decoration },
+        .{ "text-decoration-color", .unknown }, // handled in cascade via expandTextDecoration
+        .{ "text-decoration-style", .unknown }, // stored as unknown, visual only
+        .{ "text-decoration-thickness", .unknown }, // handled inline
+        .{ "text-underline-offset", .unknown }, // handled inline
+        .{ "-webkit-text-decoration", .text_decoration },
+        .{ "-webkit-appearance", .unknown },
+        .{ "appearance", .unknown },
+        .{ "pointer-events", .unknown },
+        .{ "user-select", .unknown },
+        .{ "-webkit-user-select", .unknown },
+        .{ "touch-action", .unknown },
+        .{ "will-change", .unknown },
+        .{ "contain", .unknown },
+        .{ "container-type", .unknown },
+        .{ "container-name", .unknown },
+        .{ "color-scheme", .unknown },
         .{ "text-transform", .text_transform },
         .{ "white-space", .white_space },
         .{ "word-break", .word_break },
@@ -229,6 +251,7 @@ pub const PropertyId = enum(u16) {
         .{ "grid-template-rows", .grid_template_rows },
         .{ "grid-auto-flow", .grid_auto_flow },
         .{ "grid-auto-columns", .grid_auto_columns },
+        .{ "grid-auto-rows", .grid_auto_rows },
         .{ "grid-column-start", .grid_column_start },
         .{ "grid-column-end", .grid_column_end },
         .{ "grid-row-start", .grid_row_start },
@@ -256,6 +279,9 @@ pub const PropertyId = enum(u16) {
         .{ "filter", .filter },
         .{ "backdrop-filter", .backdrop_filter },
         .{ "object-fit", .object_fit },
+        .{ "border-collapse", .border_collapse },
+        .{ "border-spacing", .border_spacing },
+        .{ "table-layout", .table_layout },
         .{ "outline-width", .outline_width },
         .{ "outline-color", .outline_color },
         .{ "outline-style", .outline_style },

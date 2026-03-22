@@ -6,7 +6,7 @@ const FontCache = @import("../paint/painter.zig").FontCache;
 const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
 
 const MAX_COLS = 64;
-const MAX_ROWS = 512;
+const MAX_ROWS = 128;
 
 /// Lay out a table element and its children.
 pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
@@ -16,6 +16,17 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
     const cellpadding: f32 = if (box.dom_node) |dn|
         if (dn.getAttribute("cellpadding")) |cp|
             std.fmt.parseFloat(f32, cp) catch 0
+        else
+            0
+    else
+        0;
+    // cellspacing: HTML attribute only (default 0). CSS border-spacing not used for
+    // table cell gaps to avoid breaking percentage-width tables like HN.
+    const cellspacing: f32 = if (box.style.border_collapse)
+        0
+    else if (box.dom_node) |dn|
+        if (dn.getAttribute("cellspacing")) |cs|
+            std.fmt.parseFloat(f32, cs) catch 0
         else
             0
     else
@@ -58,15 +69,46 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         return;
     }
 
-    // Count columns (accounting for colspan)
+    // Build cell grid accounting for both colspan and rowspan.
+    // The grid tracks which (row, col) cells are occupied and by which Box.
+    // A cell with rowspan=2 marks the grid slots in subsequent rows as occupied.
+    const GridCell = struct {
+        box: ?*Box,
+        is_spanned: bool, // true if this cell is occupied by a rowspan from above
+    };
+    var grid: [MAX_ROWS][MAX_COLS]GridCell = undefined;
+    for (0..@min(num_rows, MAX_ROWS)) |ri| {
+        for (0..MAX_COLS) |ci| {
+            grid[ri][ci] = .{ .box = null, .is_spanned = false };
+        }
+    }
+
+    // First pass: place cells into the grid
     var num_cols: usize = 0;
-    for (rows_buf[0..num_rows]) |row| {
-        var col_span_total: usize = 0;
+    for (rows_buf[0..num_rows], 0..) |row, ri| {
+        var col_idx: usize = 0;
         for (row.children.items) |cell| {
             if (!isTableCell(cell)) continue;
-            col_span_total += getColspan(cell);
+            // Skip over cells occupied by rowspan from previous rows
+            while (col_idx < MAX_COLS and grid[ri][col_idx].is_spanned) col_idx += 1;
+            if (col_idx >= MAX_COLS) break;
+
+            const cs = @min(getColspan(cell), MAX_COLS - col_idx);
+            const rs = @min(getRowspan(cell), num_rows - ri);
+
+            // Mark grid cells occupied by this cell
+            for (ri..@min(ri + rs, num_rows)) |r| {
+                for (col_idx..@min(col_idx + cs, MAX_COLS)) |c| {
+                    grid[r][c] = .{
+                        .box = if (r == ri) cell else null,
+                        .is_spanned = r > ri,
+                    };
+                }
+            }
+            if (col_idx + cs > num_cols) num_cols = col_idx + cs;
+            col_idx += cs;
         }
-        if (col_span_total > num_cols) num_cols = col_span_total;
+        if (col_idx > num_cols) num_cols = col_idx;
     }
     if (num_cols == 0) {
         box.content.height = 0;
@@ -77,50 +119,120 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         num_cols = MAX_COLS;
     }
 
+    // Collect <col>/<colgroup> width hints (HTML spec)
+    var col_hints: [MAX_COLS]?f32 = [_]?f32{null} ** MAX_COLS;
+    {
+        var col_hint_idx: usize = 0;
+        for (box.children.items) |child| {
+            const is_col = child.style.display == .table_column;
+            const is_colgroup = child.style.display == .table_column_group;
+            if (is_col) {
+                if (col_hint_idx < num_cols) {
+                    if (getCellExplicitWidth(child, box.content.width)) |w| {
+                        col_hints[col_hint_idx] = w;
+                    }
+                    col_hint_idx += 1;
+                }
+            } else if (is_colgroup) {
+                // Process <col> children within <colgroup>
+                for (child.children.items) |col_child| {
+                    if (col_child.style.display == .table_column and col_hint_idx < num_cols) {
+                        if (getCellExplicitWidth(col_child, box.content.width)) |w| {
+                            col_hints[col_hint_idx] = w;
+                        }
+                        col_hint_idx += 1;
+                    }
+                }
+            }
+        }
+    }
+
     // Determine column widths
     const table_width = box.content.width;
     var col_widths: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
 
-    // Pass 1: collect explicit widths from cells (non-colspan cells only)
-    var col_has_explicit: [MAX_COLS]bool = [_]bool{false} ** MAX_COLS;
-    for (rows_buf[0..num_rows]) |row| {
-        var col_idx: usize = 0;
-        for (row.children.items) |cell| {
-            if (!isTableCell(cell)) continue;
-            const cs = getColspan(cell);
-            if (col_idx >= num_cols) break;
+    // Apply <col> width hints as initial values
+    for (0..num_cols) |i| {
+        if (col_hints[i]) |w| col_widths[i] = w;
+    }
 
+    // table-layout: fixed — column widths from first row only (CSS 2.1 §17.5.2.1)
+    if (box.style.table_layout_fixed and num_rows > 0) {
+        var col_has_explicit_fixed: [MAX_COLS]bool = [_]bool{false} ** MAX_COLS;
+        // Apply <col> hints first
+        for (0..num_cols) |ci| {
+            if (col_hints[ci] != null) col_has_explicit_fixed[ci] = true;
+        }
+        // Then examine first row for explicit widths
+        for (0..num_cols) |ci| {
+            if (grid[0][ci].is_spanned or grid[0][ci].box == null) continue;
+            const cell = grid[0][ci].box.?;
+            const cs = @min(getColspan(cell), num_cols - ci);
+            if (cs == 1) {
+                if (getCellExplicitWidth(cell, table_width)) |w| {
+                    col_widths[ci] = w;
+                    col_has_explicit_fixed[ci] = true;
+                }
+            }
+        }
+        // Distribute remaining width equally among columns without explicit widths
+        const spacing_total_fixed = cellspacing * @as(f32, @floatFromInt(num_cols + 1));
+        var used_fixed: f32 = 0;
+        var flex_fixed: usize = 0;
+        for (0..num_cols) |i| {
+            if (col_has_explicit_fixed[i]) {
+                used_fixed += col_widths[i];
+            } else {
+                flex_fixed += 1;
+            }
+        }
+        const remaining_fixed = @max(table_width - used_fixed - spacing_total_fixed, 0);
+        if (flex_fixed > 0) {
+            const each = remaining_fixed / @as(f32, @floatFromInt(flex_fixed));
+            for (0..num_cols) |i| {
+                if (!col_has_explicit_fixed[i]) col_widths[i] = each;
+            }
+        }
+    } else {
+
+    // Pass 1: collect explicit widths from cells (non-colspan cells only)
+    // Use grid to get correct column indices
+    var col_has_explicit: [MAX_COLS]bool = [_]bool{false} ** MAX_COLS;
+    // Apply <col> hints as starting explicit widths
+    for (0..num_cols) |ci| {
+        if (col_hints[ci] != null) col_has_explicit[ci] = true;
+    }
+    for (0..num_rows) |ri| {
+        for (0..num_cols) |ci| {
+            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+            const cell = grid[ri][ci].box.?;
+            const cs = @min(getColspan(cell), num_cols - ci);
             if (cs == 1) {
                 const cell_w = getCellExplicitWidth(cell, table_width);
                 if (cell_w) |w| {
-                    if (w > col_widths[col_idx]) {
-                        col_widths[col_idx] = w;
-                        col_has_explicit[col_idx] = true;
+                    if (w > col_widths[ci]) {
+                        col_widths[ci] = w;
+                        col_has_explicit[ci] = true;
                     }
                 }
             }
-            col_idx += cs;
         }
     }
 
     // Pass 2: estimate content width for flex columns using text length heuristic
     var col_min_content: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
     const sample_rows = @min(num_rows, 5);
-    for (rows_buf[0..sample_rows]) |row| {
-        var col_idx: usize = 0;
-        for (row.children.items) |cell| {
-            if (!isTableCell(cell)) continue;
-            const cs = getColspan(cell);
-            if (col_idx >= num_cols) break;
-
-            if (cs == 1 and !col_has_explicit[col_idx]) {
-                // Estimate content width from text length without pre-layout
+    for (0..sample_rows) |ri| {
+        for (0..num_cols) |ci| {
+            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+            const cell = grid[ri][ci].box.?;
+            const cs = @min(getColspan(cell), num_cols - ci);
+            if (cs == 1 and !col_has_explicit[ci]) {
                 const est_w = estimateCellContentWidth(cell, cell.style.font_size_px);
-                if (est_w > col_min_content[col_idx]) {
-                    col_min_content[col_idx] = est_w;
+                if (est_w > col_min_content[ci]) {
+                    col_min_content[ci] = est_w;
                 }
             }
-            col_idx += cs;
         }
     }
 
@@ -137,7 +249,8 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         }
     }
 
-    const remaining = @max(table_width - used_width, 0);
+    const spacing_total = cellspacing * @as(f32, @floatFromInt(num_cols + 1));
+    const remaining = @max(table_width - used_width - spacing_total, 0);
     if (flex_cols > 0) {
         if (flex_content_total > 0) {
             // Distribute proportionally to content width
@@ -164,33 +277,31 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         }
     }
 
-    // Precompute column X positions
+    } // end auto table-layout else branch
+
+    // Precompute column X positions (with cellspacing gaps if set)
     var col_x: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
-    col_x[0] = 0;
+    col_x[0] = cellspacing;
     for (1..num_cols) |i| {
-        col_x[i] = col_x[i - 1] + col_widths[i - 1];
+        col_x[i] = col_x[i - 1] + col_widths[i - 1] + cellspacing;
     }
 
-    // Layout each row
-    var row_y: f32 = 0;
+    // Layout each row using the cell grid (supports rowspan)
+    var row_y: f32 = cellspacing;
+    var row_heights: [MAX_ROWS]f32 = [_]f32{0} ** MAX_ROWS;
 
-    for (rows_buf[0..num_rows]) |row| {
-        var col_idx: usize = 0;
-        var max_row_height: f32 = 0;
+    // Pass A: layout all cells and compute their natural heights
+    for (rows_buf[0..num_rows], 0..) |_, ri| {
+        for (0..num_cols) |ci| {
+            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+            const cell = grid[ri][ci].box.?;
+            const cs = @min(getColspan(cell), num_cols - ci);
 
-        for (row.children.items) |cell| {
-            if (!isTableCell(cell)) continue;
-            if (col_idx >= num_cols) break;
-
-            const cs = @min(getColspan(cell), num_cols - col_idx);
-
-            // Calculate cell width (sum of spanned columns)
             var cell_width: f32 = 0;
-            for (col_idx..col_idx + cs) |ci| {
-                cell_width += col_widths[ci];
+            for (ci..@min(ci + cs, num_cols)) |c| {
+                cell_width += col_widths[c];
             }
 
-            // Apply cellpadding from HTML attribute (overrides UA stylesheet padding)
             if (has_cellpadding_attr) {
                 cell.padding = .{
                     .top = cellpadding,
@@ -200,37 +311,110 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
                 };
             }
 
-            // Layout cell as a block
-            block.layoutBlock(cell, cell_width, box.content.y + row_y, fonts);
-
-            // Position cell at the correct column
-            const cell_target_x = box.content.x + col_x[col_idx];
-            const dx = cell_target_x - cell.content.x + cell.padding.left + cell.border.left + cell.margin.left;
-            block.adjustXPositions(cell, dx);
+            block.layoutBlock(cell, cell_width, box.content.y, fonts);
 
             const cell_height = cell.content.height + cell.padding.top + cell.padding.bottom +
                 cell.border.top + cell.border.bottom;
-            if (cell_height > max_row_height) max_row_height = cell_height;
 
-            col_idx += cs;
+            const rs = @min(getRowspan(cell), num_rows - ri);
+            if (rs == 1) {
+                if (cell_height > row_heights[ri]) row_heights[ri] = cell_height;
+            }
+            // Multi-row cells: distribute height later
         }
+    }
 
-        // Apply row height style (e.g. spacer rows with style="height:5px")
+    // Apply row height style
+    for (rows_buf[0..num_rows], 0..) |row, ri| {
         const row_min_h: f32 = switch (row.style.height) {
             .px => |h| h,
             .percent => |pct| pct * box.content.height / 100.0,
             else => 0,
         };
-        if (row_min_h > max_row_height) max_row_height = row_min_h;
-
-        // Set row dimensions
-        row.content.x = box.content.x;
-        row.content.y = box.content.y + row_y;
-        row.content.width = table_width;
-        row.content.height = max_row_height;
-
-        row_y += max_row_height;
+        if (row_min_h > row_heights[ri]) row_heights[ri] = row_min_h;
     }
+
+    // Pass B: ensure multi-row cells fit across their spanned rows
+    for (0..num_rows) |ri| {
+        for (0..num_cols) |ci| {
+            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+            const cell = grid[ri][ci].box.?;
+            const rs = @min(getRowspan(cell), num_rows - ri);
+            if (rs <= 1) continue;
+
+            const cell_height = cell.content.height + cell.padding.top + cell.padding.bottom +
+                cell.border.top + cell.border.bottom;
+
+            // Sum current heights of spanned rows
+            var spanned_height: f32 = 0;
+            for (ri..ri + rs) |r| {
+                spanned_height += row_heights[r];
+            }
+            spanned_height += cellspacing * @as(f32, @floatFromInt(rs - 1));
+
+            if (cell_height > spanned_height) {
+                // Distribute extra height evenly across spanned rows
+                const extra = (cell_height - spanned_height) / @as(f32, @floatFromInt(rs));
+                for (ri..ri + rs) |r| {
+                    row_heights[r] += extra;
+                }
+            }
+        }
+    }
+
+    // Pass C: position all cells using final row heights
+    // Compute row Y positions
+    var row_y_pos: [MAX_ROWS]f32 = [_]f32{0} ** MAX_ROWS;
+    row_y_pos[0] = cellspacing;
+    for (1..num_rows) |ri| {
+        row_y_pos[ri] = row_y_pos[ri - 1] + row_heights[ri - 1] + cellspacing;
+    }
+
+    for (0..num_rows) |ri| {
+        for (0..num_cols) |ci| {
+            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+            const cell = grid[ri][ci].box.?;
+            const rs = @min(getRowspan(cell), num_rows - ri);
+
+            // Position cell at correct column
+            const cell_target_x = box.content.x + col_x[ci];
+            const cell_target_y = box.content.y + row_y_pos[ri];
+            const dx = cell_target_x - cell.content.x + cell.padding.left + cell.border.left + cell.margin.left;
+            const dy = cell_target_y + cell.padding.top + cell.border.top - cell.content.y;
+            if (dx != 0) block.adjustXPositions(cell, dx);
+            if (dy != 0) block.adjustYPositions(cell, dy);
+
+            // Vertical alignment within total spanned height
+            var total_cell_h: f32 = 0;
+            for (ri..ri + rs) |r| {
+                total_cell_h += row_heights[r];
+            }
+            total_cell_h += cellspacing * @as(f32, @floatFromInt(if (rs > 1) rs - 1 else 0));
+
+            const cell_content_h = cell.content.height + cell.padding.top + cell.padding.bottom +
+                cell.border.top + cell.border.bottom;
+            if (cell_content_h < total_cell_h) {
+                const valign_dy: f32 = switch (cell.style.vertical_align) {
+                    .middle => (total_cell_h - cell_content_h) / 2,
+                    .bottom => total_cell_h - cell_content_h,
+                    else => 0,
+                };
+                if (valign_dy > 0.5) {
+                    block.adjustYPositions(cell, valign_dy);
+                }
+            }
+        }
+    }
+
+    // Set row dimensions
+    for (rows_buf[0..num_rows], 0..) |row, ri| {
+        row.content.x = box.content.x;
+        row.content.y = box.content.y + row_y_pos[ri];
+        row.content.width = table_width;
+        row.content.height = row_heights[ri];
+    }
+
+    row_y = row_y_pos[num_rows - 1] + row_heights[num_rows - 1] + cellspacing;
 
     // Position table-row-group wrappers (tbody etc) if present
     for (box.children.items) |child| {
@@ -287,6 +471,17 @@ fn getColspan(cell: *Box) usize {
     if (cell.dom_node) |dn| {
         if (dn.getAttribute("colspan")) |cs_str| {
             return std.fmt.parseInt(usize, cs_str, 10) catch 1;
+        }
+    }
+    return 1;
+}
+
+/// Get rowspan attribute from a cell's DOM node.
+fn getRowspan(cell: *Box) usize {
+    if (cell.dom_node) |dn| {
+        if (dn.getAttribute("rowspan")) |rs_str| {
+            const rs = std.fmt.parseInt(usize, rs_str, 10) catch 1;
+            return if (rs == 0) 1 else rs; // rowspan=0 means "all remaining rows" but we treat as 1
         }
     }
     return 1;

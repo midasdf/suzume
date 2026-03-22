@@ -30,16 +30,22 @@ pub const ComputedStyle = struct {
     font_style: FontStyle = .normal,
     line_height: LineHeight = .normal,
     letter_spacing: f32 = 0,
+    word_spacing: f32 = 0, // additional spacing between words (px)
 
     // Text layout & wrapping
     text_align: TextAlign = .left,
     text_decoration: TextDecoration = .{},
+    text_decoration_color: u32 = 0, // 0 = use text color (currentColor)
+    text_decoration_thickness: f32 = 0, // 0 = auto (1px default)
+    text_underline_offset: f32 = 0, // offset from baseline
     text_transform: TextTransform = .none,
     text_overflow: TextOverflow = .clip,
     white_space: WhiteSpace = .normal,
     word_break: WordBreak = .normal,
     overflow_wrap: OverflowWrap = .normal,
     vertical_align: VerticalAlign = .baseline,
+
+    text_indent: f32 = 0, // text-indent in px (inherited)
 
     // Other inherited properties
     visibility: Visibility = .visible,
@@ -69,6 +75,10 @@ pub const ComputedStyle = struct {
     margin_bottom_auto: bool = false,
     margin_left_auto: bool = false,
     margin_right_auto: bool = false,
+    margin_top_is_pct: bool = false,
+    margin_right_is_pct: bool = false,
+    margin_bottom_is_pct: bool = false,
+    margin_left_is_pct: bool = false,
 
     // Padding
     padding_top: f32 = 0,
@@ -76,6 +86,10 @@ pub const ComputedStyle = struct {
     padding_bottom: f32 = 0,
     padding_left: f32 = 0,
     padding_set_by_css: bool = false,
+    padding_top_is_pct: bool = false,
+    padding_right_is_pct: bool = false,
+    padding_bottom_is_pct: bool = false,
+    padding_left_is_pct: bool = false,
 
     // Borders
     border_top_width: f32 = 0,
@@ -86,6 +100,10 @@ pub const ComputedStyle = struct {
     border_right_color: u32 = 0xFF000000,
     border_bottom_color: u32 = 0xFF000000,
     border_left_color: u32 = 0xFF000000,
+    border_top_style: BorderStyle = .solid,
+    border_right_style: BorderStyle = .solid,
+    border_bottom_style: BorderStyle = .solid,
+    border_left_style: BorderStyle = .solid,
     border_set_by_css: bool = false,
     border_radius_tl: f32 = 0, // top-left
     border_radius_tr: f32 = 0, // top-right
@@ -129,6 +147,14 @@ pub const ComputedStyle = struct {
     row_gap: f32 = 0, // row-gap, separate from column gap
 
     // ═══════════════════════════════════════════════════════════════
+    // Table
+    // ═══════════════════════════════════════════════════════════════
+
+    border_collapse: bool = false, // true = collapse, false = separate (default)
+    border_spacing: f32 = 2, // CSS border-spacing in px (default 2 per HTML spec)
+    table_layout_fixed: bool = false, // true = fixed, false = auto (default)
+
+    // ═══════════════════════════════════════════════════════════════
     // Grid
     // ═══════════════════════════════════════════════════════════════
 
@@ -136,6 +162,7 @@ pub const ComputedStyle = struct {
     grid_template_rows: []const GridTrackSize = &.{},
     grid_auto_flow: GridAutoFlow = .row,
     grid_auto_columns: GridTrackSize = .auto,
+    grid_auto_rows: GridTrackSize = .auto,
     grid_column_start: i16 = 0, // 0 = auto
     grid_column_end: i16 = 0,
     grid_row_start: i16 = 0,
@@ -181,10 +208,13 @@ pub const ComputedStyle = struct {
     text_shadow_blur: f32 = 0,
     text_shadow_color: u32 = 0x00000000, // ARGB, transparent = no shadow
 
-    // Linear gradient (basic 2-color)
+    // Linear gradient (basic 2-color, kept for backward compat)
     gradient_color_start: u32 = 0x00000000, // ARGB, transparent = no gradient
     gradient_color_end: u32 = 0x00000000, // ARGB
     gradient_direction: GradientDirection = .to_bottom,
+    // Multi-stop gradient (N colors)
+    gradient_stops: [MAX_GRADIENT_STOPS]GradientStop = [_]GradientStop{.{ .color = 0, .position = 0 }} ** MAX_GRADIENT_STOPS,
+    gradient_stop_count: u8 = 0, // 0 = use legacy start/end, >0 = use stops array
 
     // Filters
     filter_grayscale: f32 = 0,
@@ -284,6 +314,7 @@ pub const ComputedStyle = struct {
         nowrap,
         pre_wrap,
         pre_line,
+        break_spaces,
     };
 
     pub const Overflow = enum {
@@ -291,6 +322,19 @@ pub const ComputedStyle = struct {
         hidden,
         scroll,
         auto_,
+    };
+
+    pub const BorderStyle = enum {
+        none,
+        hidden,
+        solid,
+        dashed,
+        dotted,
+        double_,
+        groove,
+        ridge,
+        inset,
+        outset,
     };
 
     pub const Position = enum {
@@ -438,6 +482,13 @@ pub const ComputedStyle = struct {
         to_top,
         to_left,
     };
+
+    pub const GradientStop = struct {
+        color: u32, // ARGB
+        position: f32, // 0.0-1.0 normalized position
+    };
+
+    pub const MAX_GRADIENT_STOPS = 8;
 
     pub const GridTrackSize = union(enum) {
         px: f32,

@@ -51,6 +51,9 @@ pub const PseudoClass = enum {
     focus_within,
     target,
     placeholder_shown,
+    // Internal-only: used by :has()/:not() selectors — never matched via fromString()
+    has,
+    not,
 
     const map = std.StaticStringMap(PseudoClass).initComptime(.{
         .{ "hover", .hover },
@@ -104,6 +107,7 @@ pub const PseudoClassSel = struct {
     pc: PseudoClass,
     nth: ?NthParams = null,
     not_inner: ?[]const u8 = null, // Raw inner selector string for :not()
+    has_inner: ?[]const u8 = null, // Raw inner selector string for :has()
 };
 
 pub const SimpleSelector = union(enum) {
@@ -377,8 +381,25 @@ const SelectorParser = struct {
                     const not_inner = self.source[inner_start..self.pos];
                     if (self.pos < self.source.len) self.advance(); // skip ')'
                     try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
-                        .pc = .hover, // placeholder — not used, matching uses not_inner
+                        .pc = .not,
                         .not_inner = not_inner,
+                    } } });
+                    self.specificity.b += 1;
+                } else if (self.peek() == '(' and eqlIgnoreCase(name, "has")) {
+                    // :has() pseudo-class — relational selector
+                    self.advance(); // skip '('
+                    const has_inner_start = self.pos;
+                    var paren_depth_has: u32 = 1;
+                    while (self.pos < self.source.len and paren_depth_has > 0) {
+                        if (self.source[self.pos] == '(') paren_depth_has += 1;
+                        if (self.source[self.pos] == ')') paren_depth_has -= 1;
+                        if (paren_depth_has > 0) self.pos += 1;
+                    }
+                    const has_inner = self.source[has_inner_start..self.pos];
+                    if (self.pos < self.source.len) self.advance(); // skip ')'
+                    try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                        .pc = .has,
+                        .has_inner = has_inner,
                     } } });
                     self.specificity.b += 1;
                 } else if (self.peek() == '(' and (eqlIgnoreCase(name, "where") or eqlIgnoreCase(name, "is"))) {
@@ -809,6 +830,10 @@ fn matchAttribute(attr: AttributeSel, element: ElementAdapter) bool {
 }
 
 fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
+    // Handle :has() — match if element has matching descendants/siblings
+    if (pcs.has_inner) |inner| {
+        return matchHasInner(inner, element);
+    }
     // Handle :not() — match if inner selector does NOT match
     if (pcs.not_inner) |inner| {
         return !matchNotInner(inner, element);
@@ -955,6 +980,8 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             }
             return false;
         },
+        // :has() and :not() are handled above via has_inner/not_inner fields
+        .has, .not => return false,
     }
 }
 
@@ -1052,6 +1079,137 @@ fn matchNotInner(inner: []const u8, element: ElementAdapter) bool {
     // :not(tagname)
     const tag = element.tagName() orelse return false;
     return eqlIgnoreCase(tag, trimmed);
+}
+
+/// Match :has() inner selector — check if element has matching descendants/siblings
+fn matchHasInner(inner: []const u8, element: ElementAdapter) bool {
+    const trimmed = std.mem.trim(u8, inner, " \t");
+    if (trimmed.len == 0) return false;
+
+    // Detect combinator prefix
+    if (trimmed[0] == '>') {
+        // :has(> selector) — direct child
+        const sel = std.mem.trim(u8, trimmed[1..], " \t");
+        var child = element.firstChild();
+        while (child) |c| {
+            if (matchInnerSimple(sel, c)) return true;
+            child = c.nextElementSibling();
+        }
+        return false;
+    }
+    if (trimmed[0] == '+') {
+        // :has(+ selector) — next sibling
+        const sel = std.mem.trim(u8, trimmed[1..], " \t");
+        const next = element.nextElementSibling() orelse return false;
+        return matchInnerSimple(sel, next);
+    }
+    if (trimmed[0] == '~') {
+        // :has(~ selector) — subsequent siblings
+        const sel = std.mem.trim(u8, trimmed[1..], " \t");
+        var sib = element.nextElementSibling();
+        while (sib) |s| {
+            if (matchInnerSimple(sel, s)) return true;
+            sib = s.nextElementSibling();
+        }
+        return false;
+    }
+
+    // Default: descendant — check all descendants
+    return hasMatchingDescendant(trimmed, element, 0);
+}
+
+fn hasMatchingDescendant(sel: []const u8, element: ElementAdapter, depth: u32) bool {
+    if (depth > 32) return false; // guard against deeply nested DOM
+    var child = element.firstChild();
+    while (child) |c| {
+        if (matchInnerSimple(sel, c)) return true;
+        if (hasMatchingDescendant(sel, c, depth + 1)) return true;
+        child = c.nextElementSibling();
+    }
+    return false;
+}
+
+/// Match a simple selector string against an element (shared by :has() and :not())
+fn matchInnerSimple(sel: []const u8, element: ElementAdapter) bool {
+    if (sel.len == 0) return false;
+
+    if (sel[0] == '.') {
+        const cls = sel[1..];
+        const class_attr = element.getAttribute("class") orelse return false;
+        return containsWord(class_attr, cls);
+    }
+    if (sel[0] == '#') {
+        const id = sel[1..];
+        const id_attr = element.getAttribute("id") orelse return false;
+        return std.mem.eql(u8, id_attr, id);
+    }
+    if (sel[0] == '[') {
+        if (std.mem.indexOfScalar(u8, sel, ']')) |close| {
+            const attr_content = std.mem.trim(u8, sel[1..close], " \t");
+            if (std.mem.indexOfScalar(u8, attr_content, '=')) |eq_pos| {
+                var name_end = eq_pos;
+                var op: AttributeOp = .equals;
+                if (eq_pos > 0) {
+                    switch (attr_content[eq_pos - 1]) {
+                        '^' => {
+                            name_end = eq_pos - 1;
+                            op = .starts_with;
+                        },
+                        '$' => {
+                            name_end = eq_pos - 1;
+                            op = .ends_with;
+                        },
+                        '*' => {
+                            name_end = eq_pos - 1;
+                            op = .contains;
+                        },
+                        '~' => {
+                            name_end = eq_pos - 1;
+                            op = .contains_word;
+                        },
+                        '|' => {
+                            name_end = eq_pos - 1;
+                            op = .starts_with_dash;
+                        },
+                        else => {},
+                    }
+                }
+                const attr_name = std.mem.trim(u8, attr_content[0..name_end], " \t");
+                var attr_val = std.mem.trim(u8, attr_content[eq_pos + 1 ..], " \t");
+                if (attr_val.len >= 2 and (attr_val[0] == '"' or attr_val[0] == '\'')) {
+                    attr_val = attr_val[1 .. attr_val.len - 1];
+                }
+                return matchAttribute(.{ .name = attr_name, .op = op, .value = attr_val }, element);
+            } else {
+                return element.getAttribute(attr_content) != null;
+            }
+        }
+        return false;
+    }
+    if (sel[0] == ':') {
+        const pseudo_name = sel[1..];
+        if (PseudoClass.fromString(pseudo_name)) |pc| {
+            return matchPseudoClass(.{ .pc = pc }, element);
+        }
+        return false;
+    }
+    // Tag name, possibly compound (tag.class or tag#id)
+    const tag = element.tagName() orelse return false;
+    if (std.mem.indexOfScalar(u8, sel, '.')) |dot| {
+        const tag_part = sel[0..dot];
+        const cls_part = sel[dot + 1 ..];
+        if (tag_part.len > 0 and !eqlIgnoreCase(tag, tag_part)) return false;
+        const class_attr = element.getAttribute("class") orelse return false;
+        return containsWord(class_attr, cls_part);
+    }
+    if (std.mem.indexOfScalar(u8, sel, '#')) |hash| {
+        const tag_part = sel[0..hash];
+        const id_part = sel[hash + 1 ..];
+        if (tag_part.len > 0 and !eqlIgnoreCase(tag, tag_part)) return false;
+        const id_attr = element.getAttribute("id") orelse return false;
+        return std.mem.eql(u8, id_attr, id_part);
+    }
+    return eqlIgnoreCase(tag, sel);
 }
 
 fn containsWord(haystack: []const u8, needle: []const u8) bool {

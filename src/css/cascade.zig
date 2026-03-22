@@ -115,8 +115,8 @@ const ua_stylesheet_text =
     \\head, style, script, link, meta, title, template { display: none; }
     \\table { display: table; }
     \\tr { display: table-row; }
-    \\td { display: table-cell; padding: 1px; text-align: left; }
-    \\th { display: table-cell; padding: 1px; }
+    \\td { display: table-cell; padding: 1px; text-align: left; vertical-align: middle; }
+    \\th { display: table-cell; padding: 1px; vertical-align: middle; }
     \\th { font-weight: bold; text-align: center; }
     \\thead { display: table-header-group; }
     \\tbody { display: table-row-group; }
@@ -141,7 +141,7 @@ const ua_stylesheet_text =
     \\pre { white-space: pre; font-family: monospace; }
     \\code { font-family: monospace; display: inline; white-space: pre; }
     \\pre { margin-top: 1em; margin-bottom: 1em; padding: 8px; }
-    \\hr { border-top-width: 1px; margin-top: 8px; margin-bottom: 8px; }
+    \\hr { border-top-width: 1px; border-top-style: solid; border-top-color: #808080; margin-top: 8px; margin-bottom: 8px; }
     \\p { margin-top: 1em; margin-bottom: 1em; }
     \\blockquote { margin-left: 40px; margin-right: 40px; margin-top: 1em; margin-bottom: 1em;
     \\  padding-left: 12px; }
@@ -157,6 +157,18 @@ const ua_stylesheet_text =
     \\summary { display: block; }
     \\dialog { display: none; }
     \\template { display: none; }
+    \\img { display: inline-block; max-width: 100%; }
+    \\svg { display: inline-block; overflow: hidden; }
+    \\video, audio, canvas, iframe { display: inline-block; }
+    \\dd { margin-left: 40px; }
+    \\fieldset { margin: 0 2px; padding: 0.35em 0.75em 0.625em; border: 2px groove; }
+    \\legend { display: block; padding: 0 2px; }
+    \\table { border-collapse: separate; }
+    \\sub { vertical-align: sub; }
+    \\sup { vertical-align: super; }
+    \\u { text-decoration: underline; }
+    \\s, del { text-decoration: line-through; }
+    \\mark { background-color: #ffff00; color: #000000; }
 ;
 
 // ── Inherited properties ─────────────────────────────────────────────
@@ -172,6 +184,7 @@ const inherited_properties = [_]PropertyId{
     .text_align,
     .text_decoration,
     .text_transform,
+    .text_indent,
     .white_space,
     .word_break,
     .overflow_wrap,
@@ -1029,6 +1042,7 @@ fn inheritAll(style: *ComputedStyle, parent: *const ComputedStyle) void {
     style.visibility = parent.visibility;
     style.list_style_type = parent.list_style_type;
     style.text_overflow = parent.text_overflow;
+    style.text_indent = parent.text_indent;
 }
 
 fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: PropertyId) void {
@@ -1046,6 +1060,7 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .text_align => style.text_align = parent.text_align,
         .text_decoration => style.text_decoration = parent.text_decoration,
         .text_transform => style.text_transform = parent.text_transform,
+        .text_indent => style.text_indent = parent.text_indent,
         .white_space => style.white_space = parent.white_space,
         .word_break => style.word_break = parent.word_break,
         .overflow_wrap => style.overflow_wrap = parent.overflow_wrap,
@@ -1057,14 +1072,14 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .position => style.position = parent.position,
         .width => style.width = parent.width,
         .height => style.height = parent.height,
-        .margin_top => style.margin_top = parent.margin_top,
-        .margin_right => style.margin_right = parent.margin_right,
-        .margin_bottom => style.margin_bottom = parent.margin_bottom,
-        .margin_left => style.margin_left = parent.margin_left,
-        .padding_top => style.padding_top = parent.padding_top,
-        .padding_right => style.padding_right = parent.padding_right,
-        .padding_bottom => style.padding_bottom = parent.padding_bottom,
-        .padding_left => style.padding_left = parent.padding_left,
+        .margin_top => { style.margin_top = parent.margin_top; style.margin_top_is_pct = parent.margin_top_is_pct; },
+        .margin_right => { style.margin_right = parent.margin_right; style.margin_right_is_pct = parent.margin_right_is_pct; },
+        .margin_bottom => { style.margin_bottom = parent.margin_bottom; style.margin_bottom_is_pct = parent.margin_bottom_is_pct; },
+        .margin_left => { style.margin_left = parent.margin_left; style.margin_left_is_pct = parent.margin_left_is_pct; },
+        .padding_top => { style.padding_top = parent.padding_top; style.padding_top_is_pct = parent.padding_top_is_pct; },
+        .padding_right => { style.padding_right = parent.padding_right; style.padding_right_is_pct = parent.padding_right_is_pct; },
+        .padding_bottom => { style.padding_bottom = parent.padding_bottom; style.padding_bottom_is_pct = parent.padding_bottom_is_pct; },
+        .padding_left => { style.padding_left = parent.padding_left; style.padding_left_is_pct = parent.padding_left_is_pct; },
         .background_color => style.background_color = parent.background_color,
         .opacity => style.opacity = parent.opacity,
         .border_top_width => style.border_top_width = parent.border_top_width,
@@ -1120,11 +1135,11 @@ fn applyDeclaration(
         if (parent) |p| inheritProperty(style, p, decl.property);
         return;
     }
-    if (eqlIgnoreCase(trimmed, "initial") or eqlIgnoreCase(trimmed, "unset")) {
-        if (eqlIgnoreCase(trimmed, "unset") and isInherited(decl.property)) {
+    if (eqlIgnoreCase(trimmed, "initial") or eqlIgnoreCase(trimmed, "unset") or eqlIgnoreCase(trimmed, "revert") or eqlIgnoreCase(trimmed, "revert-layer")) {
+        if ((eqlIgnoreCase(trimmed, "unset") or eqlIgnoreCase(trimmed, "revert") or eqlIgnoreCase(trimmed, "revert-layer")) and isInherited(decl.property)) {
             if (parent) |p| inheritProperty(style, p, decl.property);
         }
-        // For initial / non-inherited unset: leave at default (ComputedStyle already has defaults)
+        // For initial / non-inherited unset/revert: leave at default (ComputedStyle already has defaults)
         return;
     }
 
@@ -1318,7 +1333,8 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "pre")) style.white_space = .pre
             else if (eqlIgnoreCase(trimmed, "nowrap")) style.white_space = .nowrap
             else if (eqlIgnoreCase(trimmed, "pre-wrap")) style.white_space = .pre_wrap
-            else if (eqlIgnoreCase(trimmed, "pre-line")) style.white_space = .pre_line;
+            else if (eqlIgnoreCase(trimmed, "pre-line")) style.white_space = .pre_line
+            else if (eqlIgnoreCase(trimmed, "break-spaces")) style.white_space = .break_spaces;
         },
         .word_break => {
             if (eqlIgnoreCase(trimmed, "normal")) style.word_break = .normal
@@ -1333,6 +1349,9 @@ fn applyDeclaration(
         .text_overflow => {
             if (eqlIgnoreCase(trimmed, "clip")) style.text_overflow = .clip
             else if (eqlIgnoreCase(trimmed, "ellipsis")) style.text_overflow = .ellipsis;
+        },
+        .text_indent => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.text_indent = px;
         },
         .vertical_align => {
             if (eqlIgnoreCase(trimmed, "baseline")) style.vertical_align = .baseline
@@ -1360,6 +1379,13 @@ fn applyDeclaration(
                 style.letter_spacing = px;
             }
         },
+        .word_spacing => {
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.word_spacing = 0;
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.word_spacing = px;
+            }
+        },
         .width => style.width = parseDimension(trimmed, fs, vw, vh),
         .height => style.height = parseDimension(trimmed, fs, vw, vh),
         .min_width => style.min_width = parseDimension(trimmed, fs, vw, vh),
@@ -1370,33 +1396,37 @@ fn applyDeclaration(
             const md = parseMarginValue(trimmed, fs, vw, vh);
             style.margin_top = md.value;
             style.margin_top_auto = md.is_auto;
+            style.margin_top_is_pct = md.is_pct;
         },
         .margin_right => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
             style.margin_right = md.value;
             style.margin_right_auto = md.is_auto;
+            style.margin_right_is_pct = md.is_pct;
         },
         .margin_bottom => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
             style.margin_bottom = md.value;
             style.margin_bottom_auto = md.is_auto;
+            style.margin_bottom_is_pct = md.is_pct;
         },
         .margin_left => {
             const md = parseMarginValue(trimmed, fs, vw, vh);
             style.margin_left = md.value;
             style.margin_left_auto = md.is_auto;
+            style.margin_left_is_pct = md.is_pct;
         },
         .padding_top => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_top = px; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_top = v.value; style.padding_top_is_pct = v.is_pct; style.padding_set_by_css = true; }
         },
         .padding_right => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_right = px; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_right = v.value; style.padding_right_is_pct = v.is_pct; style.padding_set_by_css = true; }
         },
         .padding_bottom => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_bottom = px; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_bottom = v.value; style.padding_bottom_is_pct = v.is_pct; style.padding_set_by_css = true; }
         },
         .padding_left => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.padding_left = px; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_left = v.value; style.padding_left_is_pct = v.is_pct; style.padding_set_by_css = true; }
         },
         .border_top_width => {
             if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_top_width = px; style.border_set_by_css = true; }
@@ -1541,6 +1571,10 @@ fn applyDeclaration(
         },
         .gap => {
             // gap shorthand: "row-gap column-gap" or single value for both
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.gap = 0;
+                style.row_gap = 0;
+            } else {
             var it = std.mem.tokenizeAny(u8, trimmed, " \t");
             const first = it.next() orelse trimmed;
             const second = it.next();
@@ -1554,12 +1588,15 @@ fn applyDeclaration(
                     style.gap = row_px;
                 }
             }
+            }
         },
         .column_gap => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.gap = px;
+            if (eqlIgnoreCase(trimmed, "normal")) { style.gap = 0; }
+            else if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.gap = px; }
         },
         .row_gap => {
-            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.row_gap = px;
+            if (eqlIgnoreCase(trimmed, "normal")) { style.row_gap = 0; }
+            else if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.row_gap = px; }
         },
         .box_shadow => {
             parseShadow(trimmed, fs, &style.box_shadow_x, &style.box_shadow_y, &style.box_shadow_blur, &style.box_shadow_color);
@@ -1580,6 +1617,9 @@ fn applyDeclaration(
         },
         .grid_auto_columns => {
             if (parseOneTrack(trimmed)) |t| style.grid_auto_columns = t;
+        },
+        .grid_auto_rows => {
+            if (parseOneTrack(trimmed)) |t| style.grid_auto_rows = t;
         },
         .grid_column_start => style.grid_column_start = parseGridLine(trimmed),
         .grid_column_end => {
@@ -1683,6 +1723,20 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch
             else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline
             else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
+        },
+        .border_collapse => {
+            if (eqlIgnoreCase(trimmed, "collapse")) {
+                style.border_collapse = true;
+                style.border_spacing = 0;
+            } else if (eqlIgnoreCase(trimmed, "separate")) {
+                style.border_collapse = false;
+            }
+        },
+        .table_layout => {
+            style.table_layout_fixed = eqlIgnoreCase(trimmed, "fixed");
+        },
+        .border_spacing => {
+            if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.border_spacing = px;
         },
         .outline_width => {
             if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.outline_width = px;
@@ -1825,9 +1879,39 @@ fn applyDeclaration(
         // Skip these — just parse to avoid unknown property warnings
         .transition_timing_function,
         .animation_timing_function, .animation_play_state,
-        .backdrop_filter, .outline_style => {},
-        // Skip border-style — we don't track it but it's needed for border-width to display
-        .border_top_style, .border_right_style, .border_bottom_style, .border_left_style => {},
+        .backdrop_filter => {},
+        .outline_style => {
+            // outline-style: none → zero out outline-width
+            if (eqlIgnoreCase(trimmed, "none")) {
+                style.outline_width = 0;
+            }
+        },
+        // border-style: when none or hidden, zero out the corresponding border-width
+        // Per CSS spec: border-style:none means border-width computes to 0
+        .border_top_style => {
+            style.border_top_style = parseBorderStyle(trimmed);
+            if (style.border_top_style == .none or style.border_top_style == .hidden) {
+                style.border_top_width = 0;
+            }
+        },
+        .border_right_style => {
+            style.border_right_style = parseBorderStyle(trimmed);
+            if (style.border_right_style == .none or style.border_right_style == .hidden) {
+                style.border_right_width = 0;
+            }
+        },
+        .border_bottom_style => {
+            style.border_bottom_style = parseBorderStyle(trimmed);
+            if (style.border_bottom_style == .none or style.border_bottom_style == .hidden) {
+                style.border_bottom_width = 0;
+            }
+        },
+        .border_left_style => {
+            style.border_left_style = parseBorderStyle(trimmed);
+            if (style.border_left_style == .none or style.border_left_style == .hidden) {
+                style.border_left_width = 0;
+            }
+        },
         // Skip custom properties (already extracted)
         .custom => {},
         // Skip unknown
@@ -2184,6 +2268,8 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .percent => value, // percentage stored as-is, resolved at layout
         .vh, .svh, .dvh, .lvh => value * vh / 100.0,
         .vw, .svw, .dvw, .lvw => value * vw / 100.0,
+        .vmin => value * @min(vw, vh) / 100.0,
+        .vmax => value * @max(vw, vh) / 100.0,
         .pt => value * 4.0 / 3.0,
         .cm => value * 96.0 / 2.54,
         .mm => value * 96.0 / 25.4,
@@ -2383,12 +2469,34 @@ fn parseDimensionOrNone(s: []const u8, font_size: f32, vw: f32, vh: f32) Compute
 const MarginValue = struct {
     value: f32,
     is_auto: bool,
+    is_pct: bool = false,
 };
 
 fn parseMarginValue(s: []const u8, font_size: f32, vw: f32, vh: f32) MarginValue {
     if (eqlIgnoreCase(s, "auto")) return .{ .value = 0, .is_auto = true };
+    // Check for percentage before generic length parsing
+    if (properties.parseLength(s)) |len| {
+        if (len.unit == .percent) {
+            return .{ .value = len.value, .is_auto = false, .is_pct = true };
+        }
+        return .{ .value = resolveLengthToPx(len.value, len.unit, font_size, vw, vh), .is_auto = false };
+    }
     if (parseLengthValue(s, font_size, vw, vh)) |px| return .{ .value = px, .is_auto = false };
     return .{ .value = 0, .is_auto = false };
+}
+
+/// Like parseLengthValue but also returns whether the value was a percentage
+const LengthOrPct = struct { value: f32, is_pct: bool = false };
+
+fn parseLengthOrPct(s: []const u8, font_size: f32, vw: f32, vh: f32) ?LengthOrPct {
+    if (properties.parseLength(s)) |len| {
+        if (len.unit == .percent) {
+            return .{ .value = len.value, .is_pct = true };
+        }
+        return .{ .value = resolveLengthToPx(len.value, len.unit, font_size, vw, vh) };
+    }
+    if (parseLengthValue(s, font_size, vw, vh)) |px| return .{ .value = px };
+    return null;
 }
 
 fn parseBorderWidth(s: []const u8, font_size: f32, vw: f32, vh: f32) ?f32 {
@@ -2671,6 +2779,20 @@ fn extractUrl(value: []const u8) ?[]const u8 {
     return inner;
 }
 
+/// Parse a CSS border-style keyword.
+fn parseBorderStyle(value: []const u8) ComputedStyle.BorderStyle {
+    if (eqlIgnoreCase(value, "none")) return .none;
+    if (eqlIgnoreCase(value, "hidden")) return .hidden;
+    if (eqlIgnoreCase(value, "dashed")) return .dashed;
+    if (eqlIgnoreCase(value, "dotted")) return .dotted;
+    if (eqlIgnoreCase(value, "double")) return .double_;
+    if (eqlIgnoreCase(value, "groove")) return .groove;
+    if (eqlIgnoreCase(value, "ridge")) return .ridge;
+    if (eqlIgnoreCase(value, "inset")) return .inset;
+    if (eqlIgnoreCase(value, "outset")) return .outset;
+    return .solid; // default
+}
+
 /// Parse linear-gradient(direction, color1, color2) and set gradient fields on style.
 /// Returns true if successfully parsed.
 fn parseLinearGradient(value: []const u8, style: *ComputedStyle) bool {
@@ -2754,19 +2876,58 @@ fn parseLinearGradient(value: []const u8, style: *ComputedStyle) bool {
     }
     // else: first part is a color, no direction specified
 
-    if (color2_idx >= part_count) return false;
+    // Parse all color stops starting from color1_idx
+    const color_start_idx = color1_idx;
+    const color_count = part_count - color_start_idx;
+    if (color_count < 2) return false;
 
-    // Parse colors (strip percentage/position suffixes like "red 0%" → "red")
-    const c1_raw = stripColorStop(parts[color1_idx]);
-    const c2_raw = stripColorStop(parts[color2_idx]);
-
-    const c1 = properties.parseColor(c1_raw) orelse return false;
-    const c2 = properties.parseColor(c2_raw) orelse return false;
-
-    style.gradient_color_start = c1.toArgb();
-    style.gradient_color_end = c2.toArgb();
+    // Always set direction
     style.gradient_direction = dir;
+
+    // Parse color stops into the multi-stop array
+    var stop_count: u8 = 0;
+    for (color_start_idx..part_count) |ci| {
+        if (stop_count >= ComputedStyle.MAX_GRADIENT_STOPS) break;
+        const raw_part = parts[ci];
+        const color_str = stripColorStop(raw_part);
+        const color = properties.parseColor(color_str) orelse continue;
+        const pos = parseColorStopPosition(raw_part, stop_count, @intCast(color_count));
+        style.gradient_stops[stop_count] = .{ .color = color.toArgb(), .position = pos };
+        stop_count += 1;
+    }
+
+    if (stop_count < 2) return false;
+
+    // Also set legacy 2-color fields for backward compatibility
+    style.gradient_color_start = style.gradient_stops[0].color;
+    style.gradient_color_end = style.gradient_stops[stop_count - 1].color;
+    style.gradient_stop_count = stop_count;
     return true;
+}
+
+/// Parse the position from a color-stop like "red 50%" → 0.5, "blue 0%" → 0.0.
+/// If no position found, auto-distribute evenly based on index/total.
+fn parseColorStopPosition(raw: []const u8, index: u8, total: u8) f32 {
+    // Try to find a percentage at the end
+    const trimmed = std.mem.trim(u8, raw, " \t");
+    // Look for "%" at end
+    if (std.mem.lastIndexOf(u8, trimmed, "%")) |pct_end| {
+        // Find the start of the number before %
+        var start = pct_end;
+        while (start > 0 and (trimmed[start - 1] == '.' or (trimmed[start - 1] >= '0' and trimmed[start - 1] <= '9') or trimmed[start - 1] == '-')) {
+            start -= 1;
+        }
+        // Make sure there's a space before the number (it's a separate token)
+        if (start > 0 and trimmed[start - 1] == ' ') {
+            const num_str = trimmed[start..pct_end];
+            if (std.fmt.parseFloat(f32, num_str)) |pct| {
+                return pct / 100.0;
+            } else |_| {}
+        }
+    }
+    // Auto-distribute: evenly spaced
+    if (total <= 1) return 0;
+    return @as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(total - 1));
 }
 
 /// Strip color-stop position suffix (e.g., "red 50%" → "red", "#fff 0%" → "#fff")

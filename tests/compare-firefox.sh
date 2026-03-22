@@ -92,12 +92,16 @@ for url in "${URLS[@]}"; do
 
     # 3) Generate diff image if both exist
     if [ -f "$FIREFOX_DIR/$fname" ] && [ -f "$SUZUME_DIR/$fname" ]; then
-        # Crop Firefox's full-page screenshot to viewport size (top portion)
-        # and ensure suzume's capture is the same size for fair comparison.
-        magick "$FIREFOX_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/ff_resized.png" 2>/dev/null || \
-            convert "$FIREFOX_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/ff_resized.png" 2>/dev/null || true
-        magick "$SUZUME_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/sz_resized.png" 2>/dev/null || \
-            convert "$SUZUME_DIR/$fname" -crop "${WIDTH}x${HEIGHT}+0+0" +repage "/tmp/sz_resized.png" 2>/dev/null || true
+        # Crop to content area for fair comparison:
+        # - Firefox headless: content starts at y=0
+        # - Suzume: skip browser chrome (URL bar 36px + tab bar 28px = 64px top, 24px status bar bottom)
+        CHROME_TOP=64
+        CHROME_BOTTOM=24
+        CONTENT_H=$((HEIGHT - CHROME_TOP - CHROME_BOTTOM))
+        magick "$FIREFOX_DIR/$fname" -crop "${WIDTH}x${CONTENT_H}+0+0" +repage "/tmp/ff_resized.png" 2>/dev/null || \
+            convert "$FIREFOX_DIR/$fname" -crop "${WIDTH}x${CONTENT_H}+0+0" +repage "/tmp/ff_resized.png" 2>/dev/null || true
+        magick "$SUZUME_DIR/$fname" -crop "${WIDTH}x${CONTENT_H}+0+${CHROME_TOP}" +repage "/tmp/sz_resized.png" 2>/dev/null || \
+            convert "$SUZUME_DIR/$fname" -crop "${WIDTH}x${CONTENT_H}+0+${CHROME_TOP}" +repage "/tmp/sz_resized.png" 2>/dev/null || true
 
         if [ -f "/tmp/ff_resized.png" ] && [ -f "/tmp/sz_resized.png" ]; then
             # Compare pixel differences
@@ -107,7 +111,7 @@ for url in "${URLS[@]}"; do
                 "$DIFF_DIR/$fname" 2>&1 || true)
             DIFF_PIXELS=$(echo "$DIFF_RESULT" | grep -oP '^[\d.]+' || echo "N/A")
 
-            TOTAL_PIXELS=$((WIDTH * HEIGHT))
+            TOTAL_PIXELS=$((WIDTH * CONTENT_H))
             if [ "$DIFF_PIXELS" != "N/A" ] && [ "$TOTAL_PIXELS" -gt 0 ]; then
                 DIFF_PCT=$(awk "BEGIN{printf \"%.1f\", ($DIFF_PIXELS/$TOTAL_PIXELS)*100}")
                 echo "  [Diff]    ${DIFF_PCT}% pixels differ ($DIFF_PIXELS / $TOTAL_PIXELS)"

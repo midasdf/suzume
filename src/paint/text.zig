@@ -117,10 +117,13 @@ pub const TextRenderer = struct {
         const metrics = self.ft_face.*.size.*.metrics;
         const ascent = @divTrunc(@as(i32, @intCast(metrics.ascender)), 64);
         const descent = @divTrunc(@as(i32, @intCast(metrics.descender)), 64);
+        // FreeType metrics.height includes line gap: ascent + |descent| + line_gap
+        // Using this gives more accurate line spacing matching Firefox
+        const ft_height = @divTrunc(@as(i32, @intCast(metrics.height)), 64);
 
         return .{
             .width = total_advance,
-            .height = ascent - descent,
+            .height = if (ft_height > ascent - descent) ft_height else ascent - descent,
             .ascent = ascent,
             .descent = descent,
         };
