@@ -148,7 +148,7 @@ pub fn layoutGrid(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
     // Apply explicit height if set
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none => null,
+        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
     };
     if (explicit_h) |h| box.content.height = h;
 }

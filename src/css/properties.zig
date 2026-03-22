@@ -642,6 +642,22 @@ pub fn expandShorthand(property_name: []const u8, value_raw: []const u8, allocat
     if (std.mem.eql(u8, name, "text-decoration")) {
         return expandTextDecoration(trimmed, allocator);
     }
+    // place-items shorthand: align-items + justify-items
+    if (std.mem.eql(u8, name, "place-items")) {
+        return expandPlaceShorthand(trimmed, .align_items, "align-items", .justify_items, "justify-items", allocator);
+    }
+    // place-content shorthand: align-content + justify-content
+    if (std.mem.eql(u8, name, "place-content")) {
+        return expandPlaceShorthand(trimmed, .align_content, "align-content", .justify_content, "justify-content", allocator);
+    }
+    // place-self shorthand: align-self + justify-self
+    if (std.mem.eql(u8, name, "place-self")) {
+        return expandPlaceShorthand(trimmed, .align_self, "align-self", .justify_self, "justify-self", allocator);
+    }
+    // gap shorthand: row-gap + column-gap
+    if (std.mem.eql(u8, name, "gap")) {
+        return expandGap(trimmed, allocator);
+    }
     return null;
 }
 
@@ -775,6 +791,14 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         return decls;
     }
 
+    // "none" clears all background properties
+    if (eqlIgnoreCase(value, "none")) {
+        const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+        decls[0] = .{ .property = .background_color, .property_name = "background-color", .value_raw = "transparent", .important = false };
+        decls[1] = .{ .property = .background_image, .property_name = "background-image", .value_raw = "none", .important = false };
+        return decls;
+    }
+
     // First: try parsing the entire value as a single color (handles rgb(), hsl(), etc.)
     if (parseColor(value) != null) {
         const decls = allocator.alloc(ast.Declaration, 1) catch return null;
@@ -782,10 +806,12 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         return decls;
     }
 
-    // Try to extract color, image (url), and repeat from the background shorthand
+    // Try to extract color, image (url), position, size, and repeat from the background shorthand
     var color_val: []const u8 = "transparent";
     var image_val: ?[]const u8 = null;
     var repeat_val: ?[]const u8 = null;
+    var position_val: ?[]const u8 = null;
+    var size_val: ?[]const u8 = null;
 
     // Tokenize respecting parentheses so rgb(...), url(...) etc. stay intact
     var tokens: [16][]const u8 = undefined;
@@ -817,18 +843,47 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
     }
 
     var gradient_val: ?[]const u8 = null;
-    for (tokens[0..token_count]) |tok| {
+    var prev_was_position = false;
+    for (tokens[0..token_count], 0..) |tok, ti| {
+        _ = ti;
+        // Check for size after "/" (e.g., "center/cover")
+        if (std.mem.indexOfScalar(u8, tok, '/')) |slash_pos| {
+            // Split "position/size"
+            const before = tok[0..slash_pos];
+            const after = tok[slash_pos + 1 ..];
+            if (before.len > 0 and isPositionKeyword(before)) {
+                position_val = before;
+            }
+            if (after.len > 0) {
+                size_val = after;
+            }
+            prev_was_position = false;
+            continue;
+        }
+        // If previous token was a position keyword and this starts with /
+        if (prev_was_position and tok.len > 0 and tok[0] == '/') {
+            // This shouldn't happen with our tokenizer but handle it
+            size_val = if (tok.len > 1) tok[1..] else null;
+            prev_was_position = false;
+            continue;
+        }
         // Extract url(...) or linear-gradient(...) as background-image
         // url() takes priority over gradient (CSS multiple backgrounds: url is primary layer)
         if (startsWithIgnoreCase(tok, "url(")) {
             image_val = tok;
+            prev_was_position = false;
             continue;
         }
         if (startsWithIgnoreCase(tok, "linear-gradient(") or
             startsWithIgnoreCase(tok, "-webkit-linear-gradient(") or
-            startsWithIgnoreCase(tok, "-moz-linear-gradient("))
+            startsWithIgnoreCase(tok, "-moz-linear-gradient(") or
+            startsWithIgnoreCase(tok, "radial-gradient(") or
+            startsWithIgnoreCase(tok, "conic-gradient(") or
+            startsWithIgnoreCase(tok, "repeating-linear-gradient(") or
+            startsWithIgnoreCase(tok, "repeating-radial-gradient("))
         {
             gradient_val = tok;
+            prev_was_position = false;
             continue;
         }
         // Extract repeat keywords as background-repeat
@@ -836,17 +891,46 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
             eqlIgnoreCase(tok, "repeat-x") or eqlIgnoreCase(tok, "repeat-y"))
         {
             repeat_val = tok;
+            prev_was_position = false;
             continue;
         }
-        // Skip other background keywords (position, size, attachment)
-        if (isBackgroundKeyword(tok)) continue;
+        // Background size keywords (cover, contain)
+        if (eqlIgnoreCase(tok, "cover") or eqlIgnoreCase(tok, "contain")) {
+            size_val = tok;
+            prev_was_position = false;
+            continue;
+        }
+        // Position keywords
+        if (isPositionKeyword(tok)) {
+            position_val = tok;
+            prev_was_position = true;
+            continue;
+        }
+        // Skip attachment keywords (fixed, scroll, local)
+        if (eqlIgnoreCase(tok, "fixed") or eqlIgnoreCase(tok, "scroll") or eqlIgnoreCase(tok, "local")) {
+            prev_was_position = false;
+            continue;
+        }
+        // Skip origin/clip keywords (border-box, padding-box, content-box)
+        if (eqlIgnoreCase(tok, "border-box") or eqlIgnoreCase(tok, "padding-box") or eqlIgnoreCase(tok, "content-box")) {
+            prev_was_position = false;
+            continue;
+        }
         // Try parsing as color (now handles rgb(), hsl() etc. properly)
         if (parseColor(tok) != null) {
             color_val = tok;
+            prev_was_position = false;
             continue;
         }
         // Try parsing as length (could be background-position)
-        if (parseLength(tok) != null) continue;
+        if (parseLength(tok) != null) {
+            if (position_val == null) {
+                position_val = tok;
+                prev_was_position = true;
+            }
+            continue;
+        }
+        prev_was_position = false;
     }
 
     // Use gradient as image if no url() was found
@@ -858,8 +942,10 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
     var n: usize = 1; // always emit background-color
     if (image_val != null) n += 1;
     // If we have both url() and gradient, emit gradient separately
-    if (image_val != null and gradient_val != null and image_val.? .ptr != gradient_val.?.ptr) n += 1;
+    if (image_val != null and gradient_val != null and image_val.?.ptr != gradient_val.?.ptr) n += 1;
     if (repeat_val != null) n += 1;
+    if (position_val != null) n += 1;
+    if (size_val != null) n += 1;
 
     const decls = allocator.alloc(ast.Declaration, n) catch return null;
     var idx: usize = 0;
@@ -878,7 +964,21 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
         decls[idx] = .{ .property = .background_repeat, .property_name = "background-repeat", .value_raw = rep, .important = false };
         idx += 1;
     }
+    if (position_val) |pos| {
+        decls[idx] = .{ .property = .background_position, .property_name = "background-position", .value_raw = pos, .important = false };
+        idx += 1;
+    }
+    if (size_val) |sz| {
+        decls[idx] = .{ .property = .background_size, .property_name = "background-size", .value_raw = sz, .important = false };
+        idx += 1;
+    }
     return decls;
+}
+
+fn isPositionKeyword(tok: []const u8) bool {
+    return eqlIgnoreCase(tok, "center") or eqlIgnoreCase(tok, "top") or
+        eqlIgnoreCase(tok, "bottom") or eqlIgnoreCase(tok, "left") or
+        eqlIgnoreCase(tok, "right");
 }
 
 fn isBackgroundKeyword(tok: []const u8) bool {
@@ -1394,6 +1494,39 @@ fn expandTextDecoration(value: []const u8, allocator: std.mem.Allocator) ?[]ast.
     }
     const decls = allocator.alloc(ast.Declaration, 1) catch return null;
     decls[0] = .{ .property = .text_decoration, .property_name = "text-decoration", .value_raw = line_val, .important = false };
+    return decls;
+}
+
+/// Expand place-items, place-content, place-self shorthands.
+/// 1 value: both properties get the same value.
+/// 2 values: first is align-*, second is justify-*.
+fn expandPlaceShorthand(
+    value: []const u8,
+    align_id: ast.PropertyId,
+    align_name: []const u8,
+    justify_id: ast.PropertyId,
+    justify_name: []const u8,
+    allocator: std.mem.Allocator,
+) ?[]ast.Declaration {
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    const first = iter.next() orelse return null;
+    const second = iter.next();
+
+    const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+    decls[0] = .{ .property = align_id, .property_name = align_name, .value_raw = first, .important = false };
+    decls[1] = .{ .property = justify_id, .property_name = justify_name, .value_raw = second orelse first, .important = false };
+    return decls;
+}
+
+/// Expand gap shorthand: "row-gap column-gap" or single value for both.
+fn expandGap(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
+    var iter = std.mem.tokenizeAny(u8, value, " \t");
+    const first = iter.next() orelse return null;
+    const second = iter.next();
+
+    const decls = allocator.alloc(ast.Declaration, 2) catch return null;
+    decls[0] = .{ .property = .row_gap, .property_name = "row-gap", .value_raw = first, .important = false };
+    decls[1] = .{ .property = .column_gap, .property_name = "column-gap", .value_raw = second orelse first, .important = false };
     return decls;
 }
 

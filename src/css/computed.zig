@@ -92,6 +92,9 @@ pub const ComputedStyle = struct {
     border_radius_bl: f32 = 0, // bottom-left
     border_radius_br: f32 = 0, // bottom-right
 
+    // Aspect ratio (0 = auto/none, positive = width/height ratio)
+    aspect_ratio: f32 = 0,
+
     // Overflow
     overflow_x: Overflow = .visible,
     overflow_y: Overflow = .visible,
@@ -407,6 +410,9 @@ pub const ComputedStyle = struct {
         none,
         px: f32,
         percent: f32,
+        min_content,
+        max_content,
+        fit_content,
     };
 
     pub const WordBreak = enum {

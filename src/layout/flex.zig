@@ -51,7 +51,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     if (children.len == 0) {
         box.content.height = switch (style.height) {
             .px => |h| h,
-            .percent, .auto, .none => 0,
+            .percent, .auto, .none, .min_content, .max_content, .fit_content => 0,
         };
         return;
     }
@@ -236,7 +236,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     // Container cross size
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none => null,
+        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
     };
     const container_cross = explicit_h orelse max_cross;
 
@@ -564,7 +564,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
 
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none => null,
+        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
     };
     const container_cross = explicit_h orelse total_cross;
 
@@ -738,7 +738,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     if (children.len == 0) {
         box.content.height = switch (style.height) {
             .px => |h| h,
-            .percent, .auto, .none => 0,
+            .percent, .auto, .none, .min_content, .max_content, .fit_content => 0,
         };
         return;
     }
@@ -779,7 +779,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     // Explicit height for justify-content distribution
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none => null,
+        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
     };
     const container_main = explicit_h orelse total_main;
 

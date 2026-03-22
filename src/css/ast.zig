@@ -129,6 +129,11 @@ pub const PropertyId = enum(u16) {
     backdrop_filter,
     // Object fit
     object_fit,
+    // Aspect ratio
+    aspect_ratio,
+    // Place shorthands (justify-items, justify-self mapped to align equivalents)
+    justify_items,
+    justify_self,
     // Outline
     outline_width,
     outline_color,
@@ -254,6 +259,9 @@ pub const PropertyId = enum(u16) {
         .{ "outline-width", .outline_width },
         .{ "outline-color", .outline_color },
         .{ "outline-style", .outline_style },
+        .{ "aspect-ratio", .aspect_ratio },
+        .{ "justify-items", .justify_items },
+        .{ "justify-self", .justify_self },
     });
 
     pub fn fromString(name: []const u8) PropertyId {
@@ -296,6 +304,12 @@ pub const Rule = union(enum) {
     media: MediaRule,
     keyframes: KeyframesRule,
     font_face: FontFaceRule,
+    import: ImportRule,
+};
+
+pub const ImportRule = struct {
+    url: []const u8,
+    media_query: []const u8,
 };
 
 pub const MediaRule = struct {

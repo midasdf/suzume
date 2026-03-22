@@ -62,6 +62,9 @@ pub const Loader = struct {
             try self.walkForCssLinks(root_node, url, &css_parts, &css_link_count, max_css_links);
         }
 
+        // Process @import directives in collected CSS
+        try self.processImports(&css_parts, url, &css_link_count, max_css_links);
+
         const css = try css_parts.toOwnedSlice(self.allocator);
 
         return PageContent{
@@ -88,6 +91,120 @@ pub const Loader = struct {
             return error.AdBlocked;
         }
         return try self.client.getWithTimeout(self.allocator, url, timeout_secs);
+    }
+
+    /// Process @import directives in collected CSS text.
+    /// Scans for @import at the beginning of the CSS, fetches the URLs,
+    /// and prepends the imported CSS content.
+    fn processImports(self: *Loader, css_parts: *std.ArrayListUnmanaged(u8), base_url: [:0]const u8, link_count: *usize, max_links: usize) !void {
+        const css_text = css_parts.items;
+        if (css_text.len == 0) return;
+
+        // Collect imported CSS content
+        var imported_css: std.ArrayListUnmanaged(u8) = .empty;
+        defer imported_css.deinit(self.allocator);
+
+        var pos: usize = 0;
+        var import_count: usize = 0;
+        const max_imports: usize = 10; // Limit to prevent infinite loops
+
+        while (pos < css_text.len and import_count < max_imports and link_count.* < max_links) {
+            // Skip whitespace and comments
+            while (pos < css_text.len and (css_text[pos] == ' ' or css_text[pos] == '\t' or
+                css_text[pos] == '\r' or css_text[pos] == '\n'))
+            {
+                pos += 1;
+            }
+            if (pos >= css_text.len) break;
+
+            // Check for @import
+            if (pos + 7 < css_text.len and std.mem.eql(u8, css_text[pos .. pos + 7], "@import")) {
+                pos += 7;
+                // Skip whitespace
+                while (pos < css_text.len and (css_text[pos] == ' ' or css_text[pos] == '\t')) pos += 1;
+
+                // Extract URL
+                var url_start: usize = pos;
+                var url_end: usize = pos;
+
+                if (pos < css_text.len and (css_text[pos] == '"' or css_text[pos] == '\'')) {
+                    // @import "url"
+                    const quote = css_text[pos];
+                    pos += 1;
+                    url_start = pos;
+                    while (pos < css_text.len and css_text[pos] != quote) pos += 1;
+                    url_end = pos;
+                    if (pos < css_text.len) pos += 1; // skip closing quote
+                } else if (pos + 4 < css_text.len and std.mem.eql(u8, css_text[pos .. pos + 4], "url(")) {
+                    // @import url("...")
+                    pos += 4;
+                    // Skip whitespace
+                    while (pos < css_text.len and (css_text[pos] == ' ' or css_text[pos] == '\t')) pos += 1;
+                    // Check for quote
+                    if (pos < css_text.len and (css_text[pos] == '"' or css_text[pos] == '\'')) {
+                        const quote = css_text[pos];
+                        pos += 1;
+                        url_start = pos;
+                        while (pos < css_text.len and css_text[pos] != quote) pos += 1;
+                        url_end = pos;
+                        if (pos < css_text.len) pos += 1; // skip closing quote
+                    } else {
+                        url_start = pos;
+                        while (pos < css_text.len and css_text[pos] != ')') pos += 1;
+                        url_end = pos;
+                    }
+                    // Skip to closing paren
+                    while (pos < css_text.len and css_text[pos] != ')') pos += 1;
+                    if (pos < css_text.len) pos += 1;
+                } else {
+                    // Skip to semicolon - unrecognized format
+                    while (pos < css_text.len and css_text[pos] != ';') pos += 1;
+                    if (pos < css_text.len) pos += 1;
+                    continue;
+                }
+
+                // Skip to semicolon
+                while (pos < css_text.len and css_text[pos] != ';') pos += 1;
+                if (pos < css_text.len) pos += 1;
+
+                // Fetch the imported CSS
+                const import_url_raw = std.mem.trim(u8, css_text[url_start..url_end], " \t");
+                if (import_url_raw.len > 0) {
+                    const resolved = resolveUrl(self.allocator, base_url, import_url_raw) catch continue;
+                    defer self.allocator.free(resolved);
+
+                    if (self.adblock_enabled and adblock.shouldBlock(resolved)) continue;
+
+                    var css_resp = self.client.getWithTimeout(self.allocator, resolved, 3) catch continue;
+                    defer css_resp.deinit();
+
+                    if (css_resp.status_code == 200 and css_resp.body.len > 0) {
+                        imported_css.appendSlice(self.allocator, css_resp.body) catch continue;
+                        imported_css.append(self.allocator, '\n') catch continue;
+                        link_count.* += 1;
+                        import_count += 1;
+                    }
+                }
+            } else if (pos + 2 < css_text.len and css_text[pos] == '/' and css_text[pos + 1] == '*') {
+                // Skip CSS comment
+                pos += 2;
+                while (pos + 1 < css_text.len) {
+                    if (css_text[pos] == '*' and css_text[pos + 1] == '/') {
+                        pos += 2;
+                        break;
+                    }
+                    pos += 1;
+                }
+            } else {
+                // Not an @import — stop processing (CSS spec: @import must come before other rules)
+                break;
+            }
+        }
+
+        // Prepend imported CSS
+        if (imported_css.items.len > 0) {
+            try css_parts.insertSlice(self.allocator, 0, imported_css.items);
+        }
     }
 
     /// Recursively walk DOM to find <link rel="stylesheet"> and <style> tags.

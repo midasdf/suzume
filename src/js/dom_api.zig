@@ -4709,6 +4709,9 @@ fn dimensionToString(c: *qjs.JSContext, dim: ComputedStyle.Dimension, buf: *[128
             const pct = std.fmt.bufPrint(buf, "{d}%", .{v}) catch break :blk qjs.JS_NewStringLen(c, "0%", 2);
             break :blk qjs.JS_NewStringLen(c, pct.ptr, pct.len);
         },
+        .min_content => qjs.JS_NewStringLen(c, "min-content", 11),
+        .max_content => qjs.JS_NewStringLen(c, "max-content", 11),
+        .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
     };
 }
 

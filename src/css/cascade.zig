@@ -1539,7 +1539,23 @@ fn applyDeclaration(
         .flex_basis => {
             style.flex_basis = parseDimension(trimmed, fs, vw, vh);
         },
-        .gap, .column_gap => {
+        .gap => {
+            // gap shorthand: "row-gap column-gap" or single value for both
+            var it = std.mem.tokenizeAny(u8, trimmed, " \t");
+            const first = it.next() orelse trimmed;
+            const second = it.next();
+            if (parseLengthValue(first, fs, vw, vh)) |row_px| {
+                style.row_gap = row_px;
+                if (second) |s| {
+                    if (parseLengthValue(s, fs, vw, vh)) |col_px| {
+                        style.gap = col_px;
+                    }
+                } else {
+                    style.gap = row_px;
+                }
+            }
+        },
+        .column_gap => {
             if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.gap = px;
         },
         .row_gap => {
@@ -1630,6 +1646,43 @@ fn applyDeclaration(
             else if (eqlIgnoreCase(trimmed, "fill")) style.object_fit = .fill
             else if (eqlIgnoreCase(trimmed, "none")) style.object_fit = .none
             else if (eqlIgnoreCase(trimmed, "scale-down")) style.object_fit = .scale_down;
+        },
+        .aspect_ratio => {
+            if (eqlIgnoreCase(trimmed, "auto")) {
+                style.aspect_ratio = 0;
+            } else if (std.mem.indexOf(u8, trimmed, "/")) |slash| {
+                const num_str = std.mem.trim(u8, trimmed[0..slash], " \t");
+                const den_str = std.mem.trim(u8, trimmed[slash + 1 ..], " \t");
+                if (std.fmt.parseFloat(f32, num_str)) |num| {
+                    if (std.fmt.parseFloat(f32, den_str)) |den| {
+                        if (den > 0) style.aspect_ratio = num / den;
+                    } else |_| {}
+                } else |_| {}
+            } else if (std.fmt.parseFloat(f32, trimmed)) |v| {
+                if (v > 0) style.aspect_ratio = v;
+            } else |_| {}
+        },
+        .justify_items => {
+            // justify-items maps to align-items for our purposes
+            if (eqlIgnoreCase(trimmed, "stretch"))
+                style.align_items = .stretch
+            else if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
+                style.align_items = .flex_start
+            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end"))
+                style.align_items = .flex_end
+            else if (eqlIgnoreCase(trimmed, "center"))
+                style.align_items = .center
+            else if (eqlIgnoreCase(trimmed, "baseline"))
+                style.align_items = .baseline;
+        },
+        .justify_self => {
+            // justify-self maps to align-self for our purposes
+            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start
+            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end
+            else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center
+            else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch
+            else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline
+            else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
         },
         .outline_width => {
             if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.outline_width = px;
@@ -2308,6 +2361,11 @@ fn parseGridTemplateAreas(s: []const u8, arena: std.mem.Allocator) ?[]const []co
 fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle.Dimension {
     if (eqlIgnoreCase(s, "auto")) return .auto;
     if (eqlIgnoreCase(s, "none")) return .none;
+    if (eqlIgnoreCase(s, "min-content")) return .min_content;
+    if (eqlIgnoreCase(s, "max-content")) return .max_content;
+    if (eqlIgnoreCase(s, "fit-content")) return .fit_content;
+    if (eqlIgnoreCase(s, "-webkit-fill-available")) return .auto;
+    if (eqlIgnoreCase(s, "-moz-available")) return .auto;
     if (properties.parseLength(s)) |len| {
         if (len.unit == .percent) return .{ .percent = len.value };
         return .{ .px = resolveLengthToPx(len.value, len.unit, font_size, vw, vh) };

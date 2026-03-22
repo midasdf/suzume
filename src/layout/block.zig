@@ -308,6 +308,22 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     var explicit_width: ?f32 = switch (box.style.width) {
         .px => |w| w,
         .percent => |pct| pct * containing_width / 100.0,
+        .min_content => blk: {
+            // Minimum content width: layout children with 0 available width,
+            // then use their natural shrink-to-fit width
+            break :blk computeShrinkToFitWidth(box);
+        },
+        .max_content => blk: {
+            // Maximum content width: use a very large available width,
+            // limited by containing width for practical purposes
+            break :blk computeShrinkToFitWidth(box);
+        },
+        .fit_content => blk: {
+            // fit-content = min(max-content, max(min-content, available-width))
+            const stf = computeShrinkToFitWidth(box);
+            const avail = @max(containing_width - margin_h - pad_h - bdr_h, 0);
+            break :blk @min(stf, avail);
+        },
         else => null,
     };
 
@@ -415,16 +431,35 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         layoutBlockChildren(box, fonts);
     }
 
+    // Apply aspect-ratio: if ratio is set and height is auto, derive height from width
+    if (box.style.aspect_ratio > 0) {
+        const height_is_auto = switch (box.style.height) {
+            .auto => true,
+            else => false,
+        };
+        if (height_is_auto) {
+            box.content.height = box.content.width / box.style.aspect_ratio;
+        }
+    }
+
     // Apply explicit height if set, and vertically center inline content
     const content_height_before = box.content.height;
     switch (box.style.height) {
         .px => |h| {
             box.content.height = h;
+            // If aspect-ratio set and width is auto, derive width from height
+            if (box.style.aspect_ratio > 0 and explicit_width == null) {
+                box.content.width = h * box.style.aspect_ratio;
+            }
         },
         .percent => |pct| {
             // Resolve percent height against viewport height as fallback
             if (viewport_height > 0) {
                 box.content.height = pct * viewport_height / 100.0;
+                // If aspect-ratio set and width is auto, derive width from height
+                if (box.style.aspect_ratio > 0 and explicit_width == null) {
+                    box.content.width = box.content.height * box.style.aspect_ratio;
+                }
             }
         },
         else => {},
@@ -962,8 +997,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
                 // Determine if this inline-box has an explicit width
                 const has_explicit_width = switch (child.style.width) {
-                    .px => true,
-                    .percent => true,
+                    .px, .percent, .min_content, .max_content, .fit_content => true,
                     else => false,
                 };
 

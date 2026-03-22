@@ -1560,17 +1560,57 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\}
         \\// MutationObserver: registered natively in Zig (events.zig)
         \\if(typeof IntersectionObserver==='undefined'){globalThis.IntersectionObserver=function(cb,opts){
-        \\  this._cb=cb;this._disconnected=false;
-        \\  this.observe=function(el){
-        \\    if(this._disconnected)return;var self=this;
-        \\    var entry={isIntersecting:true,intersectionRatio:1.0,target:el,
-        \\      boundingClientRect:(el.getBoundingClientRect?el.getBoundingClientRect():{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0}),
-        \\      intersectionRect:{x:0,y:0,width:0,height:0},rootBounds:null,
-        \\      time:(typeof performance!=='undefined'?performance.now():0)};
-        \\    setTimeout(function(){if(!self._disconnected)self._cb([entry],self);},16);
+        \\  this._cb=cb;this._opts=opts||{};this._observed=[];this._prevState=new Map();
+        \\  this._disconnected=false;this._timer=null;
+        \\  var self=this;
+        \\  this._check=function(){
+        \\    if(self._disconnected||self._observed.length===0)return;
+        \\    var entries=[];var vw=innerWidth||800,vh=innerHeight||600;
+        \\    var rootMargin=self._opts.rootMargin||'0px';
+        \\    var rm=parseInt(rootMargin)||0;
+        \\    var threshold=self._opts.threshold;
+        \\    if(typeof threshold==='number')threshold=[threshold];
+        \\    if(!threshold)threshold=[0];
+        \\    for(var i=0;i<self._observed.length;i++){
+        \\      var el=self._observed[i];
+        \\      var rect=el.getBoundingClientRect?el.getBoundingClientRect():{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0};
+        \\      var isIn=rect.bottom>=(0-rm)&&rect.top<=(vh+rm)&&rect.right>=(0-rm)&&rect.left<=(vw+rm);
+        \\      var ratio=0;
+        \\      if(isIn&&rect.width>0&&rect.height>0){
+        \\        var overlapX=Math.max(0,Math.min(rect.right,vw)-Math.max(rect.left,0));
+        \\        var overlapY=Math.max(0,Math.min(rect.bottom,vh)-Math.max(rect.top,0));
+        \\        ratio=Math.min((overlapX*overlapY)/(rect.width*rect.height),1);
+        \\      }
+        \\      var prev=self._prevState.get(el);
+        \\      if(prev===undefined||prev!==isIn){
+        \\        self._prevState.set(el,isIn);
+        \\        entries.push({target:el,isIntersecting:isIn,intersectionRatio:ratio,
+        \\          boundingClientRect:rect,intersectionRect:isIn?rect:{x:0,y:0,width:0,height:0,top:0,left:0,right:0,bottom:0},
+        \\          rootBounds:{x:0,y:0,width:vw,height:vh,top:0,left:0,right:vw,bottom:vh},
+        \\          time:(typeof performance!=='undefined'?performance.now():Date.now())});
+        \\      }
+        \\    }
+        \\    if(entries.length>0){try{self._cb(entries,self);}catch(e){}}
         \\  };
-        \\  this.unobserve=function(){};
-        \\  this.disconnect=function(){this._disconnected=true;};
+        \\  this._startPolling=function(){
+        \\    if(self._timer)return;
+        \\    self._timer=setInterval(self._check,200);
+        \\  };
+        \\  this.observe=function(el){
+        \\    if(this._disconnected||!el)return;
+        \\    this._observed.push(el);
+        \\    var self2=this;
+        \\    setTimeout(function(){self2._check();self2._startPolling();},0);
+        \\  };
+        \\  this.unobserve=function(el){
+        \\    this._observed=this._observed.filter(function(e){return e!==el;});
+        \\    this._prevState.delete(el);
+        \\    if(this._observed.length===0&&this._timer){clearInterval(this._timer);this._timer=null;}
+        \\  };
+        \\  this.disconnect=function(){
+        \\    this._disconnected=true;this._observed=[];this._prevState.clear();
+        \\    if(this._timer){clearInterval(this._timer);this._timer=null;}
+        \\  };
         \\  this.takeRecords=function(){return[];};
         \\};}
         \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
