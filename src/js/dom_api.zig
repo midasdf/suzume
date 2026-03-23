@@ -73,6 +73,8 @@ const Box = @import("../layout/box.zig").Box;
 const DomNode = @import("../dom/node.zig").DomNode;
 const cascade_mod = @import("../css/cascade.zig");
 const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
+const css_ast = @import("../css/ast.zig");
+const css_properties = @import("../css/properties.zig");
 var g_root_box: ?*const Box = null;
 
 /// Set the root box pointer (called from main after layout).
@@ -1655,6 +1657,227 @@ fn setStyleProperty(style_str: []const u8, css_prop: []const u8, css_val: []cons
     return buf[0..out_pos];
 }
 
+// ── Shorthand ↔ Longhand Expansion ──────────────────────────────────
+
+/// Get the 4 longhand property names for a box shorthand (margin/padding).
+fn getBoxLonghands(shorthand: []const u8) ?[4][]const u8 {
+    if (std.ascii.eqlIgnoreCase(shorthand, "margin")) {
+        return .{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "padding")) {
+        return .{ "padding-top", "padding-right", "padding-bottom", "padding-left" };
+    }
+    return null;
+}
+
+/// Split a box shorthand value into 1-4 parts, respecting parentheses for calc().
+fn splitBoxShorthandParts(val: []const u8, out: *[4][]const u8) usize {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < val.len and count < 4) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        var paren_depth: i32 = 0;
+        while (pos < val.len) {
+            if (val[pos] == '(') {
+                paren_depth += 1;
+            } else if (val[pos] == ')') {
+                paren_depth -= 1;
+            } else if ((val[pos] == ' ' or val[pos] == '\t') and paren_depth == 0) {
+                break;
+            }
+            pos += 1;
+        }
+        out[count] = val[start..pos];
+        count += 1;
+    }
+    return count;
+}
+
+/// Expand a box shorthand in a style string: remove shorthand + existing longhands,
+/// then append the 4 expanded longhand values.
+fn expandBoxShorthandInStyle(style_str: []const u8, shorthand: []const u8, longhands: [4][]const u8, vals: [4][]const u8, buf: []u8) ?[]const u8 {
+    var out_pos: usize = 0;
+
+    // Copy existing properties, skipping shorthand and its longhands
+    var iter_pos: usize = 0;
+    while (iter_pos < style_str.len) {
+        while (iter_pos < style_str.len and (style_str[iter_pos] == ' ' or style_str[iter_pos] == '\t' or style_str[iter_pos] == '\n')) iter_pos += 1;
+        if (iter_pos >= style_str.len) break;
+        const prop_start = iter_pos;
+        while (iter_pos < style_str.len and style_str[iter_pos] != ':' and style_str[iter_pos] != ';') iter_pos += 1;
+        if (iter_pos >= style_str.len or style_str[iter_pos] != ':') break;
+        const prop_name = std.mem.trim(u8, style_str[prop_start..iter_pos], " \t\n");
+        iter_pos += 1; // skip ':'
+        const val_start = iter_pos;
+        while (iter_pos < style_str.len and style_str[iter_pos] != ';') iter_pos += 1;
+        const val = std.mem.trim(u8, style_str[val_start..iter_pos], " \t\n");
+        if (iter_pos < style_str.len) iter_pos += 1; // skip ';'
+
+        // Skip if it's the shorthand or one of its longhands
+        if (std.ascii.eqlIgnoreCase(prop_name, shorthand)) continue;
+        var skip = false;
+        for (longhands) |lh| {
+            if (std.ascii.eqlIgnoreCase(prop_name, lh)) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip) continue;
+
+        // Copy property
+        const needed = prop_name.len + 2 + val.len + 2;
+        if (out_pos + needed > buf.len) return null;
+        @memcpy(buf[out_pos..][0..prop_name.len], prop_name);
+        out_pos += prop_name.len;
+        buf[out_pos] = ':';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+        @memcpy(buf[out_pos..][0..val.len], val);
+        out_pos += val.len;
+        buf[out_pos] = ';';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+    }
+
+    // Append the 4 longhands
+    for (longhands, 0..) |lh, i| {
+        const v = vals[i];
+        const needed = lh.len + 2 + v.len + 2;
+        if (out_pos + needed > buf.len) return null;
+        @memcpy(buf[out_pos..][0..lh.len], lh);
+        out_pos += lh.len;
+        buf[out_pos] = ':';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+        @memcpy(buf[out_pos..][0..v.len], v);
+        out_pos += v.len;
+        buf[out_pos] = ';';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+    }
+
+    if (out_pos > 0 and buf[out_pos - 1] == ' ') out_pos -= 1;
+    return buf[0..out_pos];
+}
+
+/// Remove a box shorthand and all its longhands from a style string.
+fn removeBoxShorthandFromStyle(style_str: []const u8, shorthand: []const u8, longhands: [4][]const u8, buf: []u8) ?[]const u8 {
+    var out_pos: usize = 0;
+    var iter_pos: usize = 0;
+    while (iter_pos < style_str.len) {
+        while (iter_pos < style_str.len and (style_str[iter_pos] == ' ' or style_str[iter_pos] == '\t' or style_str[iter_pos] == '\n')) iter_pos += 1;
+        if (iter_pos >= style_str.len) break;
+        const prop_start = iter_pos;
+        while (iter_pos < style_str.len and style_str[iter_pos] != ':' and style_str[iter_pos] != ';') iter_pos += 1;
+        if (iter_pos >= style_str.len or style_str[iter_pos] != ':') break;
+        const prop_name = std.mem.trim(u8, style_str[prop_start..iter_pos], " \t\n");
+        iter_pos += 1;
+        const val_start = iter_pos;
+        while (iter_pos < style_str.len and style_str[iter_pos] != ';') iter_pos += 1;
+        const val = std.mem.trim(u8, style_str[val_start..iter_pos], " \t\n");
+        if (iter_pos < style_str.len) iter_pos += 1;
+
+        if (std.ascii.eqlIgnoreCase(prop_name, shorthand)) continue;
+        var skip = false;
+        for (longhands) |lh| {
+            if (std.ascii.eqlIgnoreCase(prop_name, lh)) {
+                skip = true;
+                break;
+            }
+        }
+        if (skip) continue;
+
+        const needed = prop_name.len + 2 + val.len + 2;
+        if (out_pos + needed > buf.len) return null;
+        @memcpy(buf[out_pos..][0..prop_name.len], prop_name);
+        out_pos += prop_name.len;
+        buf[out_pos] = ':';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+        @memcpy(buf[out_pos..][0..val.len], val);
+        out_pos += val.len;
+        buf[out_pos] = ';';
+        out_pos += 1;
+        buf[out_pos] = ' ';
+        out_pos += 1;
+    }
+    if (out_pos > 0 and buf[out_pos - 1] == ' ') out_pos -= 1;
+    return buf[0..out_pos];
+}
+
+const ShorthandInfo = struct {
+    shorthand: []const u8,
+    index: usize,
+};
+
+/// Given a longhand name, find its parent shorthand and position index (0=top,1=right,2=bottom,3=left).
+fn getShorthandInfoForLonghand(longhand: []const u8) ?ShorthandInfo {
+    const mapping = [_]struct { lh: []const u8, sh: []const u8, idx: usize }{
+        .{ .lh = "margin-top", .sh = "margin", .idx = 0 },
+        .{ .lh = "margin-right", .sh = "margin", .idx = 1 },
+        .{ .lh = "margin-bottom", .sh = "margin", .idx = 2 },
+        .{ .lh = "margin-left", .sh = "margin", .idx = 3 },
+        .{ .lh = "padding-top", .sh = "padding", .idx = 0 },
+        .{ .lh = "padding-right", .sh = "padding", .idx = 1 },
+        .{ .lh = "padding-bottom", .sh = "padding", .idx = 2 },
+        .{ .lh = "padding-left", .sh = "padding", .idx = 3 },
+    };
+    for (mapping) |m| {
+        if (std.ascii.eqlIgnoreCase(longhand, m.lh)) {
+            return .{ .shorthand = m.sh, .index = m.idx };
+        }
+    }
+    return null;
+}
+
+/// Reconstruct a box shorthand value from its longhands in inline style, returning a JS string.
+fn reconstructBoxShorthandJS(c: *qjs.JSContext, style_str: []const u8, shorthand: []const u8) ?qjs.JSValue {
+    const longhands = getBoxLonghands(shorthand) orelse return null;
+    const top_v = getStyleProperty(style_str, longhands[0]) orelse return null;
+    const right_v = getStyleProperty(style_str, longhands[1]) orelse return null;
+    const bottom_v = getStyleProperty(style_str, longhands[2]) orelse return null;
+    const left_v = getStyleProperty(style_str, longhands[3]) orelse return null;
+    var buf: [256]u8 = undefined;
+    if (std.mem.eql(u8, top_v, right_v) and std.mem.eql(u8, right_v, bottom_v) and std.mem.eql(u8, bottom_v, left_v)) {
+        return qjs.JS_NewStringLen(c, top_v.ptr, top_v.len);
+    } else if (std.mem.eql(u8, top_v, bottom_v) and std.mem.eql(u8, right_v, left_v)) {
+        const r = std.fmt.bufPrint(&buf, "{s} {s}", .{ top_v, right_v }) catch return null;
+        return qjs.JS_NewStringLen(c, r.ptr, r.len);
+    } else if (std.mem.eql(u8, right_v, left_v)) {
+        const r = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ top_v, right_v, bottom_v }) catch return null;
+        return qjs.JS_NewStringLen(c, r.ptr, r.len);
+    } else {
+        const r = std.fmt.bufPrint(&buf, "{s} {s} {s} {s}", .{ top_v, right_v, bottom_v, left_v }) catch return null;
+        return qjs.JS_NewStringLen(c, r.ptr, r.len);
+    }
+}
+
+/// Extract a longhand value from a stored shorthand in the style string.
+fn getLonghandFromShorthand(style_str: []const u8, longhand: []const u8) ?[]const u8 {
+    const info = getShorthandInfoForLonghand(longhand) orelse return null;
+    const shorthand_val = getStyleProperty(style_str, info.shorthand) orelse return null;
+
+    var parts: [4][]const u8 = undefined;
+    const count = splitBoxShorthandParts(shorthand_val, &parts);
+    if (count == 0) return null;
+
+    const expanded: [4][]const u8 = switch (count) {
+        1 => .{ parts[0], parts[0], parts[0], parts[0] },
+        2 => .{ parts[0], parts[1], parts[0], parts[1] },
+        3 => .{ parts[0], parts[1], parts[2], parts[1] },
+        4 => .{ parts[0], parts[1], parts[2], parts[3] },
+        else => return null,
+    };
+    return expanded[info.index];
+}
+
 /// Create a style object for an element.
 /// Uses setProperty/getPropertyValue as native methods, and sets up
 /// camelCase property access via a JavaScript Proxy-like wrapper.
@@ -1763,12 +1986,57 @@ fn styleSetProperty(
     const val_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val_s.ptr);
 
+    const prop = prop_s.ptr[0..prop_s.len];
+    const val = val_s.ptr[0..val_s.len];
+
+    // Validate CSS value: reject invalid values (WPT -invalid tests expect this)
+    if (val.len > 0) {
+        if (!isValidCssValue(prop, val)) return quickjs.JS_UNDEFINED();
+    }
+
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
     const current_style = if (style_ptr != null and style_len > 0) style_ptr.?[0..style_len] else "";
 
+    // Box shorthand expansion (margin, padding → longhands)
+    if (getBoxLonghands(prop)) |longhands| {
+        const trimmed_val = std.mem.trim(u8, val, " \t\r\n");
+        if (trimmed_val.len == 0) {
+            // Remove shorthand and all longhands
+            var buf: [4096]u8 = undefined;
+            if (removeBoxShorthandFromStyle(current_style, prop, longhands, &buf)) |new_style| {
+                _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+                setDomDirty();
+            }
+            return quickjs.JS_UNDEFINED();
+        }
+        var expanded_vals: [4][]const u8 = undefined;
+        if (eqlIgnoreCase(trimmed_val, "inherit") or eqlIgnoreCase(trimmed_val, "initial") or
+            eqlIgnoreCase(trimmed_val, "unset") or eqlIgnoreCase(trimmed_val, "revert"))
+        {
+            expanded_vals = .{ trimmed_val, trimmed_val, trimmed_val, trimmed_val };
+        } else {
+            var parts: [4][]const u8 = undefined;
+            const count = splitBoxShorthandParts(trimmed_val, &parts);
+            if (count == 0) return quickjs.JS_UNDEFINED();
+            expanded_vals = switch (count) {
+                1 => .{ parts[0], parts[0], parts[0], parts[0] },
+                2 => .{ parts[0], parts[1], parts[0], parts[1] },
+                3 => .{ parts[0], parts[1], parts[2], parts[1] },
+                4 => .{ parts[0], parts[1], parts[2], parts[3] },
+                else => return quickjs.JS_UNDEFINED(),
+            };
+        }
+        var buf: [4096]u8 = undefined;
+        if (expandBoxShorthandInStyle(current_style, prop, longhands, expanded_vals, &buf)) |new_style| {
+            _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+            setDomDirty();
+        }
+        return quickjs.JS_UNDEFINED();
+    }
+
     var buf: [4096]u8 = undefined;
-    if (setStyleProperty(current_style, prop_s.ptr[0..prop_s.len], val_s.ptr[0..val_s.len], &buf)) |new_style| {
+    if (setStyleProperty(current_style, prop, val, &buf)) |new_style| {
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
         setDomDirty();
     }
@@ -1796,9 +2064,40 @@ fn styleGetPropertyValue(
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
     if (style_ptr == null or style_len == 0) return qjs.JS_NewStringLen(c, "", 0);
 
-    if (getStyleProperty(style_ptr.?[0..style_len], prop_s.ptr[0..prop_s.len])) |val| {
+    const style = style_ptr.?[0..style_len];
+    const prop = prop_s.ptr[0..prop_s.len];
+
+    // Direct lookup
+    if (getStyleProperty(style, prop)) |val| {
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
+
+    // Try shorthand reconstruction from longhands (e.g., "margin" from margin-top/right/bottom/left)
+    if (getBoxLonghands(prop)) |longhands| {
+        const top_v = getStyleProperty(style, longhands[0]) orelse return qjs.JS_NewStringLen(c, "", 0);
+        const right_v = getStyleProperty(style, longhands[1]) orelse return qjs.JS_NewStringLen(c, "", 0);
+        const bottom_v = getStyleProperty(style, longhands[2]) orelse return qjs.JS_NewStringLen(c, "", 0);
+        const left_v = getStyleProperty(style, longhands[3]) orelse return qjs.JS_NewStringLen(c, "", 0);
+        var buf: [256]u8 = undefined;
+        if (std.mem.eql(u8, top_v, right_v) and std.mem.eql(u8, right_v, bottom_v) and std.mem.eql(u8, bottom_v, left_v)) {
+            return qjs.JS_NewStringLen(c, top_v.ptr, top_v.len);
+        } else if (std.mem.eql(u8, top_v, bottom_v) and std.mem.eql(u8, right_v, left_v)) {
+            const r = std.fmt.bufPrint(&buf, "{s} {s}", .{ top_v, right_v }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, r.ptr, r.len);
+        } else if (std.mem.eql(u8, right_v, left_v)) {
+            const r = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ top_v, right_v, bottom_v }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, r.ptr, r.len);
+        } else {
+            const r = std.fmt.bufPrint(&buf, "{s} {s} {s} {s}", .{ top_v, right_v, bottom_v, left_v }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, r.ptr, r.len);
+        }
+    }
+
+    // Try extracting longhand from stored shorthand (e.g., "margin-top" from "margin: 1px 2px")
+    if (getLonghandFromShorthand(style, prop)) |val| {
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
     return qjs.JS_NewStringLen(c, "", 0);
 }
 
@@ -1824,12 +2123,30 @@ fn styleRemoveProperty(
     if (style_ptr == null or style_len == 0) return qjs.JS_NewStringLen(c, "", 0);
 
     const current_style = style_ptr.?[0..style_len];
+    const prop = prop_s.ptr[0..prop_s.len];
+
+    // Box shorthand removal — remove shorthand + all longhands, return old value
+    if (getBoxLonghands(prop)) |longhands| {
+        // Capture old value before removal (reconstruct from longhands if needed)
+        var old_js: qjs.JSValue = qjs.JS_NewStringLen(c, "", 0);
+        if (getStyleProperty(current_style, prop)) |ov| {
+            old_js = qjs.JS_NewStringLen(c, ov.ptr, ov.len);
+        } else if (reconstructBoxShorthandJS(c, current_style, prop)) |reconstructed| {
+            old_js = reconstructed;
+        }
+        var buf: [4096]u8 = undefined;
+        if (removeBoxShorthandFromStyle(current_style, prop, longhands, &buf)) |new_style| {
+            _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+            setDomDirty();
+        }
+        return old_js;
+    }
 
     // Get old value first
-    const old_val = getStyleProperty(current_style, prop_s.ptr[0..prop_s.len]);
+    const old_val = getStyleProperty(current_style, prop);
 
     var buf: [4096]u8 = undefined;
-    if (setStyleProperty(current_style, prop_s.ptr[0..prop_s.len], "", &buf)) |new_style| {
+    if (setStyleProperty(current_style, prop, "", &buf)) |new_style| {
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
         setDomDirty();
     }
@@ -4520,7 +4837,31 @@ fn computedStyleGetPropertyValue(
         const style_ptr = lxb_dom_element_get_attribute(el, "style", 5, &style_len);
         if (style_ptr != null and style_len > 0) {
             if (getStyleProperty(style_ptr.?[0..style_len], prop)) |val| {
-                return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                const trimmed = std.mem.trim(u8, val, " \t\r\n");
+                // Resolve CSS-wide keywords to computed values
+                if (eqlIgnoreCase(trimmed, "initial")) {
+                    return cssInitialValue(c, prop);
+                } else if (eqlIgnoreCase(trimmed, "inherit")) {
+                    return getInheritedComputedValue(c, elem_val, prop);
+                } else if (eqlIgnoreCase(trimmed, "unset")) {
+                    if (isCssInheritedProperty(prop)) {
+                        return getInheritedComputedValue(c, elem_val, prop);
+                    }
+                    return cssInitialValue(c, prop);
+                } else if (eqlIgnoreCase(trimmed, "revert")) {
+                    // Fall through to cascade (UA value)
+                } else {
+                    return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                }
+            }
+            // Try shorthand reconstruction from expanded longhands
+            const istyle = style_ptr.?[0..style_len];
+            if (reconstructBoxShorthandJS(c, istyle, prop)) |reconstructed| {
+                return reconstructed;
+            }
+            // Try longhand from stored shorthand
+            if (getLonghandFromShorthand(istyle, prop)) |lh_val| {
+                return qjs.JS_NewStringLen(c, lh_val.ptr, lh_val.len);
             }
         }
     }
@@ -4848,6 +5189,161 @@ fn overflowToString(c: *qjs.JSContext, overflow: ComputedStyle.Overflow) qjs.JSV
     return qjs.JS_NewStringLen(c, s.ptr, s.len);
 }
 
+// ── CSS-wide Keyword Resolution (initial/inherit/unset) ─────────────
+
+/// Return the CSS initial value for a property (computed form).
+fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
+    // Margin/padding/border-width initial = 0
+    if (eqlIgnoreCase(prop, "margin-top") or eqlIgnoreCase(prop, "margin-right") or
+        eqlIgnoreCase(prop, "margin-bottom") or eqlIgnoreCase(prop, "margin-left") or
+        eqlIgnoreCase(prop, "padding-top") or eqlIgnoreCase(prop, "padding-right") or
+        eqlIgnoreCase(prop, "padding-bottom") or eqlIgnoreCase(prop, "padding-left") or
+        eqlIgnoreCase(prop, "border-top-width") or eqlIgnoreCase(prop, "border-right-width") or
+        eqlIgnoreCase(prop, "border-bottom-width") or eqlIgnoreCase(prop, "border-left-width") or
+        eqlIgnoreCase(prop, "text-indent"))
+    {
+        return qjs.JS_NewStringLen(c, "0px", 3);
+    }
+    // Dimensions + offsets initial = auto
+    if (eqlIgnoreCase(prop, "width") or eqlIgnoreCase(prop, "height") or
+        eqlIgnoreCase(prop, "min-width") or eqlIgnoreCase(prop, "min-height") or
+        eqlIgnoreCase(prop, "max-width") or eqlIgnoreCase(prop, "max-height") or
+        eqlIgnoreCase(prop, "z-index") or
+        eqlIgnoreCase(prop, "top") or eqlIgnoreCase(prop, "right") or
+        eqlIgnoreCase(prop, "bottom") or eqlIgnoreCase(prop, "left"))
+    {
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    }
+    if (eqlIgnoreCase(prop, "display")) return qjs.JS_NewStringLen(c, "inline", 6);
+    if (eqlIgnoreCase(prop, "position")) return qjs.JS_NewStringLen(c, "static", 6);
+    if (eqlIgnoreCase(prop, "visibility")) return qjs.JS_NewStringLen(c, "visible", 7);
+    if (eqlIgnoreCase(prop, "float")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "clear")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "overflow-x") or eqlIgnoreCase(prop, "overflow-y"))
+        return qjs.JS_NewStringLen(c, "visible", 7);
+    if (eqlIgnoreCase(prop, "opacity")) return qjs.JS_NewStringLen(c, "1", 1);
+    if (eqlIgnoreCase(prop, "font-size")) return qjs.JS_NewStringLen(c, "16px", 4);
+    if (eqlIgnoreCase(prop, "font-weight")) return qjs.JS_NewStringLen(c, "400", 3);
+    if (eqlIgnoreCase(prop, "font-style")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-family")) return qjs.JS_NewStringLen(c, "sans-serif", 10);
+    if (eqlIgnoreCase(prop, "text-align")) return qjs.JS_NewStringLen(c, "start", 5);
+    if (eqlIgnoreCase(prop, "text-transform")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "text-decoration")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "text-overflow")) return qjs.JS_NewStringLen(c, "clip", 4);
+    if (eqlIgnoreCase(prop, "line-height")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "vertical-align")) return qjs.JS_NewStringLen(c, "baseline", 8);
+    if (eqlIgnoreCase(prop, "letter-spacing") or eqlIgnoreCase(prop, "word-spacing"))
+        return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "word-break")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "white-space")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "background-color"))
+        return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
+    if (eqlIgnoreCase(prop, "border-top-color") or eqlIgnoreCase(prop, "border-right-color") or
+        eqlIgnoreCase(prop, "border-bottom-color") or eqlIgnoreCase(prop, "border-left-color"))
+        return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "border-top-style") or eqlIgnoreCase(prop, "border-right-style") or
+        eqlIgnoreCase(prop, "border-bottom-style") or eqlIgnoreCase(prop, "border-left-style"))
+        return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "box-sizing")) return qjs.JS_NewStringLen(c, "content-box", 11);
+    if (eqlIgnoreCase(prop, "flex-grow")) return qjs.JS_NewStringLen(c, "0", 1);
+    if (eqlIgnoreCase(prop, "flex-shrink")) return qjs.JS_NewStringLen(c, "1", 1);
+    if (eqlIgnoreCase(prop, "flex-basis")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // Default fallback
+    return qjs.JS_NewStringLen(c, "", 0);
+}
+
+/// Check if a CSS property is inherited by default (CSS spec).
+fn isCssInheritedProperty(prop: []const u8) bool {
+    const inherited = [_][]const u8{
+        "color",          "font-size",       "font-weight",      "font-style",
+        "font-family",    "font-variant",    "text-align",       "text-indent",
+        "text-transform", "line-height",     "letter-spacing",   "word-spacing",
+        "word-break",     "white-space",     "visibility",       "direction",
+        "cursor",         "list-style-type", "list-style-position", "list-style-image",
+        "border-collapse", "border-spacing", "caption-side",     "empty-cells",
+        "quotes",         "orphans",         "widows",           "tab-size",
+    };
+    for (inherited) |p| {
+        if (eqlIgnoreCase(prop, p)) return true;
+    }
+    return false;
+}
+
+/// Get the inherited (parent's) computed value for a property.
+fn getInheritedComputedValue(c: *qjs.JSContext, elem_val: qjs.JSValue, prop: []const u8) qjs.JSValue {
+    const node = getNode(c, elem_val) orelse return cssInitialValue(c, prop);
+    const parent = node.parent orelse return cssInitialValue(c, prop);
+
+    // Check parent's inline style first (reflects JS modifications)
+    // Guard: only element nodes have attributes
+    const parent_ptr: *lxb.lxb_dom_node_t = @ptrCast(parent);
+    if (parent_ptr.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        if (g_styles) |styles| {
+            if (styles.get(@intFromPtr(parent))) |style| {
+                return computedStyleToString(c, &style, prop);
+            }
+        }
+        return cssInitialValue(c, prop);
+    }
+    const parent_elem: *lxb.lxb_dom_element_t = @ptrCast(parent);
+    var pstyle_len: usize = 0;
+    const pstyle_ptr = lxb_dom_element_get_attribute(parent_elem, "style", 5, &pstyle_len);
+    if (pstyle_ptr != null and pstyle_len > 0) {
+        const pstyle = pstyle_ptr.?[0..pstyle_len];
+        if (getStyleProperty(pstyle, prop)) |val| {
+            const trimmed = std.mem.trim(u8, val, " \t\r\n");
+            // Don't return CSS-wide keywords — resolve them further
+            if (!eqlIgnoreCase(trimmed, "initial") and !eqlIgnoreCase(trimmed, "inherit") and
+                !eqlIgnoreCase(trimmed, "unset") and !eqlIgnoreCase(trimmed, "revert"))
+            {
+                return qjs.JS_NewStringLen(c, val.ptr, val.len);
+            }
+        }
+        // Also try longhand from stored shorthand (parent has "margin: 10px" → get "margin-top")
+        if (getLonghandFromShorthand(pstyle, prop)) |val| {
+            return qjs.JS_NewStringLen(c, val.ptr, val.len);
+        }
+    }
+
+    // Fall back to cascade computed style
+    if (g_styles) |styles| {
+        if (styles.get(@intFromPtr(parent))) |style| {
+            return computedStyleToString(c, &style, prop);
+        }
+    }
+    return cssInitialValue(c, prop);
+}
+
+/// CSS.supports(property, value) — checks if property+value is valid CSS
+fn cssSupports(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    const args = argv orelse return quickjs.JS_NewBool(false);
+
+    if (argc == 1) {
+        // CSS.supports("display: flex") — condition string form
+        // For now, always return true for single-arg form
+        return quickjs.JS_NewBool(true);
+    }
+    if (argc < 2) return quickjs.JS_NewBool(false);
+
+    const prop_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
+    defer qjs.JS_FreeCString(c, prop_s.ptr);
+    const val_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
+    defer qjs.JS_FreeCString(c, val_s.ptr);
+
+    const prop = prop_s.ptr[0..prop_s.len];
+    const val = val_s.ptr[0..val_s.len];
+
+    // Validate via isValidCssValue (handles both longhand and shorthand)
+    return quickjs.JS_NewBool(isValidCssValue(prop, val));
+}
+
 fn windowGetComputedStyle(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
@@ -4868,35 +5364,174 @@ fn windowGetComputedStyle(
     // Store element reference
     _ = qjs.JS_SetPropertyStr(c, obj, "__element", qjs.JS_DupValue(c, args[0]));
 
-    // getPropertyValue method
+    // getPropertyValue method (live — always reads current computed style)
     _ = qjs.JS_SetPropertyStr(c, obj, "getPropertyValue", qjs.JS_NewCFunction(c, &computedStyleGetPropertyValue, "getPropertyValue", 1));
 
-    // Store element and obj on globalThis for JS getter setup, then define
-    // property getters that call getPropertyValue() for live computed values.
-    const global = qjs.JS_GetGlobalObject(c);
-    _ = qjs.JS_SetPropertyStr(c, global, "__csObj", qjs.JS_DupValue(c, obj));
-    qjs.JS_FreeValue(c, global);
+    // Set static property values directly from Zig — no JS eval needed.
+    // This avoids the memory management issues (DupValue/FreeValue) that
+    // caused segfaults during navigation with the previous eval approach.
+    const node = getNode(c, args[0]);
+    const style_opt: ?ComputedStyle = if (node != null and g_styles != null)
+        g_styles.?.get(@intFromPtr(node.?))
+    else
+        null;
 
-    // Build JS code to define getters (this runs in user JS scope where Object.defineProperty works)
-    const getter_code =
-        \\(function(){
-        \\  var o=globalThis.__csObj;delete globalThis.__csObj;
-        \\  var ps='display,position,visibility,color,background-color,backgroundColor,font-size,fontSize,font-weight,fontWeight,font-family,fontFamily,font-style,fontStyle,text-align,textAlign,text-decoration,text-transform,textTransform,text-overflow,textOverflow,text-indent,textIndent,letter-spacing,letterSpacing,word-spacing,wordSpacing,word-break,wordBreak,white-space,whiteSpace,line-height,lineHeight,vertical-align,verticalAlign,width,height,min-width,minWidth,max-width,maxWidth,min-height,minHeight,max-height,maxHeight,margin,margin-top,marginTop,margin-right,marginRight,margin-bottom,marginBottom,margin-left,marginLeft,padding,padding-top,paddingTop,padding-right,paddingRight,padding-bottom,paddingBottom,padding-left,paddingLeft,border-top-width,borderTopWidth,border-right-width,borderRightWidth,border-bottom-width,borderBottomWidth,border-left-width,borderLeftWidth,border-top-color,borderTopColor,border-right-color,borderRightColor,border-bottom-color,borderBottomColor,border-left-color,borderLeftColor,border-top-style,borderTopStyle,border-right-style,borderRightStyle,border-bottom-style,borderBottomStyle,border-left-style,borderLeftStyle,top,right,bottom,left,float,clear,overflow,overflow-x,overflowX,overflow-y,overflowY,z-index,zIndex,opacity,box-sizing,boxSizing,flex-direction,flexDirection,flex-grow,flexGrow,flex-shrink,flexShrink,gap,aspect-ratio,aspectRatio'.split(',');
-        \\  for(var i=0;i<ps.length;i++){(function(p){
-        \\    var css=p.replace(/[A-Z]/g,function(m){return '-'+m.toLowerCase();});
-        \\    Object.defineProperty(o,p,{get:function(){return o.getPropertyValue(css);},enumerable:true,configurable:true});
-        \\  })(ps[i]);}
-        \\  return o;
-        \\})()
-    ;
+    // Property name pairs: kebab-case (CSS) and camelCase (JS)
+    const prop_pairs = .{
+        .{ "display", "display" },
+        .{ "position", "position" },
+        .{ "visibility", "visibility" },
+        .{ "color", "color" },
+        .{ "background-color", "backgroundColor" },
+        .{ "font-size", "fontSize" },
+        .{ "font-weight", "fontWeight" },
+        .{ "font-family", "fontFamily" },
+        .{ "font-style", "fontStyle" },
+        .{ "text-align", "textAlign" },
+        .{ "text-transform", "textTransform" },
+        .{ "text-overflow", "textOverflow" },
+        .{ "text-indent", "textIndent" },
+        .{ "letter-spacing", "letterSpacing" },
+        .{ "word-spacing", "wordSpacing" },
+        .{ "word-break", "wordBreak" },
+        .{ "white-space", "whiteSpace" },
+        .{ "line-height", "lineHeight" },
+        .{ "vertical-align", "verticalAlign" },
+        .{ "width", "width" },
+        .{ "height", "height" },
+        .{ "min-width", "minWidth" },
+        .{ "max-width", "maxWidth" },
+        .{ "min-height", "minHeight" },
+        .{ "max-height", "maxHeight" },
+        .{ "margin", "margin" },
+        .{ "margin-top", "marginTop" },
+        .{ "margin-right", "marginRight" },
+        .{ "margin-bottom", "marginBottom" },
+        .{ "margin-left", "marginLeft" },
+        .{ "padding", "padding" },
+        .{ "padding-top", "paddingTop" },
+        .{ "padding-right", "paddingRight" },
+        .{ "padding-bottom", "paddingBottom" },
+        .{ "padding-left", "paddingLeft" },
+        .{ "border-top-width", "borderTopWidth" },
+        .{ "border-right-width", "borderRightWidth" },
+        .{ "border-bottom-width", "borderBottomWidth" },
+        .{ "border-left-width", "borderLeftWidth" },
+        .{ "border-top-color", "borderTopColor" },
+        .{ "border-right-color", "borderRightColor" },
+        .{ "border-bottom-color", "borderBottomColor" },
+        .{ "border-left-color", "borderLeftColor" },
+        .{ "border-top-style", "borderTopStyle" },
+        .{ "border-right-style", "borderRightStyle" },
+        .{ "border-bottom-style", "borderBottomStyle" },
+        .{ "border-left-style", "borderLeftStyle" },
+        .{ "top", "top" },
+        .{ "right", "right" },
+        .{ "bottom", "bottom" },
+        .{ "left", "left" },
+        .{ "float", "float" },
+        .{ "clear", "clear" },
+        .{ "overflow", "overflow" },
+        .{ "overflow-x", "overflowX" },
+        .{ "overflow-y", "overflowY" },
+        .{ "z-index", "zIndex" },
+        .{ "opacity", "opacity" },
+        .{ "box-sizing", "boxSizing" },
+        .{ "flex-direction", "flexDirection" },
+        .{ "flex-grow", "flexGrow" },
+        .{ "flex-shrink", "flexShrink" },
+        .{ "aspect-ratio", "aspectRatio" },
+    };
 
-    const result = qjs.JS_Eval(c, getter_code, getter_code.len, "<computedStyle>", qjs.JS_EVAL_TYPE_GLOBAL);
-    if (quickjs.JS_IsException(result)) {
-        const exc = qjs.JS_GetException(c);
-        qjs.JS_FreeValue(c, exc);
-        return obj;
+    // Check inline style attribute first (highest specificity — reflects JS modifications)
+    const elem = getElement(c, args[0]);
+    var inline_style: []const u8 = "";
+    if (elem) |el| {
+        var style_len: usize = 0;
+        const style_ptr = lxb_dom_element_get_attribute(el, "style", 5, &style_len);
+        if (style_ptr != null and style_len > 0) {
+            inline_style = style_ptr.?[0..style_len];
+        }
     }
-    return result;
+
+    inline for (prop_pairs) |pair| {
+        const css_name = pair[0];
+        const js_name = pair[1];
+        // Priority: inline style > cascade computed style
+        var val: qjs.JSValue = undefined;
+        if (inline_style.len > 0) {
+            if (getStyleProperty(inline_style, css_name)) |inline_val| {
+                const t = std.mem.trim(u8, inline_val, " \t\r\n");
+                if (eqlIgnoreCase(t, "initial")) {
+                    val = cssInitialValue(c, css_name);
+                } else if (eqlIgnoreCase(t, "inherit")) {
+                    val = getInheritedComputedValue(c, args[0], css_name);
+                } else if (eqlIgnoreCase(t, "unset")) {
+                    val = if (isCssInheritedProperty(css_name)) getInheritedComputedValue(c, args[0], css_name) else cssInitialValue(c, css_name);
+                } else if (eqlIgnoreCase(t, "revert")) {
+                    if (style_opt) |style| {
+                        val = computedStyleToString(c, &style, css_name);
+                    } else {
+                        val = cssInitialValue(c, css_name);
+                    }
+                } else {
+                    val = qjs.JS_NewStringLen(c, inline_val.ptr, inline_val.len);
+                }
+            } else if (reconstructBoxShorthandJS(c, inline_style, css_name)) |reconstructed| {
+                val = reconstructed;
+            } else if (getLonghandFromShorthand(inline_style, css_name)) |lh_val| {
+                val = qjs.JS_NewStringLen(c, lh_val.ptr, lh_val.len);
+            } else if (style_opt) |style| {
+                val = computedStyleToString(c, &style, css_name);
+            } else {
+                val = qjs.JS_NewStringLen(c, "", 0);
+            }
+        } else if (style_opt) |style| {
+            val = computedStyleToString(c, &style, css_name);
+        } else {
+            val = qjs.JS_NewStringLen(c, "", 0);
+        }
+        _ = qjs.JS_SetPropertyStr(c, obj, js_name, val);
+        // Also set kebab-case name if different from camelCase
+        if (!std.mem.eql(u8, css_name, js_name)) {
+            var val2: qjs.JSValue = undefined;
+            if (inline_style.len > 0) {
+                if (getStyleProperty(inline_style, css_name)) |inline_val| {
+                    const t2 = std.mem.trim(u8, inline_val, " \t\r\n");
+                    if (eqlIgnoreCase(t2, "initial")) {
+                        val2 = cssInitialValue(c, css_name);
+                    } else if (eqlIgnoreCase(t2, "inherit")) {
+                        val2 = getInheritedComputedValue(c, args[0], css_name);
+                    } else if (eqlIgnoreCase(t2, "unset")) {
+                        val2 = if (isCssInheritedProperty(css_name)) getInheritedComputedValue(c, args[0], css_name) else cssInitialValue(c, css_name);
+                    } else if (eqlIgnoreCase(t2, "revert")) {
+                        if (style_opt) |style| {
+                            val2 = computedStyleToString(c, &style, css_name);
+                        } else {
+                            val2 = cssInitialValue(c, css_name);
+                        }
+                    } else {
+                        val2 = qjs.JS_NewStringLen(c, inline_val.ptr, inline_val.len);
+                    }
+                } else if (reconstructBoxShorthandJS(c, inline_style, css_name)) |reconstructed| {
+                    val2 = reconstructed;
+                } else if (getLonghandFromShorthand(inline_style, css_name)) |lh_val| {
+                    val2 = qjs.JS_NewStringLen(c, lh_val.ptr, lh_val.len);
+                } else if (style_opt) |style| {
+                    val2 = computedStyleToString(c, &style, css_name);
+                } else {
+                    val2 = qjs.JS_NewStringLen(c, "", 0);
+                }
+            } else if (style_opt) |style| {
+                val2 = computedStyleToString(c, &style, css_name);
+            } else {
+                val2 = qjs.JS_NewStringLen(c, "", 0);
+            }
+            _ = qjs.JS_SetPropertyStr(c, obj, css_name, val2);
+        }
+    }
+
+    return obj;
 }
 
 // ── document.createDocumentFragment() ───────────────────────────────
@@ -5615,6 +6250,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // window.getComputedStyle
     _ = qjs.JS_SetPropertyStr(ctx, global, "getComputedStyle", qjs.JS_NewCFunction(ctx, &windowGetComputedStyle, "getComputedStyle", 1));
 
+    // CSS global object with supports() method
+    {
+        const css_obj = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, css_obj, "supports", qjs.JS_NewCFunction(ctx, &cssSupports, "supports", 2));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "CSS", css_obj);
+    }
+
     // window.scrollTo / window.scrollBy
     _ = qjs.JS_SetPropertyStr(ctx, global, "scrollTo", qjs.JS_NewCFunction(ctx, &windowScrollTo, "scrollTo", 2));
     _ = qjs.JS_SetPropertyStr(ctx, global, "scrollBy", qjs.JS_NewCFunction(ctx, &windowScrollBy, "scrollBy", 2));
@@ -5662,3 +6304,246 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 }
 
 // wrapNodePublic/getNodePublic moved to top of file (near wrapNode/getNode)
+
+// ── CSS Value Validation (for element.style setter) ─────────────────
+
+/// Check if a CSS value is valid for a given property name.
+/// Used by styleSetProperty to reject invalid values per WPT spec.
+fn isValidCssValue(prop: []const u8, val: []const u8) bool {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed.len == 0) return true; // empty = remove property
+
+    // CSS-wide keywords always valid for any property
+    if (eqlIgnoreCase(trimmed, "inherit") or eqlIgnoreCase(trimmed, "initial") or
+        eqlIgnoreCase(trimmed, "unset") or eqlIgnoreCase(trimmed, "revert")) return true;
+
+    // var() always valid
+    if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "var(")) return true;
+
+    // calc() valid if it's a complete function call (ends with matching ')')
+    if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "calc(") and trimmed[trimmed.len - 1] == ')') return true;
+
+    const prop_id = css_ast.PropertyId.fromString(prop);
+    if (prop_id == .custom) return true;
+
+    // Handle shorthand properties that map to .unknown in PropertyId
+    if (prop_id == .unknown) {
+        return isValidShorthandValue(prop, trimmed);
+    }
+
+    return switch (prop_id) {
+        // Size properties: accept auto, lengths (non-negative), %, min/max/fit-content
+        .width, .height, .min_width, .min_height => isValidSizeValue(trimmed, false),
+        // max-width/max-height accept "none" but NOT "auto"
+        .max_width, .max_height => isValidMaxSizeValue(trimmed),
+        // Margin: accept auto, lengths (can be negative), %
+        .margin_top, .margin_right, .margin_bottom, .margin_left => isValidMarginValue(trimmed),
+        // Padding: like size, non-negative lengths and %
+        .padding_top, .padding_right, .padding_bottom, .padding_left => isValidNonNegLength(trimmed),
+        // Border widths: non-negative lengths or thin/medium/thick
+        .border_top_width, .border_right_width, .border_bottom_width, .border_left_width => isValidBorderWidth(trimmed),
+        // Color properties
+        .color, .background_color, .border_top_color, .border_right_color,
+        .border_bottom_color, .border_left_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed),
+        // Numeric properties
+        .opacity => std.fmt.parseFloat(f32, trimmed) != error.InvalidCharacter,
+        .z_index => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter or eqlIgnoreCase(trimmed, "auto"),
+        .flex_grow, .flex_shrink => isNonNegNumber(trimmed),
+        // Font size: non-negative length or keyword
+        .font_size => isValidFontSize(trimmed),
+        // Font weight: number 1-1000 or keyword
+        .font_weight => isValidFontWeight(trimmed),
+        // Line height: normal, non-negative number, non-negative length
+        .line_height => isValidLineHeight(trimmed),
+        // Top/right/bottom/left: auto, lengths (can be negative), %
+        .top, .right, .bottom, .left => isValidMarginValue(trimmed),
+        // Float: none, left, right, inline-start, inline-end (NOT auto)
+        .float_ => eqlIgnoreCase(trimmed, "none") or eqlIgnoreCase(trimmed, "left") or
+            eqlIgnoreCase(trimmed, "right") or eqlIgnoreCase(trimmed, "inline-start") or
+            eqlIgnoreCase(trimmed, "inline-end"),
+        // Clear: none, left, right, both, inline-start, inline-end (NOT auto)
+        .clear => eqlIgnoreCase(trimmed, "none") or eqlIgnoreCase(trimmed, "left") or
+            eqlIgnoreCase(trimmed, "right") or eqlIgnoreCase(trimmed, "both") or
+            eqlIgnoreCase(trimmed, "inline-start") or eqlIgnoreCase(trimmed, "inline-end"),
+        // Visibility: visible, hidden, collapse (NOT auto, NOT none)
+        .visibility => eqlIgnoreCase(trimmed, "visible") or eqlIgnoreCase(trimmed, "hidden") or
+            eqlIgnoreCase(trimmed, "collapse"),
+        // Overflow: visible, hidden, scroll, auto, clip (NOT none)
+        .overflow_x, .overflow_y => isValidOverflowValue(trimmed),
+        // Keyword-only properties: delegate to parseValue, check for .raw
+        else => blk: {
+            const parsed = css_properties.parseValue(prop_id, val);
+            break :blk switch (parsed) {
+                .raw => false,
+                else => true,
+            };
+        },
+    };
+}
+
+fn eqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    return std.ascii.eqlIgnoreCase(a, b);
+}
+
+fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
+    // margin/padding shorthand: 1-4 values, each valid for the longhand
+    if (eqlIgnoreCase(prop, "margin") or eqlIgnoreCase(prop, "margin-block") or
+        eqlIgnoreCase(prop, "margin-inline"))
+    {
+        return isValidBoxShorthand(val, true);
+    }
+    if (eqlIgnoreCase(prop, "padding") or eqlIgnoreCase(prop, "padding-block") or
+        eqlIgnoreCase(prop, "padding-inline"))
+    {
+        return isValidBoxShorthand(val, false);
+    }
+    if (eqlIgnoreCase(prop, "overflow")) {
+        // overflow shorthand: 1-2 values from {visible, hidden, scroll, auto, clip}
+        return isValidOverflowShorthand(val);
+    }
+    // Known shorthand properties that we don't deeply validate — accept
+    const known_shorthands = [_][]const u8{
+        "border", "border-top", "border-right", "border-bottom", "border-left",
+        "border-radius", "border-color", "border-width", "border-style",
+        "background", "font", "flex", "flex-flow", "transition", "animation",
+        "text-decoration", "list-style", "outline", "grid", "grid-template",
+        "grid-template-columns", "grid-template-rows", "grid-area", "grid-column",
+        "grid-row", "gap", "place-content", "place-items", "place-self",
+        "margin-trim", "columns", "column-rule", "inset",
+    };
+    for (known_shorthands) |kw| {
+        if (eqlIgnoreCase(prop, kw)) return true;
+    }
+    // Unknown property name — reject
+    return false;
+}
+
+fn isValidBoxShorthand(val: []const u8, allow_negative: bool) bool {
+    // Split by whitespace (respecting parentheses for calc() etc.), validate 1-4 parts
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < val.len) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        var paren_depth: i32 = 0;
+        while (pos < val.len) {
+            if (val[pos] == '(') {
+                paren_depth += 1;
+            } else if (val[pos] == ')') {
+                paren_depth -= 1;
+            } else if ((val[pos] == ' ' or val[pos] == '\t') and paren_depth == 0) {
+                break;
+            }
+            pos += 1;
+        }
+        const part = val[start..pos];
+        count += 1;
+        if (count > 4) return false;
+        // calc()/var() parts are always valid
+        if (part.len >= 5 and eqlIgnoreCase(part[0..5], "calc(") and part[part.len - 1] == ')') continue;
+        if (part.len >= 4 and eqlIgnoreCase(part[0..4], "var(") and part[part.len - 1] == ')') continue;
+        if (allow_negative) {
+            if (!isValidMarginValue(part)) return false;
+        } else {
+            if (!isValidNonNegLength(part)) return false;
+        }
+    }
+    return count >= 1 and count <= 4;
+}
+
+fn isValidOverflowShorthand(val: []const u8) bool {
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < val.len) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+        const part = val[start..pos];
+        count += 1;
+        if (count > 2) return false;
+        if (!eqlIgnoreCase(part, "visible") and !eqlIgnoreCase(part, "hidden") and
+            !eqlIgnoreCase(part, "scroll") and !eqlIgnoreCase(part, "auto") and
+            !eqlIgnoreCase(part, "clip")) return false;
+    }
+    return count >= 1 and count <= 2;
+}
+
+fn isValidOverflowValue(val: []const u8) bool {
+    return eqlIgnoreCase(val, "visible") or eqlIgnoreCase(val, "hidden") or
+        eqlIgnoreCase(val, "scroll") or eqlIgnoreCase(val, "auto") or
+        eqlIgnoreCase(val, "clip");
+}
+
+fn isValidMaxSizeValue(val: []const u8) bool {
+    // max-width/max-height: accept none, lengths (non-negative), %, min/max/fit-content but NOT auto
+    if (eqlIgnoreCase(val, "none")) return true;
+    if (eqlIgnoreCase(val, "min-content") or eqlIgnoreCase(val, "max-content") or
+        eqlIgnoreCase(val, "fit-content")) return true;
+    if (val.len > 12 and eqlIgnoreCase(val[0..12], "fit-content(")) return true;
+    return isValidNonNegLength(val);
+}
+
+fn isValidSizeValue(val: []const u8, allow_none: bool) bool {
+    if (eqlIgnoreCase(val, "auto")) return true;
+    if (allow_none and eqlIgnoreCase(val, "none")) return true;
+    if (eqlIgnoreCase(val, "min-content") or eqlIgnoreCase(val, "max-content") or
+        eqlIgnoreCase(val, "fit-content")) return true;
+    // fit-content(length)
+    if (val.len > 12 and eqlIgnoreCase(val[0..12], "fit-content(")) return true;
+    return isValidNonNegLength(val);
+}
+
+fn isValidNonNegLength(val: []const u8) bool {
+    if (css_properties.parseLength(val)) |len| {
+        return len.value >= 0;
+    }
+    return false;
+}
+
+fn isValidMarginValue(val: []const u8) bool {
+    if (eqlIgnoreCase(val, "auto")) return true;
+    return css_properties.parseLength(val) != null;
+}
+
+fn isValidBorderWidth(val: []const u8) bool {
+    if (eqlIgnoreCase(val, "thin") or eqlIgnoreCase(val, "medium") or eqlIgnoreCase(val, "thick")) return true;
+    return isValidNonNegLength(val);
+}
+
+fn isValidColorKeyword(val: []const u8) bool {
+    if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
+    // Named colors — use parseColor which handles them
+    return false;
+}
+
+fn isNonNegNumber(val: []const u8) bool {
+    const n = std.fmt.parseFloat(f32, val) catch return false;
+    return n >= 0;
+}
+
+fn isValidFontSize(val: []const u8) bool {
+    // Keywords
+    const kws = [_][]const u8{ "xx-small", "x-small", "small", "medium", "large", "x-large", "xx-large", "xxx-large", "smaller", "larger" };
+    for (kws) |kw| {
+        if (eqlIgnoreCase(val, kw)) return true;
+    }
+    return isValidNonNegLength(val);
+}
+
+fn isValidFontWeight(val: []const u8) bool {
+    if (eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "bold") or
+        eqlIgnoreCase(val, "bolder") or eqlIgnoreCase(val, "lighter")) return true;
+    const n = std.fmt.parseInt(i32, val, 10) catch return false;
+    return n >= 1 and n <= 1000;
+}
+
+fn isValidLineHeight(val: []const u8) bool {
+    if (eqlIgnoreCase(val, "normal")) return true;
+    // Non-negative number (unitless)
+    if (std.fmt.parseFloat(f32, val)) |n| {
+        return n >= 0;
+    } else |_| {}
+    return isValidNonNegLength(val);
+}

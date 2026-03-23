@@ -30,29 +30,28 @@ docker run --rm \
 ## Current Baseline (Firefox diff%)
 
 - lobste.rs: 0.0%
-- info.cern.ch: 2.8%
-- HN: 28.3% (±0.5% content noise)
-- Wikipedia: 23.3%
-- old.reddit.com: ~29% (±2% content noise — dynamic front page)
+- info.cern.ch: 2.7%
+- HN: 28.8% (±0.5% content noise)
+- Wikipedia: 26.9%
+- old.reddit.com: 28.6% (±2% content noise — dynamic front page)
 
 ## Remaining Diff Causes
 
 残りのdiff%は主に**フォントメトリクス差**が支配的：
 - fontconfigで解決済み（NotoSans-Regular.ttf）だがFirefoxとは微妙に異なるフォント選択
 - `pt`単位のfont-size（HN: 10pt=13.33px）がu32切り捨てで整数px化される
-  - `FT_Set_Char_Size`への変更はヒンティング差でリグレッション→要調査
 - IFCのstrut実装はフォントメトリクス差を増幅→先にフォント一致が必要
 
 ### 試行済みだがリグレッションした改善
 - **IFC strut** — old.reddit 30.6%に悪化。既存のメトリクス差を増幅
 - **FT_Set_Char_Size** — Wikipedia 26.9%に悪化。ヒンティング動作が異なる
+- **FT_LOAD_TARGET_LIGHT** — Wikipedia 23.3%→26.9%に悪化。ヒンティングモード差
 - **DejaVu Sansデフォルト化** — old.reddit 30.5%に悪化。fontconfig環境依存
 
 ### 次に試すべき改善
-1. **FreeTypeヒンティングモード調査** — FirefoxのFreeType設定を一致させる
-2. **CSS `vertical-align` IFC精度** — inline要素のベースライン揃え
-3. **CSS `white-space` collapsing** — inline要素間のスペース折り畳み
-4. **`text-align: justify`** — 両端揃えレイアウト
+1. **CSS `vertical-align` IFC精度** — inline要素のベースライン揃え
+2. **CSS `white-space` collapsing** — inline要素間のスペース折り畳み
+3. **`text-align: justify`** — 両端揃えレイアウト
 
 ## Improvement Tasks
 
