@@ -4513,21 +4513,23 @@ fn computedStyleGetPropertyValue(
     defer qjs.JS_FreeCString(c, prop_s.ptr);
     const prop = prop_s.ptr[0..prop_s.len];
 
-    // Try cascade computed style first
+    // Check inline style FIRST (highest specificity — reflects JS modifications)
+    const elem = getElement(c, elem_val);
+    if (elem) |el| {
+        var style_len: usize = 0;
+        const style_ptr = lxb_dom_element_get_attribute(el, "style", 5, &style_len);
+        if (style_ptr != null and style_len > 0) {
+            if (getStyleProperty(style_ptr.?[0..style_len], prop)) |val| {
+                return qjs.JS_NewStringLen(c, val.ptr, val.len);
+            }
+        }
+    }
+
+    // Fall back to cascade computed style
     const node = getNode(c, elem_val);
     if (node != null and g_styles != null) {
         if (g_styles.?.get(@intFromPtr(node.?))) |style| {
             return computedStyleToString(c, &style, prop);
-        }
-    }
-
-    // Fallback: read from inline style attribute
-    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
-    var style_len: usize = 0;
-    const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
-    if (style_ptr != null and style_len > 0) {
-        if (getStyleProperty(style_ptr.?[0..style_len], prop)) |val| {
-            return qjs.JS_NewStringLen(c, val.ptr, val.len);
         }
     }
     return qjs.JS_NewStringLen(c, "", 0);
@@ -4604,6 +4606,9 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
         return dimensionToString(c, style.width, &buf);
     } else if (std.mem.eql(u8, prop, "height")) {
         return dimensionToString(c, style.height, &buf);
+    } else if (std.mem.eql(u8, prop, "margin")) {
+        // Shorthand: return "top right bottom left" or collapsed form
+        return fmtBoxShorthand(c, style.margin_top, style.margin_right, style.margin_bottom, style.margin_left, &buf);
     } else if (std.mem.eql(u8, prop, "margin-top")) {
         return fmtPx(c, style.margin_top, &buf);
     } else if (std.mem.eql(u8, prop, "margin-right")) {
@@ -4612,6 +4617,8 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
         return fmtPx(c, style.margin_bottom, &buf);
     } else if (std.mem.eql(u8, prop, "margin-left")) {
         return fmtPx(c, style.margin_left, &buf);
+    } else if (std.mem.eql(u8, prop, "padding")) {
+        return fmtBoxShorthand(c, style.padding_top, style.padding_right, style.padding_bottom, style.padding_left, &buf);
     } else if (std.mem.eql(u8, prop, "padding-top")) {
         return fmtPx(c, style.padding_top, &buf);
     } else if (std.mem.eql(u8, prop, "padding-right")) {
@@ -4668,9 +4675,108 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
             .right => "right",
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "clear")) {
+        const s = switch (style.clear) {
+            .none => "none",
+            .left => "left",
+            .right => "right",
+            .both => "both",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "top")) {
+        return dimensionToString(c, style.top, &buf);
+    } else if (std.mem.eql(u8, prop, "right")) {
+        return dimensionToString(c, style.right, &buf);
+    } else if (std.mem.eql(u8, prop, "bottom")) {
+        return dimensionToString(c, style.bottom, &buf);
+    } else if (std.mem.eql(u8, prop, "left")) {
+        return dimensionToString(c, style.left, &buf);
+    } else if (std.mem.eql(u8, prop, "overflow")) {
+        // Shorthand: if both axes are the same, return one value
+        const x = switch (style.overflow_x) { .visible => "visible", .hidden => "hidden", .scroll => "scroll", .auto_ => "auto" };
+        const y = switch (style.overflow_y) { .visible => "visible", .hidden => "hidden", .scroll => "scroll", .auto_ => "auto" };
+        if (std.mem.eql(u8, x, y)) {
+            return qjs.JS_NewStringLen(c, x.ptr, x.len);
+        }
+        const result = std.fmt.bufPrint(&buf, "{s} {s}", .{ x, y }) catch return qjs.JS_NewStringLen(c, "visible", 7);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "min-width")) {
+        return dimensionToString(c, style.min_width, &buf);
+    } else if (std.mem.eql(u8, prop, "max-width")) {
+        return dimensionToString(c, style.max_width, &buf);
+    } else if (std.mem.eql(u8, prop, "min-height")) {
+        return dimensionToString(c, style.min_height, &buf);
+    } else if (std.mem.eql(u8, prop, "max-height")) {
+        return dimensionToString(c, style.max_height, &buf);
+    } else if (std.mem.eql(u8, prop, "line-height")) {
+        return switch (style.line_height) {
+            .normal => qjs.JS_NewStringLen(c, "normal", 6),
+            .px => |v| fmtPx(c, v, &buf),
+            .number => |n| blk: {
+                const result = std.fmt.bufPrint(&buf, "{d}", .{n}) catch break :blk qjs.JS_NewStringLen(c, "normal", 6);
+                break :blk qjs.JS_NewStringLen(c, result.ptr, result.len);
+            },
+        };
+    } else if (std.mem.eql(u8, prop, "white-space")) {
+        const s = switch (style.white_space) {
+            .normal => "normal", .pre => "pre", .nowrap => "nowrap",
+            .pre_wrap => "pre-wrap", .pre_line => "pre-line", .break_spaces => "break-spaces",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "word-break")) {
+        const s = switch (style.word_break) { .normal => "normal", .break_all => "break-all", .keep_all => "keep-all" };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "text-overflow")) {
+        const s = switch (style.text_overflow) { .clip => "clip", .ellipsis => "ellipsis" };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "font-style")) {
+        const s = switch (style.font_style) { .normal => "normal", .italic => "italic", .oblique => "oblique" };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "vertical-align")) {
+        const s = switch (style.vertical_align) {
+            .baseline => "baseline", .top => "top", .middle => "middle", .bottom => "bottom",
+            .text_top => "text-top", .text_bottom => "text-bottom", .sub => "sub", .super => "super",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "border-top-color") or std.mem.eql(u8, prop, "border-right-color") or
+        std.mem.eql(u8, prop, "border-bottom-color") or std.mem.eql(u8, prop, "border-left-color"))
+    {
+        const color = if (std.mem.eql(u8, prop, "border-top-color")) style.border_top_color
+            else if (std.mem.eql(u8, prop, "border-right-color")) style.border_right_color
+            else if (std.mem.eql(u8, prop, "border-bottom-color")) style.border_bottom_color
+            else style.border_left_color;
+        return argbToCssColor(c, color, &buf);
+    } else if (std.mem.eql(u8, prop, "border-top-style") or std.mem.eql(u8, prop, "border-right-style") or
+        std.mem.eql(u8, prop, "border-bottom-style") or std.mem.eql(u8, prop, "border-left-style"))
+    {
+        const bs = if (std.mem.eql(u8, prop, "border-top-style")) style.border_top_style
+            else if (std.mem.eql(u8, prop, "border-right-style")) style.border_right_style
+            else if (std.mem.eql(u8, prop, "border-bottom-style")) style.border_bottom_style
+            else style.border_left_style;
+        const s = switch (bs) {
+            .none => "none", .hidden => "hidden", .solid => "solid", .dashed => "dashed",
+            .dotted => "dotted", .double_ => "double", .groove => "groove", .ridge => "ridge",
+            .inset => "inset", .outset => "outset",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "aspect-ratio")) {
+        if (style.aspect_ratio == 0) return qjs.JS_NewStringLen(c, "auto", 4);
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.aspect_ratio}) catch return qjs.JS_NewStringLen(c, "auto", 4);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "text-transform")) {
+        const s = switch (style.text_transform) { .none => "none", .capitalize => "capitalize", .uppercase => "uppercase", .lowercase => "lowercase" };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "letter-spacing")) {
+        if (style.letter_spacing == 0) return qjs.JS_NewStringLen(c, "normal", 6);
+        return fmtPx(c, style.letter_spacing, &buf);
+    } else if (std.mem.eql(u8, prop, "word-spacing")) {
+        if (style.word_spacing == 0) return qjs.JS_NewStringLen(c, "0px", 3);
+        return fmtPx(c, style.word_spacing, &buf);
+    } else if (std.mem.eql(u8, prop, "text-indent")) {
+        return fmtPx(c, style.text_indent, &buf);
     }
 
-    // Unknown property
+    // Unknown property — return empty string (not undefined)
     return qjs.JS_NewStringLen(c, "", 0);
 }
 
@@ -4697,6 +4803,22 @@ fn argbToCssColor(c: *qjs.JSContext, argb: u32, buf: *[128]u8) qjs.JSValue {
 fn fmtPx(c: *qjs.JSContext, val: f32, buf: *[128]u8) qjs.JSValue {
     const result = std.fmt.bufPrint(buf, "{d}px", .{val}) catch return qjs.JS_NewStringLen(c, "0px", 3);
     return qjs.JS_NewStringLen(c, result.ptr, result.len);
+}
+
+/// Format a CSS shorthand box value (margin/padding) as "top right bottom left".
+fn fmtBoxShorthand(c: *qjs.JSContext, top: f32, right: f32, bottom: f32, left: f32, buf: *[128]u8) qjs.JSValue {
+    if (top == right and right == bottom and bottom == left) {
+        return fmtPx(c, top, buf);
+    } else if (top == bottom and right == left) {
+        const result = std.fmt.bufPrint(buf, "{d}px {d}px", .{ top, right }) catch return qjs.JS_NewStringLen(c, "0px", 3);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (right == left) {
+        const result = std.fmt.bufPrint(buf, "{d}px {d}px {d}px", .{ top, right, bottom }) catch return qjs.JS_NewStringLen(c, "0px", 3);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else {
+        const result = std.fmt.bufPrint(buf, "{d}px {d}px {d}px {d}px", .{ top, right, bottom, left }) catch return qjs.JS_NewStringLen(c, "0px", 3);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    }
 }
 
 /// Format a Dimension value.
@@ -4749,37 +4871,30 @@ fn windowGetComputedStyle(
     // getPropertyValue method
     _ = qjs.JS_SetPropertyStr(c, obj, "getPropertyValue", qjs.JS_NewCFunction(c, &computedStyleGetPropertyValue, "getPropertyValue", 1));
 
-    // Set up Proxy to allow reading common properties directly (e.g., cs.display)
+    // Store element and obj on globalThis for JS getter setup, then define
+    // property getters that call getPropertyValue() for live computed values.
     const global = qjs.JS_GetGlobalObject(c);
-    _ = qjs.JS_SetPropertyStr(c, global, "__csTarget", obj);
+    _ = qjs.JS_SetPropertyStr(c, global, "__csObj", qjs.JS_DupValue(c, obj));
+    qjs.JS_FreeValue(c, global);
 
-    const proxy_code =
-        \\(function() {
-        \\  var t = globalThis.__csTarget;
-        \\  delete globalThis.__csTarget;
-        \\  return new Proxy(t, {
-        \\    get: function(o,p) {
-        \\      if (p in o) return o[p];
-        \\      var map = {
-        \\        backgroundColor:"background-color",fontSize:"font-size",
-        \\        fontWeight:"font-weight",fontFamily:"font-family",
-        \\        textAlign:"text-align",textDecoration:"text-decoration",
-        \\        zIndex:"z-index",pointerEvents:"pointer-events"
-        \\      };
-        \\      var css = map[p] || p;
-        \\      return o.getPropertyValue(css);
-        \\    }
-        \\  });
+    // Build JS code to define getters (this runs in user JS scope where Object.defineProperty works)
+    const getter_code =
+        \\(function(){
+        \\  var o=globalThis.__csObj;delete globalThis.__csObj;
+        \\  var ps='display,position,visibility,color,background-color,backgroundColor,font-size,fontSize,font-weight,fontWeight,font-family,fontFamily,font-style,fontStyle,text-align,textAlign,text-decoration,text-transform,textTransform,text-overflow,textOverflow,text-indent,textIndent,letter-spacing,letterSpacing,word-spacing,wordSpacing,word-break,wordBreak,white-space,whiteSpace,line-height,lineHeight,vertical-align,verticalAlign,width,height,min-width,minWidth,max-width,maxWidth,min-height,minHeight,max-height,maxHeight,margin,margin-top,marginTop,margin-right,marginRight,margin-bottom,marginBottom,margin-left,marginLeft,padding,padding-top,paddingTop,padding-right,paddingRight,padding-bottom,paddingBottom,padding-left,paddingLeft,border-top-width,borderTopWidth,border-right-width,borderRightWidth,border-bottom-width,borderBottomWidth,border-left-width,borderLeftWidth,border-top-color,borderTopColor,border-right-color,borderRightColor,border-bottom-color,borderBottomColor,border-left-color,borderLeftColor,border-top-style,borderTopStyle,border-right-style,borderRightStyle,border-bottom-style,borderBottomStyle,border-left-style,borderLeftStyle,top,right,bottom,left,float,clear,overflow,overflow-x,overflowX,overflow-y,overflowY,z-index,zIndex,opacity,box-sizing,boxSizing,flex-direction,flexDirection,flex-grow,flexGrow,flex-shrink,flexShrink,gap,aspect-ratio,aspectRatio'.split(',');
+        \\  for(var i=0;i<ps.length;i++){(function(p){
+        \\    var css=p.replace(/[A-Z]/g,function(m){return '-'+m.toLowerCase();});
+        \\    Object.defineProperty(o,p,{get:function(){return o.getPropertyValue(css);},enumerable:true,configurable:true});
+        \\  })(ps[i]);}
+        \\  return o;
         \\})()
     ;
 
-    const result = qjs.JS_Eval(c, proxy_code, proxy_code.len, "<computedStyle>", qjs.JS_EVAL_TYPE_GLOBAL);
-    qjs.JS_FreeValue(c, global);
-
+    const result = qjs.JS_Eval(c, getter_code, getter_code.len, "<computedStyle>", qjs.JS_EVAL_TYPE_GLOBAL);
     if (quickjs.JS_IsException(result)) {
         const exc = qjs.JS_GetException(c);
         qjs.JS_FreeValue(c, exc);
-        return qjs.JS_DupValue(c, obj);
+        return obj;
     }
     return result;
 }

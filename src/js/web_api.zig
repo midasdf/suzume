@@ -1657,7 +1657,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  mql.onchange=null;
         \\  return mql;
         \\};
-        \\if(typeof getComputedStyle==='undefined'){globalThis.getComputedStyle=function(el){return new Proxy({},{get:function(_,p){return'';}});};}
+        \\// getComputedStyle: native implementation in dom_api.zig (do not polyfill)
         \\if(typeof requestIdleCallback==='undefined'){globalThis.requestIdleCallback=function(cb){return setTimeout(cb,1);};}
         \\if(typeof cancelIdleCallback==='undefined'){globalThis.cancelIdleCallback=function(id){clearTimeout(id);};}
         \\if(typeof localStorage==='undefined'){
