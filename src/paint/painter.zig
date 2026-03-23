@@ -173,6 +173,37 @@ pub const FontCache = struct {
         };
         return tr;
     }
+
+    /// Get a renderer for a CSS font-family name resolved via fontconfig.
+    /// Caches results by hashing the family name + size.
+    pub fn getRendererForCssFamily(self: *FontCache, size_px: u32, family_name: []const u8) ?*TextRenderer {
+        const clamped = if (size_px < 6) @as(u32, 6) else if (size_px > 72) @as(u32, 72) else size_px;
+        // Hash family name into high 32 bits of key (avoid collision with generic families 0-3)
+        const name_hash = std.hash.Wyhash.hash(0x42, family_name);
+        const key: u64 = @as(u64, clamped) | (name_hash & 0xFFFFFFFF00000000);
+        if (self.renderers.get(key)) |tr| return tr;
+
+        // Resolve font path via fontconfig
+        const font_resolver = @import("font_resolver.zig");
+        const resolved_path = font_resolver.resolve(self.allocator, family_name) orelse return null;
+        defer self.allocator.free(resolved_path);
+
+        // Create renderer with the resolved font path
+        const tr = self.allocator.create(TextRenderer) catch return null;
+        tr.* = TextRenderer.init(resolved_path.ptr, clamped) catch {
+            self.allocator.destroy(tr);
+            return null;
+        };
+        if (self.font_path_cjk_fallback) |fb| {
+            tr.loadFallback(fb);
+        }
+        self.renderers.put(key, tr) catch {
+            tr.deinit();
+            self.allocator.destroy(tr);
+            return null;
+        };
+        return tr;
+    }
 };
 
 /// Clip rectangle for overflow clipping.

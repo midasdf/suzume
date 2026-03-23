@@ -218,6 +218,7 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("woff2dec");
     exe.linkSystemLibrary("woff2common");
     exe.linkSystemLibrary("brotlidec");
+    exe.linkSystemLibrary("fontconfig");
 
     // C++ standard library (needed by HarfBuzz + woff2)
     exe.linkLibCpp();

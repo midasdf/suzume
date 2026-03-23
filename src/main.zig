@@ -67,7 +67,24 @@ fn blitGlyphErr(ctx: ErrBlitCtx, glyph: GlyphBitmap) void {
     );
 }
 
+const font_resolver = @import("paint/font_resolver.zig");
+
+// Fontconfig-resolved font paths (set at startup, valid for program lifetime)
+var fc_sans_path: ?[:0]const u8 = null;
+var fc_serif_path: ?[:0]const u8 = null;
+var fc_mono_path: ?[:0]const u8 = null;
+
+fn initFontPaths(allocator: std.mem.Allocator) void {
+    // Resolve generic font families via fontconfig (matches Firefox behavior)
+    fc_sans_path = font_resolver.resolve(allocator, "sans-serif");
+    fc_serif_path = font_resolver.resolve(allocator, "serif");
+    fc_mono_path = font_resolver.resolve(allocator, "monospace");
+}
+
 fn findFont() [*:0]const u8 {
+    // Use fontconfig-resolved sans-serif if available
+    if (fc_sans_path) |p| return p.ptr;
+    // Fallback to hardcoded paths
     const cjk_path: []const u8 = font_cjk[0..font_cjk.len];
     if (std.fs.openFileAbsolute(cjk_path, .{})) |f| {
         f.close();
@@ -76,8 +93,23 @@ fn findFont() [*:0]const u8 {
     return font_fallback;
 }
 
+fn findSerifFont() [*:0]const u8 {
+    if (fc_serif_path) |p| return p.ptr;
+    return font_serif;
+}
+
+fn findMonoFont() [*:0]const u8 {
+    if (fc_mono_path) |p| return p.ptr;
+    return font_mono;
+}
+
 fn findFallbackFont() ?[*:0]const u8 {
-    // Return DejaVu Sans as fallback for missing glyphs in CJK font
+    // If the primary font is fontconfig-resolved, provide CJK fallback
+    const cjk_path: []const u8 = font_cjk[0..font_cjk.len];
+    if (std.fs.openFileAbsolute(cjk_path, .{})) |f| {
+        f.close();
+        return font_cjk;
+    } else |_| {}
     const latin_path: []const u8 = font_fallback[0..font_fallback.len];
     if (std.fs.openFileAbsolute(latin_path, .{})) |f| {
         f.close();
@@ -1749,15 +1781,18 @@ pub fn main() !void {
     var loader = Loader.init(allocator, &http_client);
 
     // Font
+    // Resolve generic font families via fontconfig (matches Firefox/Chrome behavior)
+    initFontPaths(allocator);
+
     const font_path = findFont();
     std.debug.print("Using font: {s}\n", .{fontPathSlice(font_path)});
 
     var fonts = painter_mod.FontCache.init(allocator, font_path);
     defer fonts.deinit();
 
-    // Set font paths for serif and monospace families
-    fonts.font_path_serif = font_serif;
-    fonts.font_path_mono = font_mono;
+    // Set font paths for serif and monospace families (fontconfig-resolved)
+    fonts.font_path_serif = findSerifFont();
+    fonts.font_path_mono = findMonoFont();
     // Load fallback font for glyphs missing from primary font
     fonts.font_path_cjk_fallback = findFallbackFont();
 

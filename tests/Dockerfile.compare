@@ -25,7 +25,8 @@ RUN pacman -Syu --noconfirm --disable-download-timeout && \
     libssh2 \
     woff2 \
     libwebp \
-    brotli
+    brotli \
+    fontconfig
 
 RUN pacman -S --noconfirm --disable-download-timeout firefox \
     && pacman -Scc --noconfirm
