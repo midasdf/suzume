@@ -38,6 +38,8 @@ pub const FontCache = struct {
     font_path: [*:0]const u8,
     font_path_serif: [*:0]const u8,
     font_path_mono: [*:0]const u8,
+    /// CJK fallback font for missing glyphs in primary Latin font.
+    font_path_cjk_fallback: ?[*:0]const u8 = null,
     allocator: std.mem.Allocator,
     /// Web fonts loaded via @font-face: family name → font data (kept alive for FreeType)
     web_fonts: std.StringHashMap(WebFont),
@@ -160,6 +162,10 @@ pub const FontCache = struct {
             self.allocator.destroy(tr);
             return null;
         };
+        // Load CJK fallback font for missing glyphs (e.g., DejaVu → NotoSansCJK)
+        if (self.font_path_cjk_fallback) |fb| {
+            tr.loadFallback(fb);
+        }
         self.renderers.put(key, tr) catch {
             tr.deinit();
             self.allocator.destroy(tr);

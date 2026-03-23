@@ -76,6 +76,16 @@ fn findFont() [*:0]const u8 {
     return font_fallback;
 }
 
+fn findFallbackFont() ?[*:0]const u8 {
+    // Return DejaVu Sans as fallback for missing glyphs in CJK font
+    const latin_path: []const u8 = font_fallback[0..font_fallback.len];
+    if (std.fs.openFileAbsolute(latin_path, .{})) |f| {
+        f.close();
+        return font_fallback;
+    } else |_| {}
+    return null;
+}
+
 fn fontPathSlice(path: [*:0]const u8) []const u8 {
     var len: usize = 0;
     while (path[len] != 0) len += 1;
@@ -1748,6 +1758,8 @@ pub fn main() !void {
     // Set font paths for serif and monospace families
     fonts.font_path_serif = font_serif;
     fonts.font_path_mono = font_mono;
+    // Load fallback font for glyphs missing from primary font
+    fonts.font_path_cjk_fallback = findFallbackFont();
 
     // Surface (check env vars for window size override)
     chrome.initWindowSize();

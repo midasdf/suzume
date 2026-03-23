@@ -28,6 +28,8 @@ pub const TextRenderer = struct {
     ft_face: c.FT_Face,
     hb_font: *c.hb_font_t,
     font_size_px: u32,
+    // Fallback font for missing glyphs (e.g., CJK characters in a Latin font)
+    fallback_face: ?c.FT_Face = null,
 
     pub fn init(font_path: [*:0]const u8, font_size_px: u32) !TextRenderer {
         var library: c.FT_Library = undefined;
@@ -88,8 +90,20 @@ pub const TextRenderer = struct {
 
     pub fn deinit(self: *TextRenderer) void {
         c.hb_font_destroy(self.hb_font);
+        if (self.fallback_face) |fb| _ = c.FT_Done_Face(fb);
         _ = c.FT_Done_Face(self.ft_face);
         _ = c.FT_Done_FreeType(self.ft_library);
+    }
+
+    /// Load a fallback font for glyphs missing from the primary font.
+    pub fn loadFallback(self: *TextRenderer, fallback_path: [*:0]const u8) void {
+        var face: c.FT_Face = undefined;
+        if (c.FT_New_Face(self.ft_library, fallback_path, 0, &face) != 0) return;
+        if (c.FT_Set_Pixel_Sizes(face, 0, self.font_size_px) != 0) {
+            _ = c.FT_Done_Face(face);
+            return;
+        }
+        self.fallback_face = face;
     }
 
     /// Measure text dimensions using HarfBuzz shaping.
@@ -165,14 +179,28 @@ pub const TextRenderer = struct {
             const y_offset = @divTrunc(positions[i].y_offset, 64);
             const y_advance = @divTrunc(positions[i].y_advance, 64);
 
-            // Load and render the glyph
-            if (c.FT_Load_Glyph(self.ft_face, glyph_index, c.FT_LOAD_RENDER) != 0) {
-                pen_x_26_6 += positions[i].x_advance;
-                pen_y += y_advance;
-                continue;
+            // Load and render the glyph (try fallback font for .notdef glyphs)
+            var render_face = self.ft_face;
+            var load_ok = false;
+            if (glyph_index == 0 and self.fallback_face != null) {
+                // Primary font missing this glyph — try fallback
+                // Map the original codepoint to the fallback font's glyph index
+                const fb_face = self.fallback_face.?;
+                const fb_glyph = c.FT_Get_Char_Index(fb_face, infos[i].cluster);
+                if (fb_glyph != 0 and c.FT_Load_Glyph(fb_face, fb_glyph, c.FT_LOAD_RENDER) == 0) {
+                    render_face = fb_face;
+                    load_ok = true;
+                }
+            }
+            if (!load_ok) {
+                if (c.FT_Load_Glyph(self.ft_face, glyph_index, c.FT_LOAD_RENDER) != 0) {
+                    pen_x_26_6 += positions[i].x_advance;
+                    pen_y += y_advance;
+                    continue;
+                }
             }
 
-            const glyph = self.ft_face.*.glyph;
+            const glyph = render_face.*.glyph;
             const bitmap = glyph.*.bitmap;
 
             if (bitmap.buffer != null and bitmap.width > 0 and bitmap.rows > 0) {
