@@ -14,6 +14,14 @@ pub const FontFamily = enum(u8) {
     web_font, // @font-face custom font (name stored in font_family_name)
 };
 
+pub const MarginTrim = packed struct {
+    block_start: bool = false,
+    block_end: bool = false,
+    inline_start: bool = false,
+    inline_end: bool = false,
+    _pad: u4 = 0,
+};
+
 pub const ComputedStyle = struct {
 
     // ═══════════════════════════════════════════════════════════════
@@ -79,6 +87,7 @@ pub const ComputedStyle = struct {
     margin_right_is_pct: bool = false,
     margin_bottom_is_pct: bool = false,
     margin_left_is_pct: bool = false,
+    margin_trim: MarginTrim = .{},
 
     // Padding
     padding_top: f32 = 0,

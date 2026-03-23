@@ -72,7 +72,8 @@ fn setDomDirty() void {
 const Box = @import("../layout/box.zig").Box;
 const DomNode = @import("../dom/node.zig").DomNode;
 const cascade_mod = @import("../css/cascade.zig");
-const ComputedStyle = @import("../css/computed.zig").ComputedStyle;
+const computed_mod = @import("../css/computed.zig");
+const ComputedStyle = computed_mod.ComputedStyle;
 const css_ast = @import("../css/ast.zig");
 const css_properties = @import("../css/properties.zig");
 var g_root_box: ?*const Box = null;
@@ -1878,6 +1879,38 @@ fn getLonghandFromShorthand(style_str: []const u8, longhand: []const u8) ?[]cons
     return expanded[info.index];
 }
 
+/// Normalize margin-trim value to canonical form.
+fn normalizeMarginTrim(val: []const u8) []const u8 {
+    if (eqlIgnoreCase(val, "none")) return "none";
+    if (eqlIgnoreCase(val, "block")) return "block";
+    if (eqlIgnoreCase(val, "inline")) return "inline";
+    // Parse keywords and canonicalize
+    var bs = false;
+    var be = false;
+    var is_ = false;
+    var ie = false;
+    var pos: usize = 0;
+    while (pos < val.len) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+        const kw = val[start..pos];
+        if (eqlIgnoreCase(kw, "block-start")) bs = true
+        else if (eqlIgnoreCase(kw, "block-end")) be = true
+        else if (eqlIgnoreCase(kw, "inline-start")) is_ = true
+        else if (eqlIgnoreCase(kw, "inline-end")) ie = true
+        else if (eqlIgnoreCase(kw, "block")) { bs = true; be = true; }
+        else if (eqlIgnoreCase(kw, "inline")) { is_ = true; ie = true; }
+    }
+    // Condensation: individual keywords → shorthand where possible
+    if (bs and be and is_ and ie) return "block inline";
+    if (bs and be and !is_ and !ie) return "block";
+    if (!bs and !be and is_ and ie) return "inline";
+    // "block inline" / "inline block" → preserve input order
+    return val;
+}
+
 /// Create a style object for an element.
 /// Uses setProperty/getPropertyValue as native methods, and sets up
 /// camelCase property access via a JavaScript Proxy-like wrapper.
@@ -1938,7 +1971,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         \\    outline:"outline",outlineColor:"outline-color",outlineStyle:"outline-style",
         \\    outlineWidth:"outline-width",content:"content",pointerEvents:"pointer-events",
         \\    userSelect:"user-select",objectFit:"object-fit",verticalAlign:"vertical-align",
-        \\    boxSizing:"box-sizing"
+        \\    boxSizing:"box-sizing",marginTrim:"margin-trim"
         \\  };
         \\  return new Proxy(t, {
         \\    get: function(o,p) {
@@ -1997,6 +2030,23 @@ fn styleSetProperty(
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
     const current_style = if (style_ptr != null and style_len > 0) style_ptr.?[0..style_len] else "";
+
+    // margin-trim value normalization (block-start block-end → block)
+    if (eqlIgnoreCase(prop, "margin-trim")) {
+        const trimmed_val = std.mem.trim(u8, val, " \t\r\n");
+        if (trimmed_val.len > 0 and !eqlIgnoreCase(trimmed_val, "inherit") and
+            !eqlIgnoreCase(trimmed_val, "initial") and !eqlIgnoreCase(trimmed_val, "unset") and
+            !eqlIgnoreCase(trimmed_val, "revert"))
+        {
+            const normalized = normalizeMarginTrim(trimmed_val);
+            var buf: [4096]u8 = undefined;
+            if (setStyleProperty(current_style, prop, normalized, &buf)) |new_style| {
+                _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+                setDomDirty();
+            }
+            return quickjs.JS_UNDEFINED();
+        }
+    }
 
     // Box shorthand expansion (margin, padding → longhands)
     if (getBoxLonghands(prop)) |longhands| {
@@ -4958,6 +5008,8 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
         return fmtPx(c, style.margin_bottom, &buf);
     } else if (std.mem.eql(u8, prop, "margin-left")) {
         return fmtPx(c, style.margin_left, &buf);
+    } else if (std.mem.eql(u8, prop, "margin-trim")) {
+        return fmtMarginTrim(c, style.margin_trim);
     } else if (std.mem.eql(u8, prop, "padding")) {
         return fmtBoxShorthand(c, style.padding_top, style.padding_right, style.padding_bottom, style.padding_left, &buf);
     } else if (std.mem.eql(u8, prop, "padding-top")) {
@@ -5146,6 +5198,41 @@ fn fmtPx(c: *qjs.JSContext, val: f32, buf: *[128]u8) qjs.JSValue {
     return qjs.JS_NewStringLen(c, result.ptr, result.len);
 }
 
+/// Format margin-trim computed value.
+fn fmtMarginTrim(c: *qjs.JSContext, mt: computed_mod.MarginTrim) qjs.JSValue {
+    const bs = mt.block_start;
+    const be = mt.block_end;
+    const is_ = mt.inline_start;
+    const ie = mt.inline_end;
+    if (!bs and !be and !is_ and !ie) return qjs.JS_NewStringLen(c, "none", 4);
+    if (bs and be and is_ and ie) return qjs.JS_NewStringLen(c, "block inline", 12);
+    if (bs and be and !is_ and !ie) return qjs.JS_NewStringLen(c, "block", 5);
+    if (!bs and !be and is_ and ie) return qjs.JS_NewStringLen(c, "inline", 6);
+    // Individual keywords
+    var buf: [64]u8 = undefined;
+    var pos: usize = 0;
+    // CSS canonical order: block before inline? Actually spec says individual order doesn't matter
+    // but WPT expects: block-start before inline-start, etc.
+    // WPT margin-trim-computed expects block-start before inline-start
+    const parts = [_]struct { flag: bool, name: []const u8 }{
+        .{ .flag = bs, .name = "block-start" },
+        .{ .flag = be, .name = "block-end" },
+        .{ .flag = is_, .name = "inline-start" },
+        .{ .flag = ie, .name = "inline-end" },
+    };
+    for (parts) |p| {
+        if (p.flag) {
+            if (pos > 0) {
+                buf[pos] = ' ';
+                pos += 1;
+            }
+            @memcpy(buf[pos..][0..p.name.len], p.name);
+            pos += p.name.len;
+        }
+    }
+    return qjs.JS_NewStringLen(c, &buf, pos);
+}
+
 /// Format a CSS shorthand box value (margin/padding) as "top right bottom left".
 fn fmtBoxShorthand(c: *qjs.JSContext, top: f32, right: f32, bottom: f32, left: f32, buf: *[128]u8) qjs.JSValue {
     if (top == right and right == bottom and bottom == left) {
@@ -5219,6 +5306,7 @@ fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "visibility")) return qjs.JS_NewStringLen(c, "visible", 7);
     if (eqlIgnoreCase(prop, "float")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "clear")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "margin-trim")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "overflow-x") or eqlIgnoreCase(prop, "overflow-y"))
         return qjs.JS_NewStringLen(c, "visible", 7);
     if (eqlIgnoreCase(prop, "opacity")) return qjs.JS_NewStringLen(c, "1", 1);
@@ -5408,6 +5496,7 @@ fn windowGetComputedStyle(
         .{ "margin-right", "marginRight" },
         .{ "margin-bottom", "marginBottom" },
         .{ "margin-left", "marginLeft" },
+        .{ "margin-trim", "marginTrim" },
         .{ "padding", "padding" },
         .{ "padding-top", "paddingTop" },
         .{ "padding-right", "paddingRight" },
@@ -6365,6 +6454,8 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .clear => eqlIgnoreCase(trimmed, "none") or eqlIgnoreCase(trimmed, "left") or
             eqlIgnoreCase(trimmed, "right") or eqlIgnoreCase(trimmed, "both") or
             eqlIgnoreCase(trimmed, "inline-start") or eqlIgnoreCase(trimmed, "inline-end"),
+        // margin-trim: none, block, inline, block-start, block-end, inline-start, inline-end
+        .margin_trim => isValidMarginTrimValue(trimmed),
         // Visibility: visible, hidden, collapse (NOT auto, NOT none)
         .visibility => eqlIgnoreCase(trimmed, "visible") or eqlIgnoreCase(trimmed, "hidden") or
             eqlIgnoreCase(trimmed, "collapse"),
@@ -6409,7 +6500,7 @@ fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "text-decoration", "list-style", "outline", "grid", "grid-template",
         "grid-template-columns", "grid-template-rows", "grid-area", "grid-column",
         "grid-row", "gap", "place-content", "place-items", "place-self",
-        "margin-trim", "columns", "column-rule", "inset",
+        "columns", "column-rule", "inset",
     };
     for (known_shorthands) |kw| {
         if (eqlIgnoreCase(prop, kw)) return true;
@@ -6450,6 +6541,60 @@ fn isValidBoxShorthand(val: []const u8, allow_negative: bool) bool {
         }
     }
     return count >= 1 and count <= 4;
+}
+
+fn isValidMarginTrimValue(val: []const u8) bool {
+    const single_keywords = [_][]const u8{ "none", "block", "inline", "block-start", "block-end", "inline-start", "inline-end" };
+    for (single_keywords) |kw| {
+        if (eqlIgnoreCase(val, kw)) return true;
+    }
+    // Multi-value parsing
+    var has_block_sh = false; // "block" shorthand
+    var has_inline_sh = false; // "inline" shorthand
+    var has_individual = false;
+    var bs = false;
+    var be = false;
+    var is_ = false;
+    var ie = false;
+    var count: usize = 0;
+    var pos: usize = 0;
+    while (pos < val.len) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+        const kw = val[start..pos];
+        count += 1;
+        if (count > 4) return false;
+        if (eqlIgnoreCase(kw, "block")) {
+            if (has_block_sh) return false; // "block block"
+            has_block_sh = true;
+        } else if (eqlIgnoreCase(kw, "inline")) {
+            if (has_inline_sh) return false; // "inline inline"
+            has_inline_sh = true;
+        } else if (eqlIgnoreCase(kw, "block-start")) {
+            if (bs) return false;
+            bs = true;
+            has_individual = true;
+        } else if (eqlIgnoreCase(kw, "block-end")) {
+            if (be) return false;
+            be = true;
+            has_individual = true;
+        } else if (eqlIgnoreCase(kw, "inline-start")) {
+            if (is_) return false;
+            is_ = true;
+            has_individual = true;
+        } else if (eqlIgnoreCase(kw, "inline-end")) {
+            if (ie) return false;
+            ie = true;
+            has_individual = true;
+        } else {
+            return false;
+        }
+    }
+    // "block"/"inline" can combine with each other but NOT with individual keywords
+    if ((has_block_sh or has_inline_sh) and has_individual) return false;
+    return count >= 2;
 }
 
 fn isValidOverflowShorthand(val: []const u8) bool {

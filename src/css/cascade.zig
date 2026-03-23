@@ -1076,6 +1076,7 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .margin_right => { style.margin_right = parent.margin_right; style.margin_right_is_pct = parent.margin_right_is_pct; },
         .margin_bottom => { style.margin_bottom = parent.margin_bottom; style.margin_bottom_is_pct = parent.margin_bottom_is_pct; },
         .margin_left => { style.margin_left = parent.margin_left; style.margin_left_is_pct = parent.margin_left_is_pct; },
+        .margin_trim => style.margin_trim = parent.margin_trim,
         .padding_top => { style.padding_top = parent.padding_top; style.padding_top_is_pct = parent.padding_top_is_pct; },
         .padding_right => { style.padding_right = parent.padding_right; style.padding_right_is_pct = parent.padding_right_is_pct; },
         .padding_bottom => { style.padding_bottom = parent.padding_bottom; style.padding_bottom_is_pct = parent.padding_bottom_is_pct; },
@@ -1415,6 +1416,9 @@ fn applyDeclaration(
             style.margin_left = md.value;
             style.margin_left_auto = md.is_auto;
             style.margin_left_is_pct = md.is_pct;
+        },
+        .margin_trim => {
+            style.margin_trim = parseMarginTrim(trimmed);
         },
         .padding_top => {
             if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_top = v.value; style.padding_top_is_pct = v.is_pct; style.padding_set_by_css = true; }
@@ -2471,6 +2475,32 @@ const MarginValue = struct {
     is_auto: bool,
     is_pct: bool = false,
 };
+
+fn parseMarginTrim(s: []const u8) computed_mod.MarginTrim {
+    var result = computed_mod.MarginTrim{};
+    if (eqlIgnoreCase(s, "none")) return result;
+    if (eqlIgnoreCase(s, "block")) return .{ .block_start = true, .block_end = true };
+    if (eqlIgnoreCase(s, "inline")) return .{ .inline_start = true, .inline_end = true };
+    // Parse space-separated keywords
+    var pos: usize = 0;
+    while (pos < s.len) {
+        while (pos < s.len and (s[pos] == ' ' or s[pos] == '\t')) pos += 1;
+        if (pos >= s.len) break;
+        const start = pos;
+        while (pos < s.len and s[pos] != ' ' and s[pos] != '\t') pos += 1;
+        const kw = s[start..pos];
+        if (eqlIgnoreCase(kw, "block-start")) {
+            result.block_start = true;
+        } else if (eqlIgnoreCase(kw, "block-end")) {
+            result.block_end = true;
+        } else if (eqlIgnoreCase(kw, "inline-start")) {
+            result.inline_start = true;
+        } else if (eqlIgnoreCase(kw, "inline-end")) {
+            result.inline_end = true;
+        }
+    }
+    return result;
+}
 
 fn parseMarginValue(s: []const u8, font_size: f32, vw: f32, vh: f32) MarginValue {
     if (eqlIgnoreCase(s, "auto")) return .{ .value = 0, .is_auto = true };
