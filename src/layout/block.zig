@@ -287,15 +287,16 @@ fn applyTextSpacing(base_width: f32, text: []const u8, style: ComputedStyle) f32
 }
 
 /// Compute effective line height from CSS line-height property and raw font metrics height.
-/// CSS spec: line-height:normal is UA-dependent, typically 1.0-1.2x font metrics.
-/// Using raw_height directly (1.0x) matches Firefox's tight rendering for body text.
+/// raw_height is FreeType's metrics.height (ascent + |descent| + lineGap), matching
+/// Firefox's line-height:normal = emHeight + internalLeading + externalLeading.
 fn computeLineHeight(style_lh: ComputedStyle.LineHeight, raw_height: f32, font_size: f32) f32 {
     return switch (style_lh) {
-        .px => |px| @max(px, raw_height),
+        .px => |px| px, // Explicit line-height overrides font metrics (CSS 2.1 §10.8.1)
         .number => |n| font_size * n,
-        // CSS "normal" line-height is typically ~1.2x font-size.
-        // Use whichever is larger: font metrics height or 1.2 * font-size.
-        .normal => @max(raw_height, font_size * 1.2),
+        // CSS 2.1 §10.8.1: "normal" uses font metrics directly.
+        // Firefox: normalLineHeight = ascent + |descent| + lineGap (= FreeType metrics.height)
+        // No artificial floor — matches Firefox behavior.
+        .normal => raw_height,
     };
 }
 
