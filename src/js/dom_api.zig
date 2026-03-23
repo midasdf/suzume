@@ -1884,6 +1884,9 @@ fn normalizeMarginTrim(val: []const u8) []const u8 {
     if (eqlIgnoreCase(val, "none")) return "none";
     if (eqlIgnoreCase(val, "block")) return "block";
     if (eqlIgnoreCase(val, "inline")) return "inline";
+    // Preserve input order for shorthand combos
+    if (eqlIgnoreCase(val, "block inline")) return "block inline";
+    if (eqlIgnoreCase(val, "inline block")) return "inline block";
     // Parse keywords and canonicalize
     var bs = false;
     var be = false;
@@ -4901,7 +4904,7 @@ fn computedStyleGetPropertyValue(
                 } else if (eqlIgnoreCase(trimmed, "revert")) {
                     // Fall through to cascade (UA value)
                 } else {
-                    return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                    return resolveInlineForComputed(c, prop, val);
                 }
             }
             // Try shorthand reconstruction from expanded longhands
@@ -5231,6 +5234,31 @@ fn fmtMarginTrim(c: *qjs.JSContext, mt: computed_mod.MarginTrim) qjs.JSValue {
         }
     }
     return qjs.JS_NewStringLen(c, &buf, pos);
+}
+
+/// Resolve an inline style value for getComputedStyle. For most properties returns as-is.
+/// For margin-trim, canonicalizes to spec order (block before inline).
+fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8) qjs.JSValue {
+    if (eqlIgnoreCase(prop, "margin-trim")) return canonicalizeMarginTrimForComputed(c, val);
+    return qjs.JS_NewStringLen(c, val.ptr, val.len);
+}
+
+/// Canonicalize a margin-trim inline value for getComputedStyle (block before inline).
+fn canonicalizeMarginTrimForComputed(c: *qjs.JSContext, val: []const u8) qjs.JSValue {
+    var mt = computed_mod.MarginTrim{};
+    var pos: usize = 0;
+    while (pos < val.len) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+        const kw = val[start..pos];
+        if (eqlIgnoreCase(kw, "block-start") or eqlIgnoreCase(kw, "block")) mt.block_start = true;
+        if (eqlIgnoreCase(kw, "block-end") or eqlIgnoreCase(kw, "block")) mt.block_end = true;
+        if (eqlIgnoreCase(kw, "inline-start") or eqlIgnoreCase(kw, "inline")) mt.inline_start = true;
+        if (eqlIgnoreCase(kw, "inline-end") or eqlIgnoreCase(kw, "inline")) mt.inline_end = true;
+    }
+    return fmtMarginTrim(c, mt);
 }
 
 /// Format a CSS shorthand box value (margin/padding) as "top right bottom left".
@@ -5564,7 +5592,7 @@ fn windowGetComputedStyle(
                         val = cssInitialValue(c, css_name);
                     }
                 } else {
-                    val = qjs.JS_NewStringLen(c, inline_val.ptr, inline_val.len);
+                    val = resolveInlineForComputed(c, css_name, inline_val);
                 }
             } else if (reconstructBoxShorthandJS(c, inline_style, css_name)) |reconstructed| {
                 val = reconstructed;
@@ -5600,7 +5628,7 @@ fn windowGetComputedStyle(
                             val2 = cssInitialValue(c, css_name);
                         }
                     } else {
-                        val2 = qjs.JS_NewStringLen(c, inline_val.ptr, inline_val.len);
+                        val2 = resolveInlineForComputed(c, css_name, inline_val);
                     }
                 } else if (reconstructBoxShorthandJS(c, inline_style, css_name)) |reconstructed| {
                     val2 = reconstructed;
@@ -6431,6 +6459,8 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .padding_top, .padding_right, .padding_bottom, .padding_left => isValidNonNegLength(trimmed),
         // Border widths: non-negative lengths or thin/medium/thick
         .border_top_width, .border_right_width, .border_bottom_width, .border_left_width => isValidBorderWidth(trimmed),
+        // Display: all CSS display values (single and two-value syntax)
+        .display => isValidDisplayValue(trimmed),
         // Color properties
         .color, .background_color, .border_top_color, .border_right_color,
         .border_bottom_color, .border_left_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed),
@@ -6541,6 +6571,78 @@ fn isValidBoxShorthand(val: []const u8, allow_negative: bool) bool {
         }
     }
     return count >= 1 and count <= 4;
+}
+
+fn isValidDisplayValue(val: []const u8) bool {
+    // Single-keyword display values
+    const single = [_][]const u8{
+        "none",          "contents",       "block",          "inline",
+        "inline-block",  "flex",           "inline-flex",    "grid",
+        "inline-grid",   "table",          "inline-table",   "list-item",
+        "run-in",        "flow-root",      "ruby",           "ruby-text",
+        "table-row",     "table-cell",     "table-row-group", "table-header-group",
+        "table-footer-group", "table-column", "table-column-group", "table-caption",
+        "math",          "grid-lanes",
+    };
+    for (single) |kw| {
+        if (eqlIgnoreCase(val, kw)) return true;
+    }
+    // Two-value display syntax: <display-outside> <display-inside>
+    // outside: block, inline, run-in
+    // inside: flow, flow-root, table, flex, grid, ruby, grid-lanes
+    var pos: usize = 0;
+    while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+    if (pos == 0 or pos >= val.len) return false;
+    const first = val[0..pos];
+    while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+    if (pos >= val.len) return false;
+    const rest = std.mem.trim(u8, val[pos..], " \t");
+    if (rest.len == 0) return false;
+    // Check: outside + inside, or outside + inside + list-item
+    const outside = [_][]const u8{ "block", "inline", "run-in" };
+    const inside = [_][]const u8{ "flow", "flow-root", "table", "flex", "grid", "ruby", "grid-lanes" };
+    var valid_outside = false;
+    for (outside) |kw| {
+        if (eqlIgnoreCase(first, kw)) { valid_outside = true; break; }
+    }
+    if (!valid_outside) {
+        // "list-item" can be first
+        if (eqlIgnoreCase(first, "list-item")) {
+            // "list-item block" etc.
+            for (outside) |kw| {
+                if (eqlIgnoreCase(rest, kw)) return true;
+            }
+            for (inside) |kw| {
+                if (eqlIgnoreCase(rest, kw)) return true;
+            }
+        }
+        return false;
+    }
+    // Check second token as inside or "list-item"
+    for (inside) |kw| {
+        if (eqlIgnoreCase(rest, kw)) return true;
+    }
+    if (eqlIgnoreCase(rest, "list-item")) return true;
+    // Three tokens: outside inside list-item, or outside list-item inside
+    var pos2: usize = 0;
+    while (pos2 < rest.len and rest[pos2] != ' ' and rest[pos2] != '\t') pos2 += 1;
+    if (pos2 < rest.len) {
+        const second = rest[0..pos2];
+        const third = std.mem.trim(u8, rest[pos2..], " \t");
+        if (third.len > 0) {
+            // block flow list-item, block list-item flow, etc.
+            var has_inside = false;
+            var has_list_item = false;
+            for ([_][]const u8{ second, third }) |tok| {
+                for (inside) |kw| {
+                    if (eqlIgnoreCase(tok, kw)) has_inside = true;
+                }
+                if (eqlIgnoreCase(tok, "list-item")) has_list_item = true;
+            }
+            if (has_inside and has_list_item) return true;
+        }
+    }
+    return false;
 }
 
 fn isValidMarginTrimValue(val: []const u8) bool {
