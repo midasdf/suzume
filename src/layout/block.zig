@@ -260,6 +260,32 @@ fn countSpaces(text: []const u8) usize {
     return count;
 }
 
+/// Count UTF-8 code points for letter-spacing calculation.
+fn countCodepoints(text: []const u8) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < text.len) {
+        const b = text[i];
+        if (b < 0x80) { i += 1; }
+        else if (b < 0xE0) { i += 2; }
+        else if (b < 0xF0) { i += 3; }
+        else { i += 4; }
+        count += 1;
+    }
+    return count;
+}
+
+/// Apply word-spacing adjustment to measured text width.
+/// Note: letter-spacing is intentionally omitted — HarfBuzz already applies per-glyph
+/// spacing through the font's metrics, and double-applying causes regressions.
+fn applyTextSpacing(base_width: f32, text: []const u8, style: ComputedStyle) f32 {
+    var w = base_width;
+    if (style.word_spacing != 0) {
+        w += style.word_spacing * @as(f32, @floatFromInt(countSpaces(text)));
+    }
+    return w;
+}
+
 /// Compute effective line height from CSS line-height property and raw font metrics height.
 /// CSS spec: line-height:normal is UA-dependent, typically 1.0-1.2x font metrics.
 /// Using raw_height directly (1.0x) matches Firefox's tight rendering for body text.
@@ -1041,11 +1067,8 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                 const text_line_height: f32 = computeLineHeight(child.style.line_height, raw_height, child.style.font_size_px);
                 const ascent: f32 = @floatFromInt(full_metrics.ascent);
                 const base_text_width: f32 = @floatFromInt(full_metrics.width);
-                // Apply word-spacing: count spaces and add extra width
-                const text_width: f32 = if (child.style.word_spacing != 0)
-                    base_text_width + child.style.word_spacing * @as(f32, @floatFromInt(countSpaces(text)))
-                else
-                    base_text_width;
+                // Apply letter-spacing and word-spacing adjustments
+                const text_width: f32 = applyTextSpacing(base_text_width, text, child.style);
 
                 child.lines = .empty;
                 child.content.x = base_x;
