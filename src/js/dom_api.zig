@@ -5270,7 +5270,8 @@ fn computedStyleToStringWithBox(c: *qjs.JSContext, style: *const ComputedStyle, 
     } else if (std.mem.eql(u8, prop, "border-left-width")) {
         return fmtPx(c, style.border_left_width, &buf);
     } else if (std.mem.eql(u8, prop, "opacity")) {
-        const result = std.fmt.bufPrint(&buf, "{d}", .{style.opacity}) catch return qjs.JS_NewStringLen(c, "1", 1);
+        const clamped = @max(@as(f32, 0), @min(@as(f32, 1), style.opacity));
+        const result = std.fmt.bufPrint(&buf, "{d}", .{clamped}) catch return qjs.JS_NewStringLen(c, "1", 1);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
     } else if (std.mem.eql(u8, prop, "z-index")) {
         if (style.z_index == 0 and style.position == .static_) {
@@ -5553,6 +5554,24 @@ fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8
             }
         }
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Resolve opacity to clamped [0,1] numeric value
+    if (eqlIgnoreCase(prop, "opacity")) {
+        const trimmed_opacity = std.mem.trim(u8, val, " \t\r\n");
+        var opacity_val: ?f64 = null;
+        if (trimmed_opacity.len > 0 and trimmed_opacity[trimmed_opacity.len - 1] == '%') {
+            opacity_val = (std.fmt.parseFloat(f64, trimmed_opacity[0 .. trimmed_opacity.len - 1]) catch null);
+            if (opacity_val) |*v| v.* /= 100.0;
+        } else {
+            opacity_val = std.fmt.parseFloat(f64, trimmed_opacity) catch null;
+        }
+        if (opacity_val) |v| {
+            const clamped = @max(0.0, @min(1.0, v));
+            var obuf: [32]u8 = undefined;
+            const os = std.fmt.bufPrint(&obuf, "{d}", .{clamped}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+            return qjs.JS_NewStringLen(c, os.ptr, os.len);
+        }
     }
 
     // Resolve color values to rgb()/rgba() form for computed style

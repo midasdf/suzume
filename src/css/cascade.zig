@@ -1202,7 +1202,11 @@ fn applyDeclaration(
             }
         },
         .opacity => {
-            if (std.fmt.parseFloat(f32, trimmed)) |v| {
+            if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '%') {
+                if (std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1])) |v| {
+                    style.opacity = std.math.clamp(v / 100.0, 0.0, 1.0);
+                } else |_| {}
+            } else if (std.fmt.parseFloat(f32, trimmed)) |v| {
                 style.opacity = std.math.clamp(v, 0.0, 1.0);
             } else |_| {}
         },
