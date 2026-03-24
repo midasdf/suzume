@@ -542,6 +542,21 @@ fn elementGetTagName(
     return qjs.JS_NewStringLen(c, buf.ptr, len);
 }
 
+fn elementGetLocalName(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
+    var len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &len);
+    if (name_ptr == null or len == 0) return quickjs.JS_NULL();
+    // localName is lowercase (as stored by lexbor HTML parser)
+    return qjs.JS_NewStringLen(c, name_ptr.?, len);
+}
+
 fn elementGetId(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -6716,6 +6731,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const tagNameAtom = qjs.JS_NewAtom(ctx, "tagName");
         _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, tagNameAtom, qjs.JS_NewCFunction(ctx, &elementGetTagName, "get tagName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, tagNameAtom);
+    }
+    {
+        // localName: lowercase tag name (HTML spec)
+        const localNameAtom = qjs.JS_NewAtom(ctx, "localName");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, localNameAtom, qjs.JS_NewCFunction(ctx, &elementGetLocalName, "get localName", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, localNameAtom);
+    }
+    {
+        // namespaceURI: always "http://www.w3.org/1999/xhtml" for HTML elements
+        _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "namespaceURI", qjs.JS_NewString(ctx, "http://www.w3.org/1999/xhtml"));
+        // prefix: null for HTML elements
+        _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "prefix", quickjs.JS_NULL());
     }
     {
         const idAtom = qjs.JS_NewAtom(ctx, "id");
