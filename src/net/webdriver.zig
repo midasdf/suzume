@@ -470,8 +470,13 @@ pub const WebDriverServer = struct {
 // ── JSON Helpers (minimal, no allocator needed) ─────────────────────
 
 /// Extract a string value from a simple JSON object: {"key": "value"}
-/// Returns a slice into the input buffer (no allocation).
+/// Returns unescaped string in the provided static buffer.
 fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
+    // Thread-local static buffer for unescaped result
+    const S = struct {
+        threadlocal var buf: [65536]u8 = undefined;
+    };
+
     // Find "key"
     var i: usize = 0;
     while (i + key.len + 3 < json.len) : (i += 1) {
@@ -483,14 +488,29 @@ fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
             var j = i + 1 + key.len + 1; // skip past closing "
             while (j < json.len and (json[j] == ' ' or json[j] == ':' or json[j] == '\t' or json[j] == '\n')) j += 1;
             if (j < json.len and json[j] == '"') {
-                // String value
-                const start = j + 1;
-                var end = start;
-                while (end < json.len and json[end] != '"') {
-                    if (json[end] == '\\') end += 1; // skip escaped char
-                    end += 1;
+                // String value — unescape JSON escape sequences
+                var src = j + 1;
+                var dst: usize = 0;
+                while (src < json.len and json[src] != '"' and dst < S.buf.len) {
+                    if (json[src] == '\\' and src + 1 < json.len) {
+                        src += 1;
+                        switch (json[src]) {
+                            '"' => { S.buf[dst] = '"'; dst += 1; },
+                            '\\' => { S.buf[dst] = '\\'; dst += 1; },
+                            '/' => { S.buf[dst] = '/'; dst += 1; },
+                            'n' => { S.buf[dst] = '\n'; dst += 1; },
+                            'r' => { S.buf[dst] = '\r'; dst += 1; },
+                            't' => { S.buf[dst] = '\t'; dst += 1; },
+                            else => { S.buf[dst] = json[src]; dst += 1; },
+                        }
+                        src += 1;
+                    } else {
+                        S.buf[dst] = json[src];
+                        dst += 1;
+                        src += 1;
+                    }
                 }
-                return json[start..end];
+                return S.buf[0..dst];
             }
         }
     }

@@ -4270,22 +4270,42 @@ fn handleWebDriverCommand(
             const script = cmd.payload;
             if (page_states.items.len > 0) {
                 if (page_states.items[0].js_rt) |*js_rt| {
-                    // Wrap script: (function(){ <script> }).apply(null, <args>)
+                    // Wrap script: extract args from body JSON, apply with args
+                    const body_json = cmd.payload2;
                     var wrap_buf: [65536]u8 = undefined;
-                    const wrapped = std.fmt.bufPrint(&wrap_buf, "(function(){{ {s} }}).apply(null, [])", .{script}) catch return .{ .status = 500, .body = "{\"value\":null}" };
+                    const wrapped = std.fmt.bufPrint(&wrap_buf,
+                        \\(function() {{
+                        \\  var __body = {s};
+                        \\  var __args = (__body && __body.args) ? __body.args : [];
+                        \\  return (function() {{ {s} }}).apply(null, __args);
+                        \\}})()
+                    , .{ body_json, script }) catch return .{ .status = 500, .body = "{\"value\":null}" };
 
+                    std.debug.print("[WD-exec] script({d}): {s}\n", .{ wrapped.len, wrapped[0..@min(200, wrapped.len)] });
                     const result = js_rt.eval(wrapped);
                     js_rt.executePending();
 
                     switch (result) {
                         .ok => |val| {
                             // Return the string result wrapped in WebDriver JSON
+                            // Eval result text: numbers/booleans are bare, strings need quoting
                             var resp_buf: [65536]u8 = undefined;
-                            const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{val}) catch return .{ .body = "{\"value\":null}" };
+                            const is_json_primitive = val.len == 0 or
+                                std.mem.eql(u8, val, "undefined") or
+                                std.mem.eql(u8, val, "null") or
+                                std.mem.eql(u8, val, "true") or
+                                std.mem.eql(u8, val, "false") or
+                                (val[0] >= '0' and val[0] <= '9') or
+                                val[0] == '-' or val[0] == '{' or val[0] == '[' or val[0] == '"';
+                            const json = if (is_json_primitive or std.mem.eql(u8, val, "undefined"))
+                                std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{if (std.mem.eql(u8, val, "undefined")) "null" else val}) catch return .{ .body = "{\"value\":null}" }
+                            else
+                                std.fmt.bufPrint(&resp_buf, "{{\"value\":\"{s}\"}}", .{val}) catch return .{ .body = "{\"value\":null}" };
                             const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
                             return .{ .body = owned, .allocated = true };
                         },
-                        .err => {
+                        .err => |e| {
+                            std.debug.print("[WD-exec] ERR: {s}\n", .{e[0..@min(200, e.len)]});
                             return .{ .status = 500, .body = "{\"value\":{\"error\":\"javascript error\",\"message\":\"script error\",\"stacktrace\":\"\"}}" };
                         },
                     }
@@ -4297,38 +4317,60 @@ fn handleWebDriverCommand(
             const script = cmd.payload;
             if (page_states.items.len > 0) {
                 if (page_states.items[0].js_rt) |*js_rt| {
-                    // For async execution, we inject a callback and poll for completion
-                    // Simplified: wrap script with a global result store
+                    // Inject callback into global scope, execute script, return immediately
+                    // The callback sets window.__wd_async_done and window.__wd_async_result
+                    // The event loop will poll for completion and send the response
+                    // Extract args from the full request body JSON
+                    const body_json = cmd.payload2;
                     var wrap_buf: [65536]u8 = undefined;
-                    const wrapped = std.fmt.bufPrint(&wrap_buf,
+                    const setup = std.fmt.bufPrint(&wrap_buf,
+                        \\window.__wd_async_done = false;
+                        \\window.__wd_async_result = null;
                         \\(function() {{
-                        \\  var __wd_done = false, __wd_result = null;
-                        \\  var __wd_cb = function(r) {{ __wd_done = true; __wd_result = r; }};
-                        \\  var __wd_args = [];
-                        \\  __wd_args.push(__wd_cb);
-                        \\  (function() {{ {s} }}).apply(null, __wd_args);
-                        \\  // Poll for completion (sync fallback)
-                        \\  if (__wd_done) return JSON.stringify({{value: __wd_result}});
-                        \\  return null;
-                        \\}})()
-                    , .{script}) catch return .{ .status = 500, .body = "{\"value\":null}" };
+                        \\  var __cb = function(r) {{
+                        \\    window.__wd_async_done = true;
+                        \\    window.__wd_async_result = (r === undefined || r === null) ? null : r;
+                        \\  }};
+                        \\  var __body = {s};
+                        \\  var __args = (__body && __body.args) ? __body.args.slice() : [];
+                        \\  __args.push(__cb);
+                        \\  (function() {{ {s} }}).apply(null, __args);
+                        \\}})();
+                    , .{ body_json, script }) catch return .{ .status = 500, .body = "{\"value\":null}" };
 
-                    const result = js_rt.eval(wrapped);
+                    _ = js_rt.eval(setup);
                     js_rt.executePending();
 
-                    switch (result) {
-                        .ok => |val| {
-                            // Parse the JSON result from the async wrapper
-                            if (val.len > 0 and !std.mem.eql(u8, val, "undefined") and !std.mem.eql(u8, val, "null")) {
-                                const owned = allocator.dupe(u8, val) catch return .{ .body = "{\"value\":null}" };
-                                return .{ .body = owned, .allocated = true };
-                            }
-                            return .{ .body = "{\"value\":null}" };
-                        },
-                        .err => {
-                            return .{ .status = 500, .body = "{\"value\":{\"error\":\"javascript error\",\"message\":\"async script error\",\"stacktrace\":\"\"}}" };
-                        },
+                    // Poll for completion: check __wd_async_done in a loop with event processing
+                    const start_ms = std.time.milliTimestamp();
+                    const timeout_ms: i64 = 30000; // 30s async script timeout
+                    while (std.time.milliTimestamp() - start_ms < timeout_ms) {
+                        // Process pending JS jobs (timers, promises)
+                        js_rt.executePending();
+                        // Fire pending timers
+                        _ = web_api.tickTimers(js_rt.ctx);
+                        js_rt.executePending();
+
+                        // Check if callback was invoked
+                        const check = js_rt.eval("window.__wd_async_done ? JSON.stringify(window.__wd_async_result) : null");
+                        switch (check) {
+                            .ok => |val| {
+                                if (!std.mem.eql(u8, val, "null") and !std.mem.eql(u8, val, "undefined") and val.len > 0) {
+                                    // Callback was called — return result
+                                    var resp_buf: [65536]u8 = undefined;
+                                    const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{val}) catch return .{ .body = "{\"value\":null}" };
+                                    const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
+                                    return .{ .body = owned, .allocated = true };
+                                }
+                            },
+                            .err => {},
+                        }
+
+                        // Small sleep to avoid busy-waiting
+                        std.Thread.sleep(10 * std.time.ns_per_ms);
                     }
+                    // Timeout
+                    return .{ .status = 500, .body = "{\"value\":{\"error\":\"script timeout\",\"message\":\"Async script timed out\",\"stacktrace\":\"\"}}" };
                 }
             }
             return .{ .status = 500, .body = "{\"value\":{\"error\":\"no such window\",\"message\":\"No JS runtime\",\"stacktrace\":\"\"}}" };
