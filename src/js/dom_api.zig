@@ -1193,10 +1193,22 @@ fn classListGetLength(
     if (attr_ptr == null or attr_len == 0) return qjs.JS_NewInt32(c, 0);
 
     const class_str = attr_ptr.?[0..attr_len];
+    // Count unique tokens split by ASCII whitespace (DOMTokenList spec)
     var count: i32 = 0;
-    var iter = std.mem.splitSequence(u8, class_str, " ");
+    var seen: [64][]const u8 = undefined;
+    var seen_count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
-        if (cls.len > 0) count += 1;
+        if (cls.len == 0) continue;
+        // Check for duplicate
+        var dup = false;
+        for (seen[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+        }
+        if (!dup) {
+            if (seen_count < 64) { seen[seen_count] = cls; seen_count += 1; }
+            count += 1;
+        }
     }
     return qjs.JS_NewInt32(c, count);
 }
