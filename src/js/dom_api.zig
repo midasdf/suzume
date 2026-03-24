@@ -5555,6 +5555,38 @@ fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
+    // Resolve color values to rgb()/rgba() form for computed style
+    if (isColorProperty(prop)) {
+        const color_mod = @import("../css/properties.zig");
+        const trimmed_color = std.mem.trim(u8, val, " \t\r\n");
+        // currentcolor resolves to inherited color
+        if (eqlIgnoreCase(trimmed_color, "currentcolor")) {
+            return getInheritedComputedValue(c, elem_val, "color");
+        }
+        if (color_mod.parseColor(trimmed_color)) |color| {
+            var color_buf: [64]u8 = undefined;
+            if (color.a == 255) {
+                const s = std.fmt.bufPrint(&color_buf, "rgb({d}, {d}, {d})", .{ color.r, color.g, color.b }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            } else if (color.a == 0) {
+                const s = std.fmt.bufPrint(&color_buf, "rgba({d}, {d}, {d}, 0)", .{ color.r, color.g, color.b }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            } else {
+                // Try to preserve original alpha precision from the CSS value
+                const orig_alpha = extractOriginalAlpha(trimmed_color);
+                var alpha_buf: [16]u8 = undefined;
+                const alpha_s = if (orig_alpha) |a|
+                    std.fmt.bufPrint(&alpha_buf, "{d}", .{a}) catch "0"
+                else blk: {
+                    const a = @as(f32, @floatFromInt(color.a)) / 255.0;
+                    break :blk std.fmt.bufPrint(&alpha_buf, "{d}", .{a}) catch "0";
+                };
+                const s = std.fmt.bufPrint(&color_buf, "rgba({d}, {d}, {d}, {s})", .{ color.r, color.g, color.b, alpha_s }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            }
+        }
+    }
+
     // Resolve var() references before further processing
     if (std.mem.indexOf(u8, val, "var(") != null) {
         const resolved = resolveVarFromElement(c, elem_val, val);
@@ -5691,6 +5723,45 @@ fn extractCustomProps(style: []const u8, var_map: anytype) void {
             if (pos < style.len) pos += 1;
         }
     }
+}
+
+/// Extract the original alpha value from a CSS color string like "rgba(2, 3, 4, 0.5)"
+fn extractOriginalAlpha(color_str: []const u8) ?f64 {
+    // Find last comma in rgba()/hsla() — alpha is after it
+    var last_comma: ?usize = null;
+    var depth: usize = 0;
+    for (color_str, 0..) |ch, i| {
+        if (ch == '(') depth += 1
+        else if (ch == ')') { if (depth > 0) depth -= 1; }
+        else if (ch == ',' and depth == 1) last_comma = i;
+    }
+    if (last_comma) |pos| {
+        var end = color_str.len;
+        while (end > 0 and (color_str[end - 1] == ')' or color_str[end - 1] == ' ')) end -= 1;
+        const alpha_str = std.mem.trim(u8, color_str[pos + 1 .. end], " ");
+        if (alpha_str.len > 0 and alpha_str[alpha_str.len - 1] == '%') {
+            // Percentage: 50% → 0.5
+            const pct = std.fmt.parseFloat(f64, alpha_str[0 .. alpha_str.len - 1]) catch return null;
+            return pct / 100.0;
+        }
+        return std.fmt.parseFloat(f64, alpha_str) catch null;
+    }
+    return null;
+}
+
+/// Check if a CSS property takes a color value.
+fn isColorProperty(prop: []const u8) bool {
+    return eqlIgnoreCase(prop, "color") or
+        eqlIgnoreCase(prop, "background-color") or
+        eqlIgnoreCase(prop, "border-color") or
+        eqlIgnoreCase(prop, "border-top-color") or
+        eqlIgnoreCase(prop, "border-right-color") or
+        eqlIgnoreCase(prop, "border-bottom-color") or
+        eqlIgnoreCase(prop, "border-left-color") or
+        eqlIgnoreCase(prop, "outline-color") or
+        eqlIgnoreCase(prop, "text-decoration-color") or
+        eqlIgnoreCase(prop, "caret-color") or
+        eqlIgnoreCase(prop, "column-rule-color");
 }
 
 /// Check if a CSS value string contains NaN or infinity keywords.
