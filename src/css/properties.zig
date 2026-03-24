@@ -28,6 +28,18 @@ pub fn parseColor(raw: []const u8) ?values.Color {
     if (startsWithIgnoreCase(trimmed, "hwb(")) {
         return parseHwbFunc(trimmed);
     }
+    if (startsWithIgnoreCase(trimmed, "oklab(")) {
+        return parseOklabFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "oklch(")) {
+        return parseOklchFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "lab(")) {
+        return parseLabFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "lch(")) {
+        return parseLchFunc(trimmed);
+    }
 
     return namedColor(trimmed);
 }
@@ -271,6 +283,200 @@ fn parseHwbFunc(text: []const u8) ?values.Color {
         .b = @intFromFloat(@round(std.math.clamp(bv * 255.0, 0.0, 255.0))),
         .a = a,
     };
+}
+
+// ── OKLab/OKLCH/Lab/LCH Color Space Conversion ─────────────────────
+
+fn oklabToSrgb(L: f32, a: f32, b: f32) values.Color {
+    // OKLab → LMS (cube root space)
+    const l_ = L + 0.3963377774 * a + 0.2158037573 * b;
+    const m_ = L - 0.1055613458 * a - 0.0638541728 * b;
+    const s_ = L - 0.0894841775 * a - 1.2914855480 * b;
+
+    // Cube
+    const l = l_ * l_ * l_;
+    const m = m_ * m_ * m_;
+    const s = s_ * s_ * s_;
+
+    // LMS → linear sRGB
+    const r_lin = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s;
+    const g_lin = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s;
+    const b_lin = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s;
+
+    return .{
+        .r = @intFromFloat(@round(std.math.clamp(gammaCorrect(r_lin), 0, 1) * 255)),
+        .g = @intFromFloat(@round(std.math.clamp(gammaCorrect(g_lin), 0, 1) * 255)),
+        .b = @intFromFloat(@round(std.math.clamp(gammaCorrect(b_lin), 0, 1) * 255)),
+        .a = 255,
+    };
+}
+
+fn gammaCorrect(c: f32) f32 {
+    if (c <= 0.0031308) return 12.92 * c;
+    return 1.055 * std.math.pow(f32, @max(c, 0), 1.0 / 2.4) - 0.055;
+}
+
+fn parseColorComponent(tok: []const u8, is_pct_scale: f32) ?f32 {
+    if (eqlIgnoreCase(tok, "none")) return 0;
+    const is_pct = tok.len > 0 and tok[tok.len - 1] == '%';
+    const clean = if (is_pct) tok[0 .. tok.len - 1] else tok;
+    const val = std.fmt.parseFloat(f32, clean) catch return null;
+    return if (is_pct) val / 100.0 * is_pct_scale else val;
+}
+
+fn parseAngleComponent(tok: []const u8) ?f32 {
+    if (eqlIgnoreCase(tok, "none")) return 0;
+    if (std.mem.endsWith(u8, tok, "deg")) {
+        return std.fmt.parseFloat(f32, tok[0 .. tok.len - 3]) catch null;
+    } else if (std.mem.endsWith(u8, tok, "rad")) {
+        const r = std.fmt.parseFloat(f32, tok[0 .. tok.len - 3]) catch return null;
+        return r * 180.0 / std.math.pi;
+    } else if (std.mem.endsWith(u8, tok, "grad")) {
+        const g = std.fmt.parseFloat(f32, tok[0 .. tok.len - 4]) catch return null;
+        return g * 0.9;
+    } else if (std.mem.endsWith(u8, tok, "turn")) {
+        const t = std.fmt.parseFloat(f32, tok[0 .. tok.len - 4]) catch return null;
+        return t * 360.0;
+    }
+    return std.fmt.parseFloat(f32, tok) catch null;
+}
+
+fn parseOklabFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var vals: [4]f32 = .{ 0, 0, 0, 1 };
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        switch (count) {
+            0 => vals[0] = parseColorComponent(tok, 1.0) orelse return null, // L: 0-1 or 0%-100%
+            1 => vals[1] = parseColorComponent(tok, 0.4) orelse return null, // a: -0.4 to 0.4
+            2 => vals[2] = parseColorComponent(tok, 0.4) orelse return null, // b: -0.4 to 0.4
+            3 => vals[3] = parseColorComponent(tok, 1.0) orelse return null, // alpha
+            else => {},
+        }
+        count += 1;
+    }
+    if (count < 3) return null;
+    var color = oklabToSrgb(vals[0], vals[1], vals[2]);
+    if (count >= 4) color.a = @intFromFloat(@round(std.math.clamp(vals[3], 0, 1) * 255));
+    return color;
+}
+
+fn parseOklchFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var count: usize = 0;
+    var L: f32 = 0;
+    var C: f32 = 0;
+    var H: f32 = 0;
+    var alpha: f32 = 1;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        switch (count) {
+            0 => L = parseColorComponent(tok, 1.0) orelse return null,
+            1 => C = parseColorComponent(tok, 0.4) orelse return null,
+            2 => H = parseAngleComponent(tok) orelse return null,
+            3 => alpha = parseColorComponent(tok, 1.0) orelse return null,
+            else => {},
+        }
+        count += 1;
+    }
+    if (count < 3) return null;
+    // OKLCH → OKLab
+    const h_rad = H * std.math.pi / 180.0;
+    const a = C * @cos(h_rad);
+    const b = C * @sin(h_rad);
+    var color = oklabToSrgb(L, a, b);
+    if (count >= 4) color.a = @intFromFloat(@round(std.math.clamp(alpha, 0, 1) * 255));
+    return color;
+}
+
+// CIE Lab/LCH (using D50 illuminant, per CSS Color 4)
+fn labToSrgb(L: f32, a: f32, b: f32) values.Color {
+    // Lab → XYZ (D50)
+    const fy = (L + 16.0) / 116.0;
+    const fx = a / 500.0 + fy;
+    const fz = fy - b / 200.0;
+
+    const delta = 6.0 / 29.0;
+    const x = if (fx > delta) fx * fx * fx else (fx - 16.0 / 116.0) * 3.0 * delta * delta;
+    const y = if (fy > delta) fy * fy * fy else (fy - 16.0 / 116.0) * 3.0 * delta * delta;
+    const z = if (fz > delta) fz * fz * fz else (fz - 16.0 / 116.0) * 3.0 * delta * delta;
+
+    // D50 white point
+    const xn: f32 = 0.96422;
+    const yn: f32 = 1.00000;
+    const zn: f32 = 0.82521;
+
+    // XYZ (D50) → linear sRGB via Bradford adaptation to D65 then sRGB matrix
+    // Simplified: use combined D50→sRGB matrix
+    const xw = x * xn;
+    const yw = y * yn;
+    const zw = z * zn;
+
+    // XYZ D50 → linear sRGB (combined Bradford + sRGB)
+    const r_lin = 3.1338561 * xw - 1.6168667 * yw - 0.4906146 * zw;
+    const g_lin = -0.9787684 * xw + 1.9161415 * yw + 0.0334540 * zw;
+    const b_lin = 0.0719453 * xw - 0.2289914 * yw + 1.4052427 * zw;
+
+    return .{
+        .r = @intFromFloat(@round(std.math.clamp(gammaCorrect(r_lin), 0, 1) * 255)),
+        .g = @intFromFloat(@round(std.math.clamp(gammaCorrect(g_lin), 0, 1) * 255)),
+        .b = @intFromFloat(@round(std.math.clamp(gammaCorrect(b_lin), 0, 1) * 255)),
+        .a = 255,
+    };
+}
+
+fn parseLabFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var vals: [4]f32 = .{ 0, 0, 0, 1 };
+    var count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        switch (count) {
+            0 => vals[0] = parseColorComponent(tok, 100.0) orelse return null, // L: 0-100
+            1 => vals[1] = parseColorComponent(tok, 125.0) orelse return null, // a: -125 to 125
+            2 => vals[2] = parseColorComponent(tok, 125.0) orelse return null, // b: -125 to 125
+            3 => vals[3] = parseColorComponent(tok, 1.0) orelse return null, // alpha
+            else => {},
+        }
+        count += 1;
+    }
+    if (count < 3) return null;
+    var color = labToSrgb(vals[0], vals[1], vals[2]);
+    if (count >= 4) color.a = @intFromFloat(@round(std.math.clamp(vals[3], 0, 1) * 255));
+    return color;
+}
+
+fn parseLchFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var count: usize = 0;
+    var L: f32 = 0;
+    var C: f32 = 0;
+    var H: f32 = 0;
+    var alpha: f32 = 1;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        switch (count) {
+            0 => L = parseColorComponent(tok, 100.0) orelse return null,
+            1 => C = parseColorComponent(tok, 150.0) orelse return null,
+            2 => H = parseAngleComponent(tok) orelse return null,
+            3 => alpha = parseColorComponent(tok, 1.0) orelse return null,
+            else => {},
+        }
+        count += 1;
+    }
+    if (count < 3) return null;
+    // LCH → Lab
+    const h_rad = H * std.math.pi / 180.0;
+    const a = C * @cos(h_rad);
+    const b = C * @sin(h_rad);
+    var color = labToSrgb(L, a, b);
+    if (count >= 4) color.a = @intFromFloat(@round(std.math.clamp(alpha, 0, 1) * 255));
+    return color;
 }
 
 fn clampToU8(v: f32) u8 {
