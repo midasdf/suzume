@@ -1099,6 +1099,22 @@ fn classListReplace(
     return quickjs.JS_NewBool(true);
 }
 
+fn classListEntries(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+    // Stub: return empty array (full iterator support TODO)
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewArray(c);
+}
+
+fn classListKeys(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewArray(c);
+}
+
+fn classListValues(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewArray(c);
+}
+
 fn classContains(class_str: []const u8, needle: []const u8) bool {
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
@@ -1259,6 +1275,10 @@ fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue {
     _ = qjs.JS_SetPropertyStr(ctx, obj, "replace", qjs.JS_NewCFunction(ctx, &classListReplace, "replace", 2));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "item", qjs.JS_NewCFunction(ctx, &classListItem, "item", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "forEach", qjs.JS_NewCFunction(ctx, &classListForEach, "forEach", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "toString", qjs.JS_NewCFunction(ctx, &classListGetValue, "toString", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "entries", qjs.JS_NewCFunction(ctx, &classListEntries, "entries", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "keys", qjs.JS_NewCFunction(ctx, &classListKeys, "keys", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "values", qjs.JS_NewCFunction(ctx, &classListValues, "values", 0));
 
     // length getter
     {
