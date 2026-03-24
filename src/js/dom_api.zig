@@ -1146,21 +1146,38 @@ fn classListValues(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JS
 }
 
 /// Throw a DOMException with the given name and message.
-/// DOM Standard §4.3: DOMException interface
+/// DOM Standard §4.3: Uses the global DOMException constructor so
+/// assert_throws_dom's `e.constructor === DOMException` check passes.
 fn throwDOMException(c: *qjs.JSContext, name: []const u8, message: []const u8) qjs.JSValue {
-    // Create a DOMException-like error object
+    // Use the global DOMException constructor: new DOMException(message, name)
+    const global = qjs.JS_GetGlobalObject(c);
+    defer qjs.JS_FreeValue(c, global);
+    const ctor = qjs.JS_GetPropertyStr(c, global, "DOMException");
+    defer qjs.JS_FreeValue(c, ctor);
+
+    if (!quickjs.JS_IsUndefined(ctor)) {
+        var args_arr = [2]qjs.JSValue{
+            qjs.JS_NewStringLen(c, message.ptr, message.len),
+            qjs.JS_NewStringLen(c, name.ptr, name.len),
+        };
+        const exc = qjs.JS_CallConstructor(c, ctor, 2, &args_arr);
+        qjs.JS_FreeValue(c, args_arr[0]);
+        qjs.JS_FreeValue(c, args_arr[1]);
+        if (!quickjs.JS_IsException(exc)) {
+            return qjs.JS_Throw(c, exc);
+        }
+    }
+
+    // Fallback: plain object (if DOMException not registered)
     const err = qjs.JS_NewObject(c);
     _ = qjs.JS_SetPropertyStr(c, err, "name", qjs.JS_NewStringLen(c, name.ptr, name.len));
     _ = qjs.JS_SetPropertyStr(c, err, "message", qjs.JS_NewStringLen(c, message.ptr, message.len));
-
-    // Map DOMException name to legacy code
     const code: i32 = if (std.mem.eql(u8, name, "SyntaxError")) 12
         else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5
         else if (std.mem.eql(u8, name, "NotFoundError")) 8
         else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3
         else 0;
     _ = qjs.JS_SetPropertyStr(c, err, "code", qjs.JS_NewInt32(c, code));
-
     return qjs.JS_Throw(c, err);
 }
 
@@ -7290,6 +7307,27 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // HTML spec: window, self, globalThis all refer to the global object
     _ = qjs.JS_SetPropertyStr(ctx, global, "window", qjs.JS_DupValue(ctx, global));
     _ = qjs.JS_SetPropertyStr(ctx, global, "self", qjs.JS_DupValue(ctx, global));
+
+    // DOM Standard §4.3: Register DOMException constructor
+    // Must be a proper JS class so `e.constructor === DOMException` works in assert_throws_dom
+    const dom_exc_script =
+        \\function DOMException(message, name) {
+        \\  this.message = message || '';
+        \\  this.name = name || 'Error';
+        \\  var codes = {IndexSizeError:1,HierarchyRequestError:3,WrongDocumentError:4,
+        \\    InvalidCharacterError:5,NoModificationAllowedError:7,NotFoundError:8,
+        \\    NotSupportedError:9,InUseAttributeError:10,InvalidStateError:11,
+        \\    SyntaxError:12,InvalidModificationError:13,NamespaceError:14,
+        \\    InvalidAccessError:15,SecurityError:18,NetworkError:19,AbortError:20,
+        \\    URLMismatchError:21,TimeoutError:23,InvalidNodeTypeError:24,DataCloneError:25};
+        \\  this.code = codes[this.name] || 0;
+        \\}
+        \\DOMException.prototype = Object.create(Error.prototype);
+        \\DOMException.prototype.constructor = DOMException;
+        \\DOMException.prototype.toString = function() { return 'DOMException: ' + this.message; };
+    ;
+    const exc_result = qjs.JS_Eval(ctx, dom_exc_script.ptr, dom_exc_script.len, "<domexception>", 0);
+    qjs.JS_FreeValue(ctx, exc_result);
 
     qjs.JS_FreeValue(ctx, global);
 }
