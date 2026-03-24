@@ -40,6 +40,9 @@ pub fn parseColor(raw: []const u8) ?values.Color {
     if (startsWithIgnoreCase(trimmed, "lch(")) {
         return parseLchFunc(trimmed);
     }
+    if (startsWithIgnoreCase(trimmed, "color(")) {
+        return parseColorFunc(trimmed);
+    }
 
     return namedColor(trimmed);
 }
@@ -477,6 +480,98 @@ fn parseLchFunc(text: []const u8) ?values.Color {
     var color = labToSrgb(L, a, b);
     if (count >= 4) color.a = @intFromFloat(@round(std.math.clamp(alpha, 0, 1) * 255));
     return color;
+}
+
+/// CSS Color 4 §9: color() function — predefined color spaces
+fn parseColorFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var iter = std.mem.tokenizeAny(u8, inner, " \t/,");
+
+    // First token: color space name
+    const space_name = iter.next() orelse return null;
+
+    // Read R G B [/ alpha]
+    var vals: [4]f32 = .{ 0, 0, 0, 1 };
+    var count: usize = 0;
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        vals[count] = parseColorComponent(tok, 1.0) orelse return null;
+        count += 1;
+    }
+    if (count < 3) return null;
+
+    var r = vals[0];
+    var g = vals[1];
+    var b = vals[2];
+
+    // Convert from color space to sRGB
+    if (eqlIgnoreCase(space_name, "srgb")) {
+        // Already sRGB linear, just clamp
+    } else if (eqlIgnoreCase(space_name, "srgb-linear")) {
+        // Linear sRGB → sRGB gamma
+        r = gammaCorrect(r);
+        g = gammaCorrect(g);
+        b = gammaCorrect(b);
+    } else if (eqlIgnoreCase(space_name, "display-p3")) {
+        // Display P3 → linear P3 → XYZ D65 → linear sRGB → sRGB
+        // Simplified: approximate by treating as wider gamut sRGB
+        // P3 to sRGB approximate conversion
+        const rl = inverseGamma(r);
+        const gl = inverseGamma(g);
+        const bl = inverseGamma(b);
+        // P3 linear → XYZ → sRGB linear (combined matrix)
+        const sr = 1.2249401 * rl - 0.2249402 * gl + 0.0 * bl;
+        const sg = 0.0 * rl + 1.0 * gl + 0.0 * bl;
+        const sb = 0.0 * rl - 0.0416198 * gl + 1.0416198 * bl;
+        r = gammaCorrect(sr);
+        g = gammaCorrect(sg);
+        b = gammaCorrect(sb);
+    } else if (eqlIgnoreCase(space_name, "a98-rgb")) {
+        // Adobe RGB → sRGB (approximate)
+        r = gammaCorrect(std.math.pow(f32, @max(r, 0), 563.0 / 256.0));
+        g = gammaCorrect(std.math.pow(f32, @max(g, 0), 563.0 / 256.0));
+        b = gammaCorrect(std.math.pow(f32, @max(b, 0), 563.0 / 256.0));
+    } else if (eqlIgnoreCase(space_name, "prophoto-rgb")) {
+        // ProPhoto → sRGB (simplified)
+        r = gammaCorrect(r);
+        g = gammaCorrect(g);
+        b = gammaCorrect(b);
+    } else if (eqlIgnoreCase(space_name, "rec2020")) {
+        // Rec.2020 → sRGB (simplified)
+        r = gammaCorrect(r);
+        g = gammaCorrect(g);
+        b = gammaCorrect(b);
+    } else if (eqlIgnoreCase(space_name, "xyz") or eqlIgnoreCase(space_name, "xyz-d65")) {
+        // XYZ D65 → linear sRGB
+        const sr = 3.2404542 * r - 1.5371385 * g - 0.4985314 * b;
+        const sg2 = -0.9692660 * r + 1.8760108 * g + 0.0415560 * b;
+        const sb = 0.0556434 * r - 0.2040259 * g + 1.0572252 * b;
+        r = gammaCorrect(sr);
+        g = gammaCorrect(sg2);
+        b = gammaCorrect(sb);
+    } else if (eqlIgnoreCase(space_name, "xyz-d50")) {
+        // XYZ D50 → sRGB (via D50→D65 Bradford then sRGB)
+        const sr = 3.1338561 * r - 1.6168667 * g - 0.4906146 * b;
+        const sg2 = -0.9787684 * r + 1.9161415 * g + 0.0334540 * b;
+        const sb = 0.0719453 * r - 0.2289914 * g + 1.4052427 * b;
+        r = gammaCorrect(sr);
+        g = gammaCorrect(sg2);
+        b = gammaCorrect(sb);
+    } else {
+        return null; // Unknown color space
+    }
+
+    return .{
+        .r = @intFromFloat(@round(std.math.clamp(r, 0, 1) * 255)),
+        .g = @intFromFloat(@round(std.math.clamp(g, 0, 1) * 255)),
+        .b = @intFromFloat(@round(std.math.clamp(b, 0, 1) * 255)),
+        .a = if (count >= 4) @intFromFloat(@round(std.math.clamp(vals[3], 0, 1) * 255)) else 255,
+    };
+}
+
+fn inverseGamma(c: f32) f32 {
+    if (c <= 0.04045) return c / 12.92;
+    return std.math.pow(f32, (c + 0.055) / 1.055, 2.4);
 }
 
 fn clampToU8(v: f32) u8 {
