@@ -2208,6 +2208,12 @@ fn styleSetProperty(
         canonicalizeSingleArgMath(val, &calc_buf) orelse val
     else if (val.len >= 6 and eqlIgnoreCase(val[0..6], "clamp("))
         canonicalizeClamp(val, &calc_buf) orelse val
+    else if (val.len >= 6 and eqlIgnoreCase(val[0..6], "round("))
+        canonicalizeRoundModRem(val, &calc_buf) orelse val
+    else if (val.len >= 4 and eqlIgnoreCase(val[0..4], "mod("))
+        canonicalizeRoundModRem(val, &calc_buf) orelse val
+    else if (val.len >= 4 and eqlIgnoreCase(val[0..4], "rem("))
+        canonicalizeRoundModRem(val, &calc_buf) orelse val
     else
         val;
 
@@ -7160,6 +7166,18 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "min(")) return true;
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "max(")) return true;
         if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "clamp(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "round(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "mod(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "rem(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "abs(")) return true;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sign(")) return true;
+        // Color functions
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "lab(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "lch(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "oklab(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "oklch(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "color(")) return true;
     }
 
     const prop_id = css_ast.PropertyId.fromString(prop);
@@ -7480,6 +7498,59 @@ fn canonicalizeDisplayValue(val: []const u8) []const u8 {
         if (has_run_in) return "run-in flow-root list-item";
     }
     return val;
+}
+
+/// Evaluate round(), mod(), rem() to calc(result) for constant numeric args.
+fn canonicalizeRoundModRem(val: []const u8, buf: *[512]u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed[trimmed.len - 1] != ')') return null;
+
+    var func_name: []const u8 = undefined;
+    var prefix_len: usize = 0;
+    if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..6], "round(")) {
+        func_name = "round";
+        prefix_len = 6;
+    } else if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "mod(")) {
+        func_name = "mod";
+        prefix_len = 4;
+    } else if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "rem(")) {
+        func_name = "rem";
+        prefix_len = 4;
+    } else return null;
+
+    const inner = std.mem.trim(u8, trimmed[prefix_len .. trimmed.len - 1], " ");
+
+    // Split on comma
+    var comma_pos: ?usize = null;
+    var depth: usize = 0;
+    for (inner, 0..) |ch, i| {
+        if (ch == '(') depth += 1
+        else if (ch == ')') { if (depth > 0) depth -= 1; }
+        else if (ch == ',' and depth == 0) { comma_pos = i; break; }
+    }
+    if (comma_pos == null) return null;
+    const a_str = std.mem.trim(u8, inner[0..comma_pos.?], " ");
+    const b_str = std.mem.trim(u8, inner[comma_pos.? + 1 ..], " ");
+
+    // Try to parse both as numbers
+    const a = std.fmt.parseFloat(f64, a_str) catch return null;
+    const b = std.fmt.parseFloat(f64, b_str) catch return null;
+
+    var result: f64 = undefined;
+    if (std.mem.eql(u8, func_name, "round")) {
+        if (b == 0) return null;
+        result = @round(a / b) * b;
+    } else if (std.mem.eql(u8, func_name, "mod")) {
+        if (b == 0) return null;
+        result = a - b * @floor(a / b); // CSS mod (always matches sign of b)
+    } else if (std.mem.eql(u8, func_name, "rem")) {
+        if (b == 0) return null;
+        result = a - b * @trunc(a / b); // CSS rem (matches sign of a)
+    }
+
+    // Format as calc(result)
+    const s = std.fmt.bufPrint(buf, "calc({d})", .{result}) catch return null;
+    return canonicalizeCalcValue(s, buf);
 }
 
 /// Distributive expansion for calc():
