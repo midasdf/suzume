@@ -5555,6 +5555,15 @@ fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
+    // Resolve var() references before further processing
+    if (std.mem.indexOf(u8, val, "var(") != null) {
+        const resolved = resolveVarFromElement(c, elem_val, val);
+        if (resolved) |rv| {
+            // Recursively process the resolved value
+            return resolveInlineForComputed(c, prop, rv, elem_val);
+        }
+    }
+
     const trimmed = std.mem.trim(u8, val, " \t\r\n");
 
     // Keywords that should not be resolved to px
@@ -5618,6 +5627,87 @@ fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8
 
     // Fallback: return as-is
     return qjs.JS_NewStringLen(c, val.ptr, val.len);
+}
+
+/// Resolve var() references for an element by building a custom property map
+/// from inline styles of the element and its ancestors.
+fn resolveVarFromElement(c: *qjs.JSContext, elem_val: qjs.JSValue, val: []const u8) ?[]const u8 {
+    const variables_mod = @import("../css/variables.zig");
+
+    // Build a simple var map from inline styles (element + ancestors)
+    var var_map = variables_mod.VarMap.init(std.heap.c_allocator);
+    defer var_map.deinit();
+
+    // Walk up the DOM tree to collect custom properties
+    var current = elem_val;
+    var depth: usize = 0;
+    while (depth < 20) : (depth += 1) {
+        const el = getElement(c, current);
+        if (el) |e| {
+            var slen: usize = 0;
+            const sptr = lxb_dom_element_get_attribute(e, "style", 5, &slen);
+            if (sptr != null and slen > 0) {
+                const istyle = sptr.?[0..slen];
+                // Extract --custom-property definitions
+                extractCustomProps(istyle, &var_map);
+            }
+        }
+        // Move to parent element
+        const parent = qjs.JS_GetPropertyStr(c, current, "parentElement");
+        if (quickjs.JS_IsNull(parent) or quickjs.JS_IsUndefined(parent)) {
+            qjs.JS_FreeValue(c, parent);
+            break;
+        }
+        if (depth > 0) qjs.JS_FreeValue(c, current);
+        current = parent;
+    }
+    if (depth > 0) qjs.JS_FreeValue(c, current);
+
+    // Also check g_styles for custom properties from CSS cascade
+    if (g_styles) |styles| {
+        const node = getNode(c, elem_val);
+        if (node) |n| {
+            if (styles.get(@intFromPtr(n))) |style| {
+                // Add custom properties from computed style
+                for (style.custom_properties.items) |cp| {
+                    // Only add if not already defined (inline takes precedence)
+                    if (!var_map.contains(cp.name)) {
+                        var_map.put(cp.name, cp.value) catch {};
+                    }
+                }
+            }
+        }
+    }
+
+    if (var_map.count() == 0) return null;
+
+    return variables_mod.resolveVarRefs(val, &var_map, std.heap.c_allocator);
+}
+
+/// Extract --custom-property definitions from an inline style string.
+fn extractCustomProps(style: []const u8, var_map: anytype) void {
+    var pos: usize = 0;
+    while (pos < style.len) {
+        // Find next property start
+        while (pos < style.len and (style[pos] == ' ' or style[pos] == ';' or style[pos] == '\t' or style[pos] == '\n')) pos += 1;
+        if (pos + 2 >= style.len) break;
+        if (style[pos] == '-' and style[pos + 1] == '-') {
+            // Custom property
+            const name_start = pos;
+            while (pos < style.len and style[pos] != ':' and style[pos] != ';') pos += 1;
+            if (pos >= style.len or style[pos] != ':') continue;
+            const name = std.mem.trim(u8, style[name_start..pos], " \t");
+            pos += 1; // skip ':'
+            const val_start = pos;
+            while (pos < style.len and style[pos] != ';') pos += 1;
+            const value = std.mem.trim(u8, style[val_start..pos], " \t");
+            var_map.put(name, value) catch {};
+        } else {
+            // Skip to next semicolon
+            while (pos < style.len and style[pos] != ';') pos += 1;
+            if (pos < style.len) pos += 1;
+        }
+    }
 }
 
 /// Check if a CSS value string contains NaN or infinity keywords.
