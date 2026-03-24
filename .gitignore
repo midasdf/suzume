@@ -7,5 +7,14 @@ zig-cache/
 /main
 
 sysroot-aarch64/
+sysroot/
 suzume-sysroot/
 .worktrees/
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+screenshots/
+tests/wpt/wpt-suzume/build/
+tests/wpt/wpt-suzume/wpt_suzume/__pycache__/
+tests/wpt/wpt-suzume/wpt_suzume.egg-info/

@@ -187,13 +187,13 @@ pub const TextRenderer = struct {
                 // Map the original codepoint to the fallback font's glyph index
                 const fb_face = self.fallback_face.?;
                 const fb_glyph = c.FT_Get_Char_Index(fb_face, infos[i].cluster);
-                if (fb_glyph != 0 and c.FT_Load_Glyph(fb_face, fb_glyph, c.FT_LOAD_RENDER) == 0) {
+                if (fb_glyph != 0 and c.FT_Load_Glyph(fb_face, fb_glyph, c.FT_LOAD_RENDER | c.FT_LOAD_TARGET_LIGHT) == 0) {
                     render_face = fb_face;
                     load_ok = true;
                 }
             }
             if (!load_ok) {
-                if (c.FT_Load_Glyph(self.ft_face, glyph_index, c.FT_LOAD_RENDER) != 0) {
+                if (c.FT_Load_Glyph(self.ft_face, glyph_index, c.FT_LOAD_RENDER | c.FT_LOAD_TARGET_LIGHT) != 0) {
                     pen_x_26_6 += positions[i].x_advance;
                     pen_y += y_advance;
                     continue;

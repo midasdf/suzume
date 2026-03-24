@@ -47,6 +47,8 @@ const quickjs = @import("bindings/quickjs.zig");
 const web_api = @import("js/web_api.zig");
 const dom_api = @import("js/dom_api.zig");
 const events = @import("js/events.zig");
+const WebDriverServer = @import("net/webdriver.zig").WebDriverServer;
+const CommandSlot = @import("net/webdriver.zig").CommandSlot;
 const DomNode = @import("dom/node.zig").DomNode;
 const lxb = @import("bindings/lexbor.zig").c;
 
@@ -188,6 +190,7 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     // Update global root box and styles pointers for JS layout/style queries
     dom_api.setRootBox(new_root_box);
     dom_api.setStyles(&page.styles.?.styles);
+    dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
 
     std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
         page.total_height, page.total_width, new_root_box.children.items.len,
@@ -595,8 +598,6 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
                             std.debug.print("[JS:ERROR] {s}\n", .{result.value()});
                         }
                         js_rt.executePending();
-                        // GC after external scripts to reclaim memory
-                        quickjs.c.JS_RunGC(js_rt.rt);
                         response.deinit();
                     }
                 } else {
@@ -1137,6 +1138,7 @@ fn navigateTo(
     // Set root box and styles pointers for JS layout/style queries
     dom_api.setRootBox(page.root_box);
     dom_api.setStyles(if (page.styles) |*s| &s.styles else null);
+    dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page, allocator, loader, base_url_copy);
@@ -1713,6 +1715,8 @@ pub fn main() !void {
     var run_test_http = false;
     var run_test_js = false;
     var run_test_dom_js = false;
+    var screenshot_path: ?[]const u8 = null;
+    var webdriver_port: ?u16 = null;
 
     while (args.next()) |arg| {
         if (std.mem.eql(u8, arg, "--test-dom")) {
@@ -1723,6 +1727,16 @@ pub fn main() !void {
             run_test_js = true;
         } else if (std.mem.eql(u8, arg, "--test-dom-js")) {
             run_test_dom_js = true;
+        } else if (std.mem.eql(u8, arg, "--wpt-mode")) {
+            web_api.wpt_mode = true;
+        } else if (std.mem.eql(u8, arg, "--screenshot")) {
+            screenshot_path = args.next();
+        } else if (std.mem.startsWith(u8, arg, "--webdriver=")) {
+            webdriver_port = std.fmt.parseInt(u16, arg["--webdriver=".len..], 10) catch null;
+        } else if (std.mem.eql(u8, arg, "--webdriver")) {
+            if (args.next()) |port_str| {
+                webdriver_port = std.fmt.parseInt(u16, port_str, 10) catch null;
+            }
         } else {
             initial_url = arg;
         }
@@ -1897,8 +1911,8 @@ pub fn main() !void {
         loader.adblock_enabled = std.mem.eql(u8, val, "true");
     }
 
-    // Restore session if no initial URL provided
-    if (initial_url == null) {
+    // Restore session if no initial URL provided (skip in WebDriver mode)
+    if (initial_url == null and webdriver_port == null) {
         if (storage_inst) |*s| {
             if (s.loadSession()) |session_json| {
                 defer allocator.free(session_json);
@@ -1988,12 +2002,68 @@ pub fn main() !void {
         }
     }
 
+    // Screenshot mode: render page and dump to PNG, then exit
+    if (screenshot_path) |spath| {
+        // Clear surface to white
+        surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
+        // Paint page content (no chrome) directly
+        if (page_states.items.len > 0) {
+            const pg = &page_states.items[0];
+            if (pg.root_box) |root_box| {
+                const ic_ptr: ?*ImageCache = if (pg.image_cache) |*ic| ic else null;
+                painter_mod.paint(root_box, &surface, &fonts, 0, 0, 0, surface.height, ic_ptr);
+            }
+        }
+        surface.update();
+        if (surface.dumpToPng(spath)) {
+            std.debug.print("[screenshot] Saved to {s}\n", .{spath});
+        } else {
+            std.debug.print("[screenshot] Failed to save to {s}\n", .{spath});
+        }
+        return;
+    }
+
+    // WebDriver server (if --webdriver=PORT specified)
+    var wd_slot = CommandSlot{};
+    var wd_server: ?WebDriverServer = null;
+    if (webdriver_port) |port| {
+        wd_server = WebDriverServer.init(allocator, port, &wd_slot);
+        wd_server.?.start() catch |e| {
+            std.debug.print("[WebDriver] Failed to start: {}\n", .{e});
+        };
+    }
+
     // Initial paint
     var needs_repaint = true;
 
     // Event loop
     var running = true;
     while (running) {
+        // WPT mode: exit after test result is sent
+        if (web_api.wpt_mode and web_api.wpt_result_sent) {
+            break;
+        }
+
+        // WebDriver: poll command queue and execute
+        if (wd_server != null) {
+            if (wd_slot.poll()) |cmd| {
+                const wd_resp = handleWebDriverCommand(
+                    cmd,
+                    allocator,
+                    &loader,
+                    &fonts,
+                    &page_states,
+                    &tab_mgr,
+                    &surface,
+                    &needs_repaint,
+                    &scroll_y,
+                    &scroll_x,
+                    if (storage_inst) |*si| si else null,
+                );
+                wd_slot.respond(wd_resp);
+            }
+        }
+
         // Repaint if needed
         // Apply CSS animations before repaint
         {
@@ -4124,3 +4194,188 @@ pub const js = struct {
     pub const dom_apis = @import("js/dom_api.zig");
     pub const event_system = @import("js/events.zig");
 };
+
+// ── WebDriver Command Handler ───────────────────────────────────────
+
+const webdriver = @import("net/webdriver.zig");
+
+fn handleWebDriverCommand(
+    cmd: webdriver.Command,
+    allocator: std.mem.Allocator,
+    loader_ptr: *Loader,
+    fonts: *painter_mod.FontCache,
+    page_states: *std.ArrayListUnmanaged(PageState),
+    tab_mgr: *TabManager,
+    surface: *Surface,
+    needs_repaint: *bool,
+    scroll_y: *f32,
+    scroll_x: *f32,
+    storage: ?*Storage,
+) webdriver.Response {
+    switch (cmd.tag) {
+        .navigate => {
+            const url = cmd.payload;
+            if (url.len == 0) return .{ .status = 400, .body = "{\"value\":{\"error\":\"invalid argument\",\"message\":\"empty url\",\"stacktrace\":\"\"}}" };
+
+            // about:blank is a no-op navigation
+            if (std.mem.eql(u8, url, "about:blank")) {
+                return .{ .body = "{\"value\":null}" };
+            }
+
+            // Create sentinel-terminated copy for navigateTo (NOT freed - navigateTo may store reference)
+            const url_z = allocator.allocSentinel(u8, url.len, 0) catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"OOM\",\"stacktrace\":\"\"}}" };
+            @memcpy(url_z, url);
+
+            if (page_states.items.len > 0) {
+                if (navigateTo(allocator, loader_ptr, url_z, fonts, &page_states.items[0], storage, surface.width, surface.height)) {
+                    scroll_y.* = 0;
+                    scroll_x.* = 0;
+                    needs_repaint.* = true;
+                    // Duplicate URL before responding (cmd.payload points into WebDriver recv_buf)
+                    if (allocator.dupe(u8, url)) |u| {
+                        tab_mgr.updateActiveUrl(u);
+                    } else |_| {}
+                    return .{ .body = "{\"value\":null}" };
+                }
+            }
+            return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"navigation failed\",\"stacktrace\":\"\"}}" };
+        },
+        .get_url => {
+            // Return current URL
+            if (tab_mgr.getActiveTab()) |tab| {
+                // Build JSON response with URL
+                var buf: [4096]u8 = undefined;
+                const result = std.fmt.bufPrint(&buf, "{{\"value\":\"{s}\"}}", .{tab.url}) catch return .{ .body = "{\"value\":\"\"}" };
+                // Need to return stable pointer — allocate
+                const owned = allocator.dupe(u8, result) catch return .{ .body = "{\"value\":\"\"}" };
+                return .{ .body = owned, .allocated = true };
+            }
+            return .{ .body = "{\"value\":\"about:blank\"}" };
+        },
+        .get_title => {
+            if (page_states.items.len > 0) {
+                if (page_states.items[0].doc) |*d| {
+                    const title = extractTitle(d);
+                    if (title) |t| {
+                        var buf: [4096]u8 = undefined;
+                        const result = std.fmt.bufPrint(&buf, "{{\"value\":\"{s}\"}}", .{t}) catch return .{ .body = "{\"value\":\"\"}" };
+                        const owned = allocator.dupe(u8, result) catch return .{ .body = "{\"value\":\"\"}" };
+                        return .{ .body = owned, .allocated = true };
+                    }
+                }
+            }
+            return .{ .body = "{\"value\":\"\"}" };
+        },
+        .execute_sync => {
+            const script = cmd.payload;
+            if (page_states.items.len > 0) {
+                if (page_states.items[0].js_rt) |*js_rt| {
+                    // Wrap script: (function(){ <script> }).apply(null, <args>)
+                    var wrap_buf: [65536]u8 = undefined;
+                    const wrapped = std.fmt.bufPrint(&wrap_buf, "(function(){{ {s} }}).apply(null, [])", .{script}) catch return .{ .status = 500, .body = "{\"value\":null}" };
+
+                    const result = js_rt.eval(wrapped);
+                    js_rt.executePending();
+
+                    switch (result) {
+                        .ok => |val| {
+                            // Return the string result wrapped in WebDriver JSON
+                            var resp_buf: [65536]u8 = undefined;
+                            const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{val}) catch return .{ .body = "{\"value\":null}" };
+                            const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
+                            return .{ .body = owned, .allocated = true };
+                        },
+                        .err => {
+                            return .{ .status = 500, .body = "{\"value\":{\"error\":\"javascript error\",\"message\":\"script error\",\"stacktrace\":\"\"}}" };
+                        },
+                    }
+                }
+            }
+            return .{ .status = 500, .body = "{\"value\":{\"error\":\"no such window\",\"message\":\"No JS runtime\",\"stacktrace\":\"\"}}" };
+        },
+        .execute_async => {
+            const script = cmd.payload;
+            if (page_states.items.len > 0) {
+                if (page_states.items[0].js_rt) |*js_rt| {
+                    // For async execution, we inject a callback and poll for completion
+                    // Simplified: wrap script with a global result store
+                    var wrap_buf: [65536]u8 = undefined;
+                    const wrapped = std.fmt.bufPrint(&wrap_buf,
+                        \\(function() {{
+                        \\  var __wd_done = false, __wd_result = null;
+                        \\  var __wd_cb = function(r) {{ __wd_done = true; __wd_result = r; }};
+                        \\  var __wd_args = [];
+                        \\  __wd_args.push(__wd_cb);
+                        \\  (function() {{ {s} }}).apply(null, __wd_args);
+                        \\  // Poll for completion (sync fallback)
+                        \\  if (__wd_done) return JSON.stringify({{value: __wd_result}});
+                        \\  return null;
+                        \\}})()
+                    , .{script}) catch return .{ .status = 500, .body = "{\"value\":null}" };
+
+                    const result = js_rt.eval(wrapped);
+                    js_rt.executePending();
+
+                    switch (result) {
+                        .ok => |val| {
+                            // Parse the JSON result from the async wrapper
+                            if (val.len > 0 and !std.mem.eql(u8, val, "undefined") and !std.mem.eql(u8, val, "null")) {
+                                const owned = allocator.dupe(u8, val) catch return .{ .body = "{\"value\":null}" };
+                                return .{ .body = owned, .allocated = true };
+                            }
+                            return .{ .body = "{\"value\":null}" };
+                        },
+                        .err => {
+                            return .{ .status = 500, .body = "{\"value\":{\"error\":\"javascript error\",\"message\":\"async script error\",\"stacktrace\":\"\"}}" };
+                        },
+                    }
+                }
+            }
+            return .{ .status = 500, .body = "{\"value\":{\"error\":\"no such window\",\"message\":\"No JS runtime\",\"stacktrace\":\"\"}}" };
+        },
+        .screenshot => {
+            // Dump framebuffer to temp PNG, read, base64-encode
+            const tmp_path = "/tmp/suzume-wd-screenshot.png";
+            // Paint first
+            if (page_states.items.len > 0) {
+                const pg = &page_states.items[0];
+                if (pg.root_box) |root_box| {
+                    surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
+                    const ic_ptr: ?*ImageCache = if (pg.image_cache) |*ic| ic else null;
+                    painter_mod.paint(root_box, surface, fonts, 0, 0, 0, surface.height, ic_ptr);
+                    surface.update();
+                }
+            }
+            if (surface.dumpToPng(tmp_path)) {
+                const file = std.fs.cwd().openFile(tmp_path, .{}) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
+                defer file.close();
+                const png_data = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
+                defer allocator.free(png_data);
+
+                // Base64 encode
+                const base64 = std.base64.standard;
+                const encoded_len = base64.Encoder.calcSize(png_data.len);
+                const encoded = allocator.alloc(u8, encoded_len + 20) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
+                // Build response: {"value":"<base64>"}
+                const base64_enc = std.base64.standard.Encoder;
+                const b64_len = base64_enc.calcSize(png_data.len);
+                // Build response: {"value":"<base64>"}
+                const total_len = 10 + b64_len + 2; // {"value":"..."}
+                const resp_mem = allocator.alloc(u8, total_len) catch {
+                    allocator.free(encoded);
+                    return .{ .status = 500, .body = "{\"value\":\"\"}" };
+                };
+                @memcpy(resp_mem[0..10], "{\"value\":\"");
+                _ = base64_enc.encode(resp_mem[10..][0..b64_len], png_data);
+                @memcpy(resp_mem[10 + b64_len ..][0..2], "\"}");
+                allocator.free(encoded);
+                return .{ .body = resp_mem, .allocated = true };
+            }
+            return .{ .status = 500, .body = "{\"value\":\"\"}" };
+        },
+        .close_window, .noop => {
+            return .{ .body = "{\"value\":null}" };
+        },
+    }
+}
+

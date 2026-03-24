@@ -68,6 +68,22 @@ fn setDomDirty() void {
     mutation_observers_pending = true;
 }
 
+/// Check if an element is connected to the document (has an ancestor chain reaching the document node).
+fn isElementConnected(elem: *lxb.lxb_dom_element_t) bool {
+    var current: ?*lxb.lxb_dom_node_t = @as(*lxb.lxb_dom_node_t, @ptrCast(elem)).parent;
+    while (current) |n| {
+        if (n.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) return true;
+        current = n.parent;
+    }
+    return false;
+}
+
+/// Set DOM dirty flag only if the element is connected to the document tree.
+/// Disconnected elements (e.g. from createElement) don't need restyle.
+fn setDomDirtyIfConnected(elem: *lxb.lxb_dom_element_t) void {
+    if (isElementConnected(elem)) setDomDirty();
+}
+
 /// Global root box pointer — set from main after layout, used for offset/rect queries.
 const Box = @import("../layout/box.zig").Box;
 const DomNode = @import("../dom/node.zig").DomNode;
@@ -89,6 +105,16 @@ var g_styles: ?*const cascade_mod.StyleMap = null;
 /// Set the styles pointer (called from main after cascade/restyle).
 pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
     g_styles = styles;
+}
+
+/// Viewport dimensions for getComputedStyle resolution.
+var g_viewport_width: f32 = 800;
+var g_viewport_height: f32 = 600;
+
+/// Set viewport dimensions (called from main after layout).
+pub fn setViewport(w: f32, h: f32) void {
+    g_viewport_width = w;
+    g_viewport_height = h;
 }
 
 /// Find the Box in the tree that corresponds to a given DOM node pointer.
@@ -1840,22 +1866,52 @@ fn getShorthandInfoForLonghand(longhand: []const u8) ?ShorthandInfo {
 
 /// Reconstruct a box shorthand value from its longhands in inline style, returning a JS string.
 fn reconstructBoxShorthandJS(c: *qjs.JSContext, style_str: []const u8, shorthand: []const u8) ?qjs.JSValue {
+    return reconstructBoxShorthandJSWithElem(c, style_str, shorthand, quickjs.JS_UNDEFINED());
+}
+
+/// Reconstruct a box shorthand from expanded longhands, optionally resolving values.
+fn reconstructBoxShorthandJSWithElem(c: *qjs.JSContext, style_str: []const u8, shorthand: []const u8, elem_val: qjs.JSValue) ?qjs.JSValue {
     const longhands = getBoxLonghands(shorthand) orelse return null;
-    const top_v = getStyleProperty(style_str, longhands[0]) orelse return null;
-    const right_v = getStyleProperty(style_str, longhands[1]) orelse return null;
-    const bottom_v = getStyleProperty(style_str, longhands[2]) orelse return null;
-    const left_v = getStyleProperty(style_str, longhands[3]) orelse return null;
+    const top_raw = getStyleProperty(style_str, longhands[0]) orelse return null;
+    const right_raw = getStyleProperty(style_str, longhands[1]) orelse return null;
+    const bottom_raw = getStyleProperty(style_str, longhands[2]) orelse return null;
+    const left_raw = getStyleProperty(style_str, longhands[3]) orelse return null;
+
+    // If elem_val is provided and this is a length shorthand, resolve each value
+    const has_elem = !quickjs.JS_IsUndefined(elem_val);
+    if (has_elem and (eqlIgnoreCase(shorthand, "margin") or eqlIgnoreCase(shorthand, "padding"))) {
+        const font_size = getElementFontSizeFromStyle(c, elem_val);
+        const cb_width = getContainingBlockWidth(c, elem_val);
+        var resolved: [4]f32 = undefined;
+        var all_resolved = true;
+        const raw_vals = [4][]const u8{ top_raw, right_raw, bottom_raw, left_raw };
+        for (0..4) |i| {
+            const trimmed = std.mem.trim(u8, raw_vals[i], " \t\r\n");
+            if (cascade_mod.resolveValueToPx(trimmed, font_size, g_viewport_width, g_viewport_height, cb_width)) |px| {
+                resolved[i] = px;
+            } else {
+                all_resolved = false;
+                break;
+            }
+        }
+        if (all_resolved) {
+            var buf: [128]u8 = undefined;
+            return fmtBoxShorthand(c, resolved[0], resolved[1], resolved[2], resolved[3], &buf);
+        }
+    }
+
+    // Fallback: return raw values
     var buf: [256]u8 = undefined;
-    if (std.mem.eql(u8, top_v, right_v) and std.mem.eql(u8, right_v, bottom_v) and std.mem.eql(u8, bottom_v, left_v)) {
-        return qjs.JS_NewStringLen(c, top_v.ptr, top_v.len);
-    } else if (std.mem.eql(u8, top_v, bottom_v) and std.mem.eql(u8, right_v, left_v)) {
-        const r = std.fmt.bufPrint(&buf, "{s} {s}", .{ top_v, right_v }) catch return null;
+    if (std.mem.eql(u8, top_raw, right_raw) and std.mem.eql(u8, right_raw, bottom_raw) and std.mem.eql(u8, bottom_raw, left_raw)) {
+        return qjs.JS_NewStringLen(c, top_raw.ptr, top_raw.len);
+    } else if (std.mem.eql(u8, top_raw, bottom_raw) and std.mem.eql(u8, right_raw, left_raw)) {
+        const r = std.fmt.bufPrint(&buf, "{s} {s}", .{ top_raw, right_raw }) catch return null;
         return qjs.JS_NewStringLen(c, r.ptr, r.len);
-    } else if (std.mem.eql(u8, right_v, left_v)) {
-        const r = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ top_v, right_v, bottom_v }) catch return null;
+    } else if (std.mem.eql(u8, right_raw, left_raw)) {
+        const r = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ top_raw, right_raw, bottom_raw }) catch return null;
         return qjs.JS_NewStringLen(c, r.ptr, r.len);
     } else {
-        const r = std.fmt.bufPrint(&buf, "{s} {s} {s} {s}", .{ top_v, right_v, bottom_v, left_v }) catch return null;
+        const r = std.fmt.bufPrint(&buf, "{s} {s} {s} {s}", .{ top_raw, right_raw, bottom_raw, left_raw }) catch return null;
         return qjs.JS_NewStringLen(c, r.ptr, r.len);
     }
 }
@@ -1934,73 +1990,185 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
     _ = qjs.JS_DefinePropertyGetSet(ctx, obj, cssTextAtom, qjs.JS_NewCFunction(ctx, &styleGetCssText, "get cssText", 0), qjs.JS_NewCFunction(ctx, &styleSetCssText, "set cssText", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, cssTextAtom);
 
-    // Set up Proxy wrapper via JS eval to intercept camelCase property access.
-    // Store the raw object and return a Proxy.
-    const global = qjs.JS_GetGlobalObject(ctx);
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__styleTarget", obj);
+    // Define CSS property getter/setters using JS_NewCFunctionData.
+    // Each getter/setter receives the CSS name as func_data[0].
+    // This avoids Proxy (which triggers GC corruption on heavy JS pages).
+    const camel_css_pairs = comptime [_]struct { camel: [:0]const u8, css: [:0]const u8 }{
+        .{ .camel = "color", .css = "color" },
+        .{ .camel = "backgroundColor", .css = "background-color" },
+        .{ .camel = "background", .css = "background" },
+        .{ .camel = "display", .css = "display" },
+        .{ .camel = "width", .css = "width" },
+        .{ .camel = "height", .css = "height" },
+        .{ .camel = "minWidth", .css = "min-width" },
+        .{ .camel = "minHeight", .css = "min-height" },
+        .{ .camel = "maxWidth", .css = "max-width" },
+        .{ .camel = "maxHeight", .css = "max-height" },
+        .{ .camel = "margin", .css = "margin" },
+        .{ .camel = "marginTop", .css = "margin-top" },
+        .{ .camel = "marginRight", .css = "margin-right" },
+        .{ .camel = "marginBottom", .css = "margin-bottom" },
+        .{ .camel = "marginLeft", .css = "margin-left" },
+        .{ .camel = "padding", .css = "padding" },
+        .{ .camel = "paddingTop", .css = "padding-top" },
+        .{ .camel = "paddingRight", .css = "padding-right" },
+        .{ .camel = "paddingBottom", .css = "padding-bottom" },
+        .{ .camel = "paddingLeft", .css = "padding-left" },
+        .{ .camel = "border", .css = "border" },
+        .{ .camel = "borderTop", .css = "border-top" },
+        .{ .camel = "borderRight", .css = "border-right" },
+        .{ .camel = "borderBottom", .css = "border-bottom" },
+        .{ .camel = "borderLeft", .css = "border-left" },
+        .{ .camel = "borderRadius", .css = "border-radius" },
+        .{ .camel = "borderColor", .css = "border-color" },
+        .{ .camel = "borderWidth", .css = "border-width" },
+        .{ .camel = "borderStyle", .css = "border-style" },
+        .{ .camel = "borderCollapse", .css = "border-collapse" },
+        .{ .camel = "fontSize", .css = "font-size" },
+        .{ .camel = "fontWeight", .css = "font-weight" },
+        .{ .camel = "fontFamily", .css = "font-family" },
+        .{ .camel = "fontStyle", .css = "font-style" },
+        .{ .camel = "textAlign", .css = "text-align" },
+        .{ .camel = "textDecoration", .css = "text-decoration" },
+        .{ .camel = "textTransform", .css = "text-transform" },
+        .{ .camel = "textIndent", .css = "text-indent" },
+        .{ .camel = "lineHeight", .css = "line-height" },
+        .{ .camel = "letterSpacing", .css = "letter-spacing" },
+        .{ .camel = "position", .css = "position" },
+        .{ .camel = "top", .css = "top" },
+        .{ .camel = "left", .css = "left" },
+        .{ .camel = "right", .css = "right" },
+        .{ .camel = "bottom", .css = "bottom" },
+        .{ .camel = "zIndex", .css = "z-index" },
+        .{ .camel = "opacity", .css = "opacity" },
+        .{ .camel = "visibility", .css = "visibility" },
+        .{ .camel = "overflow", .css = "overflow" },
+        .{ .camel = "overflowX", .css = "overflow-x" },
+        .{ .camel = "overflowY", .css = "overflow-y" },
+        .{ .camel = "cursor", .css = "cursor" },
+        .{ .camel = "float", .css = "float" },
+        .{ .camel = "clear", .css = "clear" },
+        .{ .camel = "transform", .css = "transform" },
+        .{ .camel = "transition", .css = "transition" },
+        .{ .camel = "boxShadow", .css = "box-shadow" },
+        .{ .camel = "textShadow", .css = "text-shadow" },
+        .{ .camel = "whiteSpace", .css = "white-space" },
+        .{ .camel = "wordBreak", .css = "word-break" },
+        .{ .camel = "wordWrap", .css = "word-wrap" },
+        .{ .camel = "flexDirection", .css = "flex-direction" },
+        .{ .camel = "flexWrap", .css = "flex-wrap" },
+        .{ .camel = "justifyContent", .css = "justify-content" },
+        .{ .camel = "alignItems", .css = "align-items" },
+        .{ .camel = "alignSelf", .css = "align-self" },
+        .{ .camel = "flex", .css = "flex" },
+        .{ .camel = "flexGrow", .css = "flex-grow" },
+        .{ .camel = "flexShrink", .css = "flex-shrink" },
+        .{ .camel = "flexBasis", .css = "flex-basis" },
+        .{ .camel = "gap", .css = "gap" },
+        .{ .camel = "gridTemplateColumns", .css = "grid-template-columns" },
+        .{ .camel = "gridTemplateRows", .css = "grid-template-rows" },
+        .{ .camel = "gridColumn", .css = "grid-column" },
+        .{ .camel = "gridRow", .css = "grid-row" },
+        .{ .camel = "listStyle", .css = "list-style" },
+        .{ .camel = "listStyleType", .css = "list-style-type" },
+        .{ .camel = "outline", .css = "outline" },
+        .{ .camel = "outlineColor", .css = "outline-color" },
+        .{ .camel = "outlineStyle", .css = "outline-style" },
+        .{ .camel = "outlineWidth", .css = "outline-width" },
+        .{ .camel = "content", .css = "content" },
+        .{ .camel = "pointerEvents", .css = "pointer-events" },
+        .{ .camel = "userSelect", .css = "user-select" },
+        .{ .camel = "objectFit", .css = "object-fit" },
+        .{ .camel = "verticalAlign", .css = "vertical-align" },
+        .{ .camel = "boxSizing", .css = "box-sizing" },
+        .{ .camel = "marginTrim", .css = "margin-trim" },
+        .{ .camel = "readingFlow", .css = "reading-flow" },
+        .{ .camel = "readingOrder", .css = "reading-order" },
+        .{ .camel = "order", .css = "order" },
+        .{ .camel = "tableLayout", .css = "table-layout" },
+        .{ .camel = "willChange", .css = "will-change" },
+    };
 
-    const proxy_code =
-        \\(function() {
-        \\  var t = globalThis.__styleTarget;
-        \\  delete globalThis.__styleTarget;
-        \\  var map = {
-        \\    color:"color",backgroundColor:"background-color",background:"background",
-        \\    display:"display",width:"width",height:"height",
-        \\    minWidth:"min-width",minHeight:"min-height",maxWidth:"max-width",maxHeight:"max-height",
-        \\    margin:"margin",marginTop:"margin-top",marginRight:"margin-right",
-        \\    marginBottom:"margin-bottom",marginLeft:"margin-left",
-        \\    padding:"padding",paddingTop:"padding-top",paddingRight:"padding-right",
-        \\    paddingBottom:"padding-bottom",paddingLeft:"padding-left",
-        \\    border:"border",borderTop:"border-top",borderRight:"border-right",
-        \\    borderBottom:"border-bottom",borderLeft:"border-left",
-        \\    borderRadius:"border-radius",borderColor:"border-color",
-        \\    borderWidth:"border-width",borderStyle:"border-style",
-        \\    fontSize:"font-size",fontWeight:"font-weight",fontFamily:"font-family",
-        \\    fontStyle:"font-style",textAlign:"text-align",textDecoration:"text-decoration",
-        \\    textTransform:"text-transform",lineHeight:"line-height",letterSpacing:"letter-spacing",
-        \\    position:"position",top:"top",left:"left",right:"right",bottom:"bottom",
-        \\    zIndex:"z-index",opacity:"opacity",visibility:"visibility",
-        \\    overflow:"overflow",overflowX:"overflow-x",overflowY:"overflow-y",
-        \\    cursor:"cursor",float:"float",clear:"clear",
-        \\    transform:"transform",transition:"transition",
-        \\    boxShadow:"box-shadow",textShadow:"text-shadow",
-        \\    whiteSpace:"white-space",wordBreak:"word-break",wordWrap:"word-wrap",
-        \\    flexDirection:"flex-direction",flexWrap:"flex-wrap",
-        \\    justifyContent:"justify-content",alignItems:"align-items",alignSelf:"align-self",
-        \\    flex:"flex",flexGrow:"flex-grow",flexShrink:"flex-shrink",flexBasis:"flex-basis",
-        \\    gap:"gap",gridTemplateColumns:"grid-template-columns",gridTemplateRows:"grid-template-rows",
-        \\    gridColumn:"grid-column",gridRow:"grid-row",
-        \\    listStyle:"list-style",listStyleType:"list-style-type",
-        \\    outline:"outline",outlineColor:"outline-color",outlineStyle:"outline-style",
-        \\    outlineWidth:"outline-width",content:"content",pointerEvents:"pointer-events",
-        \\    userSelect:"user-select",objectFit:"object-fit",verticalAlign:"vertical-align",
-        \\    boxSizing:"box-sizing",marginTrim:"margin-trim"
-        \\  };
-        \\  return new Proxy(t, {
-        \\    get: function(o,p) {
-        \\      if (p in o) return o[p];
-        \\      var css = map[p] || p;
-        \\      return o.getPropertyValue(css);
-        \\    },
-        \\    set: function(o,p,v) {
-        \\      var css = map[p] || p;
-        \\      o.setProperty(css, String(v));
-        \\      return true;
-        \\    }
-        \\  });
-        \\})()
-    ;
-
-    const result = qjs.JS_Eval(ctx, proxy_code, proxy_code.len, "<style>", qjs.JS_EVAL_TYPE_GLOBAL);
-    qjs.JS_FreeValue(ctx, global);
-
-    if (quickjs.JS_IsException(result)) {
-        // Fallback: return raw object without Proxy
-        const exc = qjs.JS_GetException(ctx);
-        qjs.JS_FreeValue(ctx, exc);
-        return qjs.JS_DupValue(ctx, obj);
+    for (camel_css_pairs) |pair| {
+        const css_js = qjs.JS_NewStringLen(ctx, pair.css.ptr, pair.css.len);
+        // Define getter/setter for camelCase name
+        {
+            var gd = [1]qjs.JSValue{qjs.JS_DupValue(ctx, css_js)};
+            var sd = [1]qjs.JSValue{qjs.JS_DupValue(ctx, css_js)};
+            const getter = qjs.JS_NewCFunctionData(ctx, &stylePropDataGet, 0, 0, 1, &gd);
+            const setter = qjs.JS_NewCFunctionData(ctx, &stylePropDataSet, 1, 0, 1, &sd);
+            const atom = qjs.JS_NewAtom(ctx, pair.camel);
+            _ = qjs.JS_DefinePropertyGetSet(ctx, obj, atom, getter, setter, qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+            qjs.JS_FreeAtom(ctx, atom);
+            qjs.JS_FreeValue(ctx, gd[0]);
+            qjs.JS_FreeValue(ctx, sd[0]);
+        }
+        // Also define for CSS name (hyphenated) if different from camelCase
+        if (!std.mem.eql(u8, pair.camel, pair.css)) {
+            var gd = [1]qjs.JSValue{qjs.JS_DupValue(ctx, css_js)};
+            var sd = [1]qjs.JSValue{qjs.JS_DupValue(ctx, css_js)};
+            const getter = qjs.JS_NewCFunctionData(ctx, &stylePropDataGet, 0, 0, 1, &gd);
+            const setter = qjs.JS_NewCFunctionData(ctx, &stylePropDataSet, 1, 0, 1, &sd);
+            const atom = qjs.JS_NewAtom(ctx, pair.css);
+            _ = qjs.JS_DefinePropertyGetSet(ctx, obj, atom, getter, setter, qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+            qjs.JS_FreeAtom(ctx, atom);
+            qjs.JS_FreeValue(ctx, gd[0]);
+            qjs.JS_FreeValue(ctx, sd[0]);
+        }
+        qjs.JS_FreeValue(ctx, css_js);
     }
+
+    return obj;
+}
+
+/// Getter for CSS property via JS_NewCFunctionData. func_data[0] = CSS name string.
+fn stylePropDataGet(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: [*c]qjs.JSValue,
+    _: c_int,
+    func_data: [*c]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const gpv = qjs.JS_GetPropertyStr(c, this_val, "getPropertyValue");
+    if (quickjs.JS_IsUndefined(gpv)) return qjs.JS_NewStringLen(c, "", 0);
+    defer qjs.JS_FreeValue(c, gpv);
+    var call_args = [1]qjs.JSValue{qjs.JS_DupValue(c, func_data[0])};
+    const result = qjs.JS_Call(c, gpv, this_val, 1, &call_args);
+    qjs.JS_FreeValue(c, call_args[0]);
     return result;
+}
+
+/// Setter for CSS property via JS_NewCFunctionData. func_data[0] = CSS name string.
+fn stylePropDataSet(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: [*c]qjs.JSValue,
+    _: c_int,
+    func_data: [*c]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    // Convert value to string
+    var val_len: usize = 0;
+    const val_ptr = qjs.JS_ToCStringLen(c, &val_len, argv[0]);
+    if (val_ptr == null) return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, val_ptr);
+    const val_str = qjs.JS_NewStringLen(c, val_ptr, val_len);
+    const sp = qjs.JS_GetPropertyStr(c, this_val, "setProperty");
+    if (quickjs.JS_IsUndefined(sp)) {
+        qjs.JS_FreeValue(c, val_str);
+        return quickjs.JS_UNDEFINED();
+    }
+    defer qjs.JS_FreeValue(c, sp);
+    var call_args = [2]qjs.JSValue{ qjs.JS_DupValue(c, func_data[0]), val_str };
+    const result = qjs.JS_Call(c, sp, this_val, 2, &call_args);
+    qjs.JS_FreeValue(c, call_args[0]);
+    qjs.JS_FreeValue(c, val_str);
+    qjs.JS_FreeValue(c, result);
+    return quickjs.JS_UNDEFINED();
 }
 
 fn styleSetProperty(
@@ -2030,6 +2198,19 @@ fn styleSetProperty(
         if (!isValidCssValue(prop, val)) return quickjs.JS_UNDEFINED();
     }
 
+    // Canonicalize CSS values for canonical serialization
+    var calc_buf: [512]u8 = undefined;
+    const effective_val = if (eqlIgnoreCase(prop, "display"))
+        canonicalizeDisplayValue(val)
+    else if (val.len >= 5 and eqlIgnoreCase(val[0..5], "calc("))
+        canonicalizeCalcValue(val, &calc_buf) orelse val
+    else if (val.len >= 4 and (eqlIgnoreCase(val[0..4], "min(") or eqlIgnoreCase(val[0..4], "max(")))
+        canonicalizeSingleArgMath(val, &calc_buf) orelse val
+    else if (val.len >= 6 and eqlIgnoreCase(val[0..6], "clamp("))
+        canonicalizeClamp(val, &calc_buf) orelse val
+    else
+        val;
+
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
     const current_style = if (style_ptr != null and style_len > 0) style_ptr.?[0..style_len] else "";
@@ -2045,7 +2226,7 @@ fn styleSetProperty(
             var buf: [4096]u8 = undefined;
             if (setStyleProperty(current_style, prop, normalized, &buf)) |new_style| {
                 _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
-                setDomDirty();
+                setDomDirtyIfConnected(elem);
             }
             return quickjs.JS_UNDEFINED();
         }
@@ -2059,7 +2240,7 @@ fn styleSetProperty(
             var buf: [4096]u8 = undefined;
             if (removeBoxShorthandFromStyle(current_style, prop, longhands, &buf)) |new_style| {
                 _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
-                setDomDirty();
+                setDomDirtyIfConnected(elem);
             }
             return quickjs.JS_UNDEFINED();
         }
@@ -2083,15 +2264,15 @@ fn styleSetProperty(
         var buf: [4096]u8 = undefined;
         if (expandBoxShorthandInStyle(current_style, prop, longhands, expanded_vals, &buf)) |new_style| {
             _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
-            setDomDirty();
+            setDomDirtyIfConnected(elem);
         }
         return quickjs.JS_UNDEFINED();
     }
 
     var buf: [4096]u8 = undefined;
-    if (setStyleProperty(current_style, prop, val, &buf)) |new_style| {
+    if (setStyleProperty(current_style, prop, effective_val, &buf)) |new_style| {
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
-        setDomDirty();
+        setDomDirtyIfConnected(elem);
     }
     return quickjs.JS_UNDEFINED();
 }
@@ -2252,7 +2433,20 @@ fn elementGetStyle(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return createStyleObject(c, this_val);
+
+    // Return cached style object if available (avoids creating hundreds of Proxies
+    // when WPT tests access element.style repeatedly in batch)
+    const cached = qjs.JS_GetPropertyStr(c, this_val, "__style");
+    if (!quickjs.JS_IsUndefined(cached) and !quickjs.JS_IsNull(cached)) {
+        return cached; // GetPropertyStr already incremented refcount
+    }
+    qjs.JS_FreeValue(c, cached);
+
+    const style_obj = createStyleObject(c, this_val);
+    if (!quickjs.JS_IsException(style_obj)) {
+        _ = qjs.JS_SetPropertyStr(c, this_val, "__style", qjs.JS_DupValue(c, style_obj));
+    }
+    return style_obj;
 }
 
 // ── element.hasAttribute ────────────────────────────────────────────
@@ -4904,50 +5098,70 @@ fn computedStyleGetPropertyValue(
                 } else if (eqlIgnoreCase(trimmed, "revert")) {
                     // Fall through to cascade (UA value)
                 } else {
-                    return resolveInlineForComputed(c, prop, val);
+                    return resolveInlineForComputed(c, prop, val, elem_val);
                 }
             }
-            // Try shorthand reconstruction from expanded longhands
+            // Try shorthand reconstruction from expanded longhands (with resolution)
             const istyle = style_ptr.?[0..style_len];
-            if (reconstructBoxShorthandJS(c, istyle, prop)) |reconstructed| {
+            if (reconstructBoxShorthandJSWithElem(c, istyle, prop, elem_val)) |reconstructed| {
                 return reconstructed;
             }
-            // Try longhand from stored shorthand
+            // Try longhand from stored shorthand — resolve to computed value
             if (getLonghandFromShorthand(istyle, prop)) |lh_val| {
-                return qjs.JS_NewStringLen(c, lh_val.ptr, lh_val.len);
+                return resolveInlineForComputed(c, prop, lh_val, elem_val);
             }
         }
     }
 
-    // Fall back to cascade computed style
+    // Fall back to cascade computed style, using layout box used values where available
     const node = getNode(c, elem_val);
     if (node != null and g_styles != null) {
         if (g_styles.?.get(@intFromPtr(node.?))) |style| {
-            return computedStyleToString(c, &style, prop);
+            // Try to use layout box for resolved margin/padding/dimension values
+            const box_opt = if (g_root_box) |root| findBoxForNode(root, node.?) else null;
+            return computedStyleToStringWithBox(c, &style, prop, box_opt);
         }
     }
     return qjs.JS_NewStringLen(c, "", 0);
 }
 
-/// Convert a ComputedStyle field to a CSS string for getComputedStyle.
+/// Convert a ComputedStyle field to a CSS string for getComputedStyle (without box context).
 fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: []const u8) qjs.JSValue {
+    return computedStyleToStringWithBox(c, style, prop, null);
+}
+
+/// Convert a ComputedStyle field to a CSS string, using layout box used values when available.
+fn computedStyleToStringWithBox(c: *qjs.JSContext, style: *const ComputedStyle, prop: []const u8, box_opt: ?*const Box) qjs.JSValue {
     // Format buffer for numeric values
     var buf: [128]u8 = undefined;
 
     if (std.mem.eql(u8, prop, "display")) {
+        // CSS 2.1 §9.7: Blockification — position:absolute/fixed and float cause
+        // inline display types to become their block equivalents
+        const needs_blockify = (style.position == .absolute or style.position == .fixed or
+            style.float_ != .none);
         const s = switch (style.display) {
             .block => "block",
-            .inline_ => "inline",
+            .inline_ => if (needs_blockify) "block" else "inline",
             .none => "none",
             .flex => "flex",
-            .inline_block => "inline-block",
-            .inline_flex => "inline-flex",
+            .inline_block => if (needs_blockify) "block" else "inline-block",
+            .inline_flex => if (needs_blockify) "flex" else "inline-flex",
             .grid => "grid",
-            .inline_grid => "inline-grid",
+            .inline_grid => if (needs_blockify) "grid" else "inline-grid",
             .table => "table",
-            .table_row => "table-row",
-            .table_cell => "table-cell",
+            .inline_table => if (needs_blockify) "table" else "inline-table",
+            // CSS Display L3 §2.7: Internal table display types blockify to "block"
+            .table_row => if (needs_blockify) "block" else "table-row",
+            .table_cell => if (needs_blockify) "block" else "table-cell",
+            .table_caption => if (needs_blockify) "block" else "table-caption",
+            .table_row_group => if (needs_blockify) "block" else "table-row-group",
+            .table_header_group => if (needs_blockify) "block" else "table-header-group",
+            .table_footer_group => if (needs_blockify) "block" else "table-footer-group",
+            .table_column => if (needs_blockify) "block" else "table-column",
+            .table_column_group => if (needs_blockify) "block" else "table-column-group",
             .list_item => "list-item",
+            .contents => "contents",
             else => "block",
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
@@ -4997,31 +5211,55 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "width")) {
+        // Use layout box content width if available (resolves % to px)
+        if (box_opt) |box| {
+            if (style.width == .percent or style.width == .auto) {
+                return fmtPx(c, box.content.width, &buf);
+            }
+        }
         return dimensionToString(c, style.width, &buf);
     } else if (std.mem.eql(u8, prop, "height")) {
+        if (box_opt) |box| {
+            if (style.height == .percent or style.height == .auto) {
+                return fmtPx(c, box.content.height, &buf);
+            }
+        }
         return dimensionToString(c, style.height, &buf);
     } else if (std.mem.eql(u8, prop, "margin")) {
-        // Shorthand: return "top right bottom left" or collapsed form
+        if (box_opt) |box| {
+            return fmtBoxShorthand(c, box.margin.top, box.margin.right, box.margin.bottom, box.margin.left, &buf);
+        }
         return fmtBoxShorthand(c, style.margin_top, style.margin_right, style.margin_bottom, style.margin_left, &buf);
     } else if (std.mem.eql(u8, prop, "margin-top")) {
+        if (box_opt) |box| return fmtPx(c, box.margin.top, &buf);
         return fmtPx(c, style.margin_top, &buf);
     } else if (std.mem.eql(u8, prop, "margin-right")) {
+        if (box_opt) |box| return fmtPx(c, box.margin.right, &buf);
         return fmtPx(c, style.margin_right, &buf);
     } else if (std.mem.eql(u8, prop, "margin-bottom")) {
+        if (box_opt) |box| return fmtPx(c, box.margin.bottom, &buf);
         return fmtPx(c, style.margin_bottom, &buf);
     } else if (std.mem.eql(u8, prop, "margin-left")) {
+        if (box_opt) |box| return fmtPx(c, box.margin.left, &buf);
         return fmtPx(c, style.margin_left, &buf);
     } else if (std.mem.eql(u8, prop, "margin-trim")) {
         return fmtMarginTrim(c, style.margin_trim);
     } else if (std.mem.eql(u8, prop, "padding")) {
+        if (box_opt) |box| {
+            return fmtBoxShorthand(c, box.padding.top, box.padding.right, box.padding.bottom, box.padding.left, &buf);
+        }
         return fmtBoxShorthand(c, style.padding_top, style.padding_right, style.padding_bottom, style.padding_left, &buf);
     } else if (std.mem.eql(u8, prop, "padding-top")) {
+        if (box_opt) |box| return fmtPx(c, box.padding.top, &buf);
         return fmtPx(c, style.padding_top, &buf);
     } else if (std.mem.eql(u8, prop, "padding-right")) {
+        if (box_opt) |box| return fmtPx(c, box.padding.right, &buf);
         return fmtPx(c, style.padding_right, &buf);
     } else if (std.mem.eql(u8, prop, "padding-bottom")) {
+        if (box_opt) |box| return fmtPx(c, box.padding.bottom, &buf);
         return fmtPx(c, style.padding_bottom, &buf);
     } else if (std.mem.eql(u8, prop, "padding-left")) {
+        if (box_opt) |box| return fmtPx(c, box.padding.left, &buf);
         return fmtPx(c, style.padding_left, &buf);
     } else if (std.mem.eql(u8, prop, "border-top-width")) {
         return fmtPx(c, style.border_top_width, &buf);
@@ -5170,6 +5408,20 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
         return fmtPx(c, style.word_spacing, &buf);
     } else if (std.mem.eql(u8, prop, "text-indent")) {
         return fmtPx(c, style.text_indent, &buf);
+    } else if (std.mem.eql(u8, prop, "reading-flow")) {
+        const s = switch (style.reading_flow) {
+            .normal => "normal",
+            .flex_visual => "flex-visual",
+            .flex_flow => "flex-flow",
+            .grid_rows => "grid-rows",
+            .grid_columns => "grid-columns",
+            .grid_order => "grid-order",
+            .source_order => "source-order",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "reading-order")) {
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.reading_order}) catch return qjs.JS_NewStringLen(c, "0", 1);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
     }
 
     // Unknown property — return empty string (not undefined)
@@ -5196,8 +5448,18 @@ fn argbToCssColor(c: *qjs.JSContext, argb: u32, buf: *[128]u8) qjs.JSValue {
 }
 
 /// Format a px value as "Npx" string.
+/// CSS Values 4 §10.11: NaN → 0px, ±Infinity → ±MAX_LENGTH px.
+const MAX_CSS_LENGTH: f32 = 33554432.0; // 2^25, implementation-defined max CSS length
 fn fmtPx(c: *qjs.JSContext, val: f32, buf: *[128]u8) qjs.JSValue {
-    const result = std.fmt.bufPrint(buf, "{d}px", .{val}) catch return qjs.JS_NewStringLen(c, "0px", 3);
+    const clamped: f32 = if (std.math.isNan(val))
+        0.0
+    else if (std.math.isPositiveInf(val))
+        MAX_CSS_LENGTH
+    else if (std.math.isNegativeInf(val))
+        -MAX_CSS_LENGTH
+    else
+        val;
+    const result = std.fmt.bufPrint(buf, "{d}px", .{clamped}) catch return qjs.JS_NewStringLen(c, "0px", 3);
     return qjs.JS_NewStringLen(c, result.ptr, result.len);
 }
 
@@ -5217,10 +5479,11 @@ fn fmtMarginTrim(c: *qjs.JSContext, mt: computed_mod.MarginTrim) qjs.JSValue {
     // CSS canonical order: block before inline? Actually spec says individual order doesn't matter
     // but WPT expects: block-start before inline-start, etc.
     // WPT margin-trim-computed expects block-start before inline-start
+    // Canonical order: block-start, inline-start, block-end, inline-end (interleaved)
     const parts = [_]struct { flag: bool, name: []const u8 }{
         .{ .flag = bs, .name = "block-start" },
-        .{ .flag = be, .name = "block-end" },
         .{ .flag = is_, .name = "inline-start" },
+        .{ .flag = be, .name = "block-end" },
         .{ .flag = ie, .name = "inline-end" },
     };
     for (parts) |p| {
@@ -5238,9 +5501,269 @@ fn fmtMarginTrim(c: *qjs.JSContext, mt: computed_mod.MarginTrim) qjs.JSValue {
 
 /// Resolve an inline style value for getComputedStyle. For most properties returns as-is.
 /// For margin-trim, canonicalizes to spec order (block before inline).
-fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8) qjs.JSValue {
+fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8, elem_val: qjs.JSValue) qjs.JSValue {
     if (eqlIgnoreCase(prop, "margin-trim")) return canonicalizeMarginTrimForComputed(c, val);
+
+    // CSS 2.1 §9.7: Blockification — when position or float is set, inline display → block equiv
+    if (eqlIgnoreCase(prop, "display")) {
+        const elem = getElement(c, elem_val);
+        if (elem) |el| {
+            var style_len: usize = 0;
+            const style_ptr = lxb_dom_element_get_attribute(el, "style", 5, &style_len);
+            if (style_ptr != null and style_len > 0) {
+                const istyle = style_ptr.?[0..style_len];
+                const pos_val = getStyleProperty(istyle, "position");
+                const float_val = getStyleProperty(istyle, "float");
+                const needs_blockify = blk: {
+                    if (pos_val) |p| {
+                        const pt = std.mem.trim(u8, p, " ");
+                        if (eqlIgnoreCase(pt, "absolute") or eqlIgnoreCase(pt, "fixed")) break :blk true;
+                    }
+                    if (float_val) |f| {
+                        const ft = std.mem.trim(u8, f, " ");
+                        if (eqlIgnoreCase(ft, "left") or eqlIgnoreCase(ft, "right")) break :blk true;
+                    }
+                    break :blk false;
+                };
+                if (needs_blockify) {
+                    const tv = std.mem.trim(u8, val, " \t\r\n");
+                    // CSS Display L3 §2.7: Blockification rules
+                    const blockified: ?[]const u8 = if (eqlIgnoreCase(tv, "inline")) "block"
+                    else if (eqlIgnoreCase(tv, "inline-block")) "block"
+                    else if (eqlIgnoreCase(tv, "inline-table")) "table"
+                    else if (eqlIgnoreCase(tv, "inline-flex")) "flex"
+                    else if (eqlIgnoreCase(tv, "inline-grid")) "grid"
+                    // Internal table display types blockify to "block"
+                    else if (eqlIgnoreCase(tv, "table-row-group")) "block"
+                    else if (eqlIgnoreCase(tv, "table-header-group")) "block"
+                    else if (eqlIgnoreCase(tv, "table-footer-group")) "block"
+                    else if (eqlIgnoreCase(tv, "table-row")) "block"
+                    else if (eqlIgnoreCase(tv, "table-cell")) "block"
+                    else if (eqlIgnoreCase(tv, "table-column")) "block"
+                    else if (eqlIgnoreCase(tv, "table-column-group")) "block"
+                    else if (eqlIgnoreCase(tv, "table-caption")) "block"
+                    // Ruby internal display types blockify to "block"
+                    else if (eqlIgnoreCase(tv, "ruby-base")) "block"
+                    else if (eqlIgnoreCase(tv, "ruby-text")) "block"
+                    else if (eqlIgnoreCase(tv, "ruby-base-container")) "block"
+                    else if (eqlIgnoreCase(tv, "ruby-text-container")) "block"
+                    else null;
+                    if (blockified) |b| return qjs.JS_NewStringLen(c, b.ptr, b.len);
+                }
+            }
+        }
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+
+    // Keywords that should not be resolved to px
+    if (trimmed.len == 0 or
+        eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "none") or
+        eqlIgnoreCase(trimmed, "normal") or eqlIgnoreCase(trimmed, "medium") or
+        eqlIgnoreCase(trimmed, "thin") or eqlIgnoreCase(trimmed, "thick") or
+        eqlIgnoreCase(trimmed, "min-content") or eqlIgnoreCase(trimmed, "max-content") or
+        eqlIgnoreCase(trimmed, "fit-content") or eqlIgnoreCase(trimmed, "contents"))
+    {
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Integer properties: reading-order, order, z-index — resolve calc() to integer
+    if (eqlIgnoreCase(prop, "reading-order") or eqlIgnoreCase(prop, "order")) {
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..5], "calc(")) {
+            const font_size = getElementFontSizeFromStyle(c, elem_val);
+            if (cascade_mod.resolveValueToPx(trimmed, font_size, g_viewport_width, g_viewport_height, 0)) |v| {
+                var buf: [64]u8 = undefined;
+                const int_val: i32 = @intFromFloat(@round(v));
+                const result = std.fmt.bufPrint(&buf, "{d}", .{int_val}) catch return qjs.JS_NewStringLen(c, "0", 1);
+                return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            }
+        }
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Shorthand margin/padding: resolve each value individually
+    if (eqlIgnoreCase(prop, "margin") or eqlIgnoreCase(prop, "padding")) {
+        return resolveBoxShorthandForComputed(c, trimmed, elem_val);
+    }
+
+    // Only resolve length-type properties
+    if (!isComputedLengthProperty(prop)) {
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Get resolution context from computed style and layout tree
+    const font_size = getElementFontSizeFromStyle(c, elem_val);
+    // height/top/bottom use containing block height for %, everything else uses width
+    // (CSS spec: margin/padding % always resolve against containing block WIDTH, even vertical)
+    const pct_base = if (eqlIgnoreCase(prop, "height") or eqlIgnoreCase(prop, "min-height") or
+        eqlIgnoreCase(prop, "max-height") or eqlIgnoreCase(prop, "top") or eqlIgnoreCase(prop, "bottom"))
+        getContainingBlockHeight(c, elem_val)
+    else
+        getContainingBlockWidth(c, elem_val);
+
+    if (cascade_mod.resolveValueToPx(trimmed, font_size, g_viewport_width, g_viewport_height, pct_base)) |px| {
+        if (eqlIgnoreCase(prop, "margin-left"))
+            std.debug.print("[DBG-inline] margin-left val={s} px={d} isInf={}\n", .{ trimmed, px, std.math.isInf(px) });
+        var buf: [128]u8 = undefined;
+        // CSS Values 4 §10.11: NaN → 0, ±Infinity → clamped to allowable range
+        const clamped = if (std.math.isNan(px)) 0.0 else if (std.math.isInf(px)) @as(f32, 3.4028235e+38) else px;
+        return fmtPx(c, clamped, &buf);
+    }
+
+    // Check if value contains NaN/infinity keywords and resolve to 0px
+    if (containsNanOrInfinity(trimmed)) {
+        return qjs.JS_NewStringLen(c, "0px", 3);
+    }
+
+    // Fallback: return as-is
     return qjs.JS_NewStringLen(c, val.ptr, val.len);
+}
+
+/// Check if a CSS value string contains NaN or infinity keywords.
+fn containsNanOrInfinity(s: []const u8) bool {
+    var i: usize = 0;
+    while (i + 3 <= s.len) : (i += 1) {
+        if (eqlIgnoreCase(s[i..][0..3], "NaN")) return true;
+        if (i + 8 <= s.len and eqlIgnoreCase(s[i..][0..8], "infinity")) return true;
+    }
+    return false;
+}
+
+/// Check if a CSS property's computed value should be resolved to px.
+fn isComputedLengthProperty(prop: []const u8) bool {
+    // Box model
+    if (eqlIgnoreCase(prop, "margin-top") or eqlIgnoreCase(prop, "margin-right") or
+        eqlIgnoreCase(prop, "margin-bottom") or eqlIgnoreCase(prop, "margin-left")) return true;
+    if (eqlIgnoreCase(prop, "padding-top") or eqlIgnoreCase(prop, "padding-right") or
+        eqlIgnoreCase(prop, "padding-bottom") or eqlIgnoreCase(prop, "padding-left")) return true;
+    if (eqlIgnoreCase(prop, "border-top-width") or eqlIgnoreCase(prop, "border-right-width") or
+        eqlIgnoreCase(prop, "border-bottom-width") or eqlIgnoreCase(prop, "border-left-width")) return true;
+    // Dimensions
+    if (eqlIgnoreCase(prop, "width") or eqlIgnoreCase(prop, "height") or
+        eqlIgnoreCase(prop, "min-width") or eqlIgnoreCase(prop, "min-height") or
+        eqlIgnoreCase(prop, "max-width") or eqlIgnoreCase(prop, "max-height")) return true;
+    // Offsets
+    if (eqlIgnoreCase(prop, "top") or eqlIgnoreCase(prop, "right") or
+        eqlIgnoreCase(prop, "bottom") or eqlIgnoreCase(prop, "left")) return true;
+    // Text
+    if (eqlIgnoreCase(prop, "text-indent") or eqlIgnoreCase(prop, "letter-spacing") or
+        eqlIgnoreCase(prop, "word-spacing")) return true;
+    // Font/line
+    if (eqlIgnoreCase(prop, "font-size") or eqlIgnoreCase(prop, "line-height")) return true;
+    return false;
+}
+
+/// Get the element's computed font-size from the global style map.
+fn getElementFontSizeFromStyle(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
+    const node = getNode(c, elem_val);
+    if (node != null and g_styles != null) {
+        if (g_styles.?.get(@intFromPtr(node.?))) |style| {
+            return style.font_size_px;
+        }
+    }
+    return 16.0; // default
+}
+
+/// Get containing block width from the layout tree.
+/// For abs-pos elements, walks up to find nearest positioned ancestor (CSS spec).
+fn getContainingBlockWidth(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
+    const root = g_root_box orelse return g_viewport_width;
+    const lxb_node: *lxb.lxb_dom_node_t = getNode(c, elem_val) orelse return g_viewport_width;
+    const box = findBoxForNode(root, lxb_node) orelse return g_viewport_width;
+
+    // For absolute/fixed: containing block = nearest positioned ancestor's padding box
+    if (box.style.position == .absolute or box.style.position == .fixed) {
+        var ancestor = box.parent;
+        while (ancestor) |a| {
+            // Non-static position or root element forms a containing block
+            if (a.style.position != .static_ or a.parent == null) {
+                return a.content.width + a.padding.left + a.padding.right;
+            }
+            ancestor = a.parent;
+        }
+        return g_viewport_width;
+    }
+
+    if (box.parent) |parent| return parent.content.width;
+    return g_viewport_width;
+}
+
+/// Get containing block height from the layout tree.
+fn getContainingBlockHeight(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
+    const root = g_root_box orelse return g_viewport_height;
+    const lxb_node: *lxb.lxb_dom_node_t = getNode(c, elem_val) orelse return g_viewport_height;
+    const box = findBoxForNode(root, lxb_node) orelse return g_viewport_height;
+
+    if (box.style.position == .absolute or box.style.position == .fixed) {
+        var ancestor = box.parent;
+        while (ancestor) |a| {
+            if (a.style.position != .static_ or a.parent == null) {
+                return a.content.height + a.padding.top + a.padding.bottom;
+            }
+            ancestor = a.parent;
+        }
+        return g_viewport_height;
+    }
+
+    if (box.parent) |parent| return parent.content.height;
+    return g_viewport_height;
+}
+
+/// Resolve a margin/padding shorthand value (1-4 values) to computed px form.
+fn resolveBoxShorthandForComputed(c: *qjs.JSContext, val: []const u8, elem_val: qjs.JSValue) qjs.JSValue {
+    const font_size = getElementFontSizeFromStyle(c, elem_val);
+    const cb_width = getContainingBlockWidth(c, elem_val);
+
+    // Split into 1-4 values (space-separated, respecting calc() parens)
+    var parts: [4][]const u8 = .{ "", "", "", "" };
+    var part_count: usize = 0;
+    var pos: usize = 0;
+    var paren_depth: usize = 0;
+    var start: usize = 0;
+    while (pos <= val.len) {
+        if (pos < val.len) {
+            if (val[pos] == '(') { paren_depth += 1; pos += 1; continue; }
+            if (val[pos] == ')') { if (paren_depth > 0) paren_depth -= 1; pos += 1; continue; }
+            if (val[pos] != ' ' and val[pos] != '\t') { pos += 1; continue; }
+            if (paren_depth > 0) { pos += 1; continue; }
+        }
+        // End of token
+        if (pos > start) {
+            const token = std.mem.trim(u8, val[start..pos], " \t");
+            if (token.len > 0 and part_count < 4) {
+                parts[part_count] = token;
+                part_count += 1;
+            }
+        }
+        pos += 1;
+        start = pos;
+    }
+
+    if (part_count == 0) return qjs.JS_NewStringLen(c, val.ptr, val.len);
+
+    // Resolve each value to px
+    var resolved: [4]f32 = .{ 0, 0, 0, 0 };
+    var all_resolved = true;
+    for (0..part_count) |i| {
+        if (cascade_mod.resolveValueToPx(parts[i], font_size, g_viewport_width, g_viewport_height, cb_width)) |px| {
+            resolved[i] = px;
+        } else {
+            all_resolved = false;
+            break;
+        }
+    }
+
+    if (!all_resolved) return qjs.JS_NewStringLen(c, val.ptr, val.len);
+
+    // Expand 1-4 values to 4 (CSS shorthand rules)
+    const top = resolved[0];
+    const right = if (part_count >= 2) resolved[1] else resolved[0];
+    const bottom = if (part_count >= 3) resolved[2] else resolved[0];
+    const left_ = if (part_count >= 4) resolved[3] else right;
+
+    var buf: [128]u8 = undefined;
+    return fmtBoxShorthand(c, top, right, bottom, left_, &buf);
 }
 
 /// Canonicalize a margin-trim inline value for getComputedStyle (block before inline).
@@ -5492,6 +6015,12 @@ fn windowGetComputedStyle(
     else
         null;
 
+    // Find layout box for used-value resolution (margin/padding/width % → px)
+    const box_opt: ?*const Box = if (node != null and g_root_box != null)
+        findBoxForNode(g_root_box.?, node.?)
+    else
+        null;
+
     // Property name pairs: kebab-case (CSS) and camelCase (JS)
     const prop_pairs = .{
         .{ "display", "display" },
@@ -5558,6 +6087,8 @@ fn windowGetComputedStyle(
         .{ "flex-grow", "flexGrow" },
         .{ "flex-shrink", "flexShrink" },
         .{ "aspect-ratio", "aspectRatio" },
+        .{ "reading-flow", "readingFlow" },
+        .{ "reading-order", "readingOrder" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -5587,24 +6118,24 @@ fn windowGetComputedStyle(
                     val = if (isCssInheritedProperty(css_name)) getInheritedComputedValue(c, args[0], css_name) else cssInitialValue(c, css_name);
                 } else if (eqlIgnoreCase(t, "revert")) {
                     if (style_opt) |style| {
-                        val = computedStyleToString(c, &style, css_name);
+                        val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
                     } else {
                         val = cssInitialValue(c, css_name);
                     }
                 } else {
-                    val = resolveInlineForComputed(c, css_name, inline_val);
+                    val = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                 }
-            } else if (reconstructBoxShorthandJS(c, inline_style, css_name)) |reconstructed| {
+            } else if (reconstructBoxShorthandJSWithElem(c, inline_style, css_name, args[0])) |reconstructed| {
                 val = reconstructed;
             } else if (getLonghandFromShorthand(inline_style, css_name)) |lh_val| {
-                val = qjs.JS_NewStringLen(c, lh_val.ptr, lh_val.len);
+                val = resolveInlineForComputed(c, css_name, lh_val, args[0]);
             } else if (style_opt) |style| {
-                val = computedStyleToString(c, &style, css_name);
+                val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
             } else {
                 val = qjs.JS_NewStringLen(c, "", 0);
             }
         } else if (style_opt) |style| {
-            val = computedStyleToString(c, &style, css_name);
+            val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
         } else {
             val = qjs.JS_NewStringLen(c, "", 0);
         }
@@ -5623,24 +6154,24 @@ fn windowGetComputedStyle(
                         val2 = if (isCssInheritedProperty(css_name)) getInheritedComputedValue(c, args[0], css_name) else cssInitialValue(c, css_name);
                     } else if (eqlIgnoreCase(t2, "revert")) {
                         if (style_opt) |style| {
-                            val2 = computedStyleToString(c, &style, css_name);
+                            val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
                         } else {
                             val2 = cssInitialValue(c, css_name);
                         }
                     } else {
-                        val2 = resolveInlineForComputed(c, css_name, inline_val);
+                        val2 = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                     }
-                } else if (reconstructBoxShorthandJS(c, inline_style, css_name)) |reconstructed| {
+                } else if (reconstructBoxShorthandJSWithElem(c, inline_style, css_name, args[0])) |reconstructed| {
                     val2 = reconstructed;
                 } else if (getLonghandFromShorthand(inline_style, css_name)) |lh_val| {
-                    val2 = qjs.JS_NewStringLen(c, lh_val.ptr, lh_val.len);
+                    val2 = resolveInlineForComputed(c, css_name, lh_val, args[0]);
                 } else if (style_opt) |style| {
-                    val2 = computedStyleToString(c, &style, css_name);
+                    val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
                 } else {
                     val2 = qjs.JS_NewStringLen(c, "", 0);
                 }
             } else if (style_opt) |style| {
-                val2 = computedStyleToString(c, &style, css_name);
+                val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
             } else {
                 val2 = qjs.JS_NewStringLen(c, "", 0);
             }
@@ -6437,8 +6968,13 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
     // var() always valid
     if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "var(")) return true;
 
-    // calc() valid if it's a complete function call (ends with matching ')')
-    if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "calc(") and trimmed[trimmed.len - 1] == ')') return true;
+    // Math functions valid if complete function call (ends with matching ')')
+    if (trimmed[trimmed.len - 1] == ')') {
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "calc(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "min(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "max(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "clamp(")) return true;
+    }
 
     const prop_id = css_ast.PropertyId.fromString(prop);
     if (prop_id == .custom) return true;
@@ -6486,6 +7022,13 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             eqlIgnoreCase(trimmed, "inline-start") or eqlIgnoreCase(trimmed, "inline-end"),
         // margin-trim: none, block, inline, block-start, block-end, inline-start, inline-end
         .margin_trim => isValidMarginTrimValue(trimmed),
+        // reading-flow: normal, flex-visual, flex-flow, grid-rows, grid-columns, grid-order
+        .reading_flow => eqlIgnoreCase(trimmed, "normal") or eqlIgnoreCase(trimmed, "flex-visual") or
+            eqlIgnoreCase(trimmed, "flex-flow") or eqlIgnoreCase(trimmed, "grid-rows") or
+            eqlIgnoreCase(trimmed, "grid-columns") or eqlIgnoreCase(trimmed, "grid-order") or
+            eqlIgnoreCase(trimmed, "source-order"),
+        // reading-order: <integer>
+        .reading_order => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter,
         // Visibility: visible, hidden, collapse (NOT auto, NOT none)
         .visibility => eqlIgnoreCase(trimmed, "visible") or eqlIgnoreCase(trimmed, "hidden") or
             eqlIgnoreCase(trimmed, "collapse"),
@@ -6579,70 +7122,790 @@ fn isValidDisplayValue(val: []const u8) bool {
         "none",          "contents",       "block",          "inline",
         "inline-block",  "flex",           "inline-flex",    "grid",
         "inline-grid",   "table",          "inline-table",   "list-item",
-        "run-in",        "flow-root",      "ruby",           "ruby-text",
+        "run-in",        "flow",           "flow-root",      "ruby",
+        "ruby-base",     "ruby-text",      "ruby-base-container", "ruby-text-container",
         "table-row",     "table-cell",     "table-row-group", "table-header-group",
         "table-footer-group", "table-column", "table-column-group", "table-caption",
-        "math",          "grid-lanes",
+        "math",          "grid-lanes",     "inline-grid-lanes",
     };
     for (single) |kw| {
         if (eqlIgnoreCase(val, kw)) return true;
     }
-    // Two-value display syntax: <display-outside> <display-inside>
-    // outside: block, inline, run-in
-    // inside: flow, flow-root, table, flex, grid, ruby, grid-lanes
+    // Multi-value display: order-independent token classification
+    // CSS Display 3: <display-outside> || <display-inside> | <display-listitem>
+    // <display-outside> = block | inline | run-in
+    // <display-inside> = flow | flow-root | table | flex | grid | ruby
+    // <display-listitem> = <display-outside>? && [flow | flow-root]? && list-item
+    const outside_kw = [_][]const u8{ "block", "inline", "run-in" };
+    const inside_kw = [_][]const u8{ "flow", "flow-root", "table", "flex", "grid", "ruby", "grid-lanes" };
+
+    var tokens: [3][]const u8 = .{ "", "", "" };
+    var token_count: usize = 0;
     var pos: usize = 0;
-    while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
-    if (pos == 0 or pos >= val.len) return false;
-    const first = val[0..pos];
-    while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
-    if (pos >= val.len) return false;
-    const rest = std.mem.trim(u8, val[pos..], " \t");
-    if (rest.len == 0) return false;
-    // Check: outside + inside, or outside + inside + list-item
-    const outside = [_][]const u8{ "block", "inline", "run-in" };
-    const inside = [_][]const u8{ "flow", "flow-root", "table", "flex", "grid", "ruby", "grid-lanes" };
-    var valid_outside = false;
-    for (outside) |kw| {
-        if (eqlIgnoreCase(first, kw)) { valid_outside = true; break; }
+    while (pos < val.len and token_count < 4) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+        if (token_count >= 3) return false; // >3 tokens invalid
+        tokens[token_count] = val[start..pos];
+        token_count += 1;
     }
-    if (!valid_outside) {
-        // "list-item" can be first
-        if (eqlIgnoreCase(first, "list-item")) {
-            // "list-item block" etc.
-            for (outside) |kw| {
-                if (eqlIgnoreCase(rest, kw)) return true;
-            }
-            for (inside) |kw| {
-                if (eqlIgnoreCase(rest, kw)) return true;
+    if (token_count < 2) return false;
+
+    var has_outside = false;
+    var has_inside = false;
+    var has_list_item = false;
+    var inside_is_flow_compat = false; // flow or flow-root (allowed with list-item)
+    for (0..token_count) |i| {
+        const tok = tokens[i];
+        var matched = false;
+        for (outside_kw) |kw| {
+            if (eqlIgnoreCase(tok, kw)) {
+                if (has_outside) return false; // duplicate outside
+                has_outside = true;
+                matched = true;
+                break;
             }
         }
-        return false;
-    }
-    // Check second token as inside or "list-item"
-    for (inside) |kw| {
-        if (eqlIgnoreCase(rest, kw)) return true;
-    }
-    if (eqlIgnoreCase(rest, "list-item")) return true;
-    // Three tokens: outside inside list-item, or outside list-item inside
-    var pos2: usize = 0;
-    while (pos2 < rest.len and rest[pos2] != ' ' and rest[pos2] != '\t') pos2 += 1;
-    if (pos2 < rest.len) {
-        const second = rest[0..pos2];
-        const third = std.mem.trim(u8, rest[pos2..], " \t");
-        if (third.len > 0) {
-            // block flow list-item, block list-item flow, etc.
-            var has_inside = false;
-            var has_list_item = false;
-            for ([_][]const u8{ second, third }) |tok| {
-                for (inside) |kw| {
-                    if (eqlIgnoreCase(tok, kw)) has_inside = true;
+        if (!matched) {
+            for (inside_kw) |kw| {
+                if (eqlIgnoreCase(tok, kw)) {
+                    if (has_inside) return false; // duplicate inside
+                    has_inside = true;
+                    if (eqlIgnoreCase(tok, "flow") or eqlIgnoreCase(tok, "flow-root"))
+                        inside_is_flow_compat = true;
+                    matched = true;
+                    break;
                 }
-                if (eqlIgnoreCase(tok, "list-item")) has_list_item = true;
             }
-            if (has_inside and has_list_item) return true;
+        }
+        if (!matched) {
+            if (eqlIgnoreCase(tok, "list-item")) {
+                if (has_list_item) return false;
+                has_list_item = true;
+                matched = true;
+            }
+        }
+        if (!matched) return false; // unknown token
+    }
+
+    if (has_list_item) {
+        // list-item only combines with flow/flow-root (not flex/grid/table/ruby)
+        if (has_inside and !inside_is_flow_compat) return false;
+        return true;
+    }
+    // outside + inside is valid (any combo)
+    if (has_outside and has_inside) return true;
+    return false;
+}
+
+/// Canonicalize a CSS display value to its shortest canonical form.
+/// "block flow" → "block", "inline flow-root" → "inline-block", etc.
+/// Returns only static string literals or the input — no buffer needed.
+fn canonicalizeDisplayValue(val: []const u8) []const u8 {
+    // Parse tokens (up to 3)
+    var tokens: [3][]const u8 = .{ "", "", "" };
+    var token_count: usize = 0;
+    var pos: usize = 0;
+    while (pos < val.len and token_count < 3) {
+        while (pos < val.len and (val[pos] == ' ' or val[pos] == '\t')) pos += 1;
+        if (pos >= val.len) break;
+        const start = pos;
+        while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
+        tokens[token_count] = val[start..pos];
+        token_count += 1;
+    }
+
+    if (token_count <= 1) {
+        // Single-keyword canonical forms
+        if (eqlIgnoreCase(val, "flow")) return "block";
+        return val;
+    }
+
+    // Extract outer, inner, list-item
+    var has_block = false;
+    var has_inline = false;
+    var has_run_in = false;
+    var has_flow = false;
+    var has_flow_root = false;
+    var has_flex = false;
+    var has_grid = false;
+    var has_table = false;
+    var has_ruby = false;
+    var has_list_item = false;
+    for (0..token_count) |i| {
+        const tok = tokens[i];
+        if (eqlIgnoreCase(tok, "block")) has_block = true
+        else if (eqlIgnoreCase(tok, "inline")) has_inline = true
+        else if (eqlIgnoreCase(tok, "run-in")) has_run_in = true
+        else if (eqlIgnoreCase(tok, "flow")) has_flow = true
+        else if (eqlIgnoreCase(tok, "flow-root")) has_flow_root = true
+        else if (eqlIgnoreCase(tok, "flex")) has_flex = true
+        else if (eqlIgnoreCase(tok, "grid")) has_grid = true
+        else if (eqlIgnoreCase(tok, "table")) has_table = true
+        else if (eqlIgnoreCase(tok, "ruby")) has_ruby = true
+        else if (eqlIgnoreCase(tok, "list-item")) has_list_item = true;
+    }
+
+    if (!has_list_item) {
+        if (has_flow or (!has_flow_root and !has_flex and !has_grid and !has_table and !has_ruby)) {
+            if (has_block or (!has_inline and !has_run_in)) return "block";
+            if (has_inline) return "inline";
+            if (has_run_in) return "run-in";
+        }
+        if (has_flow_root) {
+            if (has_block or (!has_inline and !has_run_in)) return "flow-root";
+            if (has_inline) return "inline-block";
+            if (has_run_in) return "run-in flow-root";
+        }
+        if (has_flex) {
+            if (has_block or (!has_inline and !has_run_in)) return "flex";
+            if (has_inline) return "inline-flex";
+            if (has_run_in) return "run-in flex";
+        }
+        if (has_grid) {
+            if (has_block or (!has_inline and !has_run_in)) return "grid";
+            if (has_inline) return "inline-grid";
+            if (has_run_in) return "run-in grid";
+        }
+        if (has_table) {
+            if (has_block or (!has_inline and !has_run_in)) return "table";
+            if (has_inline) return "inline-table";
+            if (has_run_in) return "run-in table";
+        }
+        if (has_ruby) {
+            if (has_inline) return "ruby";
+            if (has_block) return "block ruby";
+            if (has_run_in) return "run-in ruby";
+        }
+        return val; // unrecognized combo
+    }
+
+    // With list-item
+    if (has_flow or (!has_flow_root and !has_flex and !has_grid and !has_table)) {
+        if (has_block or (!has_inline and !has_run_in)) return "list-item";
+        if (has_inline) return "inline list-item";
+        if (has_run_in) return "run-in list-item";
+    }
+    if (has_flow_root) {
+        if (has_block or (!has_inline and !has_run_in)) return "flow-root list-item";
+        if (has_inline) return "inline flow-root list-item";
+        if (has_run_in) return "run-in flow-root list-item";
+    }
+    return val;
+}
+
+/// Distributive expansion for calc():
+/// "N * (A + B)" → recursively canonicalize "calc(N*A + N*B)"
+/// "(A + B) / N" → recursively canonicalize "calc(A/N + B/N)"
+/// "(expr) * N" → "calc(N * (expr))" when expr has functions (reorder only)
+fn tryDistributiveExpansion(inner: []const u8, buf: *[512]u8) ?[]const u8 {
+    // Pattern 1: "N * (expr)" where N is a number
+    if (std.mem.indexOf(u8, inner, " * (")) |mul_pos| {
+        const left = std.mem.trim(u8, inner[0..mul_pos], " ");
+        // Check left is a plain number
+        const scalar = std.fmt.parseFloat(f64, left) catch return null;
+        _ = scalar;
+        const rest = inner[mul_pos + 3 ..]; // "(expr)"
+        if (rest.len < 2 or rest[0] != '(') return null;
+        // Find matching closing paren
+        const close = findMatchingParen(rest, 0) orelse return null;
+        if (close != rest.len - 1) return null; // must be the last thing
+        const expr_inner = rest[1..close];
+
+        // If expr contains min()/max()/clamp(), don't expand, just emit as-is
+        if (containsFunction(expr_inner)) {
+            // Already in canonical form: "N * (expr)"
+            var out: usize = 0;
+            const prefix = "calc(";
+            @memcpy(buf[out..][0..prefix.len], prefix);
+            out += prefix.len;
+            const emit = inner;
+            if (out + emit.len + 1 <= buf.len) {
+                @memcpy(buf[out..][0..emit.len], emit);
+                out += emit.len;
+                buf[out] = ')';
+                out += 1;
+                return buf[0..out];
+            }
+            return null;
+        }
+
+        // Distribute: N * (A + B - C) → N*A + N*B - N*C
+        // Build expanded string and recursively canonicalize
+        var exp_buf: [512]u8 = undefined;
+        var exp_pos: usize = 0;
+        const exp_prefix = "calc(";
+        @memcpy(exp_buf[exp_pos..][0..exp_prefix.len], exp_prefix);
+        exp_pos += exp_prefix.len;
+
+        // Split expr_inner by + and - (top-level only)
+        var epos: usize = 0;
+        var first_term = true;
+        while (epos < expr_inner.len) {
+            while (epos < expr_inner.len and expr_inner[epos] == ' ') epos += 1;
+            if (epos >= expr_inner.len) break;
+
+            var term_sign: u8 = '+';
+            if (!first_term) {
+                if (expr_inner[epos] == '+') {
+                    epos += 1;
+                    while (epos < expr_inner.len and expr_inner[epos] == ' ') epos += 1;
+                } else if (expr_inner[epos] == '-') {
+                    term_sign = '-';
+                    epos += 1;
+                    while (epos < expr_inner.len and expr_inner[epos] == ' ') epos += 1;
+                }
+            }
+
+            const tstart = epos;
+            var nest: usize = 0;
+            while (epos < expr_inner.len) {
+                if (expr_inner[epos] == '(') nest += 1
+                else if (expr_inner[epos] == ')') { if (nest > 0) nest -= 1; }
+                else if (nest == 0 and epos > tstart and
+                    (expr_inner[epos] == '+' or (expr_inner[epos] == '-' and epos > 0 and expr_inner[epos - 1] == ' ')))
+                    break;
+                epos += 1;
+            }
+            const term = std.mem.trim(u8, expr_inner[tstart..epos], " ");
+            if (term.len == 0) continue;
+
+            // Emit: " + N * term" or " - N * term"
+            if (!first_term) {
+                if (exp_pos + 3 >= exp_buf.len) return null;
+                exp_buf[exp_pos] = ' ';
+                exp_buf[exp_pos + 1] = term_sign;
+                exp_buf[exp_pos + 2] = ' ';
+                exp_pos += 3;
+            }
+            // Write "left * term"
+            if (exp_pos + left.len + 3 + term.len >= exp_buf.len) return null;
+            @memcpy(exp_buf[exp_pos..][0..left.len], left);
+            exp_pos += left.len;
+            @memcpy(exp_buf[exp_pos..][0..3], " * ");
+            exp_pos += 3;
+            @memcpy(exp_buf[exp_pos..][0..term.len], term);
+            exp_pos += term.len;
+
+            first_term = false;
+        }
+        if (exp_pos + 1 > exp_buf.len) return null;
+        exp_buf[exp_pos] = ')';
+        exp_pos += 1;
+
+        // Recursively canonicalize
+        return canonicalizeCalcValue(exp_buf[0..exp_pos], buf);
+    }
+
+    // Pattern 2: "(expr) * N" — reorder to "N * (expr)" and retry
+    if (inner.len > 4 and inner[0] == '(') {
+        const close = findMatchingParen(inner, 0) orelse return null;
+        if (close + 3 < inner.len) {
+            const after_paren = std.mem.trim(u8, inner[close + 1 ..], " ");
+            if (after_paren.len > 2 and after_paren[0] == '*' and after_paren[1] == ' ') {
+                const scalar_str = std.mem.trim(u8, after_paren[2..], " ");
+                // Verify it's a number
+                _ = std.fmt.parseFloat(f64, scalar_str) catch return null;
+                // Reorder to "N * (expr)"
+                var reorder_buf: [512]u8 = undefined;
+                var rpos: usize = 0;
+                const rprefix = "calc(";
+                @memcpy(reorder_buf[rpos..][0..rprefix.len], rprefix);
+                rpos += rprefix.len;
+                @memcpy(reorder_buf[rpos..][0..scalar_str.len], scalar_str);
+                rpos += scalar_str.len;
+                @memcpy(reorder_buf[rpos..][0..3], " * ");
+                rpos += 3;
+                @memcpy(reorder_buf[rpos..][0..close + 1], inner[0 .. close + 1]);
+                rpos += close + 1;
+                reorder_buf[rpos] = ')';
+                rpos += 1;
+                return canonicalizeCalcValue(reorder_buf[0..rpos], buf);
+            }
         }
     }
-    return false;
+
+    // Pattern 3: "(expr) / N" — distribute division
+    if (inner.len > 4 and inner[0] == '(') {
+        const close = findMatchingParen(inner, 0) orelse return null;
+        if (close + 3 < inner.len) {
+            const after_paren = std.mem.trim(u8, inner[close + 1 ..], " ");
+            if (after_paren.len > 2 and after_paren[0] == '/' and after_paren[1] == ' ') {
+                const divisor_str = std.mem.trim(u8, after_paren[2..], " ");
+                _ = std.fmt.parseFloat(f64, divisor_str) catch return null;
+                const expr_inner = inner[1..close];
+
+                if (containsFunction(expr_inner)) return null;
+
+                // Distribute: (A + B) / N → A / N + B / N
+                var exp_buf: [512]u8 = undefined;
+                var exp_pos: usize = 0;
+                const exp_prefix = "calc(";
+                @memcpy(exp_buf[exp_pos..][0..exp_prefix.len], exp_prefix);
+                exp_pos += exp_prefix.len;
+
+                var epos: usize = 0;
+                var first_term = true;
+                while (epos < expr_inner.len) {
+                    while (epos < expr_inner.len and expr_inner[epos] == ' ') epos += 1;
+                    if (epos >= expr_inner.len) break;
+                    var term_sign: u8 = '+';
+                    if (!first_term) {
+                        if (expr_inner[epos] == '+') {
+                            epos += 1;
+                            while (epos < expr_inner.len and expr_inner[epos] == ' ') epos += 1;
+                        } else if (expr_inner[epos] == '-') {
+                            term_sign = '-';
+                            epos += 1;
+                            while (epos < expr_inner.len and expr_inner[epos] == ' ') epos += 1;
+                        }
+                    }
+                    const tstart = epos;
+                    var nest: usize = 0;
+                    while (epos < expr_inner.len) {
+                        if (expr_inner[epos] == '(') nest += 1
+                        else if (expr_inner[epos] == ')') { if (nest > 0) nest -= 1; }
+                        else if (nest == 0 and epos > tstart and
+                            (expr_inner[epos] == '+' or (expr_inner[epos] == '-' and epos > 0 and expr_inner[epos - 1] == ' ')))
+                            break;
+                        epos += 1;
+                    }
+                    const term = std.mem.trim(u8, expr_inner[tstart..epos], " ");
+                    if (term.len == 0) continue;
+                    if (!first_term) {
+                        if (exp_pos + 3 >= exp_buf.len) return null;
+                        exp_buf[exp_pos] = ' ';
+                        exp_buf[exp_pos + 1] = term_sign;
+                        exp_buf[exp_pos + 2] = ' ';
+                        exp_pos += 3;
+                    }
+                    if (exp_pos + term.len + 3 + divisor_str.len >= exp_buf.len) return null;
+                    @memcpy(exp_buf[exp_pos..][0..term.len], term);
+                    exp_pos += term.len;
+                    @memcpy(exp_buf[exp_pos..][0..3], " / ");
+                    exp_pos += 3;
+                    @memcpy(exp_buf[exp_pos..][0..divisor_str.len], divisor_str);
+                    exp_pos += divisor_str.len;
+                    first_term = false;
+                }
+                if (exp_pos + 1 > exp_buf.len) return null;
+                exp_buf[exp_pos] = ')';
+                exp_pos += 1;
+                return canonicalizeCalcValue(exp_buf[0..exp_pos], buf);
+            }
+        }
+    }
+
+    return null;
+}
+
+fn findMatchingParen(s: []const u8, start: usize) ?usize {
+    if (start >= s.len or s[start] != '(') return null;
+    var depth: usize = 0;
+    for (s[start..], start..) |ch, i| {
+        if (ch == '(') depth += 1
+        else if (ch == ')') {
+            depth -= 1;
+            if (depth == 0) return i;
+        }
+    }
+    return null;
+}
+
+fn containsFunction(s: []const u8) bool {
+    return std.mem.indexOf(u8, s, "min(") != null or
+        std.mem.indexOf(u8, s, "max(") != null or
+        std.mem.indexOf(u8, s, "clamp(") != null;
+}
+
+/// Canonicalize a calc() expression per CSS Values 4 §11.3:
+/// 1. Convert absolute length units (in, cm, mm, pt, pc, q) to px
+/// 2. Combine terms with the same unit
+/// 3. Reorder: numbers, %, then dimensions by unit (ASCII)
+/// 4. Serialize with canonical sign handling
+fn canonicalizeCalcValue(val: []const u8, buf: *[512]u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed.len < 6) return null;
+    if (!eqlIgnoreCase(trimmed[0..5], "calc(")) return null;
+    if (trimmed[trimmed.len - 1] != ')') return null;
+    const raw_inner = std.mem.trim(u8, trimmed[5 .. trimmed.len - 1], " ");
+    if (raw_inner.len == 0) return null;
+
+    // Flatten nested calc(): "9pt + calc(9rem + 10px)" → "9pt + 9rem + 10px"
+    // Removes "calc(" and its matching ")" while preserving min()/max() parens.
+    var flat_buf: [512]u8 = undefined;
+    var flat_pos: usize = 0;
+    {
+        var k: usize = 0;
+        var calc_depth: usize = 0; // track nesting of stripped calc() parens
+        var paren_depth: [16]usize = undefined; // paren depth at each calc strip
+        while (k < raw_inner.len) {
+            if (k + 5 <= raw_inner.len and eqlIgnoreCase(raw_inner[k..][0..5], "calc(")) {
+                // Strip this calc( — record current paren nesting to find matching )
+                if (calc_depth < 16) {
+                    // Count how deep in parens we are at this point in flat output
+                    var depth: usize = 0;
+                    for (flat_buf[0..flat_pos]) |ch| {
+                        if (ch == '(') depth += 1 else if (ch == ')') {
+                            if (depth > 0) depth -= 1;
+                        }
+                    }
+                    paren_depth[calc_depth] = depth;
+                    calc_depth += 1;
+                }
+                k += 5; // skip "calc("
+            } else if (raw_inner[k] == ')' and calc_depth > 0) {
+                // Check if this ) matches a stripped calc(
+                var depth: usize = 0;
+                for (flat_buf[0..flat_pos]) |ch| {
+                    if (ch == '(') depth += 1 else if (ch == ')') {
+                        if (depth > 0) depth -= 1;
+                    }
+                }
+                if (depth == paren_depth[calc_depth - 1]) {
+                    // This ) matches the stripped calc( — skip it
+                    calc_depth -= 1;
+                    k += 1;
+                } else {
+                    // This ) belongs to something else (min/max) — keep it
+                    if (flat_pos < flat_buf.len) {
+                        flat_buf[flat_pos] = raw_inner[k];
+                        flat_pos += 1;
+                    }
+                    k += 1;
+                }
+            } else {
+                if (flat_pos < flat_buf.len) {
+                    flat_buf[flat_pos] = raw_inner[k];
+                    flat_pos += 1;
+                }
+                k += 1;
+            }
+        }
+    }
+    const inner = std.mem.trim(u8, flat_buf[0..flat_pos], " ");
+    if (inner.len == 0) return null;
+
+    // Distributive expansion: "N * (A + B)" → "N*A + N*B", "(A + B) / N" → "A/N + B/N"
+    // Also handle scalar reordering: "(expr) * N" → "N * (expr)" when expr contains functions
+    if (tryDistributiveExpansion(inner, buf)) |expanded| return expanded;
+
+    // Parsed term: numeric value + canonical unit
+    const CalcTerm = struct { value: f64, unit: []const u8 };
+    var terms: [32]CalcTerm = undefined;
+    var term_count: usize = 0;
+    // Per-term unit buffers (each term may need its own lowercased unit)
+    var unit_bufs: [32][16]u8 = undefined;
+    var pos: usize = 0;
+
+    while (pos < inner.len and term_count < 32) {
+        while (pos < inner.len and (inner[pos] == ' ' or inner[pos] == '\t')) pos += 1;
+        if (pos >= inner.len) break;
+
+        // Detect operator sign
+        var sign: f64 = 1.0;
+        if (inner[pos] == '+') {
+            pos += 1;
+            while (pos < inner.len and inner[pos] == ' ') pos += 1;
+        } else if (inner[pos] == '-') {
+            sign = -1.0;
+            pos += 1;
+            while (pos < inner.len and inner[pos] == ' ') pos += 1;
+        }
+
+        // Read term (stop at next + or - with space before it)
+        const term_start = pos;
+        var nesting: usize = 0;
+        while (pos < inner.len) {
+            if (inner[pos] == '(') nesting += 1
+            else if (inner[pos] == ')') { if (nesting > 0) nesting -= 1; }
+            else if (nesting == 0 and pos > term_start and
+                (inner[pos] == '+' or (inner[pos] == '-' and pos > 0 and inner[pos - 1] == ' ')))
+                break;
+            pos += 1;
+        }
+        const term_str = std.mem.trimRight(u8, inner[term_start..pos], " ");
+        if (term_str.len == 0) continue;
+
+        // Can't canonicalize nested functions (but allow * and / within a term)
+        var has_paren = false;
+        for (term_str) |ch| {
+            if (ch == '(') { has_paren = true; break; }
+        }
+        if (has_paren) return null;
+
+        // Handle multiplication/division within a term: "4 * 3px", "4pc / 8"
+        var num_val: f64 = undefined;
+        var raw_unit: []const u8 = undefined;
+        if (std.mem.indexOf(u8, term_str, " * ")) |mul_pos| {
+            // scalar * dimension OR dimension * scalar
+            const left = std.mem.trim(u8, term_str[0..mul_pos], " ");
+            const right_s = std.mem.trim(u8, term_str[mul_pos + 3 ..], " ");
+            const lp = parseNumUnit(left);
+            const rp = parseNumUnit(right_s);
+            if (lp == null or rp == null) return null;
+            if (lp.?.unit.len == 0 and rp.?.unit.len > 0) {
+                num_val = lp.?.value * rp.?.value;
+                raw_unit = rp.?.unit;
+            } else if (lp.?.unit.len > 0 and rp.?.unit.len == 0) {
+                num_val = lp.?.value * rp.?.value;
+                raw_unit = lp.?.unit;
+            } else return null; // both have units or both unitless — can't simplify
+        } else if (std.mem.indexOf(u8, term_str, " / ")) |div_pos| {
+            // dimension / scalar
+            const left = std.mem.trim(u8, term_str[0..div_pos], " ");
+            const right_s = std.mem.trim(u8, term_str[div_pos + 3 ..], " ");
+            const lp = parseNumUnit(left);
+            const rp = parseNumUnit(right_s);
+            if (lp == null or rp == null) return null;
+            if (rp.?.unit.len > 0) return null; // division by dimension
+            if (@abs(rp.?.value) < 1e-20) return null; // div by zero
+            num_val = lp.?.value / rp.?.value;
+            raw_unit = lp.?.unit;
+        } else {
+            // Simple number+unit
+            const p = parseNumUnit(term_str) orelse return null;
+            num_val = p.value;
+            raw_unit = p.unit;
+        }
+        const value = sign * num_val;
+
+        // Convert absolute units to px
+        const unit_lower = blk: {
+            var ubuf: [16]u8 = undefined;
+            for (raw_unit, 0..) |ch, k| {
+                if (k >= 16) break;
+                ubuf[k] = std.ascii.toLower(ch);
+            }
+            break :blk ubuf[0..@min(raw_unit.len, 16)];
+        };
+        var final_value = value;
+        var final_unit: []const u8 = raw_unit;
+        if (std.mem.eql(u8, unit_lower, "in")) {
+            final_value = value * 96.0;
+            final_unit = "px";
+        } else if (std.mem.eql(u8, unit_lower, "cm")) {
+            final_value = value * (96.0 / 2.54);
+            final_unit = "px";
+        } else if (std.mem.eql(u8, unit_lower, "mm")) {
+            final_value = value * (96.0 / 25.4);
+            final_unit = "px";
+        } else if (std.mem.eql(u8, unit_lower, "q")) {
+            final_value = value * (96.0 / 101.6);
+            final_unit = "px";
+        } else if (std.mem.eql(u8, unit_lower, "pt")) {
+            final_value = value * (96.0 / 72.0);
+            final_unit = "px";
+        } else if (std.mem.eql(u8, unit_lower, "pc")) {
+            final_value = value * 16.0;
+            final_unit = "px";
+        } else {
+            // Lowercase the unit for canonical form — use per-term buffer
+            for (raw_unit, 0..) |ch, k| {
+                if (k >= 16) break;
+                unit_bufs[term_count][k] = std.ascii.toLower(ch);
+            }
+            final_unit = unit_bufs[term_count][0..@min(raw_unit.len, 16)];
+        }
+
+        // Try to combine with existing term of same unit
+        var combined = false;
+        for (0..term_count) |k| {
+            if (std.mem.eql(u8, terms[k].unit, final_unit)) {
+                terms[k].value += final_value;
+                combined = true;
+                break;
+            }
+        }
+        if (!combined) {
+            terms[term_count] = .{ .value = final_value, .unit = final_unit };
+            term_count += 1;
+        }
+    }
+
+    if (term_count == 0) return null;
+
+    // Sort: unitless (0), % (1), dimensions by unit ASCII (2+)
+    var indices: [32]usize = undefined;
+    for (0..term_count) |k| indices[k] = k;
+    var i: usize = 1;
+    while (i < term_count) : (i += 1) {
+        var j = i;
+        while (j > 0) {
+            const a_u = terms[indices[j - 1]].unit;
+            const b_u = terms[indices[j]].unit;
+            if (calcUnitCmp(a_u, b_u) <= 0) break;
+            const tmp = indices[j];
+            indices[j] = indices[j - 1];
+            indices[j - 1] = tmp;
+            j -= 1;
+        }
+    }
+
+    // Serialize
+    var out: usize = 0;
+    const pfx = "calc(";
+    @memcpy(buf[out..][0..pfx.len], pfx);
+    out += pfx.len;
+
+    for (0..term_count) |idx| {
+        const t = terms[indices[idx]];
+        const is_neg = t.value < -1e-10;
+        const abs_val = @abs(t.value);
+
+        if (idx == 0) {
+            if (is_neg) {
+                buf[out] = '-';
+                out += 1;
+            }
+        } else {
+            if (is_neg) {
+                @memcpy(buf[out..][0..3], " - ");
+                out += 3;
+            } else {
+                @memcpy(buf[out..][0..3], " + ");
+                out += 3;
+            }
+        }
+
+        // Format number: integer if possible, else float
+        const formatted = fmtCalcNum(abs_val, buf[out..][0..64]) orelse return null;
+        out += formatted.len;
+
+        // Unit
+        if (out + t.unit.len >= buf.len) return null;
+        @memcpy(buf[out..][0..t.unit.len], t.unit);
+        out += t.unit.len;
+    }
+
+    buf[out] = ')';
+    out += 1;
+    return buf[0..out];
+}
+
+/// Parse a simple "number+unit" string into value and unit.
+fn parseNumUnit(s: []const u8) ?struct { value: f64, unit: []const u8 } {
+    var ne: usize = 0;
+    if (ne < s.len and (s[ne] == '-' or s[ne] == '+')) ne += 1;
+    while (ne < s.len and (s[ne] >= '0' and s[ne] <= '9' or s[ne] == '.')) ne += 1;
+    if (ne == 0) return null;
+    const v = std.fmt.parseFloat(f64, s[0..ne]) catch return null;
+    return .{ .value = v, .unit = s[ne..] };
+}
+
+fn fmtCalcNum(val: f64, out: []u8) ?[]const u8 {
+    // Integer if no fractional part
+    const rounded = @round(val);
+    if (@abs(val - rounded) < 1e-6) {
+        const int_val: i64 = @intFromFloat(rounded);
+        const n = std.fmt.bufPrint(out, "{d}", .{int_val}) catch return null;
+        return n;
+    }
+    // Float, trim trailing zeros
+    const n = std.fmt.bufPrint(out, "{d:.6}", .{val}) catch return null;
+    var end = n.len;
+    while (end > 0 and out[end - 1] == '0') end -= 1;
+    if (end > 0 and out[end - 1] == '.') end -= 1;
+    return out[0..end];
+}
+
+fn calcUnitCmp(a: []const u8, b: []const u8) i32 {
+    const a_rank = calcUnitRank(a);
+    const b_rank = calcUnitRank(b);
+    if (a_rank < b_rank) return -1;
+    if (a_rank > b_rank) return 1;
+    const max_len = @max(a.len, b.len);
+    for (0..max_len) |k| {
+        const ac: u8 = if (k < a.len) std.ascii.toLower(a[k]) else 0;
+        const bc: u8 = if (k < b.len) std.ascii.toLower(b[k]) else 0;
+        if (ac < bc) return -1;
+        if (ac > bc) return 1;
+    }
+    return 0;
+}
+
+fn calcUnitRank(unit: []const u8) u8 {
+    if (unit.len == 0) return 0;
+    if (std.mem.eql(u8, unit, "%")) return 1;
+    return 2;
+}
+
+/// Simplify single-argument min()/max() to the bare value: min(1px) → calc(1px), min(1%) → 1%
+/// Also converts absolute units: min(1in) → calc(96px)
+fn canonicalizeSingleArgMath(val: []const u8, buf: *[512]u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed[trimmed.len - 1] != ')') return null;
+    // Extract inner content
+    var prefix_len: usize = 0;
+    if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "min(")) prefix_len = 4
+    else if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "max(")) prefix_len = 4
+    else return null;
+    const inner = std.mem.trim(u8, trimmed[prefix_len .. trimmed.len - 1], " ");
+    // Check: single argument (no commas at top level)
+    var nesting: usize = 0;
+    for (inner) |ch| {
+        if (ch == '(') nesting += 1
+        else if (ch == ')') { if (nesting > 0) nesting -= 1; }
+        else if (ch == ',' and nesting == 0) return null; // multi-arg
+    }
+
+    // Wrap as calc() and canonicalize
+    var tmp_buf: [512]u8 = undefined;
+    const calc_str = std.fmt.bufPrint(&tmp_buf, "calc({s})", .{inner}) catch return null;
+    return canonicalizeCalcValue(calc_str, buf);
+}
+
+/// Simplify constant clamp(): clamp(1px, 2px, 3px) → calc(2px) when all args are same-unit constants
+fn canonicalizeClamp(val: []const u8, buf: *[512]u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed.len < 7) return null;
+    if (!eqlIgnoreCase(trimmed[0..6], "clamp(")) return null;
+    if (trimmed[trimmed.len - 1] != ')') return null;
+    const inner = std.mem.trim(u8, trimmed[6 .. trimmed.len - 1], " ");
+    // Split on commas (top-level only)
+    var args: [3][]const u8 = undefined;
+    var arg_count: usize = 0;
+    var start: usize = 0;
+    var nesting: usize = 0;
+    for (inner, 0..) |ch, k| {
+        if (ch == '(') nesting += 1
+        else if (ch == ')') { if (nesting > 0) nesting -= 1; }
+        else if (ch == ',' and nesting == 0) {
+            if (arg_count >= 3) return null;
+            args[arg_count] = std.mem.trim(u8, inner[start..k], " ");
+            arg_count += 1;
+            start = k + 1;
+        }
+    }
+    if (arg_count < 2) return null;
+    args[arg_count] = std.mem.trim(u8, inner[start..], " ");
+    arg_count += 1;
+    if (arg_count != 3) return null;
+
+    // Parse each arg as number+unit
+    const parsed = struct {
+        fn parse(s: []const u8) ?struct { value: f64, unit: []const u8 } {
+            var ne: usize = 0;
+            if (ne < s.len and (s[ne] == '-' or s[ne] == '+')) ne += 1;
+            while (ne < s.len and (s[ne] >= '0' and s[ne] <= '9' or s[ne] == '.')) ne += 1;
+            if (ne == 0) return null;
+            const v = std.fmt.parseFloat(f64, s[0..ne]) catch return null;
+            return .{ .value = v, .unit = s[ne..] };
+        }
+    };
+    const min_arg = parsed.parse(args[0]) orelse return null;
+    const val_arg = parsed.parse(args[1]) orelse return null;
+    const max_arg = parsed.parse(args[2]) orelse return null;
+    // All same unit
+    if (!std.mem.eql(u8, min_arg.unit, val_arg.unit) or !std.mem.eql(u8, val_arg.unit, max_arg.unit)) return null;
+    // Evaluate: clamp(min, val, max) = max(min, min(val, max))
+    const result = @max(min_arg.value, @min(val_arg.value, max_arg.value));
+    // Convert absolute units
+    var calc_str_buf: [128]u8 = undefined;
+    const calc_str = std.fmt.bufPrint(&calc_str_buf, "calc({d}{s})", .{ result, min_arg.unit }) catch return null;
+    return canonicalizeCalcValue(calc_str, buf);
 }
 
 fn isValidMarginTrimValue(val: []const u8) bool {

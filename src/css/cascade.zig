@@ -1570,6 +1570,26 @@ fn applyDeclaration(
         .order => {
             if (std.fmt.parseInt(i32, trimmed, 10)) |v| style.order = v else |_| {}
         },
+        .reading_flow => {
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.reading_flow = .normal;
+            } else if (eqlIgnoreCase(trimmed, "flex-visual")) {
+                style.reading_flow = .flex_visual;
+            } else if (eqlIgnoreCase(trimmed, "flex-flow")) {
+                style.reading_flow = .flex_flow;
+            } else if (eqlIgnoreCase(trimmed, "grid-rows")) {
+                style.reading_flow = .grid_rows;
+            } else if (eqlIgnoreCase(trimmed, "grid-columns")) {
+                style.reading_flow = .grid_columns;
+            } else if (eqlIgnoreCase(trimmed, "grid-order")) {
+                style.reading_flow = .grid_order;
+            } else if (eqlIgnoreCase(trimmed, "source-order")) {
+                style.reading_flow = .source_order;
+            }
+        },
+        .reading_order => {
+            if (std.fmt.parseInt(i32, trimmed, 10)) |v| style.reading_order = v else |_| {}
+        },
         .flex_basis => {
             style.flex_basis = parseDimension(trimmed, fs, vw, vh);
         },
@@ -2194,10 +2214,14 @@ fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool, de
             (parseLengthValueDepth(a_str, font_size, vw, vh, depth + 1) orelse return null);
         const b = parseCalcExpr(b_str, font_size, vw, vh, depth + 1) orelse
             (parseLengthValueDepth(b_str, font_size, vw, vh, depth + 1) orelse return null);
+        // CSS Values 4: NaN taints min/max result
+        if (std.math.isNan(a) or std.math.isNan(b)) return 0;
         return if (is_min) @min(a, b) else @max(a, b);
     }
-    return parseCalcExpr(inner, font_size, vw, vh, depth + 1) orelse
-        parseLengthValueDepth(inner, font_size, vw, vh, depth + 1);
+    const single = parseCalcExpr(inner, font_size, vw, vh, depth + 1) orelse
+        (parseLengthValueDepth(inner, font_size, vw, vh, depth + 1) orelse return null);
+    if (std.math.isNan(single)) return 0;
+    return single;
 }
 
 fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
@@ -2205,7 +2229,10 @@ fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) 
     var end = s.len;
     if (end > 0 and s[end - 1] == ')') end -= 1;
     const inner = std.mem.trim(u8, s[start..end], " \t");
-    return parseCalcExpr(inner, font_size, vw, vh, depth);
+    const result = parseCalcExpr(inner, font_size, vw, vh, depth) orelse return null;
+    // CSS Values 4 §10.11: NaN → 0 (Infinity passes through for property-level clamping)
+    if (std.math.isNan(result)) return 0;
+    return result;
 }
 
 /// Parse a calc expression with correct operator precedence.
@@ -2280,6 +2307,196 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .in_ => value * 96.0,
         else => value,
     };
+}
+
+// ── Public API for getComputedStyle (resolves % against containing block) ──
+
+/// Resolve a CSS length/calc/min/max/clamp value string to pixels.
+/// Unlike the internal parseLengthValue, this also resolves percentages
+/// against `pct_base` (containing block width for most properties).
+/// Returns null if the value cannot be parsed as a length.
+pub fn resolveValueToPx(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32) ?f32 {
+    return resolveValueToPxDepth(s, font_size, vw, vh, pct_base, 0);
+}
+
+fn resolveValueToPxDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    if (s.len == 0) return null;
+    if (std.mem.eql(u8, s, "0")) return 0;
+
+    if (startsWithIgnoreCase(s, "clamp(")) {
+        return resolveClampWithPct(s, font_size, vw, vh, pct_base, depth);
+    }
+    if (startsWithIgnoreCase(s, "calc(")) {
+        return resolveCalcWithPct(s, font_size, vw, vh, pct_base, depth);
+    }
+    if (startsWithIgnoreCase(s, "min(")) {
+        return resolveMinMaxWithPct(s, font_size, vw, vh, pct_base, true, depth);
+    }
+    if (startsWithIgnoreCase(s, "max(")) {
+        return resolveMinMaxWithPct(s, font_size, vw, vh, pct_base, false, depth);
+    }
+
+    if (properties.parseLength(s)) |len| {
+        return resolveLengthToPxWithPct(len.value, len.unit, font_size, vw, vh, pct_base);
+    }
+    if (std.fmt.parseFloat(f32, s)) |v| return v else |_| {}
+    return null;
+}
+
+fn resolveLengthToPxWithPct(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh: f32, pct_base: f32) f32 {
+    return switch (unit) {
+        .percent => value * pct_base / 100.0,
+        .px => value,
+        .em => value * font_size,
+        .rem => value * 16.0,
+        .ch => value * font_size * 0.5,
+        .ex => value * font_size * 0.5,
+        .lh => value * font_size * 1.2,
+        .vh, .svh, .dvh, .lvh => value * vh / 100.0,
+        .vw, .svw, .dvw, .lvw => value * vw / 100.0,
+        .vmin => value * @min(vw, vh) / 100.0,
+        .vmax => value * @max(vw, vh) / 100.0,
+        .pt => value * 4.0 / 3.0,
+        .cm => value * 96.0 / 2.54,
+        .mm => value * 96.0 / 25.4,
+        .in_ => value * 96.0,
+        else => value,
+    };
+}
+
+fn containsInfOrNan(s: []const u8) bool {
+    var j: usize = 0;
+    while (j + 3 <= s.len) : (j += 1) {
+        if (std.ascii.eqlIgnoreCase(s[j..][0..3], "nan")) return true;
+        if (j + 8 <= s.len and std.ascii.eqlIgnoreCase(s[j..][0..8], "infinity")) return true;
+    }
+    return false;
+}
+
+fn resolveCalcWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    const start = 5; // "calc(".len
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[start..end], " \t");
+    const result = resolveCalcExprWithPct(inner, font_size, vw, vh, pct_base, depth) orelse return null;
+    // CSS Values 4 §10.11: NaN → 0; Infinity passes through (clamped at property level)
+    if (std.math.isNan(result)) return 0;
+    return result;
+}
+
+fn resolveCalcExprWithPct(expr: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+
+    var paren_depth: usize = 0;
+    var last_add_sub: ?usize = null;
+    var last_mul_div: ?usize = null;
+
+    var i: usize = 0;
+    while (i < expr.len) {
+        const ch = expr[i];
+        if (ch == '(') { paren_depth += 1; i += 1; continue; }
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; i += 1; continue; }
+        if (paren_depth == 0) {
+            if (i > 0 and i + 1 < expr.len and expr[i - 1] == ' ' and expr[i + 1] == ' ') {
+                if (ch == '+' or ch == '-') last_add_sub = i;
+            }
+            if (ch == '*' or ch == '/') {
+                if (i > 0 and i + 1 < expr.len) last_mul_div = i;
+            }
+        }
+        i += 1;
+    }
+
+    if (last_add_sub) |pos| {
+        const left = std.mem.trim(u8, expr[0 .. pos - 1], " \t");
+        const right = std.mem.trim(u8, expr[pos + 2 ..], " \t");
+        const l = resolveCalcExprWithPct(left, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+        const r = resolveCalcExprWithPct(right, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+        return if (expr[pos] == '+') l + r else l - r;
+    }
+
+    if (last_mul_div) |pos| {
+        const left = std.mem.trim(u8, expr[0..pos], " \t");
+        const right = std.mem.trim(u8, expr[pos + 1 ..], " \t");
+        const l = resolveCalcExprWithPct(left, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+        const r = resolveCalcExprWithPct(right, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+        return if (expr[pos] == '*') l * r else if (r != 0) l / r else null;
+    }
+
+    return resolveValueToPxDepth(expr, font_size, vw, vh, pct_base, depth + 1);
+}
+
+fn resolveClampWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    const start = 6; // "clamp(".len
+    var pdepth: usize = 1;
+    var end: usize = start;
+    while (end < s.len and pdepth > 0) : (end += 1) {
+        if (s[end] == '(') pdepth += 1;
+        if (s[end] == ')') pdepth -= 1;
+    }
+    if (pdepth != 0) return null;
+    const inner = s[start .. end - 1];
+
+    var parts: [3][]const u8 = .{ "", "", "" };
+    var part_idx: usize = 0;
+    var paren_depth: usize = 0;
+    var part_start: usize = 0;
+    for (inner, 0..) |ch, idx| {
+        if (ch == '(') paren_depth += 1;
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ',' and paren_depth == 0 and part_idx < 2) {
+            parts[part_idx] = std.mem.trim(u8, inner[part_start..idx], " \t");
+            part_idx += 1;
+            part_start = idx + 1;
+        }
+    }
+    if (part_idx == 2) {
+        parts[2] = std.mem.trim(u8, inner[part_start..], " \t");
+    } else return null;
+
+    const min_val = resolveCalcExprWithPct(parts[0], font_size, vw, vh, pct_base, depth + 1) orelse
+        (resolveValueToPxDepth(parts[0], font_size, vw, vh, pct_base, depth + 1) orelse return null);
+    const pref_val = resolveCalcExprWithPct(parts[1], font_size, vw, vh, pct_base, depth + 1) orelse
+        (resolveValueToPxDepth(parts[1], font_size, vw, vh, pct_base, depth + 1) orelse return null);
+    const max_val = resolveCalcExprWithPct(parts[2], font_size, vw, vh, pct_base, depth + 1) orelse
+        (resolveValueToPxDepth(parts[2], font_size, vw, vh, pct_base, depth + 1) orelse return null);
+
+    const result = std.math.clamp(pref_val, min_val, max_val);
+    // CSS Values 4: NaN in clamp → 0
+    if (std.math.isNan(result)) return 0;
+    return result;
+}
+
+fn resolveMinMaxWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, is_min: bool, depth: u32) ?f32 {
+    const prefix_len: usize = 4;
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[prefix_len..end], " \t");
+
+    var paren_depth: usize = 0;
+    var split_pos: ?usize = null;
+    for (inner, 0..) |ch, idx| {
+        if (ch == '(') paren_depth += 1;
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ',' and paren_depth == 0) { split_pos = idx; break; }
+    }
+
+    if (split_pos) |sp| {
+        const a_str = std.mem.trim(u8, inner[0..sp], " \t");
+        const b_str = std.mem.trim(u8, inner[sp + 1 ..], " \t");
+        const a = resolveCalcExprWithPct(a_str, font_size, vw, vh, pct_base, depth + 1) orelse
+            (resolveValueToPxDepth(a_str, font_size, vw, vh, pct_base, depth + 1) orelse return null);
+        const b = resolveCalcExprWithPct(b_str, font_size, vw, vh, pct_base, depth + 1) orelse
+            (resolveValueToPxDepth(b_str, font_size, vw, vh, pct_base, depth + 1) orelse return null);
+        // CSS Values 4: If any argument is NaN, result is NaN → clamps to 0
+        if (std.math.isNan(a) or std.math.isNan(b)) return 0;
+        return if (is_min) @min(a, b) else @max(a, b);
+    }
+    const single = resolveCalcExprWithPct(inner, font_size, vw, vh, pct_base, depth + 1) orelse
+        (resolveValueToPxDepth(inner, font_size, vw, vh, pct_base, depth + 1) orelse return null);
+    if (std.math.isNan(single)) return 0;
+    return single;
 }
 
 fn parseGridTemplate(s: []const u8, alloc: std.mem.Allocator) ?[]const ComputedStyle.GridTrackSize {
@@ -2555,6 +2772,7 @@ fn mapDisplay(s: []const u8) ?ComputedStyle.Display {
     if (eqlIgnoreCase(s, "table-column")) return .table_column;
     if (eqlIgnoreCase(s, "table-column-group")) return .table_column_group;
     if (eqlIgnoreCase(s, "table-caption")) return .table_caption;
+    if (eqlIgnoreCase(s, "inline-table")) return .inline_table;
     if (eqlIgnoreCase(s, "contents")) return .contents;
     return null;
 }

@@ -155,6 +155,10 @@ pub const ComputedStyle = struct {
     gap: f32 = 0, // column-gap, used for both row and column in flex
     row_gap: f32 = 0, // row-gap, separate from column gap
 
+    // Reading order (CSS Display Level 4)
+    reading_flow: ReadingFlow = .normal,
+    reading_order: i32 = 0, // like order, default 0
+
     // ═══════════════════════════════════════════════════════════════
     // Table
     // ═══════════════════════════════════════════════════════════════
@@ -300,6 +304,7 @@ pub const ComputedStyle = struct {
         table_column,
         table_column_group,
         table_caption,
+        inline_table,
         contents,
         other,
     };
@@ -466,6 +471,16 @@ pub const ComputedStyle = struct {
         min_content,
         max_content,
         fit_content,
+    };
+
+    pub const ReadingFlow = enum {
+        normal,
+        flex_visual,
+        flex_flow,
+        grid_rows,
+        grid_columns,
+        grid_order,
+        source_order,
     };
 
     pub const WordBreak = enum {

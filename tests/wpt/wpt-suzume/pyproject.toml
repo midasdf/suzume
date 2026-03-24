@@ -1,0 +1,12 @@
+[project]
+name = "wpt-suzume"
+version = "0.1.0"
+requires-python = ">=3.10"
+description = "wptrunner product adapter for suzume browser"
+
+[project.entry-points."wptrunner.products"]
+suzume = "wpt_suzume.browser:create_product"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"

@@ -458,4 +458,61 @@ pub const Surface = struct {
         const new_a: u32 = @intFromFloat(a * opacity);
         return (colour & 0x00FFFFFF) | (new_a << 24);
     }
+
+    // ── Screenshot support (for WPT reftests) ──────────────────────
+
+    extern fn stbi_write_png(
+        filename: [*:0]const u8,
+        w: c_int,
+        h: c_int,
+        comp: c_int,
+        data: [*]const u8,
+        stride_in_bytes: c_int,
+    ) c_int;
+
+    /// Dump the current framebuffer contents to a PNG file.
+    /// Converts from LibNSFB XRGB8888 (BGRX in memory) to RGB for PNG.
+    pub fn dumpToPng(self: *Surface, path: []const u8) bool {
+        const nsfb_c = @import("../bindings/nsfb.zig").c;
+        var raw_ptr: ?[*]u8 = null;
+        var fb_stride: c_int = 0;
+        if (nsfb_c.nsfb_get_buffer(self.fb, @ptrCast(&raw_ptr), &fb_stride) != 0) return false;
+        const fb_ptr: [*]u8 = raw_ptr orelse return false;
+
+        const w: usize = @intCast(self.width);
+        const h: usize = @intCast(self.height);
+        const stride: usize = @intCast(fb_stride);
+
+        // Convert XRGB8888 (B,G,R,X per pixel in memory) to RGB
+        const rgb_buf = std.heap.c_allocator.alloc(u8, w * h * 3) catch return false;
+        defer std.heap.c_allocator.free(rgb_buf);
+
+        for (0..h) |y| {
+            const src_row = fb_ptr + y * stride;
+            const dst_row = rgb_buf[y * w * 3 ..];
+            for (0..w) |x| {
+                const src_off = x * 4;
+                const dst_off = x * 3;
+                dst_row[dst_off + 0] = src_row[src_off + 2]; // R
+                dst_row[dst_off + 1] = src_row[src_off + 1]; // G
+                dst_row[dst_off + 2] = src_row[src_off + 0]; // B
+            }
+        }
+
+        // Null-terminate the path for C API
+        var path_buf: [4096]u8 = undefined;
+        if (path.len >= path_buf.len) return false;
+        @memcpy(path_buf[0..path.len], path);
+        path_buf[path.len] = 0;
+
+        const result = stbi_write_png(
+            @ptrCast(&path_buf),
+            @intCast(self.width),
+            @intCast(self.height),
+            3, // RGB
+            rgb_buf.ptr,
+            @intCast(w * 3),
+        );
+        return result != 0;
+    }
 };

@@ -144,6 +144,9 @@ pub const PropertyId = enum(u16) {
     outline_width,
     outline_color,
     outline_style,
+    // Reading order
+    reading_flow,
+    reading_order,
     // Custom property
     custom,
     // Unknown (preserved)
@@ -290,6 +293,8 @@ pub const PropertyId = enum(u16) {
         .{ "aspect-ratio", .aspect_ratio },
         .{ "justify-items", .justify_items },
         .{ "justify-self", .justify_self },
+        .{ "reading-flow", .reading_flow },
+        .{ "reading-order", .reading_order },
     });
 
     pub fn fromString(name: []const u8) PropertyId {

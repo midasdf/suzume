@@ -5,6 +5,15 @@ const HttpClient = @import("../net/http.zig").HttpClient;
 const WebSocket = @import("../net/websocket.zig").WebSocket;
 const worker_mod = @import("worker.zig");
 
+// ── WPT test mode ───────────────────────────────────────────────────
+
+/// When true, console.log lines starting with "ALERT:" are written to
+/// stdout (for wptrunner result capture) instead of stderr.
+pub var wpt_mode: bool = false;
+
+/// Set to true after ALERT: RESULT: is output — signals the event loop to exit.
+pub var wpt_result_sent: bool = false;
+
 // ── Navigation request (from location.assign/replace/href setter) ────
 
 var pending_navigation_url: ?[]const u8 = null;
@@ -152,36 +161,67 @@ fn consoleWrite(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
 
-    // Build the output line using a buffer, then print it via std.debug.print
+    // Use heap buffer for WPT mode (result JSON can be very large)
+    var heap_buf: ?[]u8 = null;
+    defer if (heap_buf) |hb| std.heap.c_allocator.free(hb);
+
     var buf: [4096]u8 = undefined;
+    var out: []u8 = &buf;
+
+    if (wpt_mode) {
+        // Allocate larger buffer for WPT result JSON
+        heap_buf = std.heap.c_allocator.alloc(u8, 256 * 1024) catch null;
+        if (heap_buf) |hb| out = hb;
+    }
+
     var pos: usize = 0;
 
     // Write prefix
-    const prefix_str = std.fmt.bufPrint(buf[pos..], "[JS:{s}] ", .{prefix}) catch "";
+    const prefix_str = std.fmt.bufPrint(out[pos..], "[JS:{s}] ", .{prefix}) catch "";
     pos += prefix_str.len;
 
     var i: c_int = 0;
     while (i < argc) : (i += 1) {
-        if (i > 0 and pos < buf.len) {
-            buf[pos] = ' ';
+        if (i > 0 and pos < out.len) {
+            out[pos] = ' ';
             pos += 1;
         }
         const str = qjs.JS_ToCString(c, args[@intCast(i)]);
         if (str) |s| {
             const len = std.mem.len(s);
-            const copy_len = @min(len, buf.len - pos);
-            @memcpy(buf[pos..][0..copy_len], s[0..copy_len]);
+            const copy_len = @min(len, out.len - pos);
+            @memcpy(out[pos..][0..copy_len], s[0..copy_len]);
             pos += copy_len;
             qjs.JS_FreeCString(c, s);
         } else {
             const fallback = "[object]";
-            const copy_len = @min(fallback.len, buf.len - pos);
-            @memcpy(buf[pos..][0..copy_len], fallback[0..copy_len]);
+            const copy_len = @min(fallback.len, out.len - pos);
+            @memcpy(out[pos..][0..copy_len], fallback[0..copy_len]);
             pos += copy_len;
         }
     }
 
-    std.debug.print("{s}\n", .{buf[0..pos]});
+    const line = out[0..pos];
+
+    // In WPT mode, route "ALERT: RESULT:" lines to stdout for wptrunner capture
+    if (wpt_mode) {
+        // Strip "[JS:LOG] " prefix to check for ALERT:
+        const payload = if (std.mem.startsWith(u8, line, "[JS:LOG] "))
+            line["[JS:LOG] ".len..]
+        else
+            line;
+        if (std.mem.startsWith(u8, payload, "ALERT: ")) {
+            const stdout_file = std.fs.File.stdout();
+            _ = stdout_file.write(payload) catch 0;
+            _ = stdout_file.write("\n") catch 0;
+            if (std.mem.startsWith(u8, payload, "ALERT: RESULT: ")) {
+                wpt_result_sent = true;
+            }
+            return quickjs.JS_UNDEFINED();
+        }
+    }
+
+    std.debug.print("{s}\n", .{line});
 
     return quickjs.JS_UNDEFINED();
 }

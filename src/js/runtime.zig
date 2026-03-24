@@ -12,6 +12,9 @@ pub const JsRuntime = struct {
         errdefer qjs.JS_FreeRuntime(rt);
 
         qjs.JS_SetMemoryLimit(rt, 48 * 1024 * 1024);
+        // Set very high GC threshold — avoids crash from GC list corruption on heavy JS pages.
+        // QuickJS-ng triggers GC when malloc_size > threshold; SIZE_MAX effectively disables it.
+        qjs.JS_SetGCThreshold(rt, std.math.maxInt(usize));
 
         // Interrupt handler prevents infinite loops / very heavy scripts
         qjs.JS_SetInterruptHandler(rt, &interruptHandler, null);
