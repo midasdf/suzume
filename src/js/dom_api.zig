@@ -932,6 +932,9 @@ fn classListAdd(
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
 
     const cls_to_add = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+
+    // DOM §7.1: Validate token
+    if (validateToken(c, cls_to_add.ptr[0..cls_to_add.len])) |exc| return exc;
     defer qjs.JS_FreeCString(c, cls_to_add.ptr);
 
     // Get current class
@@ -978,6 +981,8 @@ fn classListRemove(
 
     const cls_to_remove = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, cls_to_remove.ptr);
+    // DOM §7.1: Validate token
+    if (validateToken(c, cls_to_remove.ptr[0..cls_to_remove.len])) |exc| return exc;
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
@@ -1024,6 +1029,8 @@ fn classListContains(
 
     const cls_name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, cls_name.ptr);
+    // DOM §7.1: Validate token
+    if (validateToken(c, cls_name.ptr[0..cls_name.len])) |exc| return exc;
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
@@ -1047,6 +1054,8 @@ fn classListToggle(
 
     const cls_name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, cls_name.ptr);
+    // DOM §7.1: Validate token
+    if (validateToken(c, cls_name.ptr[0..cls_name.len])) |exc| return exc;
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
@@ -1102,6 +1111,10 @@ fn classListReplace(
     const new_cls = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, new_cls.ptr);
 
+    // DOM §7.1: Validate both tokens
+    if (validateToken(c, old_cls.ptr[0..old_cls.len])) |exc| return exc;
+    if (validateToken(c, new_cls.ptr[0..new_cls.len])) |exc| return exc;
+
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
@@ -1130,6 +1143,40 @@ fn classListKeys(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSVa
 fn classListValues(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     return qjs.JS_NewArray(c);
+}
+
+/// Throw a DOMException with the given name and message.
+/// DOM Standard §4.3: DOMException interface
+fn throwDOMException(c: *qjs.JSContext, name: []const u8, message: []const u8) qjs.JSValue {
+    // Create a DOMException-like error object
+    const err = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, err, "name", qjs.JS_NewStringLen(c, name.ptr, name.len));
+    _ = qjs.JS_SetPropertyStr(c, err, "message", qjs.JS_NewStringLen(c, message.ptr, message.len));
+
+    // Map DOMException name to legacy code
+    const code: i32 = if (std.mem.eql(u8, name, "SyntaxError")) 12
+        else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5
+        else if (std.mem.eql(u8, name, "NotFoundError")) 8
+        else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3
+        else 0;
+    _ = qjs.JS_SetPropertyStr(c, err, "code", qjs.JS_NewInt32(c, code));
+
+    return qjs.JS_Throw(c, err);
+}
+
+/// Validate a DOMTokenList token per DOM Standard §7.1:
+/// - Must not be empty string (SyntaxError)
+/// - Must not contain ASCII whitespace (InvalidCharacterError)
+fn validateToken(c: *qjs.JSContext, token: []const u8) ?qjs.JSValue {
+    if (token.len == 0) {
+        return throwDOMException(c, "SyntaxError", "The token provided must not be empty.");
+    }
+    for (token) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c) {
+            return throwDOMException(c, "InvalidCharacterError", "The token provided contains HTML space characters, which are not valid in tokens.");
+        }
+    }
+    return null;
 }
 
 fn classContains(class_str: []const u8, needle: []const u8) bool {
