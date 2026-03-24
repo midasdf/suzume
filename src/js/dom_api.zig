@@ -7223,6 +7223,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "platform", qjs.JS_NewStringLen(ctx, "Linux", 5));
     _ = qjs.JS_SetPropertyStr(ctx, global, "navigator", nav_obj);
 
+    // HTML spec: window, self, globalThis all refer to the global object
+    _ = qjs.JS_SetPropertyStr(ctx, global, "window", qjs.JS_DupValue(ctx, global));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "self", qjs.JS_DupValue(ctx, global));
+
     qjs.JS_FreeValue(ctx, global);
 }
 

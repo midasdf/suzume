@@ -978,8 +978,8 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             }
             return false;
         },
-        // :has() and :not() are handled above via has_inner/not_inner fields
-        .has, .not => return false,
+        // :has()/:not()/:is()/:where() are handled above via inner fields
+        .has, .not, .is, .where => return false,
     }
 }
 
