@@ -2303,6 +2303,29 @@ fn styleGetPropertyValue(
 
     // Direct lookup
     if (getStyleProperty(style, prop)) |val| {
+        // Serialize color values to canonical rgb()/rgba() form
+        if (isColorProperty(prop)) {
+            const color_mod = @import("../css/properties.zig");
+            const tv = std.mem.trim(u8, val, " \t\r\n");
+            if (color_mod.parseColor(tv)) |color| {
+                var color_buf: [64]u8 = undefined;
+                if (color.a == 255) {
+                    const s = std.fmt.bufPrint(&color_buf, "rgb({d}, {d}, {d})", .{ color.r, color.g, color.b }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                    return qjs.JS_NewStringLen(c, s.ptr, s.len);
+                } else {
+                    const orig_alpha = extractOriginalAlpha(tv);
+                    var alpha_buf: [16]u8 = undefined;
+                    const alpha_s = if (orig_alpha) |a|
+                        std.fmt.bufPrint(&alpha_buf, "{d}", .{a}) catch "0"
+                    else blk: {
+                        const a = @as(f32, @floatFromInt(color.a)) / 255.0;
+                        break :blk std.fmt.bufPrint(&alpha_buf, "{d}", .{a}) catch "0";
+                    };
+                    const s = std.fmt.bufPrint(&color_buf, "rgba({d}, {d}, {d}, {s})", .{ color.r, color.g, color.b, alpha_s }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                    return qjs.JS_NewStringLen(c, s.ptr, s.len);
+                }
+            }
+        }
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 

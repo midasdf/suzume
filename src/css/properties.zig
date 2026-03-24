@@ -25,6 +25,9 @@ pub fn parseColor(raw: []const u8) ?values.Color {
     if (startsWithIgnoreCase(trimmed, "hsl(")) {
         return parseHslFunc(trimmed);
     }
+    if (startsWithIgnoreCase(trimmed, "hwb(")) {
+        return parseHwbFunc(trimmed);
+    }
 
     return namedColor(trimmed);
 }
@@ -213,6 +216,60 @@ fn parseHslaFunc(text: []const u8) ?values.Color {
         .g = rgb.g,
         .b = rgb.b,
         .a = @intFromFloat(std.math.clamp(alpha_f, 0.0, 255.0)),
+    };
+}
+
+fn parseHwbFunc(text: []const u8) ?values.Color {
+    const inner = extractFuncArgs(text) orelse return null;
+    var vals: [4]f32 = undefined;
+    var count: usize = 0;
+    var alpha_is_percentage = false;
+    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        const is_pct = tok.len > 0 and tok[tok.len - 1] == '%';
+        if (count == 3 and is_pct) alpha_is_percentage = true;
+        const clean = if (is_pct) tok[0 .. tok.len - 1] else tok;
+        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
+        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        count += 1;
+    }
+    if (count < 3) return null;
+
+    const h = vals[0];
+    const w = vals[1] / 100.0; // whiteness as fraction
+    const b = vals[2] / 100.0; // blackness as fraction
+
+    // HWB to RGB conversion (CSS Color 4 §4.5)
+    var white = w;
+    var black = b;
+    if (white + black > 1.0) {
+        const sum = white + black;
+        white /= sum;
+        black /= sum;
+    }
+
+    // Start with HSL (S=100%, L=50%) to get pure hue
+    const hue_rgb = hslToRgb(h, 100, 50);
+    const rf = @as(f32, @floatFromInt(hue_rgb.r)) / 255.0;
+    const gf = @as(f32, @floatFromInt(hue_rgb.g)) / 255.0;
+    const bf = @as(f32, @floatFromInt(hue_rgb.b)) / 255.0;
+
+    // Mix: color = hue * (1 - white - black) + white
+    const r = rf * (1.0 - white - black) + white;
+    const g = gf * (1.0 - white - black) + white;
+    const bv = bf * (1.0 - white - black) + white;
+
+    const a: u8 = if (count >= 4) blk: {
+        const alpha_f = if (alpha_is_percentage) vals[3] * 255.0 / 100.0 else vals[3] * 255.0;
+        break :blk @intFromFloat(std.math.clamp(alpha_f, 0.0, 255.0));
+    } else 255;
+
+    return .{
+        .r = @intFromFloat(@round(std.math.clamp(r * 255.0, 0.0, 255.0))),
+        .g = @intFromFloat(@round(std.math.clamp(g * 255.0, 0.0, 255.0))),
+        .b = @intFromFloat(@round(std.math.clamp(bv * 255.0, 0.0, 255.0))),
+        .a = a,
     };
 }
 
