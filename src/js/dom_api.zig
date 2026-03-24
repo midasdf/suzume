@@ -1055,13 +1055,30 @@ fn classListToggle(
     else
         false;
 
+    // DOM spec §7.1: toggle(token, force) — if force is present, use it
+    if (argc >= 2) {
+        var force_val: c_int = 0;
+        if (qjs.JS_ToBool(c, args[1]) >= 0) {
+            force_val = qjs.JS_ToBool(c, args[1]);
+        }
+        const force = force_val != 0;
+        if (force and !has) {
+            _ = classListAdd(ctx, this_val, 1, argv);
+            return quickjs.JS_NewBool(true);
+        } else if (!force and has) {
+            _ = classListRemove(ctx, this_val, 1, argv);
+            return quickjs.JS_NewBool(false);
+        }
+        return quickjs.JS_NewBool(has);
+    }
+
     if (has) {
         // Remove
-        _ = classListRemove(ctx, this_val, argc, argv);
+        _ = classListRemove(ctx, this_val, 1, argv);
         return quickjs.JS_NewBool(false);
     } else {
         // Add
-        _ = classListAdd(ctx, this_val, argc, argv);
+        _ = classListAdd(ctx, this_val, 1, argv);
         return quickjs.JS_NewBool(true);
     }
 }
