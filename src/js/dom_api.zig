@@ -1100,7 +1100,7 @@ fn classListReplace(
 }
 
 fn classContains(class_str: []const u8, needle: []const u8) bool {
-    var iter = std.mem.splitSequence(u8, class_str, " ");
+    var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (std.mem.eql(u8, cls, needle)) return true;
     }
@@ -1130,11 +1130,20 @@ fn classListItem(
 
     const class_str = attr_ptr.?[0..attr_len];
     var i: i32 = 0;
-    var iter = std.mem.splitSequence(u8, class_str, " ");
+    var seen: [64][]const u8 = undefined;
+    var seen_count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
-        if (i == idx) return qjs.JS_NewStringLen(c, cls.ptr, cls.len);
-        i += 1;
+        var dup = false;
+        for (seen[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+        }
+        if (!dup) {
+            if (seen_count < 64) { seen[seen_count] = cls; seen_count += 1; }
+            if (i == idx) return qjs.JS_NewStringLen(c, cls.ptr, cls.len);
+            i += 1;
+        }
     }
     return quickjs.JS_NULL();
 }
@@ -1160,9 +1169,17 @@ fn classListForEach(
 
     const class_str = attr_ptr.?[0..attr_len];
     var i: i32 = 0;
-    var iter = std.mem.splitSequence(u8, class_str, " ");
+    var seen_fe: [64][]const u8 = undefined;
+    var seen_fe_count: usize = 0;
+    var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
+        var dup_fe = false;
+        for (seen_fe[0..seen_fe_count]) |s| {
+            if (std.mem.eql(u8, s, cls)) { dup_fe = true; break; }
+        }
+        if (dup_fe) continue;
+        if (seen_fe_count < 64) { seen_fe[seen_fe_count] = cls; seen_fe_count += 1; }
         var cb_args = [_]qjs.JSValue{
             qjs.JS_NewStringLen(c, cls.ptr, cls.len),
             qjs.JS_NewInt32(c, i),
