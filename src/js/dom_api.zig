@@ -5663,24 +5663,7 @@ fn resolveVarFromElement(c: *qjs.JSContext, elem_val: qjs.JSValue, val: []const 
     }
     if (depth > 0) qjs.JS_FreeValue(c, current);
 
-    // Also check g_styles for custom properties from CSS cascade
-    if (g_styles) |styles| {
-        const node = getNode(c, elem_val);
-        if (node) |n| {
-            if (styles.get(@intFromPtr(n))) |style| {
-                // Add custom properties from computed style
-                for (style.custom_properties.items) |cp| {
-                    // Only add if not already defined (inline takes precedence)
-                    if (!var_map.contains(cp.name)) {
-                        var_map.put(cp.name, cp.value) catch {};
-                    }
-                }
-            }
-        }
-    }
-
-    if (var_map.count() == 0) return null;
-
+    // Always try resolving — even with empty map, fallback values in var() need processing
     return variables_mod.resolveVarRefs(val, &var_map, std.heap.c_allocator);
 }
 
@@ -5701,7 +5684,7 @@ fn extractCustomProps(style: []const u8, var_map: anytype) void {
             const val_start = pos;
             while (pos < style.len and style[pos] != ';') pos += 1;
             const value = std.mem.trim(u8, style[val_start..pos], " \t");
-            var_map.put(name, value) catch {};
+            var_map.set(name, value) catch {};
         } else {
             // Skip to next semicolon
             while (pos < style.len and style[pos] != ';') pos += 1;
