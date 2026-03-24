@@ -675,6 +675,10 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // readyState = "loading" during script execution
     dom_api.setReadyState(.loading);
 
+    // HTML spec §7.3.3: Named access on Window — register id'd elements as globals
+    // Must be done before script execution so scripts can reference elements by id
+    _ = js_rt.eval("try{document.querySelectorAll('[id]').forEach(function(e){if(e.id&&!window[e.id])window[e.id]=e;})}catch(e){}");
+
     // Execute <script> tags (including external scripts via src attribute)
     executeScripts(doc, &js_rt, allocator, loader, base_url);
 

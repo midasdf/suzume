@@ -51,9 +51,11 @@ pub const PseudoClass = enum {
     focus_within,
     target,
     placeholder_shown,
-    // Internal-only: used by :has()/:not() selectors — never matched via fromString()
+    // Internal-only: used by :has()/:not()/:is()/:where() selectors
     has,
     not,
+    is,
+    where,
 
     const map = std.StaticStringMap(PseudoClass).initComptime(.{
         .{ "hover", .hover },
@@ -108,6 +110,8 @@ pub const PseudoClassSel = struct {
     nth: ?NthParams = null,
     not_inner: ?[]const u8 = null, // Raw inner selector string for :not()
     has_inner: ?[]const u8 = null, // Raw inner selector string for :has()
+    is_inner: ?[]const u8 = null, // Raw inner selector string for :is()
+    where_inner: ?[]const u8 = null, // Raw inner selector string for :where()
 };
 
 pub const SimpleSelector = union(enum) {
@@ -403,7 +407,8 @@ const SelectorParser = struct {
                     } } });
                     self.specificity.b += 1;
                 } else if (self.peek() == '(' and (eqlIgnoreCase(name, "where") or eqlIgnoreCase(name, "is"))) {
-                    // Handle :where() and :is() — parse inner selector classes/ids
+                    // CSS Selectors L4 §4.1-4.2: :is()/:where() — store raw inner string
+                    // Matching uses OR semantics (match if ANY inner selector matches)
                     self.advance(); // skip '('
                     const inner_start = self.pos;
                     var paren_depth_inner: u32 = 1;
@@ -415,37 +420,22 @@ const SelectorParser = struct {
                     const inner = self.source[inner_start..self.pos];
                     if (self.pos < self.source.len) self.advance(); // skip ')'
 
-                    // Parse class/id selectors from inner content
                     const is_where = eqlIgnoreCase(name, "where");
-                    var inner_pos: usize = 0;
-                    while (inner_pos < inner.len) {
-                        const ic = inner[inner_pos];
-                        if (ic == '.') {
-                            inner_pos += 1;
-                            const cls_start = inner_pos;
-                            while (inner_pos < inner.len and isIdentChar(inner[inner_pos])) inner_pos += 1;
-                            if (inner_pos > cls_start) {
-                                try self.components.append(self.allocator, .{ .simple = .{ .class = inner[cls_start..inner_pos] } });
-                                if (!is_where) self.specificity.b += 1; // :where has zero specificity
-                            }
-                        } else if (ic == '#') {
-                            inner_pos += 1;
-                            const id_start = inner_pos;
-                            while (inner_pos < inner.len and isIdentChar(inner[inner_pos])) inner_pos += 1;
-                            if (inner_pos > id_start) {
-                                try self.components.append(self.allocator, .{ .simple = .{ .id = inner[id_start..inner_pos] } });
-                                if (!is_where) self.specificity.a += 1;
-                            }
-                        } else if (isIdentStart(ic)) {
-                            const tag_start = inner_pos;
-                            while (inner_pos < inner.len and isIdentChar(inner[inner_pos])) inner_pos += 1;
-                            if (inner_pos > tag_start) {
-                                try self.components.append(self.allocator, .{ .simple = .{ .type_sel = inner[tag_start..inner_pos] } });
-                                if (!is_where) self.specificity.c += 1;
-                            }
-                        } else {
-                            inner_pos += 1;
-                        }
+                    if (is_where) {
+                        try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                            .pc = .where,
+                            .where_inner = inner,
+                        } } });
+                        // :where() contributes zero specificity
+                    } else {
+                        try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                            .pc = .is,
+                            .is_inner = inner,
+                        } } });
+                        // :is() specificity = max of inner selectors (approximate: count classes/ids)
+                        // For a proper implementation, parse each selector and take max specificity
+                        // Simplified: add b+1 for now (most :is() contains class-level selectors)
+                        self.specificity.b += 1;
                     }
                 } else {
                     // Unknown pseudo-class, skip including any parenthesized args
@@ -838,6 +828,14 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
     if (pcs.not_inner) |inner| {
         return !matchNotInner(inner, element);
     }
+    // Handle :is() — match if element matches ANY comma-separated inner selector
+    if (pcs.is_inner) |inner| {
+        return matchIsWhereInner(inner, element);
+    }
+    // Handle :where() — same matching as :is(), zero specificity (handled at parse time)
+    if (pcs.where_inner) |inner| {
+        return matchIsWhereInner(inner, element);
+    }
     const pc = pcs.pc;
     switch (pc) {
         .first_child => return element.previousElementSibling() == null,
@@ -1079,6 +1077,29 @@ fn matchNotInner(inner: []const u8, element: ElementAdapter) bool {
     // :not(tagname)
     const tag = element.tagName() orelse return false;
     return eqlIgnoreCase(tag, trimmed);
+}
+
+/// Match :is()/:where() — OR of comma-separated selectors (CSS Selectors L4 §4.1-4.2)
+fn matchIsWhereInner(inner: []const u8, element: ElementAdapter) bool {
+    // Split by comma (respecting parentheses) and match each as a simple selector
+    var start: usize = 0;
+    var paren_depth: usize = 0;
+    var bracket_depth: usize = 0;
+    for (inner, 0..) |ch, i| {
+        if (ch == '(') paren_depth += 1
+        else if (ch == ')' and paren_depth > 0) paren_depth -= 1
+        else if (ch == '[') bracket_depth += 1
+        else if (ch == ']' and bracket_depth > 0) bracket_depth -= 1
+        else if (ch == ',' and paren_depth == 0 and bracket_depth == 0) {
+            const segment = std.mem.trim(u8, inner[start..i], " \t\r\n");
+            if (segment.len > 0 and matchInnerSimple(segment, element)) return true;
+            start = i + 1;
+        }
+    }
+    // Last segment
+    const last = std.mem.trim(u8, inner[start..], " \t\r\n");
+    if (last.len > 0 and matchInnerSimple(last, element)) return true;
+    return false;
 }
 
 /// Match :has() inner selector — check if element has matching descendants/siblings
