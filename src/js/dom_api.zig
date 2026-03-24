@@ -5177,6 +5177,13 @@ fn computedStyleGetPropertyValue(
         const style_ptr = lxb_dom_element_get_attribute(el, "style", 5, &style_len);
         if (style_ptr != null and style_len > 0) {
             if (getStyleProperty(style_ptr.?[0..style_len], prop)) |val| {
+                // Resolve var() references in computed style getPropertyValue
+                if (std.mem.indexOf(u8, val, "var(") != null) {
+                    const resolved = resolveVarFromElement(c, elem_val, val);
+                    if (resolved) |rv| {
+                        return resolveInlineForComputed(c, prop, rv, elem_val);
+                    }
+                }
                 const trimmed = std.mem.trim(u8, val, " \t\r\n");
                 // Resolve CSS-wide keywords to computed values
                 if (eqlIgnoreCase(trimmed, "initial")) {
