@@ -152,6 +152,24 @@ pub const PropertyId = enum(u16) {
     // Reading order
     reading_flow,
     reading_order,
+    // Text decoration sub-properties
+    text_decoration_color,
+    text_decoration_style,
+    text_decoration_thickness,
+    text_underline_offset,
+    // Interaction
+    appearance,
+    user_select,
+    pointer_events,
+    touch_action,
+    cursor,
+    // Containment
+    will_change,
+    contain,
+    // Color scheme
+    color_scheme,
+    accent_color,
+    caret_color,
     // Custom property
     custom,
     // Unknown (preserved)
@@ -218,22 +236,25 @@ pub const PropertyId = enum(u16) {
         .{ "hyphens", .hyphens },
         .{ "text-decoration", .text_decoration },
         .{ "text-decoration-line", .text_decoration },
-        .{ "text-decoration-color", .unknown }, // handled in cascade via expandTextDecoration
-        .{ "text-decoration-style", .unknown }, // stored as unknown, visual only
-        .{ "text-decoration-thickness", .unknown }, // handled inline
-        .{ "text-underline-offset", .unknown }, // handled inline
+        .{ "text-decoration-color", .text_decoration_color },
+        .{ "text-decoration-style", .text_decoration_style },
+        .{ "text-decoration-thickness", .text_decoration_thickness },
+        .{ "text-underline-offset", .text_underline_offset },
         .{ "-webkit-text-decoration", .text_decoration },
-        .{ "-webkit-appearance", .unknown },
-        .{ "appearance", .unknown },
-        .{ "pointer-events", .unknown },
-        .{ "user-select", .unknown },
-        .{ "-webkit-user-select", .unknown },
-        .{ "touch-action", .unknown },
-        .{ "will-change", .unknown },
-        .{ "contain", .unknown },
+        .{ "-webkit-appearance", .appearance },
+        .{ "appearance", .appearance },
+        .{ "pointer-events", .pointer_events },
+        .{ "user-select", .user_select },
+        .{ "-webkit-user-select", .user_select },
+        .{ "touch-action", .touch_action },
+        .{ "will-change", .will_change },
+        .{ "contain", .contain },
         .{ "container-type", .unknown },
         .{ "container-name", .unknown },
-        .{ "color-scheme", .unknown },
+        .{ "color-scheme", .color_scheme },
+        .{ "accent-color", .accent_color },
+        .{ "caret-color", .caret_color },
+        .{ "cursor", .cursor },
         .{ "text-transform", .text_transform },
         .{ "white-space", .white_space },
         .{ "word-break", .word_break },

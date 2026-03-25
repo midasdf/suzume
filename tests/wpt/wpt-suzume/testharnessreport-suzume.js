@@ -5,14 +5,13 @@
         explicit_timeout: %(explicit_timeout)s,
         debug: %(debug)s
     };
-    var start_loc = document.createElement("a");
-    start_loc.href = location.href;
     setup(props);
 
     add_completion_callback(function(tests, harness_status) {
-        var id = decodeURIComponent(start_loc.pathname) +
-                 decodeURIComponent(start_loc.search) +
-                 decodeURIComponent(start_loc.hash);
+        var loc = location;
+        var id = decodeURIComponent(loc.pathname || "") +
+                 decodeURIComponent(loc.search || "") +
+                 decodeURIComponent(loc.hash || "");
         var result = JSON.stringify([
             id,
             harness_status.status,

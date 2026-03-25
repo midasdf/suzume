@@ -1208,7 +1208,12 @@ fn applyDeclaration(
                 } else |_| {}
             } else if (std.fmt.parseFloat(f32, trimmed)) |v| {
                 style.opacity = std.math.clamp(v, 0.0, 1.0);
-            } else |_| {}
+            } else |_| {
+                // Try calc()/min()/max()/clamp() — resolve to number
+                if (resolveCalcWithPct(trimmed, style.font_size_px, 0, 0, 1.0, 0)) |v| {
+                    style.opacity = std.math.clamp(v, 0.0, 1.0);
+                }
+            }
         },
         .visibility => {
             if (eqlIgnoreCase(trimmed, "visible")) style.visibility = .visible

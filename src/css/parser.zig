@@ -779,41 +779,53 @@ pub const Parser = struct {
     }
 
     fn evaluateSupports(condition: []const u8) bool {
-        // Parse @supports condition: (property: value), not(...), and/or
-        // Simple approach: check if property name inside (...) is a known PropertyId
+        const cond = std.mem.trim(u8, condition, " \t\r\n");
+        if (cond.len == 0) return false;
 
         // Handle "not (...)"
-        var cond = condition;
-        var negate = false;
         if (cond.len > 4 and eqlIgnoreCase(cond[0..4], "not ")) {
-            negate = true;
-            cond = std.mem.trim(u8, cond[4..], " \t");
+            return !evaluateSupports(cond[4..]);
         }
 
-        // Find (property: value) — extract property name
-        if (std.mem.indexOf(u8, cond, "(")) |open| {
-            const inner_start = open + 1;
-            // Find matching close paren
-            var depth: usize = 1;
-            var inner_end = inner_start;
-            while (inner_end < cond.len and depth > 0) : (inner_end += 1) {
-                if (cond[inner_end] == '(') depth += 1;
-                if (cond[inner_end] == ')') depth -= 1;
-            }
-            if (depth == 0 and inner_end > inner_start) {
-                const inner = std.mem.trim(u8, cond[inner_start .. inner_end - 1], " \t");
-                // Split by ':'
-                if (std.mem.indexOfScalar(u8, inner, ':')) |colon| {
-                    const prop_name = std.mem.trim(u8, inner[0..colon], " \t");
-                    const prop_id = ast.PropertyId.fromString(prop_name);
-                    const supported = (prop_id != .unknown);
-                    return if (negate) !supported else supported;
+        // Handle compound: find top-level "and" or "or"
+        // We scan for " and " or " or " outside parentheses
+        var depth: usize = 0;
+        var i: usize = 0;
+        while (i < cond.len) : (i += 1) {
+            if (cond[i] == '(') {
+                depth += 1;
+            } else if (cond[i] == ')' and depth > 0) {
+                depth -= 1;
+            } else if (depth == 0) {
+                // Check for " and "
+                if (i + 5 <= cond.len and eqlIgnoreCase(cond[i .. i + 5], " and ")) {
+                    const left = evaluateSupports(cond[0..i]);
+                    const right = evaluateSupports(cond[i + 5 ..]);
+                    return left and right;
+                }
+                // Check for " or "
+                if (i + 4 <= cond.len and eqlIgnoreCase(cond[i .. i + 4], " or ")) {
+                    const left = evaluateSupports(cond[0..i]);
+                    const right = evaluateSupports(cond[i + 4 ..]);
+                    return left or right;
                 }
             }
         }
 
-        // For "and"/"or" conditions, be optimistic: return true
-        return !negate;
+        // Single condition: (property: value)
+        if (cond[0] == '(' and cond[cond.len - 1] == ')') {
+            const inner = std.mem.trim(u8, cond[1 .. cond.len - 1], " \t");
+            if (std.mem.indexOfScalar(u8, inner, ':')) |colon| {
+                const prop_name = std.mem.trim(u8, inner[0..colon], " \t");
+                const prop_id = ast.PropertyId.fromString(prop_name);
+                return prop_id != .unknown;
+            }
+            // Could be nested: ((condition))
+            return evaluateSupports(inner);
+        }
+
+        // Unknown form — conservative false
+        return false;
     }
 
     fn skipAtRule(self: *Parser) void {

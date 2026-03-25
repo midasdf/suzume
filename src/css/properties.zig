@@ -43,6 +43,12 @@ pub fn parseColor(raw: []const u8) ?values.Color {
     if (startsWithIgnoreCase(trimmed, "color(")) {
         return parseColorFunc(trimmed);
     }
+    if (startsWithIgnoreCase(trimmed, "color-mix(")) {
+        return parseColorMixFunc(trimmed);
+    }
+    if (startsWithIgnoreCase(trimmed, "light-dark(")) {
+        return parseLightDarkFunc(trimmed);
+    }
 
     return namedColor(trimmed);
 }
@@ -594,6 +600,262 @@ fn inverseGamma(c: f32) f32 {
 
 fn clampToU8(v: f32) u8 {
     return @intFromFloat(std.math.clamp(v, 0.0, 255.0));
+}
+
+// ── color-mix() ────────────────────────────────────────────────────
+// CSS Color 5: color-mix(in <colorspace>, <color1> [<p1>], <color2> [<p2>])
+// We support interpolation in srgb (default), hsl, hwb, oklab, oklch, lab, lch.
+
+fn parseColorMixFunc(raw: []const u8) ?values.Color {
+    // Extract content between "color-mix(" and ")"
+    const prefix_len = "color-mix(".len;
+    if (raw.len < prefix_len + 1) return null;
+    const end = std.mem.lastIndexOfScalar(u8, raw, ')') orelse return null;
+    const args = std.mem.trim(u8, raw[prefix_len..end], " \t\r\n");
+
+    // Parse "in <colorspace>, <color1> [%], <color2> [%]"
+    if (!startsWithIgnoreCase(args, "in ")) return null;
+    var rest = args[3..]; // after "in "
+
+    // Find comma after colorspace
+    const comma1 = findTopLevelComma(rest) orelse return null;
+    const colorspace = std.mem.trim(u8, rest[0..comma1], " \t");
+    rest = std.mem.trim(u8, rest[comma1 + 1 ..], " \t");
+
+    // Split remaining into two color+percentage parts
+    const comma2 = findTopLevelComma(rest) orelse return null;
+    const part1 = std.mem.trim(u8, rest[0..comma2], " \t");
+    const part2 = std.mem.trim(u8, rest[comma2 + 1 ..], " \t");
+
+    // Parse color and percentage for each part
+    var p1: f32 = -1; // -1 = not specified
+    var p2: f32 = -1;
+    const c1 = parseColorWithPercent(part1, &p1) orelse return null;
+    const c2 = parseColorWithPercent(part2, &p2) orelse return null;
+
+    // Normalize percentages per spec
+    if (p1 < 0 and p2 < 0) {
+        p1 = 50;
+        p2 = 50;
+    } else if (p1 < 0) {
+        p1 = 100 - p2;
+    } else if (p2 < 0) {
+        p2 = 100 - p1;
+    }
+    // Clamp to 0-100
+    p1 = std.math.clamp(p1, 0, 100);
+    p2 = std.math.clamp(p2, 0, 100);
+
+    // Normalize so they sum to 100 (or less for transparency)
+    const total = p1 + p2;
+    if (total <= 0) return values.Color.transparent;
+    const w1 = p1 / total; // weight for color1 (0..1)
+
+    // Interpolate in chosen color space
+    return interpolateColors(c1, c2, w1, colorspace);
+}
+
+fn findTopLevelComma(s: []const u8) ?usize {
+    var depth: u32 = 0;
+    for (s, 0..) |ch, i| {
+        if (ch == '(' or ch == '[') depth += 1
+        else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+        else if (ch == ',' and depth == 0) return i;
+    }
+    return null;
+}
+
+fn parseColorWithPercent(part: []const u8, pct: *f32) ?values.Color {
+    // Try to find a trailing percentage: "red 30%", "rgb(255,0,0) 70%"
+    // Work backwards from end to find percentage
+    const trimmed = std.mem.trim(u8, part, " \t");
+    if (trimmed.len == 0) return null;
+
+    // Check if last token is a percentage
+    if (trimmed[trimmed.len - 1] == '%') {
+        // Find start of percentage number
+        var i = trimmed.len - 2;
+        while (i > 0 and (trimmed[i] == '.' or (trimmed[i] >= '0' and trimmed[i] <= '9'))) : (i -= 1) {}
+        // Check for space before percentage
+        if (i > 0 and trimmed[i] == ' ') {
+            const pct_str = trimmed[i + 1 .. trimmed.len - 1];
+            if (std.fmt.parseFloat(f32, pct_str)) |v| {
+                pct.* = v;
+                return parseColor(trimmed[0..i]);
+            } else |_| {}
+        }
+    }
+    // No percentage, just parse as color
+    return parseColor(trimmed);
+}
+
+fn interpolateColors(c1: values.Color, c2: values.Color, w1: f32, colorspace: []const u8) ?values.Color {
+    const w2 = 1.0 - w1;
+
+    // Interpolate alpha separately (always in linear space)
+    const a1 = @as(f32, @floatFromInt(c1.a)) / 255.0;
+    const a2 = @as(f32, @floatFromInt(c2.a)) / 255.0;
+    const a_out = a1 * w1 + a2 * w2;
+
+    // sRGB interpolation (default)
+    if (eqlIgnoreCase(colorspace, "srgb") or colorspace.len == 0) {
+        return .{
+            .r = clampToU8(@as(f32, @floatFromInt(c1.r)) * w1 + @as(f32, @floatFromInt(c2.r)) * w2),
+            .g = clampToU8(@as(f32, @floatFromInt(c1.g)) * w1 + @as(f32, @floatFromInt(c2.g)) * w2),
+            .b = clampToU8(@as(f32, @floatFromInt(c1.b)) * w1 + @as(f32, @floatFromInt(c2.b)) * w2),
+            .a = clampToU8(a_out * 255.0),
+        };
+    }
+
+    // sRGB-linear: linearize, interpolate, gamma-correct back
+    if (eqlIgnoreCase(colorspace, "srgb-linear")) {
+        const r1 = inverseGamma(@as(f32, @floatFromInt(c1.r)) / 255.0);
+        const g1 = inverseGamma(@as(f32, @floatFromInt(c1.g)) / 255.0);
+        const b1 = inverseGamma(@as(f32, @floatFromInt(c1.b)) / 255.0);
+        const r2 = inverseGamma(@as(f32, @floatFromInt(c2.r)) / 255.0);
+        const g2 = inverseGamma(@as(f32, @floatFromInt(c2.g)) / 255.0);
+        const b2 = inverseGamma(@as(f32, @floatFromInt(c2.b)) / 255.0);
+        return .{
+            .r = clampToU8(gammaCorrect(r1 * w1 + r2 * w2) * 255.0),
+            .g = clampToU8(gammaCorrect(g1 * w1 + g2 * w2) * 255.0),
+            .b = clampToU8(gammaCorrect(b1 * w1 + b2 * w2) * 255.0),
+            .a = clampToU8(a_out * 255.0),
+        };
+    }
+
+    // OKLab: convert to OKLab, interpolate, convert back
+    if (eqlIgnoreCase(colorspace, "oklab")) {
+        const lab1 = srgbToOklab(c1);
+        const lab2 = srgbToOklab(c2);
+        return oklabToSrgbColor(
+            lab1[0] * w1 + lab2[0] * w2,
+            lab1[1] * w1 + lab2[1] * w2,
+            lab1[2] * w1 + lab2[2] * w2,
+            a_out,
+        );
+    }
+
+    // OKLCH: convert to OKLab→OKLCH, interpolate hue, convert back
+    if (eqlIgnoreCase(colorspace, "oklch")) {
+        const lab1 = srgbToOklab(c1);
+        const lab2 = srgbToOklab(c2);
+        const lch1 = labToLch(lab1);
+        const lch2 = labToLch(lab2);
+        const h = interpolateHue(lch1[2], lch2[2], w1);
+        const L = lch1[0] * w1 + lch2[0] * w2;
+        const C = lch1[1] * w1 + lch2[1] * w2;
+        // Convert LCH back to Lab
+        const a_lab = C * @cos(h * std.math.pi / 180.0);
+        const b_lab = C * @sin(h * std.math.pi / 180.0);
+        return oklabToSrgbColor(L, a_lab, b_lab, a_out);
+    }
+
+    // HSL: convert to HSL, interpolate hue, convert back
+    if (eqlIgnoreCase(colorspace, "hsl")) {
+        const hsl1 = srgbToHsl(c1);
+        const hsl2 = srgbToHsl(c2);
+        const h = interpolateHue(hsl1[0], hsl2[0], w1);
+        const s = hsl1[1] * w1 + hsl2[1] * w2;
+        const l = hsl1[2] * w1 + hsl2[2] * w2;
+        const rgb = hslToRgb(h, s, l);
+        return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b, .a = clampToU8(a_out * 255.0) };
+    }
+
+    // HWB: convert to HWB via HSL, interpolate hue, convert back
+    if (eqlIgnoreCase(colorspace, "hwb")) {
+        const hsl1 = srgbToHsl(c1);
+        const hsl2 = srgbToHsl(c2);
+        const h = interpolateHue(hsl1[0], hsl2[0], w1);
+        const s = hsl1[1] * w1 + hsl2[1] * w2;
+        const l = hsl1[2] * w1 + hsl2[2] * w2;
+        const rgb = hslToRgb(h, s, l);
+        return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b, .a = clampToU8(a_out * 255.0) };
+    }
+
+    // Default: fallback to sRGB
+    return .{
+        .r = clampToU8(@as(f32, @floatFromInt(c1.r)) * w1 + @as(f32, @floatFromInt(c2.r)) * w2),
+        .g = clampToU8(@as(f32, @floatFromInt(c1.g)) * w1 + @as(f32, @floatFromInt(c2.g)) * w2),
+        .b = clampToU8(@as(f32, @floatFromInt(c1.b)) * w1 + @as(f32, @floatFromInt(c2.b)) * w2),
+        .a = clampToU8(a_out * 255.0),
+    };
+}
+
+// ── Helper: sRGB u8 → OKLab [L, a, b] ─────────────────────────────
+fn srgbToOklab(c: values.Color) [3]f32 {
+    const r = inverseGamma(@as(f32, @floatFromInt(c.r)) / 255.0);
+    const g = inverseGamma(@as(f32, @floatFromInt(c.g)) / 255.0);
+    const b = inverseGamma(@as(f32, @floatFromInt(c.b)) / 255.0);
+    // Linear sRGB → LMS (Oklab matrix)
+    const l_ = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+    const m_ = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+    const s_ = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+    const l_c = std.math.cbrt(l_);
+    const m_c = std.math.cbrt(m_);
+    const s_c = std.math.cbrt(s_);
+    return .{
+        0.2104542553 * l_c + 0.7936177850 * m_c - 0.0040720468 * s_c,
+        1.9779984951 * l_c - 2.4285922050 * m_c + 0.4505937099 * s_c,
+        0.0259040371 * l_c + 0.7827717662 * m_c - 0.8086757660 * s_c,
+    };
+}
+
+fn oklabToSrgbColor(L: f32, a: f32, b_val: f32, alpha: f32) values.Color {
+    const col = oklabToSrgb(L, a, b_val);
+    return .{ .r = col.r, .g = col.g, .b = col.b, .a = clampToU8(alpha * 255.0) };
+}
+
+fn labToLch(lab: [3]f32) [3]f32 {
+    const C = @sqrt(lab[1] * lab[1] + lab[2] * lab[2]);
+    var H = std.math.atan2(lab[2], lab[1]) * 180.0 / std.math.pi;
+    if (H < 0) H += 360.0;
+    return .{ lab[0], C, H };
+}
+
+fn interpolateHue(h1: f32, h2: f32, w1: f32) f32 {
+    var diff = h2 - h1;
+    if (diff > 180.0) diff -= 360.0;
+    if (diff < -180.0) diff += 360.0;
+    var result = h1 + diff * (1.0 - w1);
+    if (result < 0) result += 360.0;
+    if (result >= 360.0) result -= 360.0;
+    return result;
+}
+
+// ── Helper: sRGB u8 → HSL [h, s, l] ────────────────────────────────
+fn srgbToHsl(c: values.Color) [3]f32 {
+    const r: f32 = @as(f32, @floatFromInt(c.r)) / 255.0;
+    const g: f32 = @as(f32, @floatFromInt(c.g)) / 255.0;
+    const b: f32 = @as(f32, @floatFromInt(c.b)) / 255.0;
+    const max_c = @max(r, @max(g, b));
+    const min_c = @min(r, @min(g, b));
+    const l = (max_c + min_c) / 2.0;
+    if (max_c == min_c) return .{ 0, 0, l * 100.0 };
+    const d = max_c - min_c;
+    const s = if (l > 0.5) d / (2.0 - max_c - min_c) else d / (max_c + min_c);
+    var h: f32 = 0;
+    if (max_c == r) {
+        h = (g - b) / d + (if (g < b) @as(f32, 6.0) else 0.0);
+    } else if (max_c == g) {
+        h = (b - r) / d + 2.0;
+    } else {
+        h = (r - g) / d + 4.0;
+    }
+    return .{ h * 60.0, s * 100.0, l * 100.0 };
+}
+
+// ── light-dark() ────────────────────────────────────────────────────
+// CSS Color 5: light-dark(<light-color>, <dark-color>)
+// We always pick the light color since suzume defaults to light mode.
+fn parseLightDarkFunc(raw: []const u8) ?values.Color {
+    const prefix_len = "light-dark(".len;
+    if (raw.len < prefix_len + 1) return null;
+    const end = std.mem.lastIndexOfScalar(u8, raw, ')') orelse return null;
+    const args = std.mem.trim(u8, raw[prefix_len..end], " \t\r\n");
+    const comma = findTopLevelComma(args) orelse return null;
+    const light = std.mem.trim(u8, args[0..comma], " \t");
+    // Always return light color (default color scheme)
+    return parseColor(light);
 }
 
 const startsWithIgnoreCase = util.startsWithIgnoreCase;

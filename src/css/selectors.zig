@@ -824,9 +824,9 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
     if (pcs.has_inner) |inner| {
         return matchHasInner(inner, element);
     }
-    // Handle :not() — match if inner selector does NOT match
+    // Handle :not() — match if NONE of the comma-separated inner selectors match
     if (pcs.not_inner) |inner| {
-        return !matchNotInner(inner, element);
+        return !matchIsWhereInner(inner, element);
     }
     // Handle :is() — match if element matches ANY comma-separated inner selector
     if (pcs.is_inner) |inner| {

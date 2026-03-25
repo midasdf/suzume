@@ -21,6 +21,7 @@ extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_n
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_element_has_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) bool;
 extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
+extern fn lxb_dom_document_create_comment(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
 
 // Lexbor attribute iteration (using _noi ABI-safe non-inline variants)
 extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
@@ -63,7 +64,7 @@ pub var scroll_y: f32 = 0;
 pub var pending_scroll_x: ?f32 = null;
 pub var pending_scroll_y: ?f32 = null;
 
-fn setDomDirty() void {
+pub fn setDomDirty() void {
     dom_dirty = true;
     mutation_observers_pending = true;
 }
@@ -458,9 +459,11 @@ fn wrapNode(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
         return qjs.JS_DupValue(ctx, cached);
     }
 
-    // Create new wrapper
+    // Create new wrapper — CharacterData subtypes (Text, Comment, PI) use text class
     const node_type = node.type;
-    const obj = if (node_type == lxb.LXB_DOM_NODE_TYPE_TEXT)
+    const obj = if (node_type == lxb.LXB_DOM_NODE_TYPE_TEXT or
+        node_type == lxb.LXB_DOM_NODE_TYPE_COMMENT or
+        node_type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
         wrapTextNew(ctx, node)
     else
         wrapElementNew(ctx, node);
@@ -484,6 +487,74 @@ fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));
     return obj;
+}
+
+// ── CharacterData.data getter/setter (Text, Comment, PI) ────────────
+
+fn textGetData(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNodeFromText(c, this_val) orelse return qjs.JS_NewString(c, "");
+    var len: usize = 0;
+    const txt = lxb_dom_node_text_content(node, &len);
+    if (txt) |t| return qjs.JS_NewStringLen(c, t, len);
+    return qjs.JS_NewString(c, "");
+}
+
+fn textSetData(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const node = getNodeFromText(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const s = jsStringToSlice(c, args[0]) orelse {
+        // null/undefined → empty string (JS wrapper should handle this, but be safe)
+        _ = lxb_dom_node_text_content_set(node, "", 0);
+        events.recordMutation(node, "characterData", null, null, null);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    };
+    defer qjs.JS_FreeCString(c, s.ptr);
+    _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    events.recordMutation(node, "characterData", null, null, null);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+/// nodeValue getter for node_proto — returns null for Element/Document, data for Text/Comment
+fn nodeGetNodeValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    // Text, Comment, PI have nodeValue = their data; everything else returns null
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT or
+        node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT or
+        node.type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+    {
+        var len: usize = 0;
+        const txt = lxb_dom_node_text_content(node, &len);
+        if (txt) |t| return qjs.JS_NewStringLen(c, t, len);
+        return qjs.JS_NewString(c, "");
+    }
+    return quickjs.JS_NULL();
+}
+
+fn getNodeFromText(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
+    const ptr = qjs.JS_GetOpaque2(ctx, val, text_class_id);
+    if (ptr) |p| return @ptrCast(@alignCast(p));
+    return null;
 }
 
 /// Get the lxb_dom_node_t* from a JS Element/Text value.
@@ -3024,28 +3095,26 @@ fn documentCreateComment(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const obj = qjs.JS_NewObject(c);
-    _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 8));
-    _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_NewString(c, "#comment"));
-    // data property from argument
+    const doc = g_document orelse return quickjs.JS_NULL();
+
+    // Get the data string (default to empty)
+    var data_ptr: [*]const u8 = "";
+    var data_len: usize = 0;
     if (argc >= 1) {
         if (argv) |args| {
-            _ = qjs.JS_SetPropertyStr(c, obj, "data", qjs.JS_DupValue(c, args[0]));
-            _ = qjs.JS_SetPropertyStr(c, obj, "textContent", qjs.JS_DupValue(c, args[0]));
-            _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", qjs.JS_DupValue(c, args[0]));
+            if (jsStringToSlice(c, args[0])) |s| {
+                data_ptr = s.ptr;
+                data_len = s.len;
+            }
         }
-    } else {
-        _ = qjs.JS_SetPropertyStr(c, obj, "data", qjs.JS_NewString(c, ""));
-        _ = qjs.JS_SetPropertyStr(c, obj, "textContent", qjs.JS_NewString(c, ""));
-        _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", qjs.JS_NewString(c, ""));
     }
-    _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
-    // isEqualNode for Comment nodes
-    const ieq_js = "(function(o){if(!o||o.nodeType!==8)return false;return this.data===o.data;})";
-    _ = qjs.JS_SetPropertyStr(c, obj, "isEqualNode", qjs.JS_Eval(c, ieq_js, ieq_js.len, "<comment-ieq>", qjs.JS_EVAL_TYPE_GLOBAL));
-    const isn_js = "(function(o){return this===o;})";
-    _ = qjs.JS_SetPropertyStr(c, obj, "isSameNode", qjs.JS_Eval(c, isn_js, isn_js.len, "<comment-isn>", qjs.JS_EVAL_TYPE_GLOBAL));
-    return obj;
+    const comment_node = lxb_dom_document_create_comment(doc, data_ptr, data_len) orelse {
+        if (data_len > 0) qjs.JS_FreeCString(c, data_ptr);
+        return quickjs.JS_NULL();
+    };
+    const result = wrapNode(c, comment_node);
+    if (data_len > 0) qjs.JS_FreeCString(c, data_ptr);
+    return result;
 }
 
 fn documentAdoptNode(
@@ -3631,18 +3700,34 @@ fn elementCloneNode(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
     const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
-    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return quickjs.JS_NULL();
-    const args = argv orelse return quickjs.JS_NULL();
 
     // Determine deep flag (default: shallow clone per DOM spec)
     var deep = false;
     if (argc > 0) {
-        if (args[0].tag == qjs.JS_TAG_BOOL) {
-            deep = args[0].u.int32 != 0;
+        if (argv) |args| {
+            deep = qjs.JS_ToBool(c, args[0]) > 0;
         }
     }
 
-    // Clone by serializing and re-parsing
+    // Text/Comment/PI nodes: create new node with same data
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
+        const doc = g_document orelse return quickjs.JS_NULL();
+        var len: usize = 0;
+        const txt = lxb_dom_node_text_content(node, &len);
+        const new_text = lxb_dom_document_create_text_node(doc, if (txt) |t| t else "", if (txt != null) len else 0) orelse return quickjs.JS_NULL();
+        return wrapNode(c, new_text);
+    }
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
+        const doc = g_document orelse return quickjs.JS_NULL();
+        var len: usize = 0;
+        const txt = lxb_dom_node_text_content(node, &len);
+        const new_comment = lxb_dom_document_create_comment(doc, if (txt) |t| t else "", if (txt != null) len else 0) orelse return quickjs.JS_NULL();
+        return wrapNode(c, new_comment);
+    }
+
+    // Element nodes: clone by serializing and re-parsing
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return quickjs.JS_NULL();
+
     var stack_buf: [8192]u8 = undefined;
     var accum = SerializeAccum.init(&stack_buf);
     defer accum.deinit();
@@ -3920,6 +4005,60 @@ fn getNodeFromThis(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?*lxb.lxb_dom_nod
     const ptr2 = qjs.JS_GetOpaque2(ctx, this_val, text_class_id);
     if (ptr2) |p| return @ptrCast(@alignCast(p));
     return null;
+}
+
+fn elementGetClientWidth(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        const pbox = box.paddingBox();
+        return qjs.JS_NewInt32(c, @intFromFloat(pbox.width));
+    }
+    return qjs.JS_NewInt32(c, 0);
+}
+
+fn elementGetClientHeight(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        const pbox = box.paddingBox();
+        return qjs.JS_NewInt32(c, @intFromFloat(pbox.height));
+    }
+    return qjs.JS_NewInt32(c, 0);
+}
+
+fn elementGetClientTop(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        return qjs.JS_NewInt32(c, @intFromFloat(box.border.top));
+    }
+    return qjs.JS_NewInt32(c, 0);
+}
+
+fn elementGetClientLeft(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (getBoxForThis(c, this_val)) |box| {
+        return qjs.JS_NewInt32(c, @intFromFloat(box.border.left));
+    }
+    return qjs.JS_NewInt32(c, 0);
 }
 
 fn elementGetOffsetWidth(
@@ -5734,18 +5873,20 @@ fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const ComputedSt
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "width")) {
-        // Use layout box content width if available (resolves % to px)
+        // CSS 2.1: computed width is the used value (px) when in layout
         if (box_opt) |box| {
-            if (style.width == .percent or style.width == .auto) {
-                return fmtPx(c, box.content.width, &buf);
+            if (style.width == .auto) {
+                return qjs.JS_NewStringLen(c, "auto", 4);
             }
+            return fmtPx(c, box.content.width, &buf);
         }
         return dimensionToString(c, style.width, &buf);
     } else if (std.mem.eql(u8, prop, "height")) {
         if (box_opt) |box| {
-            if (style.height == .percent or style.height == .auto) {
-                return fmtPx(c, box.content.height, &buf);
+            if (style.height == .auto) {
+                return qjs.JS_NewStringLen(c, "auto", 4);
             }
+            return fmtPx(c, box.content.height, &buf);
         }
         return dimensionToString(c, style.height, &buf);
     } else if (std.mem.eql(u8, prop, "margin")) {
@@ -5965,9 +6106,22 @@ fn argbToCssColor(c: *qjs.JSContext, argb: u32, buf: *[128]u8) qjs.JSValue {
         const s = "rgba(0, 0, 0, 0)";
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else {
-        const alpha: f32 = @as(f32, @floatFromInt(a)) / 255.0;
-        const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.2})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
-        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        // Round alpha to common fractions to match browser serialization
+        // e.g. 128/255 ≈ 0.502 but CSS expects clean values like 0.5
+        const alpha_raw: f32 = @as(f32, @floatFromInt(a)) / 255.0;
+        // Round to nearest 1/1000 to produce cleaner output
+        const alpha = @round(alpha_raw * 1000.0) / 1000.0;
+        // Use minimal decimal places
+        if (alpha == @round(alpha * 10.0) / 10.0) {
+            const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.1})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        } else if (alpha == @round(alpha * 100.0) / 100.0) {
+            const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.2})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        } else {
+            const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.3})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        }
     }
 }
 
@@ -6695,8 +6849,26 @@ fn cssSupports(
 
     if (argc == 1) {
         // CSS.supports("display: flex") — condition string form
-        // For now, always return true for single-arg form
-        return quickjs.JS_NewBool(true);
+        // Parse "property: value" and validate
+        const cond_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
+        defer qjs.JS_FreeCString(c, cond_s.ptr);
+        const cond = cond_s.ptr[0..cond_s.len];
+        // Handle parenthesized form: "(display: flex)"
+        var inner = cond;
+        if (inner.len > 2 and inner[0] == '(' and inner[inner.len - 1] == ')') {
+            inner = inner[1 .. inner.len - 1];
+        }
+        // Find the colon separating property from value
+        if (std.mem.indexOfScalar(u8, inner, ':')) |colon_pos| {
+            const prop_raw = std.mem.trim(u8, inner[0..colon_pos], " \t");
+            const val_raw = std.mem.trim(u8, inner[colon_pos + 1 ..], " \t");
+            if (prop_raw.len > 0 and val_raw.len > 0) {
+                return quickjs.JS_NewBool(isValidCssValue(prop_raw, val_raw));
+            }
+        }
+        // Not a simple "property: value" form — could be "not ()" or "() and ()"
+        // For complex conditions, return false (conservative)
+        return quickjs.JS_NewBool(false);
     }
     if (argc < 2) return quickjs.JS_NewBool(false);
 
@@ -7155,6 +7327,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, ownerDocumentAtom, qjs.JS_NewCFunction(ctx, &nodeGetOwnerDocument, "get ownerDocument", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, ownerDocumentAtom);
     }
+    // nodeValue: null for Element/Document, overridden on text_proto for CharacterData
+    {
+        const nodeValueAtom = qjs.JS_NewAtom(ctx, "nodeValue");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nodeValueAtom, qjs.JS_NewCFunction(ctx, &nodeGetNodeValue, "get nodeValue", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, nodeValueAtom);
+    }
     {
         const firstChildAtom = qjs.JS_NewAtom(ctx, "firstChild");
         _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, firstChildAtom, qjs.JS_NewCFunction(ctx, &elementGetFirstChild, "get firstChild", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
@@ -7352,6 +7530,38 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetLeft, "get offsetLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, offsetLeftAtom);
     }
+    // clientWidth/clientHeight (padding box) and clientTop/clientLeft (border widths)
+    {
+        const cwAtom = qjs.JS_NewAtom(ctx, "clientWidth");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, cwAtom, qjs.JS_NewCFunction(ctx, &elementGetClientWidth, "get clientWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, cwAtom);
+    }
+    {
+        const chAtom = qjs.JS_NewAtom(ctx, "clientHeight");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, chAtom, qjs.JS_NewCFunction(ctx, &elementGetClientHeight, "get clientHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, chAtom);
+    }
+    {
+        const ctAtom = qjs.JS_NewAtom(ctx, "clientTop");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, ctAtom, qjs.JS_NewCFunction(ctx, &elementGetClientTop, "get clientTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, ctAtom);
+    }
+    {
+        const clAtom = qjs.JS_NewAtom(ctx, "clientLeft");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, clAtom, qjs.JS_NewCFunction(ctx, &elementGetClientLeft, "get clientLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, clAtom);
+    }
+    // scrollWidth/scrollHeight (same as clientWidth/Height for now — no overflow tracking)
+    {
+        const swAtom = qjs.JS_NewAtom(ctx, "scrollWidth");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, swAtom, qjs.JS_NewCFunction(ctx, &elementGetClientWidth, "get scrollWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, swAtom);
+    }
+    {
+        const shAtom = qjs.JS_NewAtom(ctx, "scrollHeight");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, shAtom, qjs.JS_NewCFunction(ctx, &elementGetClientHeight, "get scrollHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, shAtom);
+    }
     {
         const scrollTopAtom = qjs.JS_NewAtom(ctx, "scrollTop");
         _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollTop, "get scrollTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
@@ -7482,9 +7692,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  ['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','dir','for'].forEach(function(a){
             \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
             \\  });
-            \\  ['disabled','checked','selected'].forEach(function(a){
+            \\  ['disabled','checked','selected','autofocus'].forEach(function(a){
             \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.hasAttribute(a);},set:function(v){if(v)this.setAttribute(a,'');else this.removeAttribute(a);},configurable:true});}
             \\  });
+            \\  Object.defineProperty(EP,'tabIndex',{get:function(){var v=this.getAttribute('tabindex');return v!==null?parseInt(v,10)||0:-1;},set:function(v){this.setAttribute('tabindex',String(v));},configurable:true});
+            \\  Object.defineProperty(EP,'id',{get:function(){return this.getAttribute('id')||'';},set:function(v){this.setAttribute('id',v);},configurable:true});
+            \\  EP.getAttributeNode=function(n){if(!this.hasAttribute(n))return null;return{nodeType:2,name:n,localName:n.toLowerCase(),value:this.getAttribute(n),namespaceURI:null,prefix:null,specified:true,ownerElement:this,get nodeValue(){return this.value;},set nodeValue(v){this.value=v;this.ownerElement.setAttribute(this.name,v);}};};
+            \\  EP.getAttributeNodeNS=function(ns,ln){return this.getAttributeNode(ln);};
+            \\  EP.setAttributeNode=function(attr){var old=this.getAttributeNode(attr.name);this.setAttribute(attr.name,attr.value);attr.ownerElement=this;return old;};
+            \\  EP.setAttributeNodeNS=EP.setAttributeNode;
+            \\  EP.removeAttributeNode=function(attr){if(!this.hasAttribute(attr.name))throw new DOMException('','NotFoundError');this.removeAttribute(attr.name);attr.ownerElement=null;return attr;};
             \\})();
         ;
         const r = qjs.JS_Eval(ctx, reflected_js, reflected_js.len, "<reflected-attrs>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -7492,10 +7709,39 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
 
     // ── Text prototype (inherits Node.prototype) ─────────────────────
-    // Text nodes get Node methods (textContent, parentNode, etc.) via prototype chain.
-    // No need to duplicate them — just set Node.prototype as the text proto's prototype.
+    // Text/Comment/PI nodes get CharacterData methods via this prototype.
     const text_proto = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPrototype(ctx, text_proto, node_proto);
+
+    // CharacterData: data/nodeValue native getter + JS-wrapped setter (handles null→"" per DOM spec)
+    // We expose native getter as __nativeGetData and native setter as __nativeSetData,
+    // then wrap them in JS to handle type coercion.
+    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "__nativeGetData", qjs.JS_NewCFunction(ctx, &textGetData, "__nativeGetData", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "__nativeSetData", qjs.JS_NewCFunction(ctx, &textSetData, "__nativeSetData", 1));
+
+    // CharacterData methods via JS — wraps native data access with proper coercion
+    {
+        _ = qjs.JS_SetPropertyStr(ctx, global, "__tp", qjs.JS_DupValue(ctx, text_proto));
+        const cd_js =
+            \\(function(P){
+            \\var G=P.__nativeGetData,S=P.__nativeSetData;
+            \\function sd(v){S.call(this,v===null?'':''+v);}
+            \\Object.defineProperty(P,'data',{get:G,set:sd,configurable:true,enumerable:true});
+            \\Object.defineProperty(P,'nodeValue',{get:G,set:sd,configurable:true,enumerable:true});
+            \\Object.defineProperty(P,'length',{get:function(){return this.data.length;},configurable:true});
+            \\Object.defineProperty(P,'wholeText',{get:function(){return this.data;},configurable:true});
+            \\P.appendData=function(d){this.data+=d;};
+            \\P.insertData=function(o,d){var s=this.data;o=o>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o);};
+            \\P.deleteData=function(o,c){var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+s.slice(o+c);};
+            \\P.replaceData=function(o,c,d){var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o+c);};
+            \\P.substringData=function(o,c){var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');return s.slice(o,o+c);};
+            \\delete P.__nativeGetData;delete P.__nativeSetData;
+            \\})(__tp);delete __tp;
+        ;
+        const r = qjs.JS_Eval(ctx, cd_js, cd_js.len, "<chardata>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
     qjs.JS_SetClassProto(ctx, text_class_id, text_proto);
 
     // Free local proto references (class proto + constructors hold refs)
@@ -7512,10 +7758,22 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &documentCreateElementNS, "createElementNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
-    // createAttributeNS(namespace, qualifiedName)
+    // createAttribute(localName) + createAttributeNS(namespace, qualifiedName)
     {
-        const attr_js = "(function(ns,qn){var a={nodeType:2,name:qn,value:'',namespaceURI:ns,prefix:null,localName:qn,specified:true,ownerElement:null};var ci=qn.indexOf(':');if(ci>=0){a.prefix=qn.substring(0,ci);a.localName=qn.substring(ci+1);}a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};return a;})";
+        const attr_js =
+            \\(function(ns,qn){var a={nodeType:2,name:qn,value:'',namespaceURI:ns,prefix:null,localName:qn,specified:true,ownerElement:null,ownerDocument:document};
+            \\var ci=qn.indexOf(':');if(ci>=0){a.prefix=qn.substring(0,ci);a.localName=qn.substring(ci+1);}
+            \\a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};
+            \\a.isSameNode=function(o){return this===o;};
+            \\Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v;},configurable:true});
+            \\Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v;},configurable:true});
+            \\return a;})
+        ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const create_attr_js =
+            \\(function(name){return document.createAttributeNS(null,name.toLowerCase());})
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &documentCreateDocumentFragment, "createDocumentFragment", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &documentCreateEvent, "createEvent", 1));
@@ -7591,6 +7849,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "domain", qjs.JS_NewString(ctx, ""));
     }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "referrer", qjs.JS_NewString(ctx, ""));
+    // document.documentURI (alias for document.URL)
+    if (g_current_url) |url| {
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "documentURI", qjs.JS_NewStringLen(ctx, url.ptr, url.len));
+    } else {
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "documentURI", qjs.JS_NewString(ctx, ""));
+    }
+    // document.hasFocus() — always returns true (single-window browser)
+    {
+        const hf_js = "(function(){return true;})";
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hasFocus", qjs.JS_Eval(ctx, hf_js, hf_js.len, "<hasFocus>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createComment", qjs.JS_NewCFunction(ctx, &documentCreateComment, "createComment", 1));
 
     // document.createProcessingInstruction(target, data)
@@ -7679,6 +7948,25 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    addEventListener: function(t,f,o) { d.addEventListener(t,f,o); },
             \\    removeEventListener: function(t,f,o) { d.removeEventListener(t,f,o); },
             \\    dispatchEvent: function(e) { return d.dispatchEvent(e); },
+            \\    createAttribute: function(n) { return document.createAttribute(n); },
+            \\    createAttributeNS: function(ns,qn) { return document.createAttributeNS(ns,qn); },
+            \\    createTreeWalker: function(r,w,f) { return document.createTreeWalker(r,w,f); },
+            \\    createNodeIterator: function(r,w,f) { return document.createNodeIterator(r,w,f); },
+            \\    createRange: function() { return document.createRange(); },
+            \\    ownerDocument: null,
+            \\    contentType: 'text/html',
+            \\    characterSet: 'UTF-8',
+            \\    URL: 'about:blank',
+            \\    documentURI: 'about:blank',
+            \\    compatMode: 'CSS1Compat',
+            \\    doctype: null,
+            \\    defaultView: null,
+            \\    hasFocus: function() { return false; },
+            \\    cloneNode: function(deep) {
+            \\      var nd = document.implementation.createHTMLDocument(title);
+            \\      if(deep && d.innerHTML) nd.documentElement.innerHTML = d.innerHTML;
+            \\      return nd;
+            \\    },
             \\  };
             \\  return doc;
             \\})

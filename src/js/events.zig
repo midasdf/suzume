@@ -1127,11 +1127,51 @@ pub fn injectElementEventMethods(ctx: *qjs.JSContext, class_id: qjs.JSClassID) v
     _ = qjs.JS_SetPropertyStr(ctx, proto, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 3));
     _ = qjs.JS_SetPropertyStr(ctx, proto, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 3));
     _ = qjs.JS_SetPropertyStr(ctx, proto, "click", qjs.JS_NewCFunction(ctx, &jsElementClick, "click", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, proto, "focus", qjs.JS_NewCFunction(ctx, &jsElementFocus, "focus", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, proto, "blur", qjs.JS_NewCFunction(ctx, &jsElementBlur, "blur", 0));
     _ = qjs.JS_SetPropertyStr(ctx, proto, "dispatchEvent", qjs.JS_NewCFunction(ctx, &jsElementDispatchEvent, "dispatchEvent", 1));
     qjs.JS_FreeValue(ctx, proto);
 }
 
+/// element.focus() — programmatically focus the element
+fn jsElementFocus(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const old_active = dom_api.active_element;
+    if (old_active != null and old_active != node) {
+        // Blur the previously focused element
+        _ = dispatchEvent(c, old_active.?, "blur");
+    }
+    dom_api.active_element = node;
+    _ = dispatchEvent(c, node, "focus");
+    dom_api.setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+/// element.blur() — remove focus from the element
+fn jsElementBlur(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    if (dom_api.active_element == node) {
+        dom_api.active_element = null;
+        _ = dispatchEvent(c, node, "blur");
+        dom_api.setDomDirty();
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
 /// element.click() — programmatically fire a click event on the element
+/// For checkbox/radio inputs, toggles the checked state before dispatching.
 fn jsElementClick(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -1140,6 +1180,29 @@ fn jsElementClick(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    // HTML spec: checkbox/radio toggle checked state on click activation
+    // Check via JS properties (tagName, type) since we can't access lexbor directly
+    const tagName_val = qjs.JS_GetPropertyStr(c, this_val, "tagName");
+    defer qjs.JS_FreeValue(c, tagName_val);
+    if (dom_api.jsStringToSlice(c, tagName_val)) |tag_s| {
+        defer qjs.JS_FreeCString(c, tag_s.ptr);
+        if (std.ascii.eqlIgnoreCase(tag_s.ptr[0..tag_s.len], "INPUT")) {
+            const type_val = qjs.JS_GetPropertyStr(c, this_val, "type");
+            defer qjs.JS_FreeValue(c, type_val);
+            if (dom_api.jsStringToSlice(c, type_val)) |type_s| {
+                defer qjs.JS_FreeCString(c, type_s.ptr);
+                const t = type_s.ptr[0..type_s.len];
+                if (std.ascii.eqlIgnoreCase(t, "checkbox") or std.ascii.eqlIgnoreCase(t, "radio")) {
+                    const checked_val = qjs.JS_GetPropertyStr(c, this_val, "checked");
+                    const was_checked = qjs.JS_ToBool(c, checked_val) > 0;
+                    qjs.JS_FreeValue(c, checked_val);
+                    _ = qjs.JS_SetPropertyStr(c, this_val, "checked", quickjs.JS_NewBool(!was_checked));
+                }
+            }
+        }
+    }
+
     _ = dispatchEvent(c, node, "click");
     return quickjs.JS_UNDEFINED();
 }
