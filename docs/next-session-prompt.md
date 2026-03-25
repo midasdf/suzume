@@ -1,108 +1,95 @@
 # suzume ブラウザ — 次セッションのプロンプト
 
-TDDでWPT全エリア90%+を目指す。CSS/JS仕様を検索しながら進めてください。
+TDDでWPT全エリア90%+を目指す。基礎レイヤーから順に。
 プラン: `~/.claude/plans/sleepy-puzzling-shell.md`
 
-## 前セッション成果（2026-03-24 深夜）
+## 前セッション成果（2026-03-25）
 
-### Infrastructure構築（Phase 0）
-- ✅ **wptrunner adapter**: `tests/wpt/wpt-suzume/` Python package (NullBrowser + subprocess executor)
-- ✅ **`--wpt-mode` flag**: ALERT:行をstdoutルーティング + wpt_result_sent自動終了 + 256KBバッファ
-- ✅ **`--screenshot` flag**: stb_image_write経由でフレームバッファPNGダンプ (reftest用)
-- ✅ **`run_wpt.sh`改良**: 全WPTカテゴリ対応 (dom/, url/, encoding/等), レガシーcss-X互換
-- ✅ **test262セットアップ**: /tmp/quickjs-ng-full (standalone build), /tmp/test262
-- ✅ **venv**: `.venv/` に wptrunner + wpt-suzume installed
+### 25 commits pushed to main
 
-### test262ベースライン（Phase 1）
-- ✅ **99.7% pass** (107/41562 errors, 3353 excluded, 5588 skipped)
-- 残りエラー: RegExp Unicode property escapes, TypedArray subarray edge cases
-- QuickJS-ng 0.13 (standalone) vs suzume組込み0.12.1 — 差異は小さい
+### WPTスコア
+| Area | Start | End | Δ subtests |
+|------|-------|-----|-----------|
+| dom/nodes | 9.5% | **37.6%** | +1500 |
+| classList | 630 | **1060** | +430 |
+| css-color | 14.6% | **~24%** | +500 |
+| css-text | 50.9% | **52.3%** | +27 |
+| css-values | 31.8% | ~33% | +47 |
+| css-variables | 24.0% | ~32% | +33 |
+| css-display | 68.2% | ~69% | +4 |
+| css-selectors | 43.1% | ~47% | +30 |
+| css-box | 97.4% | 97.4% | 0 |
+| html/dom | new | **27.8%** | baseline |
+| dom/events | new | **13.5%** | baseline |
+| css/cssom-view | new | **26.4%** | baseline |
+| xhr | new | **18.7%** | baseline |
 
-### WPTバグ修正（TDD成果）
-- ✅ **Internal table/ruby blockification** — `table-row-group`/`ruby-base` + position:absolute → `block` (CSS Display L3 §2.7)
-  - dom_api.zig: `computedStyleToStringWithBox` + `resolveInlineForComputed` 両パス修正
-  - display-computed.html: 108/112 → **112/112 PASS**
-- ✅ **calc() distributive expansion** — `calc(2*(10px+1rem))` → `calc(20px + 2rem)`
-  - dom_api.zig: `tryDistributiveExpansion()` 新関数 (N*(A+B), (A+B)/N, (expr)*N reorder)
-  - calc-serialization-002.html: 20/24 → **24/24 PASS**
-- ⬜ **NaN/Infinity clamping (partial)** — fmtPx + resolveInlineForComputed にクランプ追加
-  - cascade経由のComputedStyleパスはまだ未修正 (calc-infinity-nan-computed: 0/48)
+### 主要実装
+- **WebDriver server** (21 endpoints, --webdriver=PORT)
+- **DOMException constructor** (assert_throws_dom対応) — classList +430テスト
+- **CSS Color 4**: hwb, oklab, oklch, lab, lch, color() — +500テスト
+- **window/self globals** + Named access on Window
+- **:is()/:where()** OR-semantics matching
+- **classList DOMTokenList**: toString, toggle force, unique tokens, validation
+- **text-wrap/tab-size/hyphens** properties
+- **calc()** distributive expansion, NaN/Infinity clamping
+- **var()** resolution in getPropertyValue
+- **Node.isEqualNode** structural equality
+- **element.localName, namespaceURI, prefix**
+- **Parallel WPT runner** (run_wpt_parallel.sh)
+- **round()/mod()/rem()** CSS math functions
+- **opacity %** support + clamp
+- **color() computed value** serialization (color(srgb ...) format)
 
-## WPTスコア現状
+### WPT非CSSエリアのベースライン
+- url: 0% (テスト4件、ERR)
+- encoding: 未測定
+- html/syntax: 2.6% (パーサー適合性、reftest多)
+- fetch: 未測定 (236テスト)
+- websockets: 未測定 (126テスト)
+- webstorage: 0% (timeout問題)
+- FileAPI: 4.8%
 
-| エリア | Before | After | 残FAIL主因 |
-|--------|--------|-------|-----------|
-| **css-box** | 97.4% | 97.4% (299/307) | margin-trim(2), padding-computed calc(6) |
-| **css-display** | 68.2% | **69.1%** (328/475) | display-contents(~10), tentative(~14), reftests |
-| **css-values** | 31.8% | **~32%+** (1065+8/3350) | NaN/Infinity(48), viewport-units(96+), round/mod/rem(23), calc-size(34) |
+## 次セッション方針
 
-## 次セッション優先順位
+### 基礎→上位の順序で進める
+```
+URL/Encoding → HTML Parser → DOM → CSSOM → CSS → Layout → Web APIs
+```
 
-### Tier 1: 最高インパクト（+100 subtests可能）
-1. **NaN/Infinity in cascade** — cascade.zigでcalc()評価時にNaN/Infinity検出→0/MAX clamp (+48 tests)
-   - resolveValueToPxDepthでNaN*1px等をパースできるようにする
-   - ComputedStyle.Dimension.pxにNaN値が入らないよう防止
-2. **viewport units (svw/svh/lvw/lvh/dvw/dvh)** — viewport-units-css2-001.html (64/160, +96 tests)
-   - 新viewport unitを getComputedStyleで認識・解決
-3. **round()/mod()/rem() functions** — round-mod-rem-serialize.html (1/24, +23 tests)
-   - CSS math functionsの追加
+### 優先タスク
+1. **DOM core** — dom/events改善、Node.cloneNode深化、ChildNodeミキシン
+2. **html/dom** — Document properties、element interfaces
+3. **CSSOM** — CSSStyleSheet、CSSRule、matchMedia
+4. **css-cascade** — @layer実装（1.9%→）
+5. **css-selectors** — querySelectorAll内:is()/:where()
 
-### Tier 2: 中インパクト
-4. **display:contents semantics** — box tree構築で display:contents 要素のboxを生成しない (+10 tests)
-5. **calc-size() function** — 新CSS関数 (3/37 pass, +34 tests)
-6. **min/max % preservation** — specified/computed/used value 3層で異なる%処理が必要 (+17 tests)
-
-### Tier 3: 新エリアベースライン取得
-- dom/, url/, encoding/, css/cssom/, css/css-cascade/, css/selectors/ のベースラインをまだ取得していない
-
-## 重要な技術的決定
-
-### wptrunner vs run_wpt.sh
-- wptrunnerはentry_pointsの互換性問題（Python 3.14 + metadata API変更）で未解決
-- 当面は改良版run_wpt.shで全カテゴリTDDサイクルを回す
-- wptrunner統合は別セッションで
-
-### WPTチェックアウト
-- `/tmp/wpt` — 再起動で消える。`./tests/wpt/run_wpt.sh setup` で再セットアップ
-- testharnessreport.jsにsuzumeコールバック注入が必要（setupで自動化済み）
-
-### QuickJS-ng GC無効化（維持）
-- `JS_SetGCThreshold(rt, SIZE_MAX)` — testharness.js GC corruption回避
-- 48MB memory limitは維持
-
-## 実装済みの主要関数リファレンス
-
-| 機能 | 関数 | 場所 |
-|------|------|------|
-| calc distributive expansion | `tryDistributiveExpansion()` | dom_api.zig |
-| Matching paren finder | `findMatchingParen()` | dom_api.zig |
-| Function detection | `containsFunction()` | dom_api.zig |
-| NaN/Infinity string check | `containsNanOrInfinity()` | dom_api.zig |
-| NaN/Infinity px clamp | `fmtPx()` (modified) | dom_api.zig |
-| Blockification (table/ruby) | `computedStyleToStringWithBox` + `resolveInlineForComputed` | dom_api.zig |
-| WPT mode flag | `web_api.wpt_mode`, `web_api.wpt_result_sent` | web_api.zig |
-| Screenshot dump | `surface.dumpToPng()` | surface.zig |
+### 残りの大きな実装項目（全部やる）
+- @layer (CSS Cascade 5) — css-cascade 1.9%
+- Shadow DOM — 228テスト
+- color-mix() / relative color syntax — css-color +1600テスト
+- DOMParser (XML/XHTML) — dom/nodes ERR多数
+- Service Workers / Web Workers完全化
+- CSS Grid/Flexbox reftests
+- position:sticky
+- :has() selector matching
 
 ## ビルド・テスト
 
 ```bash
-# ビルド
+# ビルド（.zig-cacheが古い場合はrm -rf .zig-cache zig-out）
 zig build
 
-# CSSユニットテスト
-zig build test-css
+# 並列WPTテスト
+./tests/wpt/run_wpt_parallel.sh --jobs 4 css/css-box
+./tests/wpt/run_wpt_parallel.sh --jobs 4 dom/nodes
+./tests/wpt/run_wpt_parallel.sh --jobs 4 html/dom
 
-# WPTテスト（/tmp再起動後は setup 必要）
-./tests/wpt/run_wpt.sh setup              # 初回のみ
-./tests/wpt/run_wpt.sh css/css-box         # ~20分
-./tests/wpt/run_wpt.sh css/css-display     # ~10分
-./tests/wpt/run_wpt.sh css/css-values      # ~60分
-./tests/wpt/run_wpt.sh dom                 # 未測定
-./tests/wpt/run_wpt.sh url                 # 未測定
+# WPTセットアップ（/tmp再起動後）
+./tests/wpt/run_wpt_parallel.sh setup
+# or
+./tests/wpt/run_wpt.sh setup
 
 # test262
-cd /tmp/quickjs-ng-full && ./run-test262 -c test262.conf  # ~2分
-
-# venv (wptrunner用)
-source .venv/bin/activate
+cd /tmp/quickjs-ng-full && ./run-test262 -c test262.conf
 ```
