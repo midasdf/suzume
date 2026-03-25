@@ -2,7 +2,7 @@
 
 ## Problem
 
-zt is already fast (3.5ms startup, 1,382 MB/s throughput, 4.3MB RSS), but several optimization opportunities remain — including a correctness bug that masks a major performance win. This spec covers six targeted optimizations that improve both throughput and latency while maintaining the existing architecture.
+zt is already fast (3.5ms startup, 1,382 MB/s throughput, 4.3MB RSS), but several optimization opportunities remain. This spec covers six targeted optimizations that improve both throughput and latency while maintaining the existing architecture.
 
 ## Target Platforms
 
@@ -15,23 +15,17 @@ Both platforms get all code optimizations. Build optimization level is selectabl
 
 ---
 
-## Optimization 1: Scroll Pixel Buffer Scroll (Bug Fix + Perf)
+## Optimization 1: Scroll Pixel Buffer Scroll
 
 ### Problem
 
-`scrollUp()` and `scrollDown()` manipulate `row_map` for O(1) logical-to-physical remapping and only mark recycled (blank) rows dirty. However, the pixel buffer (backend shadow/SHM) still contains pixels from the previous frame at the old screen positions. Since moved rows are not marked dirty, they are never re-rendered, causing stale pixels on screen.
+`scrollUp()` and `scrollDown()` manipulate `row_map` for O(1) logical-to-physical remapping and mark the **entire scroll region** dirty. This is correct — the pixel buffer still has old content at old positions, so all rows in the region must be re-rendered. However, this means every scroll triggers a full re-render of all cells in the scroll region (typically all 24 rows × 80 columns = 1,920 cells), each requiring glyph lookup and pixel blitting.
 
-**Example**: Screen shows A,B,C,D. After `scrollUp(1)`:
-- row_map correctly maps logical row 0 → physical "B"
-- But pixel row 0 still shows "A" (from previous frame)
-- Only the new blank row at bottom is re-rendered
-- Result: screen shows A,B,C,blank instead of B,C,D,blank
-
-This bug is masked during high-throughput output (e.g., `cat bigfile`) because subsequent writes mark all cells dirty. It is visible during interactive use with line-by-line scrolling.
+For a 80×24 terminal at scale=2, each scroll re-renders 1,920 cells. During `cat bigfile`, hundreds of scrolls occur per render cycle, but the full-region dirty mark forces re-rendering everything even though the pixel content could be shifted with a simple memory move.
 
 ### Solution: Pixel Buffer memmove
 
-When scroll occurs, shift the pixel buffer content to match the new logical layout. Only the recycled rows need cell-level re-rendering.
+When scroll occurs, shift the pixel buffer content to match the new logical layout via memmove. Then only mark the recycled (blank) rows dirty instead of the entire scroll region. The moved rows' pixels are already correct after the shift.
 
 **Architecture**:
 
@@ -39,44 +33,60 @@ Add scroll accumulator to `Term`:
 ```zig
 // term.zig — new fields in Term struct
 scroll_pixel_shift: i32 = 0,  // pixels to shift (positive = up, negative = down)
+scroll_region_top: u32 = 0,   // scroll region bounds at time of scroll
+scroll_region_bot: u32 = 0,
 ```
 
-In `scrollUp(n)` (after existing row_map manipulation):
+In `scrollUp(n)`, **replace** the full-region dirty mark with accumulator update:
 ```zig
-self.scroll_pixel_shift += @as(i32, @intCast(n)) * @as(i32, @intCast(config.cell_height));
+// REPLACE: self.markDirtyRange(.{ .start = top * cols, .end = (bot + 1) * cols });
+// WITH: accumulate pixel shift + mark only recycled rows dirty
+self.scroll_pixel_shift += @as(i32, @intCast(shift)) * @as(i32, @intCast(config.cell_height));
+self.scroll_region_top = @intCast(top);
+self.scroll_region_bot = @intCast(bot);
+for (0..shift) |s| {
+    const row = bot + 1 - shift + s;
+    self.markDirtyRange(.{ .start = row * cols, .end = (row + 1) * cols });
+}
 ```
 
-In `scrollDown(n)`:
-```zig
-self.scroll_pixel_shift -= @as(i32, @intCast(n)) * @as(i32, @intCast(config.cell_height));
-```
+In `scrollDown(n)`, same pattern with negative shift and top rows dirty.
 
 In the main render loop (before cell rendering), apply the accumulated shift:
 ```zig
 if (term.scroll_pixel_shift != 0) {
     const buf = backend.getBuffer();
     const stride = backend.getStride();
-    const height = backend.getHeight();
     const shift = term.scroll_pixel_shift;
     term.scroll_pixel_shift = 0;
 
+    const region_px_top = @as(usize, term.scroll_region_top) * config.cell_height;
+    const region_px_bot = (@as(usize, term.scroll_region_bot) + 1) * config.cell_height;
+    const region_byte_top = region_px_top * stride;
+    const region_byte_bot = region_px_bot * stride;
+    const region_bytes = region_byte_bot - region_byte_top;
+
     if (shift > 0) {
-        // Scroll up: move pixels upward
+        // Scroll up: move pixels upward within region
         const byte_shift = @as(usize, @intCast(shift)) * stride;
-        const total = @as(usize, height) * stride;
-        if (byte_shift < total) {
-            std.mem.copyForwards(u8, buf[0 .. total - byte_shift], buf[byte_shift..total]);
+        if (byte_shift < region_bytes) {
+            const src_start = region_byte_top + byte_shift;
+            const dest_start = region_byte_top;
+            const len = region_bytes - byte_shift;
+            std.mem.copyForwards(u8, buf[dest_start..dest_start + len], buf[src_start..src_start + len]);
         }
     } else {
-        // Scroll down: move pixels downward
+        // Scroll down: move pixels downward within region
         const byte_shift = @as(usize, @intCast(-shift)) * stride;
-        const total = @as(usize, height) * stride;
-        if (byte_shift < total) {
-            std.mem.copyBackwards(u8, buf[byte_shift..total], buf[0 .. total - byte_shift]);
+        if (byte_shift < region_bytes) {
+            const src_start = region_byte_top;
+            const dest_start = region_byte_top + byte_shift;
+            const len = region_bytes - byte_shift;
+            std.mem.copyBackwards(u8, buf[dest_start..dest_start + len], buf[src_start..src_start + len]);
         }
     }
-    // Backend needs to present the entire shifted region
-    backend.markDirtyRows(0, height - 1);
+    // Mark entire region for backend present (pixels moved, not just cells)
+    backend.markDirtyRows(@intCast(region_px_top), @intCast(region_px_bot - 1));
 }
 ```
 
@@ -92,11 +102,13 @@ const region_px_bot = (term.scroll_bottom + 1) * config.cell_height;
 
 **Saturation**: If `|scroll_pixel_shift| >= scroll_region_height_in_pixels`, the entire region scrolled away. Skip memmove and just clear the region (all rows already marked dirty by scrollUp/scrollDown).
 
+**Dirty bit coordination**: After the pixel memmove, only recycled (blank) rows have their dirty bits set. Moved rows are NOT dirty because their pixel content is already correct (shifted by memmove). The backend dirty rows cover the full region for `present()` (pixels changed position), but the cell-level dirty bitmap only covers recycled rows for the render loop.
+
 **Impact**:
-- Fixes visual correctness bug
-- Eliminates re-rendering of all moved rows on scroll
-- For 80x24 at scale=2: replaces 1840-cell render with ~1.8MB memmove
+- Eliminates re-rendering of all moved rows on scroll (only recycled rows rendered)
+- For 80x24 at scale=2: replaces 1,920-cell render with ~1.8MB memmove + 80-cell render
 - memmove uses CPU SIMD instructions, vastly faster than per-cell glyph blitting
+- Scroll-heavy workloads (cat, log tailing) benefit most
 
 ### Files Changed
 
@@ -148,17 +160,12 @@ In the main render loop, check for space before glyph lookup:
 
 ```zig
 // main.zig render loop, after getting cell:
-const is_space = cell.char == ' ' and !cell.attrs.bold and !cell.attrs.underline;
-const glyph = if (is_space) null else FontType.getGlyph(cell.char);
+const glyph = if (cell.char == ' ' or cell.char == 0) null else FontType.getGlyph(cell.char);
 ```
 
-The `renderCell` function already handles `glyph == null` by drawing a box outline fallback. For spaces, we want it to just fill the background. Modify the `null` glyph path:
+No bold/underline guard needed: underline rendering is independent of the glyph (runs unconditionally after the glyph section), and bold on an all-zero bitmap has no visible effect.
 
-Since space IS a valid glyph (exists in font), we need to distinguish "space = skip glyph blit" from "missing glyph = draw box". The simplest approach: pass `glyph` as-is but skip the glyph blit loop when the character is space.
-
-Actually, simpler: just skip the getGlyph call and pass null. The render function's null-glyph path draws a box outline — we need to change that. Add a character parameter or handle space specially:
-
-**Best approach**: In `renderCell`, skip the glyph blit section entirely when `glyph` is null AND `cell.char == ' '`. The existing box-outline fallback only triggers for truly missing glyphs (non-space null).
+The `renderCell` function currently handles `glyph == null` by drawing a box outline fallback. For spaces, we want it to just fill the background. Modify the null-glyph path in `renderCell` to only draw the box for truly missing glyphs (non-space, non-null characters):
 
 ```zig
 // render.zig, in the glyph section:
@@ -244,13 +251,16 @@ We still need to clear stale RGB entries when overwriting cells. The bulk path s
 
 ```zig
 // Before writing new RGB values, clear any existing entries
-if (term.fg_rgb_map.count() > 0 or term.bg_rgb_map.count() > 0) {
-    for (0..count) |j| {
-        _ = term.fg_rgb_map.remove(phys_start + j);
-        _ = term.bg_rgb_map.remove(phys_start + j);
-    }
+// Check each map independently (one may be empty while other is not)
+if (term.fg_rgb_map.count() > 0) {
+    for (0..count) |j| _ = term.fg_rgb_map.remove(phys_start + j);
+}
+if (term.bg_rgb_map.count() > 0) {
+    for (0..count) |j| _ = term.bg_rgb_map.remove(phys_start + j);
 }
 ```
+
+**Note**: The existing non-TrueColor bulk path also bypasses `setCell` and does not clear stale RGB entries. This is a pre-existing issue — if TrueColor was previously set for a cell and a non-TrueColor write overwrites it via the bulk path, the stale RGB entry persists. The TrueColor bulk path fix above addresses this for new TrueColor writes. A complete fix would add RGB clearing to the non-TrueColor bulk path as well (low priority since RGB maps are typically empty in non-TrueColor usage).
 
 **Impact**:
 - TrueColor content processes at bulk speed instead of per-character
@@ -306,7 +316,7 @@ pub fn getGlyph(codepoint: u21) ?GlyphView {
 }
 ```
 
-**Memory**: 256 × (4 + 24 + 1) = ~7.4KB. Negligible even on HackberryPi.
+**Memory**: 256 × sizeof(CacheEntry) ≈ ~9KB. `GlyphView` is 28 bytes (u21 + u32 + u32 + slice), `CacheEntry` wraps it with codepoint + valid flag ≈ 34 bytes. Negligible even on HackberryPi.
 
 **Cache effectiveness**: Japanese text uses ~2,000 unique kanji but a much smaller working set in typical content. The 256-entry cache captures the hot working set with minimal collision.
 
@@ -333,28 +343,11 @@ pub fn getGlyph(codepoint: u21) ?GlyphView {
 
 The render loop in `main.zig:498-527` has four branches for wide × cursor combinations. Each branch calls either `renderCell` or `renderCursor` with slightly different parameters. `renderCursor` just swaps fg/bg and calls `renderCell`.
 
-Additionally, `wide_dummy` cells are checked AFTER `getCell` and glyph lookup, wasting work.
+Note: `wide_dummy` is already checked before glyph lookup (line 503), so no change needed there.
 
 ### Solution
 
-**6a: Early wide_dummy skip**
-
-Move the `wide_dummy` check before `getFgRgb`/`getBgRgb`/`getGlyph`:
-
-```zig
-if (term.isDirty(x, y)) {
-    const cell = term.getCell(x, y);
-    if (cell.attrs.wide_dummy) continue;  // EARLY: before expensive lookups
-
-    const fg_rgb = term.getFgRgb(x, y);
-    const bg_rgb = term.getBgRgb(x, y);
-    // ...
-}
-```
-
-**6b: Inline cursor fg/bg swap**
-
-Eliminate the 4-branch pattern:
+**Inline cursor fg/bg swap** — eliminate the 4-branch pattern:
 
 ```zig
 const is_cursor = (x == term.cursor_x and y == term.cursor_y and term.cursor_visible and cursor_visible_blink);
@@ -391,9 +384,9 @@ if (is_cursor) {
 ```
 
 **Impact**:
-- Eliminates getFgRgb/getBgRgb/getGlyph calls for wide_dummy cells
 - Removes renderCursor function (dead code elimination)
 - Reduces branch count from 4 to 2 in hot render loop
+- Simpler code, easier to reason about
 
 ### Files Changed
 
@@ -410,14 +403,14 @@ Each optimization is independent and can be verified separately:
 
 | Order | Optimization | Risk | Impact |
 |-------|-------------|------|--------|
-| 1 | Scroll pixel buffer | Medium (correctness fix) | High |
-| 2 | Space glyph skip | Low | High |
-| 3 | Render loop simplification | Low | Medium |
-| 4 | TrueColor bulk path | Low | Medium (TrueColor content) |
-| 5 | Non-ASCII glyph cache | Low | Medium (CJK content) |
+| 1 | Space glyph skip | Low | High |
+| 2 | Render loop simplification | Low | Medium |
+| 3 | TrueColor bulk path | Low | Medium (TrueColor content) |
+| 4 | Non-ASCII glyph cache | Low | Medium (CJK content) |
+| 5 | Scroll pixel buffer memmove | Medium | High (scroll-heavy) |
 | 6 | ReleaseFast docs | None | High (PC only) |
 
-Scroll fix first because it's a correctness bug. Space skip and render loop next because they're low-risk high-reward. TrueColor and glyph cache improve specific workloads. ReleaseFast docs last (no code change).
+Low-risk changes first (space skip, render loop, TrueColor, glyph cache). Scroll pixel memmove last among code changes because it requires careful dirty-bit coordination and has the highest risk of rendering artifacts if implemented incorrectly. ReleaseFast docs is a no-code-change item.
 
 ## Verification
 
