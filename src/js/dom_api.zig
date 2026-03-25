@@ -7698,6 +7698,48 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
 
+    // Document constructor (new Document() creates a standalone XML document-like object)
+    {
+        const doc_ctor_js =
+            \\(function() {
+            \\  function Document() {
+            \\    this.nodeType = 9;
+            \\    this.nodeName = '#document';
+            \\    this.childNodes = [];
+            \\    this.children = [];
+            \\    this.firstChild = null;
+            \\    this.lastChild = null;
+            \\    this.documentElement = null;
+            \\  }
+            \\  Document.prototype.createElement = function(t) { return document.createElement(t); };
+            \\  Document.prototype.createElementNS = function(ns,t) { return document.createElementNS(ns,t); };
+            \\  Document.prototype.createTextNode = function(t) { return document.createTextNode(t); };
+            \\  Document.prototype.createComment = function(t) { return document.createComment(t); };
+            \\  Document.prototype.createDocumentFragment = function() { return document.createDocumentFragment(); };
+            \\  Document.prototype.createProcessingInstruction = function(t,d) { return document.createProcessingInstruction(t,d); };
+            \\  Document.prototype.createCDATASection = function(d) { return {nodeType:4,nodeName:'#cdata-section',data:d,textContent:d,nodeValue:d,childNodes:[]}; };
+            \\  Document.prototype.createEvent = function(t) { return document.createEvent(t); };
+            \\  Document.prototype.getElementById = function(id) { if(this.documentElement) return this.documentElement.querySelector('#'+CSS.escape(id)); return null; };
+            \\  Document.prototype.querySelector = function(s) { if(this.documentElement) return this.documentElement.querySelector(s); return null; };
+            \\  Document.prototype.querySelectorAll = function(s) { if(this.documentElement) return this.documentElement.querySelectorAll(s); return []; };
+            \\  Document.prototype.getElementsByTagName = function(t) { if(this.documentElement) return this.documentElement.getElementsByTagName(t); return []; };
+            \\  Document.prototype.appendChild = function(n) {
+            \\    this.childNodes.push(n);
+            \\    this.children.push(n);
+            \\    this.firstChild = this.childNodes[0];
+            \\    this.lastChild = this.childNodes[this.childNodes.length-1];
+            \\    if(n.nodeType===1 && !this.documentElement) this.documentElement = n;
+            \\    return n;
+            \\  };
+            \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
+            \\  Document.prototype.adoptNode = function(n) { return n; };
+            \\  Document.prototype.implementation = document.implementation;
+            \\  return Document;
+            \\})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, doc_ctor_js, doc_ctor_js.len, "<Document>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "Document", ctor);
+    }
 
     // window.location
     _ = qjs.JS_SetPropertyStr(ctx, global, "location", createLocationObject(ctx));
