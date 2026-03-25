@@ -12,7 +12,7 @@ Add comptime integer pixel scaling (1x/2x/4x) via a `-Dscale=N` build flag. Each
 
 - Zero runtime overhead: `scale` is comptime, all multiplications become constants
 - Minimal code change: localized to render.zig + plumbing in build/config/main
-- Same total pixel writes: 2x scale = 4x fewer cells, 4x more pixels per cell = net zero
+- fbdev: same total pixel writes (4x fewer cells, 4x more per cell = net zero on fixed resolution). X11: window grows with scale, total writes scale with scale^2, but cell count stays the same (80x24 default)
 
 ## Build System
 
@@ -48,7 +48,18 @@ comptime {
 
 ### render.zig
 
-`renderCell` gains a `comptime scale: u32` parameter.
+Both `renderCell` and `renderCursor` gain a `comptime scale: u32` parameter. `renderCursor` passes it through to `renderCell`. All four call sites in main.zig (two `renderCell`, two `renderCursor`) must be updated.
+
+#### Pixel offset calculation
+
+The cell-to-pixel coordinate conversion must account for scale:
+
+```zig
+const px_x = cell_x * font_w * scale;
+const px_y = cell_y * font_h * scale;
+```
+
+This ensures cells are positioned at scaled intervals. `font_w` and `font_h` remain the bitmap dimensions (8/16); the multiplication by `scale` produces the screen-space offset.
 
 #### Background fill
 
@@ -84,28 +95,25 @@ BGRA32 fast path optimizations:
 
 #### Bold
 
-Bold pixel shift applies at scaled coordinates (offset by `scale` pixels instead of 1).
+Bold operates at the bitmap level (before scaling): when a bitmap bit is set and bold is active, the adjacent bitmap column also gets a scale x scale block. This means bold shifts by 1 glyph pixel (= `scale` screen pixels), preserving visual weight proportional to scale. At scale=1 this is identical to current behavior (1px shift).
 
 #### Underline
 
-Drawn at `font_h * scale - 2 * scale` with `scale`-pixel thickness.
+Position is scaled from the original: `(font_h - 2) * scale`, with thickness of `scale` pixels (drawing `scale` consecutive rows). At scale=1: position 14, 1px thick (matches current). At scale=2: position 28, 2px thick.
 
 #### Box fallback (missing glyph)
 
 Box outline drawn at scaled cell dimensions (`render_w * scale` x `font_h * scale`), border thickness = `scale` pixels.
 
-#### renderCursor
-
-Calls renderCell internally, so scaling is automatic.
-
 ## main.zig Changes
 
-Replace `config.font_width` / `config.font_height` with `config.cell_width` / `config.cell_height` for all screen layout calculations:
+Replace `config.font_width` / `config.font_height` with `config.cell_width` / `config.cell_height` at these specific locations:
 
-- Terminal grid: `cols = width / config.cell_width`, `rows = height / config.cell_height`
-- Resize handling: same substitution
-- Dirty row tracking: `backend.markDirtyRows(y * config.cell_height, (y + 1) * config.cell_height - 1)`
-- renderCell calls: pass `config.font_width`, `config.font_height`, `config.scale` as comptime args
+1. **Line 262-263**: Initial grid calculation — `cols = width / config.cell_width`, `rows = height / config.cell_height`
+2. **Line 312-313**: Post-init X11 geometry sync — same substitution
+3. **Line 416-417**: X11 ConfigureNotify resize handler — same substitution
+4. **Line 524**: Dirty row tracking — `backend.markDirtyRows(y * config.cell_height, (y + 1) * config.cell_height - 1)`
+5. **Lines 512, 514, 518, 520**: All four render calls (two `renderCell`, two `renderCursor`) — pass `config.font_width`, `config.font_height`, `config.scale` as comptime args
 
 ## Backend Changes
 
@@ -136,7 +144,7 @@ No changes. Framebuffer size is hardware-fixed. The grid calculation in main.zig
 
 ### Unit tests (render.zig)
 
-- Existing `renderCell writes pixels to buffer` test extended for scale=2
+- Existing `renderCell writes pixels to buffer` test extended for scale=2: buffer and stride must use `w * scale` dimensions, pixel position assertions updated to scaled coordinates
 - Verify cell output buffer is `(font_w * scale) * (font_h * scale)` pixels
 - Verify glyph pixels appear as scale x scale blocks
 
