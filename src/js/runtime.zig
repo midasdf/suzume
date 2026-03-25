@@ -316,7 +316,9 @@ pub const JsRuntime = struct {
 /// Timestamp (ms) when current script execution started.
 var script_start_time: i64 = 0;
 /// Maximum execution time per eval() call in milliseconds.
-const max_script_execution_ms: i64 = 5000; // 5 seconds
+/// 10s is enough for most sites; WPT async_tests need longer for completion callbacks.
+const max_script_execution_ms: i64 = 10000; // 10 seconds (normal mode)
+const max_script_execution_ms_wpt: i64 = 25000; // 25 seconds (WPT mode)
 
 fn currentTimeMs() i64 {
     const ts = std.time.milliTimestamp();
@@ -333,8 +335,9 @@ fn resetScriptTimer() void {
 fn interruptHandler(_: ?*qjs.JSRuntime, _: ?*anyopaque) callconv(.c) c_int {
     if (script_start_time == 0) return 0; // timer not set
     const elapsed = currentTimeMs() - script_start_time;
-    if (elapsed > max_script_execution_ms) {
-        std.debug.print("[JS] Script execution timeout ({d}ms > {d}ms limit)\n", .{ elapsed, max_script_execution_ms });
+    const limit = if (web_api.wpt_mode) max_script_execution_ms_wpt else max_script_execution_ms;
+    if (elapsed > limit) {
+        std.debug.print("[JS] Script execution timeout ({d}ms > {d}ms limit)\n", .{ elapsed, limit });
         return 1; // interrupt
     }
     return 0; // continue

@@ -411,6 +411,29 @@ fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?
     return event;
 }
 
+/// Call on{eventType} property handler on a JS object (element, document, or window).
+/// DOM spec: event handler IDL attributes (onclick, onload, etc.) act as event listeners.
+fn callOnEventHandler(ctx: *qjs.JSContext, target_obj: qjs.JSValue, event_type: []const u8, event_obj: qjs.JSValue) void {
+    if (current_event_flags.stop_immediate_propagation) return;
+    // Build "on" + eventType property name
+    var name_buf: [64]u8 = undefined;
+    if (event_type.len + 2 > name_buf.len) return;
+    name_buf[0] = 'o';
+    name_buf[1] = 'n';
+    @memcpy(name_buf[2 .. 2 + event_type.len], event_type);
+    name_buf[2 + event_type.len] = 0;
+    const prop_name: [*:0]const u8 = @ptrCast(name_buf[0 .. 2 + event_type.len :0]);
+
+    const handler = qjs.JS_GetPropertyStr(ctx, target_obj, prop_name);
+    defer qjs.JS_FreeValue(ctx, handler);
+    if (qjs.JS_IsFunction(ctx, handler)) {
+        var argv = [_]qjs.JSValue{event_obj};
+        const ret = qjs.JS_Call(ctx, handler, target_obj, 1, &argv);
+        qjs.JS_FreeValue(ctx, ret);
+        syncStopFlags(ctx, event_obj);
+    }
+}
+
 /// Invoke a listener callback. Handles both function callbacks and
 /// object listeners with a handleEvent method (DOM spec §2.8).
 fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSValue, event_obj: qjs.JSValue) void {
@@ -786,6 +809,12 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                 break;
             }
         }
+        // Call on{event} handler property on target element
+        if (!current_event_flags.stop_propagation) {
+            const target_js = dom_api.wrapNodePublic(ctx, target);
+            callOnEventHandler(ctx, target_js, event_type, event_obj);
+            qjs.JS_FreeValue(ctx, target_js);
+        }
     }
 
     // Phase 3: Bubble (parent of target → ... → root → Document → Window)
@@ -809,18 +838,26 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                         break;
                     }
                 }
+                // Call on{event} handler on bubble node
+                if (!current_event_flags.stop_propagation) {
+                    const node_js = dom_api.wrapNodePublic(ctx, node);
+                    callOnEventHandler(ctx, node_js, event_type, event_obj);
+                    qjs.JS_FreeValue(ctx, node_js);
+                }
             }
         }
-        // 3b: Document bubble listeners
+        // 3b: Document bubble listeners + on{event} handler
         if (!current_event_flags.stop_propagation) {
             updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
             setEventCurrentTarget(ctx, event_obj, doc_obj);
             callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, false);
+            callOnEventHandler(ctx, doc_obj, event_type, event_obj);
         }
-        // 3c: Window bubble listeners
+        // 3c: Window bubble listeners + on{event} handler
         if (!current_event_flags.stop_propagation) {
             setEventCurrentTarget(ctx, event_obj, global);
             callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
+            callOnEventHandler(ctx, global, event_type, event_obj);
         }
     }
 
