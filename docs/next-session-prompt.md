@@ -93,3 +93,25 @@ zig build
 # test262
 cd /tmp/quickjs-ng-full && ./run-test262 -c test262.conf
 ```
+
+## Reftest Results (2026-03-25 late)
+
+Suzume passes visual reftests at very high rates:
+- css-flexbox: 89/100 = 89% (sample)
+- css-display: 29/30 = 97% (sample)
+- css-grid: 8/10 = 80% (sample)
+
+Estimated +1700 additional tests when reftest integrated into runner.
+
+Total available reftests across CSS areas:
+- css-grid: 1194
+- css-flexbox: 740
+- css-backgrounds: 670
+- css-sizing: 532
+- css-overflow: 475
+- css-position: 219
+- css-tables: 151
+- css-display: 78
+Total: ~4059 reftests
+
+Next: integrate reftest into run_wpt_parallel.sh for combined scoring.
