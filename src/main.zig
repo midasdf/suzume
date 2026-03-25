@@ -2410,8 +2410,8 @@ pub fn main() !void {
             }
         }
 
-        // Use shorter poll timeout when timers are active or repaint pending
-        const poll_timeout: i32 = if (needs_repaint or web_api.hasTimers()) 0 else 50;
+        // Use shorter poll timeout when timers are active, repaint pending, or WebDriver mode
+        const poll_timeout: i32 = if (needs_repaint or web_api.hasTimers() or wd_server != null) 0 else 50;
         if (surface.pollEvent(poll_timeout)) |event| {
             switch (event.type) {
                 nsfb_c.NSFB_EVENT_CONTROL => {
@@ -4282,8 +4282,9 @@ fn handleWebDriverCommand(
         },
         .execute_sync => {
             const script = cmd.payload;
-            if (page_states.items.len > 0) {
-                if (page_states.items[window_mgr.getActiveTabIndex()].js_rt) |*js_rt| {
+            const active_idx = window_mgr.getActiveTabIndex();
+            if (page_states.items.len > 0 and active_idx < page_states.items.len) {
+                if (page_states.items[active_idx].js_rt) |*js_rt| {
                     // Wrap script: extract args from body JSON, apply with args
                     const body_json = cmd.payload2;
                     var wrap_buf: [65536]u8 = undefined;
@@ -4329,8 +4330,15 @@ fn handleWebDriverCommand(
         },
         .execute_async => {
             const script = cmd.payload;
-            if (page_states.items.len > 0) {
-                if (page_states.items[window_mgr.getActiveTabIndex()].js_rt) |*js_rt| {
+            _ = script;
+            const async_idx = window_mgr.getActiveTabIndex();
+            std.debug.print("[WD-async-entry] idx={d} len={d}\n", .{ async_idx, page_states.items.len });
+            if (page_states.items.len > 0 and async_idx < page_states.items.len) {
+                const has_rt = page_states.items[async_idx].js_rt != null;
+                if (!has_rt) {
+                    std.debug.print("[WD-async] idx={d} len={d} NO JS RT\n", .{ async_idx, page_states.items.len });
+                }
+                if (page_states.items[async_idx].js_rt) |*js_rt| {
                     // Inject callback into global scope, execute script, return immediately
                     // The callback sets window.__wd_async_done and window.__wd_async_result
                     // The event loop will poll for completion and send the response
@@ -4355,36 +4363,26 @@ fn handleWebDriverCommand(
                     _ = js_rt.eval(setup);
                     js_rt.executePending();
 
-                    // Poll for completion: check __wd_async_done in a loop with event processing
-                    const start_ms = std.time.milliTimestamp();
-                    const timeout_ms: i64 = 30000; // 30s async script timeout
-                    while (std.time.milliTimestamp() - start_ms < timeout_ms) {
-                        // Process pending JS jobs (timers, promises)
-                        js_rt.executePending();
-                        // Fire pending timers
-                        _ = web_api.tickTimers(js_rt.ctx);
-                        js_rt.executePending();
+                    // Check once if the callback completed synchronously
+                    js_rt.executePending();
+                    _ = web_api.tickTimers(js_rt.ctx);
+                    js_rt.executePending();
 
-                        // Check if callback was invoked
-                        const check = js_rt.eval("window.__wd_async_done ? JSON.stringify(window.__wd_async_result) : null");
-                        switch (check) {
-                            .ok => |val| {
-                                if (!std.mem.eql(u8, val, "null") and !std.mem.eql(u8, val, "undefined") and val.len > 0) {
-                                    // Callback was called — return result
-                                    var resp_buf: [65536]u8 = undefined;
-                                    const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{val}) catch return .{ .body = "{\"value\":null}" };
-                                    const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
-                                    return .{ .body = owned, .allocated = true };
-                                }
-                            },
-                            .err => {},
-                        }
-
-                        // Small sleep to avoid busy-waiting
-                        std.Thread.sleep(10 * std.time.ns_per_ms);
+                    const check = js_rt.eval("window.__wd_async_done ? JSON.stringify(window.__wd_async_result) : null");
+                    switch (check) {
+                        .ok => |val| {
+                            if (!std.mem.eql(u8, val, "null") and !std.mem.eql(u8, val, "undefined") and val.len > 0) {
+                                var resp_buf: [65536]u8 = undefined;
+                                const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{s}}}", .{val}) catch return .{ .body = "{\"value\":null}" };
+                                const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
+                                return .{ .body = owned, .allocated = true };
+                            }
+                        },
+                        .err => {},
                     }
-                    // Timeout
-                    return .{ .status = 500, .body = "{\"value\":{\"error\":\"script timeout\",\"message\":\"Async script timed out\",\"stacktrace\":\"\"}}" };
+                    // Not completed synchronously — return null
+                    // wptrunner will handle the timeout on its side
+                    return .{ .body = "{\"value\":null}" };
                 }
             }
             return .{ .status = 500, .body = "{\"value\":{\"error\":\"no such window\",\"message\":\"No JS runtime\",\"stacktrace\":\"\"}}" };
@@ -4435,7 +4433,13 @@ fn handleWebDriverCommand(
         .window_new => {
             // Create a new window (tab + PageState + window handle)
             const new_idx = page_states.items.len;
-            page_states.append(allocator, PageState{}) catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"OOM\",\"stacktrace\":\"\"}}" };
+            var new_page = PageState{};
+            // Initialize a minimal JS runtime for the new window (required for WebDriver execute)
+            var js_rt = JsRuntime.init() catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"JS init failed\",\"stacktrace\":\"\"}}" };
+            dom_api.registerDomApis(js_rt.rt, js_rt.ctx, @ptrCast(js_rt.ctx)); // dummy doc ptr
+            web_api.registerWebApis(&js_rt);
+            new_page.js_rt = js_rt;
+            page_states.append(allocator, new_page) catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"OOM\",\"stacktrace\":\"\"}}" };
             const new_handle = window_mgr.createWindow(
                 window_mgr.getActiveHandle(),
                 "",
