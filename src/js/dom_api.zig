@@ -961,6 +961,7 @@ fn classListAdd(
     } else {
         _ = lxb_dom_element_set_attribute(elem, "class", 5, cls_to_add.ptr, cls_to_add.len);
     }
+    normalizeClassAttribute(elem);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -991,10 +992,10 @@ fn classListRemove(
     const current = cur.?[0..cur_len];
     const remove_str = cls_to_remove.ptr[0..cls_to_remove.len];
 
-    // Rebuild class string without the removed class
+    // Rebuild class string without the removed class (using ASCII whitespace split)
     var buf: [1024]u8 = undefined;
     var pos: usize = 0;
-    var iter = std.mem.splitSequence(u8, current, " ");
+    var iter = std.mem.tokenizeAny(u8, current, " \t\n\r\x0c");
     var first = true;
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
@@ -1194,6 +1195,39 @@ fn validateToken(c: *qjs.JSContext, token: []const u8) ?qjs.JSValue {
         }
     }
     return null;
+}
+
+/// Normalize class attribute: split by whitespace, deduplicate, rejoin with single spaces.
+/// DOM spec: ordered set serialization for DOMTokenList.
+fn normalizeClassAttribute(elem: *lxb.lxb_dom_element_t) void {
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &attr_len);
+    if (attr_ptr == null or attr_len == 0) return;
+
+    const class_str = attr_ptr.?[0..attr_len];
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+    var seen: [64][]const u8 = undefined;
+    var seen_count: usize = 0;
+
+    var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
+    while (iter.next()) |tok| {
+        if (tok.len == 0) continue;
+        // Deduplicate
+        var dup = false;
+        for (seen[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, tok)) { dup = true; break; }
+        }
+        if (dup) continue;
+        if (seen_count < 64) { seen[seen_count] = tok; seen_count += 1; }
+
+        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (pos + tok.len <= buf.len) {
+            @memcpy(buf[pos..][0..tok.len], tok);
+            pos += tok.len;
+        }
+    }
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
 }
 
 fn classContains(class_str: []const u8, needle: []const u8) bool {

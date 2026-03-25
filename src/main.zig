@@ -4330,7 +4330,6 @@ fn handleWebDriverCommand(
         },
         .execute_async => {
             const script = cmd.payload;
-            _ = script;
             const async_idx = window_mgr.getActiveTabIndex();
             std.debug.print("[WD-async-entry] idx={d} len={d}\n", .{ async_idx, page_states.items.len });
             if (page_states.items.len > 0 and async_idx < page_states.items.len) {
