@@ -963,8 +963,7 @@ fn classListAdd(
     }
     normalizeClassAttribute(elem);
     // Notify MutationObserver of attribute change
-    const events = @import("../js/events.zig");
-    events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
+    @import("../js/events.zig").recordMutation(@ptrCast(elem), "attributes", null, null, "class");
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
