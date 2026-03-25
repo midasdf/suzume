@@ -2535,26 +2535,53 @@ fn styleGetPropertyValue(
 
     // Direct lookup
     if (getStyleProperty(style, prop)) |val| {
-        // Serialize color values to canonical rgb()/rgba() form
+        // For element.style (specified value), color keywords stay as keywords
+        // per CSSOM §6.7.2 and CSS Color Level 4 §15
         if (isColorProperty(prop)) {
-            const color_mod = @import("../css/properties.zig");
             const tv = std.mem.trim(u8, val, " \t\r\n");
-            // color() keeps color() format in specified value too
+            // Named colors, transparent, currentcolor → return lowercase as-is
+            // Check if it's a named color keyword (not a function like rgb(...))
+            const is_keyword = blk: {
+                if (eqlIgnoreCase(tv, "transparent") or eqlIgnoreCase(tv, "currentcolor")) break :blk true;
+                // If it has parentheses, it's a function, not a keyword
+                if (std.mem.indexOf(u8, tv, "(") != null) break :blk false;
+                // If parseColor succeeds and it's not a hex (#...), it's a named color
+                const color_mod2 = @import("../css/properties.zig");
+                if (tv.len > 0 and tv[0] == '#') break :blk false;
+                break :blk color_mod2.parseColor(tv) != null;
+            };
+            if (is_keyword) {
+                // Lowercase the keyword
+                var lbuf: [32]u8 = undefined;
+                if (tv.len <= lbuf.len) {
+                    for (tv, 0..) |ch, i| {
+                        lbuf[i] = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+                    }
+                    return qjs.JS_NewStringLen(c, &lbuf, tv.len);
+                }
+                return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
+            }
+            // rgb()/rgba()/hsl()/hsla() → normalize to canonical rgb()/rgba()
+            const color_mod = @import("../css/properties.zig");
             if (tv.len >= 6 and eqlIgnoreCase(tv[0..6], "color(")) {
                 return formatColorFuncComputed(c, tv);
             }
             if (color_mod.parseColor(tv)) |color| {
                 var color_buf: [64]u8 = undefined;
-                if (color.a == 255) {
+                // Clamp alpha to [0, 1] range
+                const clamped_a = if (color.a > 255) @as(u8, 255) else color.a;
+                if (clamped_a == 255) {
                     const s = std.fmt.bufPrint(&color_buf, "rgb({d}, {d}, {d})", .{ color.r, color.g, color.b }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
                     return qjs.JS_NewStringLen(c, s.ptr, s.len);
                 } else {
                     const orig_alpha = extractOriginalAlpha(tv);
                     var alpha_buf: [16]u8 = undefined;
-                    const alpha_s = if (orig_alpha) |a|
-                        std.fmt.bufPrint(&alpha_buf, "{d}", .{a}) catch "0"
-                    else blk: {
-                        const a = @as(f32, @floatFromInt(color.a)) / 255.0;
+                    const alpha_s = if (orig_alpha) |a| blk: {
+                        // Clamp negative alpha to 0
+                        const clamped = if (a < 0) @as(f32, 0) else if (a > 1) @as(f32, 1) else a;
+                        break :blk std.fmt.bufPrint(&alpha_buf, "{d}", .{clamped}) catch "0";
+                    } else blk: {
+                        const a = @as(f32, @floatFromInt(clamped_a)) / 255.0;
                         break :blk std.fmt.bufPrint(&alpha_buf, "{d}", .{a}) catch "0";
                     };
                     const s = std.fmt.bufPrint(&color_buf, "rgba({d}, {d}, {d}, {s})", .{ color.r, color.g, color.b, alpha_s }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
