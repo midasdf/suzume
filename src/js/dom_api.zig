@@ -112,9 +112,15 @@ var g_viewport_width: f32 = 800;
 var g_viewport_height: f32 = 600;
 
 /// Set viewport dimensions (called from main after layout).
+/// For CSS viewport units (vw/vh), use the actual window viewport size,
+/// not the layout surface size. Falls back to web_api.viewport if available.
 pub fn setViewport(w: f32, h: f32) void {
-    g_viewport_width = w;
-    g_viewport_height = h;
+    const web_api = @import("web_api.zig");
+    // Use web_api viewport (window.innerWidth/Height) if set, otherwise use provided
+    const vw: f32 = @floatFromInt(web_api.getViewportWidth());
+    const vh: f32 = @floatFromInt(web_api.getViewportHeight());
+    g_viewport_width = if (vw > 0) vw else w;
+    g_viewport_height = if (vh > 0) vh else h;
 }
 
 /// Find the Box in the tree that corresponds to a given DOM node pointer.

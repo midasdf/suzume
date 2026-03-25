@@ -163,6 +163,9 @@ pub fn setViewportSize(w: u32, h: u32) void {
     viewport_height = h;
 }
 
+pub fn getViewportWidth() u32 { return viewport_width; }
+pub fn getViewportHeight() u32 { return viewport_height; }
+
 // ── Timer system ────────────────────────────────────────────────────
 
 const TimerEntry = struct {
