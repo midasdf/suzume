@@ -49,6 +49,7 @@ const dom_api = @import("js/dom_api.zig");
 const events = @import("js/events.zig");
 const WebDriverServer = @import("net/webdriver.zig").WebDriverServer;
 const CommandSlot = @import("net/webdriver.zig").CommandSlot;
+const WindowManager = @import("js/window_manager.zig").WindowManager;
 const DomNode = @import("dom/node.zig").DomNode;
 const lxb = @import("bindings/lexbor.zig").c;
 
@@ -2027,6 +2028,10 @@ pub fn main() !void {
         return;
     }
 
+    // Window manager for multi-window support (WebDriver + window.open)
+    var window_mgr = WindowManager.init(allocator);
+    _ = window_mgr.createInitialWindow() catch {};
+
     // WebDriver server (if --webdriver=PORT specified)
     var wd_slot = CommandSlot{};
     var wd_server: ?WebDriverServer = null;
@@ -2063,6 +2068,7 @@ pub fn main() !void {
                     &scroll_y,
                     &scroll_x,
                     if (storage_inst) |*si| si else null,
+                    &window_mgr,
                 );
                 wd_slot.respond(wd_resp);
             }
@@ -4215,6 +4221,7 @@ fn handleWebDriverCommand(
     scroll_y: *f32,
     scroll_x: *f32,
     storage: ?*Storage,
+    window_mgr: *WindowManager,
 ) webdriver.Response {
     switch (cmd.tag) {
         .navigate => {
@@ -4231,7 +4238,7 @@ fn handleWebDriverCommand(
             @memcpy(url_z, url);
 
             if (page_states.items.len > 0) {
-                if (navigateTo(allocator, loader_ptr, url_z, fonts, &page_states.items[0], storage, surface.width, surface.height)) {
+                if (navigateTo(allocator, loader_ptr, url_z, fonts, &page_states.items[window_mgr.getActiveTabIndex()], storage, surface.width, surface.height)) {
                     scroll_y.* = 0;
                     scroll_x.* = 0;
                     needs_repaint.* = true;
@@ -4258,7 +4265,7 @@ fn handleWebDriverCommand(
         },
         .get_title => {
             if (page_states.items.len > 0) {
-                if (page_states.items[0].doc) |*d| {
+                if (page_states.items[window_mgr.getActiveTabIndex()].doc) |*d| {
                     const title = extractTitle(d);
                     if (title) |t| {
                         var buf: [4096]u8 = undefined;
@@ -4273,7 +4280,7 @@ fn handleWebDriverCommand(
         .execute_sync => {
             const script = cmd.payload;
             if (page_states.items.len > 0) {
-                if (page_states.items[0].js_rt) |*js_rt| {
+                if (page_states.items[window_mgr.getActiveTabIndex()].js_rt) |*js_rt| {
                     // Wrap script: extract args from body JSON, apply with args
                     const body_json = cmd.payload2;
                     var wrap_buf: [65536]u8 = undefined;
@@ -4320,7 +4327,7 @@ fn handleWebDriverCommand(
         .execute_async => {
             const script = cmd.payload;
             if (page_states.items.len > 0) {
-                if (page_states.items[0].js_rt) |*js_rt| {
+                if (page_states.items[window_mgr.getActiveTabIndex()].js_rt) |*js_rt| {
                     // Inject callback into global scope, execute script, return immediately
                     // The callback sets window.__wd_async_done and window.__wd_async_result
                     // The event loop will poll for completion and send the response
@@ -4384,7 +4391,7 @@ fn handleWebDriverCommand(
             const tmp_path = "/tmp/suzume-wd-screenshot.png";
             // Paint first
             if (page_states.items.len > 0) {
-                const pg = &page_states.items[0];
+                const pg = &page_states.items[window_mgr.getActiveTabIndex()];
                 if (pg.root_box) |root_box| {
                     surface.fillRect(0, 0, surface.width, surface.height, 0xFFFFFFFF);
                     const ic_ptr: ?*ImageCache = if (pg.image_cache) |*ic| ic else null;
@@ -4421,6 +4428,85 @@ fn handleWebDriverCommand(
         },
         .close_window, .noop => {
             return .{ .body = "{\"value\":null}" };
+        },
+        .window_new => {
+            // Create a new window (tab + PageState + window handle)
+            const new_idx = page_states.items.len;
+            page_states.append(allocator, PageState{}) catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"OOM\",\"stacktrace\":\"\"}}" };
+            const new_handle = window_mgr.createWindow(
+                window_mgr.getActiveHandle(),
+                "",
+                new_idx,
+            ) catch return .{ .status = 500, .body = "{\"value\":{\"error\":\"unknown error\",\"message\":\"window create failed\",\"stacktrace\":\"\"}}" };
+            // Build response: {"value":{"handle":"window-N","type":"tab"}}
+            var resp_buf: [128]u8 = undefined;
+            const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":{{\"handle\":\"{s}\",\"type\":\"tab\"}}}}", .{new_handle}) catch return .{ .body = "{\"value\":null}" };
+            const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":null}" };
+            return .{ .body = owned, .allocated = true };
+        },
+        .window_switch => {
+            const handle = cmd.payload;
+            if (window_mgr.switchTo(handle)) {
+                tab_mgr.active_index = window_mgr.getActiveTabIndex();
+                return .{ .body = "{\"value\":null}" };
+            }
+            return .{ .status = 404, .body = "{\"value\":{\"error\":\"no such window\",\"message\":\"Window not found\",\"stacktrace\":\"\"}}" };
+        },
+        .window_close => {
+            if (window_mgr.getActiveHandle()) |handle| {
+                window_mgr.closeWindow(handle);
+            }
+            // Return remaining handles
+            var handles_buf: [16][]const u8 = undefined;
+            const count = window_mgr.getHandles(&handles_buf);
+            if (count > 0) {
+                var resp_buf: [512]u8 = undefined;
+                var pos: usize = 0;
+                const prefix = "{\"value\":[";
+                @memcpy(resp_buf[pos..][0..prefix.len], prefix);
+                pos += prefix.len;
+                for (0..count) |i| {
+                    if (i > 0) { resp_buf[pos] = ','; pos += 1; }
+                    resp_buf[pos] = '"'; pos += 1;
+                    @memcpy(resp_buf[pos..][0..handles_buf[i].len], handles_buf[i]);
+                    pos += handles_buf[i].len;
+                    resp_buf[pos] = '"'; pos += 1;
+                }
+                @memcpy(resp_buf[pos..][0..2], "]}");
+                pos += 2;
+                const owned = allocator.dupe(u8, resp_buf[0..pos]) catch return .{ .body = "{\"value\":[]}" };
+                return .{ .body = owned, .allocated = true };
+            }
+            return .{ .body = "{\"value\":[]}" };
+        },
+        .get_window_handle => {
+            if (window_mgr.getActiveHandle()) |handle| {
+                var resp_buf: [64]u8 = undefined;
+                const json = std.fmt.bufPrint(&resp_buf, "{{\"value\":\"{s}\"}}", .{handle}) catch return .{ .body = "{\"value\":\"\"}" };
+                const owned = allocator.dupe(u8, json) catch return .{ .body = "{\"value\":\"\"}" };
+                return .{ .body = owned, .allocated = true };
+            }
+            return .{ .body = "{\"value\":\"\"}" };
+        },
+        .get_window_handles => {
+            var handles_buf: [16][]const u8 = undefined;
+            const count = window_mgr.getHandles(&handles_buf);
+            var resp_buf: [512]u8 = undefined;
+            var pos: usize = 0;
+            const prefix = "{\"value\":[";
+            @memcpy(resp_buf[pos..][0..prefix.len], prefix);
+            pos += prefix.len;
+            for (0..count) |i| {
+                if (i > 0) { resp_buf[pos] = ','; pos += 1; }
+                resp_buf[pos] = '"'; pos += 1;
+                @memcpy(resp_buf[pos..][0..handles_buf[i].len], handles_buf[i]);
+                pos += handles_buf[i].len;
+                resp_buf[pos] = '"'; pos += 1;
+            }
+            @memcpy(resp_buf[pos..][0..2], "]}");
+            pos += 2;
+            const owned = allocator.dupe(u8, resp_buf[0..pos]) catch return .{ .body = "{\"value\":[]}" };
+            return .{ .body = owned, .allocated = true };
         },
     }
 }

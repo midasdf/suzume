@@ -12,6 +12,11 @@ pub const CommandTag = enum {
     screenshot,
     get_title,
     close_window,
+    window_new,
+    window_switch,
+    window_close,
+    get_window_handle,
+    get_window_handles,
     noop, // for stub endpoints that need main-thread ack
 };
 
@@ -287,9 +292,10 @@ pub const WebDriverServer = struct {
         if (method == .GET and std.mem.eql(u8, path, "/window")) {
             return self.getWindowHandle();
         }
-        // POST /window
+        // POST /window (switch)
         if (method == .POST and std.mem.eql(u8, path, "/window")) {
-            return ok("{\"value\":null}");
+            const handle = extractJsonString(body, "handle") orelse return ok("{\"value\":null}");
+            return self.slot.submitAndWait(.{ .tag = .window_switch, .payload = handle }, 5000);
         }
         // GET /window/handles
         if (method == .GET and std.mem.eql(u8, path, "/window/handles")) {
@@ -409,27 +415,19 @@ pub const WebDriverServer = struct {
     }
 
     fn getWindowHandle(self: *WebDriverServer) Response {
-        _ = self;
-        return ok("{\"value\":\"window-0\"}");
+        return self.slot.submitAndWait(.{ .tag = .get_window_handle }, 5000);
     }
 
     fn getWindowHandles(self: *WebDriverServer) Response {
-        if (self.session.num_windows >= 2) {
-            return ok("{\"value\":[\"window-0\",\"window-1\"]}");
-        }
-        return ok("{\"value\":[\"window-0\"]}");
+        return self.slot.submitAndWait(.{ .tag = .get_window_handles }, 5000);
     }
 
     fn newWindow(self: *WebDriverServer) Response {
-        self.session.num_windows = 2;
-        return ok("{\"value\":{\"handle\":\"window-1\",\"type\":\"tab\"}}");
+        return self.slot.submitAndWait(.{ .tag = .window_new }, 10000);
     }
 
     fn closeWindow(self: *WebDriverServer) Response {
-        if (self.session.num_windows > 1) {
-            self.session.num_windows -= 1;
-        }
-        return ok("{\"value\":[\"window-0\"]}");
+        return self.slot.submitAndWait(.{ .tag = .window_close }, 5000);
     }
 
     fn getTimeouts(self: *WebDriverServer) Response {
