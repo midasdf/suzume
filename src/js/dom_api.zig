@@ -5540,6 +5540,53 @@ fn computedStyleToString(c: *qjs.JSContext, style: *const ComputedStyle, prop: [
 
 /// Convert a ComputedStyle field to a CSS string, using layout box used values when available.
 fn computedStyleToStringWithBox(c: *qjs.JSContext, style: *const ComputedStyle, prop: []const u8, box_opt: ?*const Box) qjs.JSValue {
+    // Map CSS logical properties to physical properties (horizontal-tb writing mode assumed)
+    // Per CSS Logical Properties Level 1 spec
+    const mapped_prop = mapLogicalToPhysical(prop);
+    return computedStyleToStringWithBoxInner(c, style, mapped_prop, box_opt);
+}
+
+/// Map CSS logical properties to physical equivalents (assuming horizontal-tb)
+fn mapLogicalToPhysical(prop: []const u8) []const u8 {
+    // margin-block-start/end → margin-top/bottom
+    if (eqlIgnoreCase(prop, "margin-block-start")) return "margin-top";
+    if (eqlIgnoreCase(prop, "margin-block-end")) return "margin-bottom";
+    if (eqlIgnoreCase(prop, "margin-inline-start")) return "margin-left";
+    if (eqlIgnoreCase(prop, "margin-inline-end")) return "margin-right";
+    // padding-block-start/end → padding-top/bottom
+    if (eqlIgnoreCase(prop, "padding-block-start")) return "padding-top";
+    if (eqlIgnoreCase(prop, "padding-block-end")) return "padding-bottom";
+    if (eqlIgnoreCase(prop, "padding-inline-start")) return "padding-left";
+    if (eqlIgnoreCase(prop, "padding-inline-end")) return "padding-right";
+    // border-block-*-color/width/style → border-top/bottom-*
+    if (eqlIgnoreCase(prop, "border-block-start-color")) return "border-top-color";
+    if (eqlIgnoreCase(prop, "border-block-end-color")) return "border-bottom-color";
+    if (eqlIgnoreCase(prop, "border-inline-start-color")) return "border-left-color";
+    if (eqlIgnoreCase(prop, "border-inline-end-color")) return "border-right-color";
+    if (eqlIgnoreCase(prop, "border-block-start-width")) return "border-top-width";
+    if (eqlIgnoreCase(prop, "border-block-end-width")) return "border-bottom-width";
+    if (eqlIgnoreCase(prop, "border-inline-start-width")) return "border-left-width";
+    if (eqlIgnoreCase(prop, "border-inline-end-width")) return "border-right-width";
+    if (eqlIgnoreCase(prop, "border-block-start-style")) return "border-top-style";
+    if (eqlIgnoreCase(prop, "border-block-end-style")) return "border-bottom-style";
+    if (eqlIgnoreCase(prop, "border-inline-start-style")) return "border-left-style";
+    if (eqlIgnoreCase(prop, "border-inline-end-style")) return "border-right-style";
+    // inset-block/inline → top/bottom/left/right
+    if (eqlIgnoreCase(prop, "inset-block-start")) return "top";
+    if (eqlIgnoreCase(prop, "inset-block-end")) return "bottom";
+    if (eqlIgnoreCase(prop, "inset-inline-start")) return "left";
+    if (eqlIgnoreCase(prop, "inset-inline-end")) return "right";
+    // block-size/inline-size → height/width
+    if (eqlIgnoreCase(prop, "block-size")) return "height";
+    if (eqlIgnoreCase(prop, "inline-size")) return "width";
+    if (eqlIgnoreCase(prop, "min-block-size")) return "min-height";
+    if (eqlIgnoreCase(prop, "min-inline-size")) return "min-width";
+    if (eqlIgnoreCase(prop, "max-block-size")) return "max-height";
+    if (eqlIgnoreCase(prop, "max-inline-size")) return "max-width";
+    return prop;
+}
+
+fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const ComputedStyle, prop: []const u8, box_opt: ?*const Box) qjs.JSValue {
     // Format buffer for numeric values
     var buf: [128]u8 = undefined;
 
@@ -5593,6 +5640,17 @@ fn computedStyleToStringWithBox(c: *qjs.JSContext, style: *const ComputedStyle, 
         return argbToCssColor(c, style.color, &buf);
     } else if (std.mem.eql(u8, prop, "background-color")) {
         return argbToCssColor(c, style.background_color, &buf);
+    } else if (std.mem.eql(u8, prop, "outline-color")) {
+        // Default outline-color is currentcolor → resolve to computed color
+        return argbToCssColor(c, style.color, &buf);
+    } else if (std.mem.eql(u8, prop, "caret-color")) {
+        // Default caret-color is auto → resolved as currentcolor
+        return argbToCssColor(c, style.color, &buf);
+    } else if (std.mem.eql(u8, prop, "box-shadow")) {
+        // Default box-shadow is none
+        return qjs.JS_NewStringLen(c, "none", 4);
+    } else if (std.mem.eql(u8, prop, "text-shadow")) {
+        return qjs.JS_NewStringLen(c, "none", 4);
     } else if (std.mem.eql(u8, prop, "font-size")) {
         return fmtPx(c, style.font_size_px, &buf);
     } else if (std.mem.eql(u8, prop, "font-weight")) {
