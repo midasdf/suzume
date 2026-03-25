@@ -2462,6 +2462,10 @@ fn styleGetPropertyValue(
         if (isColorProperty(prop)) {
             const color_mod = @import("../css/properties.zig");
             const tv = std.mem.trim(u8, val, " \t\r\n");
+            // color() keeps color() format in specified value too
+            if (tv.len >= 6 and eqlIgnoreCase(tv[0..6], "color(")) {
+                return formatColorFuncComputed(c, tv);
+            }
             if (color_mod.parseColor(tv)) |color| {
                 var color_buf: [64]u8 = undefined;
                 if (color.a == 255) {
