@@ -3626,28 +3626,145 @@ fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) bool 
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
-    if (selector[0] == '#') {
-        var val_len: usize = 0;
-        const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
-        if (val != null and val_len == selector.len - 1) {
-            return std.mem.eql(u8, val.?[0..val_len], selector[1..]);
+    const sel = std.mem.trim(u8, selector, " \t\r\n");
+    if (sel.len == 0) return false;
+
+    // Handle comma-separated selector list (any match = true)
+    var start: usize = 0;
+    var depth: usize = 0;
+    for (sel, 0..) |ch, i| {
+        if (ch == '(' or ch == '[') depth += 1
+        else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+        else if (ch == ',' and depth == 0) {
+            if (matchSingleSimple(elem, std.mem.trim(u8, sel[start..i], " \t"))) return true;
+            start = i + 1;
         }
-        return false;
-    } else if (selector[0] == '.') {
-        var val_len: usize = 0;
-        const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-        if (val != null and val_len > 0) {
-            return classContains(val.?[0..val_len], selector[1..]);
-        }
-        return false;
-    } else {
-        var name_len: usize = 0;
-        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
-        if (name_ptr != null and name_len == selector.len) {
-            return std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector);
+    }
+    return matchSingleSimple(elem, std.mem.trim(u8, sel[start..], " \t"));
+}
+
+fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
+    if (sel.len == 0) return false;
+
+    // :not(inner) — negate inner match
+    if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":not(") and sel[sel.len - 1] == ')') {
+        return !elementMatchesSelector(@ptrCast(elem), sel[5 .. sel.len - 1]);
+    }
+    // :is(inner) / :where(inner) — OR of comma-separated
+    if (sel.len > 4 and std.ascii.eqlIgnoreCase(sel[0..4], ":is(") and sel[sel.len - 1] == ')') {
+        return elementMatchesSelector(@ptrCast(elem), sel[4 .. sel.len - 1]);
+    }
+    if (sel.len > 7 and std.ascii.eqlIgnoreCase(sel[0..7], ":where(") and sel[sel.len - 1] == ')') {
+        return elementMatchesSelector(@ptrCast(elem), sel[7 .. sel.len - 1]);
+    }
+
+    // [attr] or [attr=value] etc.
+    if (sel[0] == '[') {
+        if (std.mem.indexOfScalar(u8, sel, ']')) |close| {
+            const attr_expr = sel[1..close];
+            return matchAttributeSelector(elem, attr_expr);
         }
         return false;
     }
+    // #id
+    if (sel[0] == '#') {
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
+        if (val != null and val_len == sel.len - 1) {
+            return std.mem.eql(u8, val.?[0..val_len], sel[1..]);
+        }
+        return false;
+    }
+    // .class
+    if (sel[0] == '.') {
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
+        if (val != null and val_len > 0) {
+            return classContains(val.?[0..val_len], sel[1..]);
+        }
+        return false;
+    }
+    // * (universal)
+    if (sel.len == 1 and sel[0] == '*') return true;
+
+    // Compound: tag.class or tag#id
+    if (std.mem.indexOfScalar(u8, sel, '.')) |dot| {
+        if (dot > 0) {
+            // tag.class
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr == null or !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], sel[0..dot])) return false;
+            var val_len: usize = 0;
+            const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
+            if (val != null and val_len > 0) return classContains(val.?[0..val_len], sel[dot + 1 ..]);
+            return false;
+        }
+    }
+    if (std.mem.indexOfScalar(u8, sel, '#')) |hash| {
+        if (hash > 0) {
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr == null or !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], sel[0..hash])) return false;
+            var val_len: usize = 0;
+            const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
+            if (val != null and val_len == sel.len - hash - 1) return std.mem.eql(u8, val.?[0..val_len], sel[hash + 1 ..]);
+            return false;
+        }
+    }
+
+    // Plain tagname
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr != null) {
+        return std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], sel);
+    }
+    return false;
+}
+
+fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bool {
+    // [attr], [attr=val], [attr^=val], [attr$=val], [attr*=val], [attr~=val]
+    const trimmed = std.mem.trim(u8, expr, " \t");
+    // Find operator
+    var op_pos: ?usize = null;
+    var op_type: u8 = 0; // 0=exists, '='=exact, '^'=starts, '$'=ends, '*'=contains, '~'=word
+    for (trimmed, 0..) |ch, i| {
+        if (ch == '=' and i > 0) {
+            if (trimmed[i - 1] == '^' or trimmed[i - 1] == '$' or trimmed[i - 1] == '*' or trimmed[i - 1] == '~' or trimmed[i - 1] == '|') {
+                op_pos = i - 1;
+                op_type = trimmed[i - 1];
+            } else {
+                op_pos = i;
+                op_type = '=';
+            }
+            break;
+        }
+    }
+    if (op_pos == null) {
+        // [attr] — existence check
+        var val_len: usize = 0;
+        _ = lxb_dom_element_get_attribute(elem, trimmed.ptr, trimmed.len, &val_len);
+        return lxb_dom_element_has_attribute(elem, trimmed.ptr, trimmed.len);
+    }
+    const attr_name = std.mem.trim(u8, trimmed[0..op_pos.?], " \t");
+    const val_start = if (op_type == '=') op_pos.? + 1 else op_pos.? + 2;
+    var expected = std.mem.trim(u8, trimmed[val_start..], " \t");
+    // Strip quotes
+    if (expected.len >= 2 and (expected[0] == '"' or expected[0] == '\'') and expected[expected.len - 1] == expected[0]) {
+        expected = expected[1 .. expected.len - 1];
+    }
+    var val_len: usize = 0;
+    const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
+    if (val == null) return false;
+    const actual = val.?[0..val_len];
+
+    return switch (op_type) {
+        '=' => std.mem.eql(u8, actual, expected),
+        '^' => actual.len >= expected.len and std.mem.eql(u8, actual[0..expected.len], expected),
+        '$' => actual.len >= expected.len and std.mem.eql(u8, actual[actual.len - expected.len ..], expected),
+        '*' => std.mem.indexOf(u8, actual, expected) != null,
+        '~' => classContains(actual, expected),
+        else => false,
+    };
 }
 
 fn elementMatches(
