@@ -1123,10 +1123,34 @@ fn classListReplace(
     const cur_str = cur.?[0..cur_len];
     if (!classContains(cur_str, old_cls.ptr[0..old_cls.len])) return quickjs.JS_NewBool(false);
 
-    // Remove old, add new
-    _ = classListRemove(ctx, this_val, 1, argv);
-    var new_argv = [_]qjs.JSValue{args[1]};
-    _ = classListAdd(ctx, this_val, 1, &new_argv);
+    // Replace old with new in-place (single mutation per spec)
+    const old_str = old_cls.ptr[0..old_cls.len];
+    const new_str = new_cls.ptr[0..new_cls.len];
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+    var replaced = false;
+    var iter = std.mem.tokenizeAny(u8, cur_str, " \t\n\r\x0c");
+    while (iter.next()) |tok| {
+        if (tok.len == 0) continue;
+        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (!replaced and std.mem.eql(u8, tok, old_str)) {
+            // Replace first occurrence of old with new
+            if (pos + new_str.len <= buf.len) {
+                @memcpy(buf[pos..][0..new_str.len], new_str);
+                pos += new_str.len;
+            }
+            replaced = true;
+        } else if (replaced and std.mem.eql(u8, tok, new_str)) {
+            continue; // Skip duplicate of new token
+        } else {
+            if (pos + tok.len <= buf.len) {
+                @memcpy(buf[pos..][0..tok.len], tok);
+                pos += tok.len;
+            }
+        }
+    }
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    setDomDirty();
     return quickjs.JS_NewBool(true);
 }
 
