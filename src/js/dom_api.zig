@@ -6692,14 +6692,19 @@ fn documentCreateEvent(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    // Return an Event-like object with initEvent() method
+    // Return an Event-like object with all standard properties
     const js_code =
         \\(function(){var e={type:'',bubbles:false,cancelable:false,
         \\defaultPrevented:false,_stopped:false,isTrusted:false,eventPhase:0,
-        \\preventDefault:function(){this.defaultPrevented=true;},
-        \\stopPropagation:function(){this._stopped=true;},
-        \\stopImmediatePropagation:function(){this._stopped=true;},
-        \\initEvent:function(t,b,c){this.type=t;this.bubbles=b!==false;this.cancelable=c!==false;}
+        \\returnValue:true,cancelBubble:false,composed:false,
+        \\timeStamp:Date.now(),target:null,currentTarget:null,srcElement:null,
+        \\NONE:0,CAPTURING_PHASE:1,AT_TARGET:2,BUBBLING_PHASE:3,
+        \\preventDefault:function(){this.defaultPrevented=true;this.returnValue=false;},
+        \\stopPropagation:function(){this._stopped=true;this.cancelBubble=true;},
+        \\stopImmediatePropagation:function(){this._stopped=true;this.cancelBubble=true;},
+        \\initEvent:function(t,b,c){this.type=t;this.bubbles=b!==false;this.cancelable=c!==false;this._initialized=true;},
+        \\composedPath:function(){return [];},
+        \\_initialized:false
         \\};return e;})()
     ;
     return qjs.JS_Eval(c, js_code, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
