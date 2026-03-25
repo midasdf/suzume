@@ -130,8 +130,10 @@ pub fn jsAddEventListener(
     defer qjs.JS_FreeCString(c, type_s.ptr);
     const event_type = type_s.ptr[0..type_s.len];
 
-    // Check if callback is a function
-    if (!qjs.JS_IsFunction(c, args[1])) return quickjs.JS_UNDEFINED();
+    // DOM spec: callback can be a function or an object with handleEvent method
+    // Null callbacks are ignored per spec
+    if (!qjs.JS_IsFunction(c, args[1]) and args[1].tag != qjs.JS_TAG_OBJECT) return quickjs.JS_UNDEFINED();
+    if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1])) return quickjs.JS_UNDEFINED();
 
     // Parse 3rd argument: options object or boolean (legacy useCapture)
     var capture: bool = false;
@@ -409,6 +411,24 @@ fn createMouseEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?
     return event;
 }
 
+/// Invoke a listener callback. Handles both function callbacks and
+/// object listeners with a handleEvent method (DOM spec §2.8).
+fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSValue, event_obj: qjs.JSValue) void {
+    var argv = [_]qjs.JSValue{event_obj};
+    if (qjs.JS_IsFunction(ctx, callback)) {
+        const ret = qjs.JS_Call(ctx, callback, this_val, 1, &argv);
+        qjs.JS_FreeValue(ctx, ret);
+    } else {
+        // Object listener: get handleEvent property and call it with the object as this
+        const he = qjs.JS_GetPropertyStr(ctx, callback, "handleEvent");
+        if (qjs.JS_IsFunction(ctx, he)) {
+            const ret = qjs.JS_Call(ctx, he, callback, 1, &argv);
+            qjs.JS_FreeValue(ctx, ret);
+        }
+        qjs.JS_FreeValue(ctx, he);
+    }
+}
+
 /// Sync JS event object's _stopped/_stopImmediate flags to native current_event_flags.
 /// This is needed because JS code might set cancelBubble=true or call stopPropagation()
 /// via the JS prototype methods (not our native C callbacks).
@@ -442,9 +462,7 @@ fn callListenersOnNode(ctx: *qjs.JSContext, entry: *ListenerEntry, event_obj: qj
         }
 
         const this = dom_api.wrapNodePublic(ctx, node);
-        var argv = [_]qjs.JSValue{event_obj};
-        const ret = qjs.JS_Call(ctx, rec.callback, this, 1, &argv);
-        qjs.JS_FreeValue(ctx, ret);
+        invokeListener(ctx, rec.callback, this, event_obj);
         qjs.JS_FreeValue(ctx, this);
 
         // Sync JS-side stop flags to native (e.g. cancelBubble setter)
@@ -475,9 +493,7 @@ fn callEntryListeners(ctx: *qjs.JSContext, entries: *std.ArrayListUnmanaged(Wind
                     i += 1;
                     continue;
                 }
-                var argv = [_]qjs.JSValue{event_obj};
-                const ret = qjs.JS_Call(ctx, rec.callback, this_obj, 1, &argv);
-                qjs.JS_FreeValue(ctx, ret);
+                invokeListener(ctx, rec.callback, this_obj, event_obj);
                 syncStopFlags(ctx, event_obj);
                 if (rec.once) {
                     qjs.JS_FreeValue(ctx, rec.callback);
