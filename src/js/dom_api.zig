@@ -2993,14 +2993,27 @@ fn elementScrollIntoView(
 fn documentCreateComment(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    // Return a minimal comment-like object
     const obj = qjs.JS_NewObject(c);
     _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 8));
     _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_NewString(c, "#comment"));
+    // data property from argument
+    if (argc >= 1) {
+        if (argv) |args| {
+            _ = qjs.JS_SetPropertyStr(c, obj, "data", qjs.JS_DupValue(c, args[0]));
+            _ = qjs.JS_SetPropertyStr(c, obj, "textContent", qjs.JS_DupValue(c, args[0]));
+            _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", qjs.JS_DupValue(c, args[0]));
+        }
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, obj, "data", qjs.JS_NewString(c, ""));
+        _ = qjs.JS_SetPropertyStr(c, obj, "textContent", qjs.JS_NewString(c, ""));
+        _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", qjs.JS_NewString(c, ""));
+    }
+    // DOM Level 3 isEqualNode support
+    _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
     return obj;
 }
 
@@ -3014,6 +3027,63 @@ fn documentAdoptNode(
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
     return qjs.JS_DupValue(c, args[0]);
+}
+
+/// document.implementation.createDocumentType(qualifiedName, publicId, systemId)
+fn implCreateDocumentType(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const obj = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 10));
+    // name
+    if (argc >= 1) {
+        _ = qjs.JS_SetPropertyStr(c, obj, "name", qjs.JS_DupValue(c, args[0]));
+        _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_DupValue(c, args[0]));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, obj, "name", qjs.JS_NewString(c, ""));
+        _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_NewString(c, ""));
+    }
+    // publicId
+    if (argc >= 2) {
+        _ = qjs.JS_SetPropertyStr(c, obj, "publicId", qjs.JS_DupValue(c, args[1]));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, obj, "publicId", qjs.JS_NewString(c, ""));
+    }
+    // systemId
+    if (argc >= 3) {
+        _ = qjs.JS_SetPropertyStr(c, obj, "systemId", qjs.JS_DupValue(c, args[2]));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, obj, "systemId", qjs.JS_NewString(c, ""));
+    }
+    _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
+    // isEqualNode for DocumentType
+    const ieq_js = "(function(o){if(!o||o.nodeType!==10)return false;return this.name===o.name&&this.publicId===o.publicId&&this.systemId===o.systemId;})";
+    const ieq_fn = qjs.JS_Eval(c, ieq_js, ieq_js.len, "<dt-ieq>", qjs.JS_EVAL_TYPE_GLOBAL);
+    _ = qjs.JS_SetPropertyStr(c, obj, "isEqualNode", ieq_fn);
+    const isn_js = "(function(o){return this===o;})";
+    const isn_fn = qjs.JS_Eval(c, isn_js, isn_js.len, "<dt-isn>", qjs.JS_EVAL_TYPE_GLOBAL);
+    _ = qjs.JS_SetPropertyStr(c, obj, "isSameNode", isn_fn);
+    return obj;
+}
+
+/// document.implementation.createDocument(namespace, qualifiedName, doctype)
+fn implCreateDocument(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    _ = argc;
+    _ = argv;
+    // Return a minimal document-like object via JS eval
+    const js = "(document.implementation.createHTMLDocument(''))";
+    return qjs.JS_Eval(c, js, js.len, "<createDoc>", qjs.JS_EVAL_TYPE_GLOBAL);
 }
 
 fn documentImportNode(
@@ -6763,25 +6833,21 @@ fn documentGetActiveElement(
 fn documentCreateEvent(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    // Return an Event-like object with all standard properties
-    const js_code =
-        \\(function(){var e={type:'',bubbles:false,cancelable:false,
-        \\defaultPrevented:false,_stopped:false,isTrusted:false,eventPhase:0,
-        \\returnValue:true,cancelBubble:false,composed:false,
-        \\timeStamp:Date.now(),target:null,currentTarget:null,srcElement:null,
-        \\NONE:0,CAPTURING_PHASE:1,AT_TARGET:2,BUBBLING_PHASE:3,
-        \\preventDefault:function(){this.defaultPrevented=true;this.returnValue=false;},
-        \\stopPropagation:function(){this._stopped=true;this.cancelBubble=true;},
-        \\stopImmediatePropagation:function(){this._stopped=true;this.cancelBubble=true;},
-        \\initEvent:function(t,b,c){this.type=t;this.bubbles=b!==false;this.cancelable=c!==false;this._initialized=true;},
-        \\composedPath:function(){return [];},
-        \\_initialized:false
-        \\};return e;})()
-    ;
+    // Check if interface is "CustomEvent"
+    var is_custom = false;
+    if (argc >= 1) {
+        if (argv) |args| {
+            if (jsStringToSlice(c, args[0])) |s| {
+                defer qjs.JS_FreeCString(c, s.ptr);
+                is_custom = std.mem.eql(u8, s.ptr[0..s.len], "CustomEvent");
+            }
+        }
+    }
+    const js_code = if (is_custom) "(new CustomEvent(''))" else "(new Event(''))";
     return qjs.JS_Eval(c, js_code, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
 }
 
@@ -7392,6 +7458,24 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "referrer", qjs.JS_NewString(ctx, ""));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createComment", qjs.JS_NewCFunction(ctx, &documentCreateComment, "createComment", 1));
 
+    // document.createProcessingInstruction(target, data)
+    {
+        const pi_js =
+            \\(function(target, data) {
+            \\  var pi = {nodeType:7, nodeName:target, target:target, data:data||'',
+            \\          textContent:data||'', nodeValue:data||'', childNodes:[]};
+            \\  pi.isEqualNode = function(o) {
+            \\    if (!o || o.nodeType !== 7) return false;
+            \\    return this.target === o.target && this.data === o.data;
+            \\  };
+            \\  pi.isSameNode = function(o) { return this === o; };
+            \\  return pi;
+            \\})
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createProcessingInstruction", qjs.JS_Eval(ctx,
+            pi_js, pi_js.len, "<pi>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+
     // Document properties required by jQuery/Sizzle
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeType", qjs.JS_NewInt32(ctx, 9)); // DOCUMENT_NODE
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "defaultView", qjs.JS_DupValue(ctx, global)); // window
@@ -7420,23 +7504,65 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, imagesAtom);
     }
 
-    // document.implementation (jQuery feature detection uses createHTMLDocument)
+    // document.implementation
     {
         const impl = qjs.JS_NewObject(ctx);
-        const create_html_doc_js = "(function(title) { return document; })";
+        // createHTMLDocument: returns a minimal standalone document-like object
+        const create_html_doc_js =
+            \\(function(title) {
+            \\  var d = document.createElement('html');
+            \\  var head = document.createElement('head');
+            \\  var body = document.createElement('body');
+            \\  if (title !== undefined) {
+            \\    var t = document.createElement('title');
+            \\    t.textContent = title;
+            \\    head.appendChild(t);
+            \\  }
+            \\  d.appendChild(head);
+            \\  d.appendChild(body);
+            \\  var doc = {
+            \\    nodeType: 9, nodeName: '#document',
+            \\    documentElement: d, head: head, body: body,
+            \\    childNodes: [d], children: [d], firstChild: d, lastChild: d,
+            \\    createElement: function(t) { return document.createElement(t); },
+            \\    createElementNS: function(ns, t) { return document.createElementNS ? document.createElementNS(ns, t) : document.createElement(t); },
+            \\    createTextNode: function(t) { return document.createTextNode(t); },
+            \\    createComment: function(t) { var c = document.createComment ? document.createComment(t) : {nodeType:8,nodeName:'#comment',data:t,textContent:t}; return c; },
+            \\    createDocumentFragment: function() { return document.createDocumentFragment(); },
+            \\    createEvent: function(t) { return document.createEvent(t); },
+            \\    getElementById: function(id) { return d.querySelector('#'+CSS.escape(id)); },
+            \\    getElementsByTagName: function(t) { return d.getElementsByTagName(t); },
+            \\    getElementsByClassName: function(c) { return d.getElementsByClassName(c); },
+            \\    querySelector: function(s) { return d.querySelector(s); },
+            \\    querySelectorAll: function(s) { return d.querySelectorAll(s); },
+            \\    appendChild: function(n) { return d.appendChild(n); },
+            \\    removeChild: function(n) { return d.removeChild(n); },
+            \\    importNode: function(n, deep) { return n.cloneNode(deep); },
+            \\    adoptNode: function(n) { return n; },
+            \\    title: title || '',
+            \\    implementation: document.implementation,
+            \\    addEventListener: function(t,f,o) { d.addEventListener(t,f,o); },
+            \\    removeEventListener: function(t,f,o) { d.removeEventListener(t,f,o); },
+            \\    dispatchEvent: function(e) { return d.dispatchEvent(e); },
+            \\  };
+            \\  return doc;
+            \\})
+        ;
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx,
             create_html_doc_js, create_html_doc_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         const has_feature_js = "(function() { return true; })";
         _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx,
             has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &implCreateDocumentType, "createDocumentType", 3));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &implCreateDocument, "createDocument", 3));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
     }
-
     // document.adoptedStyleSheets (used by CSS-in-JS / popover polyfills)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptedStyleSheets", qjs.JS_NewArray(ctx));
 
     // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
+
 
     // window.location
     _ = qjs.JS_SetPropertyStr(ctx, global, "location", createLocationObject(ctx));
