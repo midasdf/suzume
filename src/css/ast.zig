@@ -68,6 +68,7 @@ pub const PropertyId = enum(u16) {
     text_wrap_mode,
     text_wrap_style,
     tab_size,
+    hyphens,
     vertical_align,
     visibility,
     // Layout
@@ -214,6 +215,7 @@ pub const PropertyId = enum(u16) {
         .{ "text-wrap-mode", .text_wrap_mode },
         .{ "text-wrap-style", .text_wrap_style },
         .{ "tab-size", .tab_size },
+        .{ "hyphens", .hyphens },
         .{ "text-decoration", .text_decoration },
         .{ "text-decoration-line", .text_decoration },
         .{ "text-decoration-color", .unknown }, // handled in cascade via expandTextDecoration

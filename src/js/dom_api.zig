@@ -2204,6 +2204,8 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "textWrapMode", .css = "text-wrap-mode" },
         .{ .camel = "textWrapStyle", .css = "text-wrap-style" },
         .{ .camel = "tabSize", .css = "tab-size" },
+        .{ .camel = "hyphens", .css = "hyphens" },
+        .{ .camel = "overflowWrap", .css = "overflow-wrap" },
         .{ .camel = "flexDirection", .css = "flex-direction" },
         .{ .camel = "flexWrap", .css = "flex-wrap" },
         .{ .camel = "justifyContent", .css = "justify-content" },
@@ -7445,7 +7447,12 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .color, .background_color, .border_top_color, .border_right_color,
         .border_bottom_color, .border_left_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed),
         // Numeric properties
-        .opacity => std.fmt.parseFloat(f32, trimmed) != error.InvalidCharacter,
+        .opacity => blk: {
+            if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '%') {
+                break :blk std.fmt.parseFloat(f32, trimmed[0 .. trimmed.len - 1]) != error.InvalidCharacter;
+            }
+            break :blk std.fmt.parseFloat(f32, trimmed) != error.InvalidCharacter;
+        },
         .z_index => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter or eqlIgnoreCase(trimmed, "auto"),
         .flex_grow, .flex_shrink => isNonNegNumber(trimmed),
         // Font size: non-negative length or keyword
@@ -7489,6 +7496,8 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             eqlIgnoreCase(trimmed, "pretty") or eqlIgnoreCase(trimmed, "stable"),
         // tab-size: non-negative number or non-negative length
         .tab_size => isNonNegNumber(trimmed) or isValidNonNegLength(trimmed),
+        // hyphens: none, manual, auto
+        .hyphens => eqlIgnoreCase(trimmed, "none") or eqlIgnoreCase(trimmed, "manual") or eqlIgnoreCase(trimmed, "auto"),
         // Keyword-only properties: delegate to parseValue, check for .raw
         else => blk: {
             const parsed = css_properties.parseValue(prop_id, val);

@@ -97,25 +97,35 @@ pub fn extractFuncArgs(text: []const u8) ?[]const u8 {
 
 fn parseRgbFunc(text: []const u8) ?values.Color {
     const inner = extractFuncArgs(text) orelse return null;
-    var nums: [3]f32 = undefined;
+    var nums: [4]f32 = .{ 0, 0, 0, 255 };
     var count: usize = 0;
+    var alpha_is_pct = false;
     var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
     while (iter.next()) |tok| {
-        if (count >= 3) break;
+        if (count >= 4) break;
         if (tok.len > 0 and tok[tok.len - 1] == '%') {
             const pct = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return null;
-            nums[count] = pct * 255.0 / 100.0;
+            if (count < 3) {
+                nums[count] = pct * 255.0 / 100.0;
+            } else {
+                nums[count] = pct / 100.0;
+                alpha_is_pct = true;
+            }
         } else {
             nums[count] = std.fmt.parseFloat(f32, tok) catch return null;
         }
         count += 1;
     }
     if (count < 3) return null;
+    const alpha: u8 = if (count >= 4)
+        @intFromFloat(@round(std.math.clamp(if (alpha_is_pct) nums[3] * 255 else nums[3] * 255, 0, 255)))
+    else
+        255;
     return .{
         .r = clampToU8(nums[0]),
         .g = clampToU8(nums[1]),
         .b = clampToU8(nums[2]),
-        .a = 255,
+        .a = alpha,
     };
 }
 
@@ -200,7 +210,11 @@ fn parseHslFunc(text: []const u8) ?values.Color {
         if (count >= 3) break;
         const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
         const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
-        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        if (eqlIgnoreCase(clean2, "none")) {
+            vals[count] = 0;
+        } else {
+            vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        }
         count += 1;
     }
     if (count < 3) return null;
@@ -246,7 +260,11 @@ fn parseHwbFunc(text: []const u8) ?values.Color {
         if (count == 3 and is_pct) alpha_is_percentage = true;
         const clean = if (is_pct) tok[0 .. tok.len - 1] else tok;
         const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
-        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        if (eqlIgnoreCase(clean2, "none")) {
+            vals[count] = 0;
+        } else {
+            vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
+        }
         count += 1;
     }
     if (count < 3) return null;
