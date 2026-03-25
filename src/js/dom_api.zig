@@ -5767,6 +5767,18 @@ fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8
         if (eqlIgnoreCase(trimmed_color, "currentcolor")) {
             return getInheritedComputedValue(c, elem_val, "color");
         }
+        // CSS Color 4: color() function keeps color() serialization
+        if (eqlIgnoreCase(trimmed_color[0..@min(6, trimmed_color.len)], "color(")) {
+            return formatColorFuncComputed(c, trimmed_color);
+        }
+        // CSS Color 4: oklab/oklch/lab/lch keep their serialization in computed style
+        if (eqlIgnoreCase(trimmed_color[0..@min(6, trimmed_color.len)], "oklab(") or
+            eqlIgnoreCase(trimmed_color[0..@min(6, trimmed_color.len)], "oklch(") or
+            eqlIgnoreCase(trimmed_color[0..@min(4, trimmed_color.len)], "lab(") or
+            eqlIgnoreCase(trimmed_color[0..@min(4, trimmed_color.len)], "lch("))
+        {
+            return formatModernColorComputed(c, trimmed_color);
+        }
         if (color_mod.parseColor(trimmed_color)) |color| {
             var color_buf: [64]u8 = undefined;
             if (color.a == 255) {
@@ -5951,6 +5963,37 @@ fn extractOriginalAlpha(color_str: []const u8) ?f64 {
         return std.fmt.parseFloat(f64, alpha_str) catch null;
     }
     return null;
+}
+
+/// Format color() function for computed value: color(srgb R G B) or color(srgb R G B / A)
+fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
+    const color_mod = @import("../css/properties.zig");
+    const inner = color_mod.extractFuncArgs(input) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+
+    var iter = std.mem.tokenizeAny(u8, inner, " \t/,");
+    const space = iter.next() orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+
+    var vals: [4]f32 = .{ 0, 0, 0, 1 };
+    var count: usize = 0;
+    while (iter.next()) |tok| {
+        if (count >= 4) break;
+        vals[count] = color_mod.parseColorComponent(tok, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+        count += 1;
+    }
+    if (count < 3) return qjs.JS_NewStringLen(c, input.ptr, input.len);
+
+    var buf: [128]u8 = undefined;
+    const result = if (count >= 4 and vals[3] < 1.0)
+        std.fmt.bufPrint(&buf, "color({s} {d} {d} {d} / {d})", .{ space, vals[0], vals[1], vals[2], vals[3] }) catch return qjs.JS_NewStringLen(c, input.ptr, input.len)
+    else
+        std.fmt.bufPrint(&buf, "color({s} {d} {d} {d})", .{ space, vals[0], vals[1], vals[2] }) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+    return qjs.JS_NewStringLen(c, result.ptr, result.len);
+}
+
+/// Format modern color functions (oklab/oklch/lab/lch) for computed value
+fn formatModernColorComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
+    // For now, return as-is (proper serialization requires complex normalization)
+    return qjs.JS_NewStringLen(c, input.ptr, input.len);
 }
 
 /// Check if a CSS property takes a color value.

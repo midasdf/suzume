@@ -88,7 +88,7 @@ fn parseHexByte(s: *const [2]u8) ?u8 {
     return hi * 16 + lo;
 }
 
-fn extractFuncArgs(text: []const u8) ?[]const u8 {
+pub fn extractFuncArgs(text: []const u8) ?[]const u8 {
     const start = std.mem.indexOf(u8, text, "(") orelse return null;
     const end = std.mem.lastIndexOf(u8, text, ")") orelse return null;
     if (start >= end) return null;
@@ -319,7 +319,7 @@ fn gammaCorrect(c: f32) f32 {
     return 1.055 * std.math.pow(f32, @max(c, 0), 1.0 / 2.4) - 0.055;
 }
 
-fn parseColorComponent(tok: []const u8, is_pct_scale: f32) ?f32 {
+pub fn parseColorComponent(tok: []const u8, is_pct_scale: f32) ?f32 {
     if (eqlIgnoreCase(tok, "none")) return 0;
     const is_pct = tok.len > 0 and tok[tok.len - 1] == '%';
     const clean = if (is_pct) tok[0 .. tok.len - 1] else tok;
