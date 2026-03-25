@@ -1,142 +1,103 @@
 #!/bin/bash
-# WPT Visual Regression - Run all tests automatically
-# Captures Firefox + suzume screenshots side by side
+# Run ALL WPT tests (testharness + reftests) against suzume
+# Usage: ./run_all.sh [--jobs N] [area ...]
+set -uo pipefail
 
-set -euo pipefail
+WPT_DIR="/tmp/wpt"
+SUZUME_BIN="$(cd "$(dirname "$0")/../.." && pwd)/zig-out/bin/suzume"
+PORT=9876
+TIMEOUT=15
+JOBS=4
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-RESULTS_DIR="$SCRIPT_DIR/results"
-SUZUME_BIN="$SCRIPT_DIR/../../zig-out/bin/suzume"
-XEPHYR_DISPLAY=":99"
-WIDTH=800
-HEIGHT=2000
-PORT=8765
+AREAS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --jobs|-j) JOBS="$2"; shift 2 ;;
+        *) AREAS+=("$1"); shift ;;
+    esac
+done
 
-mkdir -p "$RESULTS_DIR/firefox" "$RESULTS_DIR/suzume" "$RESULTS_DIR/diff"
+if [ ${#AREAS[@]} -eq 0 ]; then
+    AREAS=(
+        css/css-box css/css-display css/css-values css/css-variables css/css-color
+        css/css-text css/css-flexbox css/css-grid css/css-sizing css/css-position
+        css/css-overflow css/css-backgrounds css/css-tables css/css-cascade
+        css/selectors css/cssom css/cssom-view
+        dom/nodes dom/events html/dom
+    )
+fi
 
-# Ensure clean state (only kill test-profile Firefox, not user's browser)
-pkill -9 -f "firefox.*ff-wpt-profile" 2>/dev/null || true
-pkill -f "python3.*http.server.*$PORT" 2>/dev/null || true
+[ -d "$WPT_DIR" ] || { echo "ERROR: WPT not found. Run setup first."; exit 1; }
+[ -f "$SUZUME_BIN" ] || { echo "ERROR: suzume not built."; exit 1; }
+
+cd "$WPT_DIR"
+python3 -m http.server "$PORT" --bind 127.0.0.1 &>/dev/null & HTTP_PID=$!
+Xvfb :99 -screen 0 800x600x24 -ac &>/dev/null & XVFB_PID=$!
 sleep 1
+trap "kill $HTTP_PID $XVFB_PID 2>/dev/null" EXIT
 
-# Start HTTP server
-cd "$SCRIPT_DIR"
-python3 -m http.server $PORT > /dev/null 2>&1 &
-HTTP_PID=$!
-sleep 1
+GRAND_TH_PASS=0; GRAND_TH_TOTAL=0; GRAND_TH_ERR=0
+GRAND_RT_PASS=0; GRAND_RT_TOTAL=0
 
-cleanup() {
-    kill $HTTP_PID 2>/dev/null || true
-    pkill -9 -f firefox 2>/dev/null || true
-    pkill -f "Xephyr.*$XEPHYR_DISPLAY" 2>/dev/null || true
-}
-trap cleanup EXIT
+for AREA in "${AREAS[@]}"; do
+    [ -d "$WPT_DIR/$AREA" ] || continue
 
-ensure_xephyr() {
-    if ! ps aux | grep -v grep | grep "Xephyr.*$XEPHYR_DISPLAY" > /dev/null 2>&1; then
-        Xephyr $XEPHYR_DISPLAY -screen ${WIDTH}x${HEIGHT} -ac > /dev/null 2>&1 &
-        sleep 2
-    fi
-}
+    TH_PASS=0; TH_TOTAL=0; TH_ERR=0
+    RT_PASS=0; RT_TOTAL=0
 
-capture_firefox() {
-    local url="$1"
-    local output="$2"
-    local wait_secs="${3:-6}"
-
-    pkill -9 -f firefox 2>/dev/null || true
-    sleep 1
-    ensure_xephyr
-
-    DISPLAY=$XEPHYR_DISPLAY GDK_BACKEND=x11 MOZ_ENABLE_WAYLAND=0 \
-        firefox --no-remote --new-instance -profile /tmp/ff-wpt-profile \
-        "$url" > /dev/null 2>&1 &
-    local pid=$!
-    sleep "$wait_secs"
-
-    # Find and maximize the content window
-    local win_id
-    win_id=$(DISPLAY=$XEPHYR_DISPLAY xdotool search --name "Mozilla Firefox" 2>/dev/null | head -1 || true)
-    if [ -n "$win_id" ]; then
-        DISPLAY=$XEPHYR_DISPLAY xdotool windowsize "$win_id" $WIDTH $HEIGHT 2>/dev/null || true
-        DISPLAY=$XEPHYR_DISPLAY xdotool windowmove "$win_id" 0 0 2>/dev/null || true
-        sleep 1
-    fi
-
-    # Close any popup windows
-    for popup in $(DISPLAY=$XEPHYR_DISPLAY xdotool search --name "Firefox" 2>/dev/null || true); do
-        if [ "$popup" != "$win_id" ]; then
-            DISPLAY=$XEPHYR_DISPLAY xdotool windowclose "$popup" 2>/dev/null || true
+    # Testharness tests
+    while IFS= read -r test; do
+        [ -z "$test" ] && continue
+        URL="http://127.0.0.1:$PORT/$test"
+        OUTPUT=$(DISPLAY=:99 timeout "$TIMEOUT" "$SUZUME_BIN" "$URL" 2>&1 || true)
+        SUMMARY=$(echo "$OUTPUT" | grep "WPT_SUMMARY:" | tail -1)
+        if [ -n "$SUMMARY" ]; then
+            P=$(echo "$SUMMARY" | grep -oP 'PASS=\K\d+')
+            T=$(echo "$SUMMARY" | grep -oP 'TOTAL=\K\d+')
+            TH_PASS=$((TH_PASS + P)); TH_TOTAL=$((TH_TOTAL + T))
+        else
+            TH_ERR=$((TH_ERR + 1))
         fi
-    done
-    sleep 1
+    done < <(grep -rl "testharness.js" "$AREA/" 2>/dev/null | grep '\.html$' | sort)
 
-    DISPLAY=$XEPHYR_DISPLAY import -window root "$output" 2>/dev/null
-    kill -9 $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
-}
+    # Reftests
+    while IFS= read -r test; do
+        [ -z "$test" ] && continue
+        RT_TOTAL=$((RT_TOTAL + 1))
+        REF=$(grep -oP 'rel="match"[^>]*href="\K[^"]+' "$test" | head -1)
+        [ -z "$REF" ] && continue
+        BASE=$(dirname "$test")
+        DISPLAY=:99 timeout "$TIMEOUT" "$SUZUME_BIN" --screenshot /tmp/suzume-wpt-t.png "http://127.0.0.1:$PORT/$test" 2>/dev/null
+        DISPLAY=:99 timeout "$TIMEOUT" "$SUZUME_BIN" --screenshot /tmp/suzume-wpt-r.png "http://127.0.0.1:$PORT/$BASE/$REF" 2>/dev/null
+        R=$(python3 -c "
+from PIL import Image
+try:
+    t=Image.open('/tmp/suzume-wpt-t.png');r=Image.open('/tmp/suzume-wpt-r.png')
+    if t.size!=r.size:print('F')
+    else:
+        d=sum(1 for a,b in zip(t.tobytes(),r.tobytes()) if abs(a-b)>2)
+        print('P' if d/(t.size[0]*t.size[1]*3)*100<1 else 'F')
+except:print('E')
+" 2>&1)
+        [ "$R" = "P" ] && RT_PASS=$((RT_PASS+1))
+    done < <(grep -rl 'rel="match"' "$AREA/" 2>/dev/null | grep -E '\.html?$' | sort)
 
-capture_suzume() {
-    local url="$1"
-    local output="$2"
-    local wait_secs="${3:-5}"
+    TOTAL=$((TH_TOTAL + RT_TOTAL))
+    PASS=$((TH_PASS + RT_PASS))
+    PCT="0.0"; [ "$TOTAL" -gt 0 ] && PCT=$(awk "BEGIN{printf \"%.1f\", ($PASS/$TOTAL)*100}")
+    echo "$AREA: ${PCT}% (th:$TH_PASS/$TH_TOTAL err:$TH_ERR rt:$RT_PASS/$RT_TOTAL)"
 
-    ensure_xephyr
-
-    DISPLAY=$XEPHYR_DISPLAY "$SUZUME_BIN" "$url" > /dev/null 2>&1 &
-    local pid=$!
-    sleep "$wait_secs"
-
-    DISPLAY=$XEPHYR_DISPLAY import -window root "$output" 2>/dev/null
-    kill $pid 2>/dev/null || true
-    wait $pid 2>/dev/null || true
-}
-
-# Create fresh Firefox profile
-rm -rf /tmp/ff-wpt-profile
-mkdir -p /tmp/ff-wpt-profile
-
-# Collect test files
-TEST_FILES=()
-for f in "$SCRIPT_DIR"/css/*.html "$SCRIPT_DIR"/js/*.html; do
-    [ -f "$f" ] && TEST_FILES+=("$f")
-done
-
-echo "=== WPT Visual Regression Tests ==="
-echo "Tests: ${#TEST_FILES[@]}"
-echo ""
-
-for test_file in "${TEST_FILES[@]}"; do
-    rel_path="${test_file#$SCRIPT_DIR/}"
-    name="$(basename "$test_file" .html)"
-    category="$(basename "$(dirname "$test_file")")"
-    full_name="${category}_${name}"
-    url="http://localhost:$PORT/$rel_path"
-
-    wait_time=6
-    [[ "$category" == "js" ]] && wait_time=8
-
-    echo -n "[$full_name] "
-
-    ff_img="$RESULTS_DIR/firefox/${full_name}.png"
-    sz_img="$RESULTS_DIR/suzume/${full_name}.png"
-    diff_img="$RESULTS_DIR/diff/${full_name}.png"
-
-    echo -n "FF.."
-    capture_firefox "$url" "$ff_img" "$wait_time"
-
-    echo -n " SZ.."
-    capture_suzume "$url" "$sz_img" "$wait_time"
-
-    echo -n " CMP.."
-    if [ -f "$ff_img" ] && [ -f "$sz_img" ]; then
-        rmse=$(compare -metric RMSE "$ff_img" "$sz_img" "$diff_img" 2>&1 || true)
-        echo " RMSE=$rmse"
-    else
-        echo " SKIP (missing)"
-    fi
+    GRAND_TH_PASS=$((GRAND_TH_PASS+TH_PASS)); GRAND_TH_TOTAL=$((GRAND_TH_TOTAL+TH_TOTAL)); GRAND_TH_ERR=$((GRAND_TH_ERR+TH_ERR))
+    GRAND_RT_PASS=$((GRAND_RT_PASS+RT_PASS)); GRAND_RT_TOTAL=$((GRAND_RT_TOTAL+RT_TOTAL))
 done
 
 echo ""
-echo "=== Done ==="
-echo "Results: $RESULTS_DIR/"
+echo "==========================================="
+echo "  GRAND TOTAL"
+echo "==========================================="
+GT=$((GRAND_TH_TOTAL+GRAND_RT_TOTAL)); GP=$((GRAND_TH_PASS+GRAND_RT_PASS))
+echo "  Testharness: $GRAND_TH_PASS/$GRAND_TH_TOTAL (err:$GRAND_TH_ERR)"
+echo "  Reftests:    $GRAND_RT_PASS/$GRAND_RT_TOTAL"
+echo "  Combined:    $GP/$GT"
+[ "$GT" -gt 0 ] && echo "  Overall:     $(awk "BEGIN{printf \"%.1f\", ($GP/$GT)*100}")%"
+echo "==========================================="
