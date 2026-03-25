@@ -81,7 +81,7 @@ run_single_test() {
     local disp=$((98 + (job_id % JOBS)))
     local url="http://127.0.0.1:$PORT/$test"
     local output
-    output=$(DISPLAY=":$disp" SUZUME_WIDTH=800 SUZUME_HEIGHT=600 timeout "$TIMEOUT" "$SUZUME_BIN" "$url" 2>&1 || true)
+    output=$(DISPLAY=":$disp" timeout "$TIMEOUT" "$SUZUME_BIN" "$url" 2>&1 || true)
     local summary
     summary=$(echo "$output" | grep "WPT_SUMMARY:" | tail -1)
     if [ -n "$summary" ]; then
