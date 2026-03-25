@@ -64,6 +64,10 @@ pub const PropertyId = enum(u16) {
     word_break,
     overflow_wrap,
     text_overflow,
+    text_wrap,
+    text_wrap_mode,
+    text_wrap_style,
+    tab_size,
     vertical_align,
     visibility,
     // Layout
@@ -206,6 +210,10 @@ pub const PropertyId = enum(u16) {
         .{ "word-spacing", .word_spacing },
         .{ "text-indent", .text_indent },
         .{ "text-align", .text_align },
+        .{ "text-wrap", .text_wrap },
+        .{ "text-wrap-mode", .text_wrap_mode },
+        .{ "text-wrap-style", .text_wrap_style },
+        .{ "tab-size", .tab_size },
         .{ "text-decoration", .text_decoration },
         .{ "text-decoration-line", .text_decoration },
         .{ "text-decoration-color", .unknown }, // handled in cascade via expandTextDecoration

@@ -2200,6 +2200,10 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "whiteSpace", .css = "white-space" },
         .{ .camel = "wordBreak", .css = "word-break" },
         .{ .camel = "wordWrap", .css = "word-wrap" },
+        .{ .camel = "textWrap", .css = "text-wrap" },
+        .{ .camel = "textWrapMode", .css = "text-wrap-mode" },
+        .{ .camel = "textWrapStyle", .css = "text-wrap-style" },
+        .{ .camel = "tabSize", .css = "tab-size" },
         .{ .camel = "flexDirection", .css = "flex-direction" },
         .{ .camel = "flexWrap", .css = "flex-wrap" },
         .{ .camel = "justifyContent", .css = "justify-content" },
@@ -7427,6 +7431,17 @@ fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             eqlIgnoreCase(trimmed, "collapse"),
         // Overflow: visible, hidden, scroll, auto, clip (NOT none)
         .overflow_x, .overflow_y => isValidOverflowValue(trimmed),
+        // text-wrap: wrap, nowrap, balance, pretty, stable, auto
+        .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
+            eqlIgnoreCase(trimmed, "balance") or eqlIgnoreCase(trimmed, "pretty") or
+            eqlIgnoreCase(trimmed, "stable") or eqlIgnoreCase(trimmed, "auto"),
+        // text-wrap-mode: wrap, nowrap
+        .text_wrap_mode => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap"),
+        // text-wrap-style: auto, balance, pretty, stable
+        .text_wrap_style => eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "balance") or
+            eqlIgnoreCase(trimmed, "pretty") or eqlIgnoreCase(trimmed, "stable"),
+        // tab-size: non-negative number or non-negative length
+        .tab_size => isNonNegNumber(trimmed) or isValidNonNegLength(trimmed),
         // Keyword-only properties: delegate to parseValue, check for .raw
         else => blk: {
             const parsed = css_properties.parseValue(prop_id, val);
