@@ -49,7 +49,7 @@ for AREA in "${AREAS[@]}"; do
     while IFS= read -r test; do
         [ -z "$test" ] && continue
         URL="http://127.0.0.1:$PORT/$test"
-        OUTPUT=$(DISPLAY=:99 timeout "$TIMEOUT" "$SUZUME_BIN" "$URL" 2>&1 || true)
+        OUTPUT=$(DISPLAY=:99 SUZUME_WIDTH=800 SUZUME_HEIGHT=600 timeout "$TIMEOUT" "$SUZUME_BIN" "$URL" 2>&1 || true)
         SUMMARY=$(echo "$OUTPUT" | grep "WPT_SUMMARY:" | tail -1)
         if [ -n "$SUMMARY" ]; then
             P=$(echo "$SUMMARY" | grep -oP 'PASS=\K\d+')
@@ -67,8 +67,8 @@ for AREA in "${AREAS[@]}"; do
         REF=$(grep -oP 'rel="match"[^>]*href="\K[^"]+' "$test" | head -1)
         [ -z "$REF" ] && continue
         BASE=$(dirname "$test")
-        DISPLAY=:99 timeout "$TIMEOUT" "$SUZUME_BIN" --screenshot /tmp/suzume-wpt-t.png "http://127.0.0.1:$PORT/$test" 2>/dev/null
-        DISPLAY=:99 timeout "$TIMEOUT" "$SUZUME_BIN" --screenshot /tmp/suzume-wpt-r.png "http://127.0.0.1:$PORT/$BASE/$REF" 2>/dev/null
+        DISPLAY=:99 SUZUME_WIDTH=800 SUZUME_HEIGHT=600 timeout "$TIMEOUT" "$SUZUME_BIN" --screenshot /tmp/suzume-wpt-t.png "http://127.0.0.1:$PORT/$test" 2>/dev/null
+        DISPLAY=:99 SUZUME_WIDTH=800 SUZUME_HEIGHT=600 timeout "$TIMEOUT" "$SUZUME_BIN" --screenshot /tmp/suzume-wpt-r.png "http://127.0.0.1:$PORT/$BASE/$REF" 2>/dev/null
         R=$(python3 -c "
 from PIL import Image
 try:
