@@ -962,6 +962,9 @@ fn classListAdd(
         _ = lxb_dom_element_set_attribute(elem, "class", 5, cls_to_add.ptr, cls_to_add.len);
     }
     normalizeClassAttribute(elem);
+    // Notify MutationObserver of attribute change
+    const events = @import("../js/events.zig");
+    events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -1010,6 +1013,8 @@ fn classListRemove(
         first = false;
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    const events_mod = @import("../js/events.zig");
+    events_mod.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -1150,6 +1155,8 @@ fn classListReplace(
         }
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
+    const ev = @import("../js/events.zig");
+    ev.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
     setDomDirty();
     return quickjs.JS_NewBool(true);
 }
