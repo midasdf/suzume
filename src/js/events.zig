@@ -625,8 +625,17 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
 
     // Use existing event or create a new one
     var owns_event = false;
+
+    // DOM spec: check stop propagation flag from event JS object
+    if (existing_event) |ev| {
+        const stopped_val = qjs.JS_GetPropertyStr(ctx, ev, "_stopped");
+        if (quickjs.JS_ToBool(ctx, stopped_val) > 0) {
+            current_event_flags.stop_propagation = true;
+        }
+        qjs.JS_FreeValue(ctx, stopped_val);
+    }
+
     const event_obj = if (existing_event) |ev| blk: {
-        // Inject our native methods so preventDefault/stopPropagation interact with dispatch
         ensureEventMethods(ctx, ev);
         break :blk ev;
     } else blk: {
@@ -688,6 +697,13 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     }
 
     const ev_result = !current_event_flags.prevent_default;
+
+    // DOM spec: dispatch resets stop propagation flag on the event
+    if (existing_event) |ev| {
+        _ = qjs.JS_SetPropertyStr(ctx, ev, "_stopped", quickjs.JS_NewBool(false));
+        _ = qjs.JS_SetPropertyStr(ctx, ev, "cancelBubble", quickjs.JS_NewBool(false));
+    }
+
     current_event_flags = saved_flags;
     return ev_result;
 }
