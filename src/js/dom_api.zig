@@ -3253,15 +3253,17 @@ fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
         }
     }
 
-    // Compare children recursively
-    var child_a = a.first_child;
-    var child_b = b.first_child;
+    // Compare children recursively using DOM node wrapper
+    const dom_node = @import("../dom/node.zig");
+    const da = dom_node.DomNode{ .lxb_node = a };
+    const db = dom_node.DomNode{ .lxb_node = b };
+    var child_a = da.firstChild();
+    var child_b = db.firstChild();
     while (child_a != null and child_b != null) {
-        if (!nodesAreEqual(child_a.?, child_b.?)) return false;
-        child_a = child_a.?.next;
-        child_b = child_b.?.next;
+        if (!nodesAreEqual(child_a.?.lxb_node, child_b.?.lxb_node)) return false;
+        child_a = child_a.?.nextSibling();
+        child_b = child_b.?.nextSibling();
     }
-    // Both must have same number of children
     return child_a == null and child_b == null;
 }
 
