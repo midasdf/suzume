@@ -2420,8 +2420,13 @@ fn styleSetProperty(
     }
 
     // Canonicalize CSS values for canonical serialization
+    // CSS spec: unitless 0 → "0px" for length properties
+    const trimmed_val2 = std.mem.trim(u8, val, " \t\r\n");
+    const zero_px = "0px";
     var calc_buf: [512]u8 = undefined;
-    const effective_val = if (eqlIgnoreCase(prop, "display"))
+    const effective_val = if (std.mem.eql(u8, trimmed_val2, "0") and isComputedLengthProperty(prop))
+        zero_px
+    else if (eqlIgnoreCase(prop, "display"))
         canonicalizeDisplayValue(val)
     else if (val.len >= 5 and eqlIgnoreCase(val[0..5], "calc("))
         canonicalizeCalcValue(val, &calc_buf) orelse val
