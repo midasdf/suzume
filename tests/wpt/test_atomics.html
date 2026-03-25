@@ -1,0 +1,12 @@
+<!DOCTYPE html><html><body><script>
+console.log('Atomics: ' + typeof Atomics);
+if (typeof Atomics !== 'undefined') {
+  var methods = Object.getOwnPropertyNames(Atomics).sort();
+  console.log('Methods: ' + methods.join(', '));
+  console.log('waitAsync: ' + typeof Atomics.waitAsync);
+  console.log('wait: ' + typeof Atomics.wait);
+  console.log('notify: ' + typeof Atomics.notify);
+  console.log('load: ' + typeof Atomics.load);
+  console.log('store: ' + typeof Atomics.store);
+}
+</script></body></html>

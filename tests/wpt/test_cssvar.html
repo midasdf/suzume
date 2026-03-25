@@ -1,0 +1,10 @@
+<!DOCTYPE html><html>
+<head><style>
+:root { --text-color: #333; --bg-color: #f0f0f0; }
+body { color: var(--text-color); background: var(--bg-color); }
+.box { color: var(--accent, red); border: 1px solid var(--text-color); padding: 10px; }
+</style></head>
+<body>
+<p>Text should be #333 on #f0f0f0 background</p>
+<div class="box">This should be red (fallback)</div>
+</body></html>

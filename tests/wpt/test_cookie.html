@@ -1,0 +1,19 @@
+<!DOCTYPE html><html><body>
+<script>
+// Test document.cookie setter
+document.cookie = "testname=testvalue";
+document.cookie = "foo=bar; path=/";
+console.log("cookies after set: " + document.cookie);
+
+// Test reading back
+var hasFoo = document.cookie.indexOf("foo=bar") >= 0;
+var hasTest = document.cookie.indexOf("testname=testvalue") >= 0;
+console.log("has foo=bar: " + hasFoo);
+console.log("has testname=testvalue: " + hasTest);
+
+// Test overwrite
+document.cookie = "foo=baz";
+var hasBaz = document.cookie.indexOf("foo=baz") >= 0;
+console.log("after overwrite foo=baz: " + hasBaz);
+console.log("final cookies: " + document.cookie);
+</script></body></html>

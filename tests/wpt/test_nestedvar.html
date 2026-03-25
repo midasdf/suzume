@@ -1,0 +1,10 @@
+<!DOCTYPE html><html>
+<head><style>
+:root { --black-600: #333333; }
+body { color: var(--theme-body-font-color, var(--black-600)); background: white; }
+.test { color: var(--undefined-var, var(--also-undefined, blue)); }
+</style></head>
+<body>
+<p>Body text should be #333333 (nested var fallback)</p>
+<p class="test">This should be blue (double nested fallback)</p>
+</body></html>

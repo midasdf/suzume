@@ -1,0 +1,11 @@
+<!DOCTYPE html><html><body>
+<script type="module">
+try {
+  console.log('import.meta type: ' + typeof import.meta);
+  console.log('import.meta.url: ' + import.meta.url);
+  console.log('PASS: import.meta works');
+} catch(e) {
+  console.log('FAIL: ' + e.message);
+}
+</script>
+</body></html>
