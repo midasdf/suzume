@@ -261,6 +261,22 @@ fn jsStopImmediatePropagation(
     return quickjs.JS_UNDEFINED();
 }
 
+fn jsComposedPath(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    return qjs.JS_NewArray(c);
+}
+
+fn jsInitEvent(ctx: ?*qjs.JSContext, this_val: qjs.JSValue, argc: c_int, argv: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    // initEvent(type, bubbles, cancelable)
+    _ = qjs.JS_SetPropertyStr(c, this_val, "type", qjs.JS_DupValue(c, args[0]));
+    if (argc >= 2) _ = qjs.JS_SetPropertyStr(c, this_val, "bubbles", qjs.JS_DupValue(c, args[1]));
+    if (argc >= 3) _ = qjs.JS_SetPropertyStr(c, this_val, "cancelable", qjs.JS_DupValue(c, args[2]));
+    return quickjs.JS_UNDEFINED();
+}
+
 fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.lxb_dom_node_t, current_target: ?*lxb.lxb_dom_node_t) qjs.JSValue {
     const event = qjs.JS_NewObject(ctx);
     if (quickjs.JS_IsException(event)) return event;
@@ -286,6 +302,20 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
     _ = qjs.JS_SetPropertyStr(ctx, event, "preventDefault", qjs.JS_NewCFunction(ctx, &jsPreventDefault, "preventDefault", 0));
     _ = qjs.JS_SetPropertyStr(ctx, event, "stopPropagation", qjs.JS_NewCFunction(ctx, &jsStopPropagation, "stopPropagation", 0));
     _ = qjs.JS_SetPropertyStr(ctx, event, "stopImmediatePropagation", qjs.JS_NewCFunction(ctx, &jsStopImmediatePropagation, "stopImmediatePropagation", 0));
+
+    // Additional DOM Event interface properties
+    _ = qjs.JS_SetPropertyStr(ctx, event, "returnValue", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "cancelBubble", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "composed", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "isTrusted", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "timeStamp", qjs.JS_NewFloat64(ctx, @as(f64, @floatFromInt(std.time.milliTimestamp()))));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "srcElement", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, event, "composedPath", qjs.JS_NewCFunction(ctx, &jsComposedPath, "composedPath", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "initEvent", qjs.JS_NewCFunction(ctx, &jsInitEvent, "initEvent", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "NONE", qjs.JS_NewInt32(ctx, 0));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "CAPTURING_PHASE", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "AT_TARGET", qjs.JS_NewInt32(ctx, 2));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "BUBBLING_PHASE", qjs.JS_NewInt32(ctx, 3));
 
     return event;
 }
