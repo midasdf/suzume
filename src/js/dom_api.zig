@@ -4723,6 +4723,36 @@ fn documentGetTitle(
     return qjs.JS_NewStringLen(c, ptr.?, len);
 }
 
+fn documentSetTitle(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const new_title = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, new_title.ptr);
+
+    // Find <title> element in DOM and set its text content
+    const doc_node = getDocumentNode() orelse return quickjs.JS_UNDEFINED();
+    if (walkTreeByTag(doc_node, "title")) |title_node| {
+        // Remove all existing children
+        while (title_node.first_child) |child| {
+            lxb_dom_node_remove(child);
+            _ = lxb_dom_node_destroy(child);
+        }
+        // Create new text node with the title content
+        const doc_ptr = g_document orelse return quickjs.JS_UNDEFINED();
+        const text_node = lxb_dom_document_create_text_node(doc_ptr, new_title.ptr, new_title.len);
+        if (text_node) |tn| {
+            lxb_dom_node_insert_child(title_node, @ptrCast(tn));
+        }
+    }
+    return quickjs.JS_UNDEFINED();
+}
+
 fn documentGetDocumentElement(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
@@ -7503,7 +7533,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // document.title (getter)
     const titleAtom = qjs.JS_NewAtom(ctx, "title");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, titleAtom, qjs.JS_NewCFunction(ctx, &documentGetTitle, "get title", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, titleAtom, qjs.JS_NewCFunction(ctx, &documentGetTitle, "get title", 0), qjs.JS_NewCFunction(ctx, &documentSetTitle, "set title", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, titleAtom);
 
     // document.documentElement (getter)
