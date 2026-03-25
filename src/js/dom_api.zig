@@ -3012,8 +3012,12 @@ fn documentCreateComment(
         _ = qjs.JS_SetPropertyStr(c, obj, "textContent", qjs.JS_NewString(c, ""));
         _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", qjs.JS_NewString(c, ""));
     }
-    // DOM Level 3 isEqualNode support
     _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
+    // isEqualNode for Comment nodes
+    const ieq_js = "(function(o){if(!o||o.nodeType!==8)return false;return this.data===o.data;})";
+    _ = qjs.JS_SetPropertyStr(c, obj, "isEqualNode", qjs.JS_Eval(c, ieq_js, ieq_js.len, "<comment-ieq>", qjs.JS_EVAL_TYPE_GLOBAL));
+    const isn_js = "(function(o){return this===o;})";
+    _ = qjs.JS_SetPropertyStr(c, obj, "isSameNode", qjs.JS_Eval(c, isn_js, isn_js.len, "<comment-isn>", qjs.JS_EVAL_TYPE_GLOBAL));
     return obj;
 }
 
@@ -4650,7 +4654,6 @@ fn documentCreateElementNS(
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // createElementNS(namespace, tagName) — ignore namespace, just create element
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 2) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
@@ -4658,9 +4661,21 @@ fn documentCreateElementNS(
     defer qjs.JS_FreeCString(c, s.ptr);
 
     const doc = g_document orelse return quickjs.JS_NULL();
-    const elem = lxb_dom_document_create_element(doc, s.ptr, s.len, null) orelse return quickjs.JS_NULL();
+    // Handle qualified name (prefix:localName)
+    const tag = s.ptr[0..s.len];
+    const elem = lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    return wrapNode(c, node);
+    const obj = wrapNode(c, node);
+    // Set namespace-related properties on the JS object
+    _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", qjs.JS_DupValue(c, args[0]));
+    // Parse prefix from qualifiedName
+    if (std.mem.indexOf(u8, tag, ":")) |colon_pos| {
+        _ = qjs.JS_SetPropertyStr(c, obj, "prefix", qjs.JS_NewStringLen(c, tag.ptr, colon_pos));
+        _ = qjs.JS_SetPropertyStr(c, obj, "localName", qjs.JS_NewStringLen(c, tag.ptr + colon_pos + 1, tag.len - colon_pos - 1));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, obj, "prefix", quickjs.JS_NULL());
+    }
+    return obj;
 }
 
 fn documentCreateTextNode(
@@ -7382,6 +7397,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &documentCreateElementNS, "createElementNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
+    // createAttributeNS(namespace, qualifiedName)
+    {
+        const attr_js = "(function(ns,qn){var a={nodeType:2,name:qn,value:'',namespaceURI:ns,prefix:null,localName:qn,specified:true,ownerElement:null};var ci=qn.indexOf(':');if(ci>=0){a.prefix=qn.substring(0,ci);a.localName=qn.substring(ci+1);}a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};return a;})";
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &documentCreateDocumentFragment, "createDocumentFragment", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &documentCreateEvent, "createEvent", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "write", qjs.JS_NewCFunction(ctx, &documentWrite, "write", 1));
