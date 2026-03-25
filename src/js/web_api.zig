@@ -14,6 +14,70 @@ pub var wpt_mode: bool = false;
 /// Set to true after ALERT: RESULT: is output — signals the event loop to exit.
 pub var wpt_result_sent: bool = false;
 
+// ── Multi-window support ────────────────────────────────────────────
+const WindowManager = @import("window_manager.zig").WindowManager;
+pub var global_window_mgr: ?*WindowManager = null;
+
+/// window.open(url, target, features)
+/// Returns a WindowProxy-like object with .closed, .close(), .name, .postMessage()
+fn jsWindowOpen(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+
+    // Extract url (default: "about:blank")
+    var url: []const u8 = "about:blank";
+    if (argc >= 1) {
+        const url_s = qjs.JS_ToCString(c, args[0]);
+        if (url_s) |s| {
+            const len = std.mem.len(s);
+            if (len > 0) url = s[0..len];
+            // Note: string lifetime OK for this function scope
+            defer qjs.JS_FreeCString(c, url_s);
+        }
+    }
+
+    // Extract target name (default: "_blank")
+    var target_name: []const u8 = "_blank";
+    if (argc >= 2) {
+        const name_s = qjs.JS_ToCString(c, args[1]);
+        if (name_s) |s| {
+            const len = std.mem.len(s);
+            if (len > 0) target_name = s[0..len];
+            defer qjs.JS_FreeCString(c, name_s);
+        }
+    }
+
+    // Create a minimal WindowProxy object
+    const proxy = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, proxy, "closed", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(c, proxy, "name", qjs.JS_NewStringLen(c, target_name.ptr, target_name.len));
+    _ = qjs.JS_SetPropertyStr(c, proxy, "opener", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, proxy, "document", quickjs.JS_NULL());
+    const loc = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, loc, "href", qjs.JS_NewStringLen(c, url.ptr, url.len));
+    _ = qjs.JS_SetPropertyStr(c, proxy, "location", loc);
+
+    // close() method
+    const close_js = "(function() { this.closed = true; })";
+    _ = qjs.JS_SetPropertyStr(c, proxy, "close", qjs.JS_Eval(c, close_js, close_js.len, "<close>", 0));
+
+    // postMessage() stub
+    const pm_js = "(function(data, origin) {})";
+    _ = qjs.JS_SetPropertyStr(c, proxy, "postMessage", qjs.JS_Eval(c, pm_js, pm_js.len, "<pm>", 0));
+
+    // focus() / blur() stubs
+    const noop_js = "(function() {})";
+    _ = qjs.JS_SetPropertyStr(c, proxy, "focus", qjs.JS_Eval(c, noop_js, noop_js.len, "<noop>", 0));
+    _ = qjs.JS_SetPropertyStr(c, proxy, "blur", qjs.JS_Eval(c, noop_js, noop_js.len, "<noop>", 0));
+
+    return proxy;
+}
+
 // ── Navigation request (from location.assign/replace/href setter) ────
 
 var pending_navigation_url: ?[]const u8 = null;
@@ -1516,6 +1580,9 @@ pub fn registerWebApis(js_rt: anytype) void {
 
     // -- queueMicrotask, structuredClone (JS-based) --
     evalInitScript(ctx, utility_apis_js, utility_apis_js.len);
+
+    // -- window.open() --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "open", qjs.JS_NewCFunction(ctx, &jsWindowOpen, "open", 3));
 
     // -- Stub Web APIs for compatibility --
     // Note: window, navigator, screen, location are defined above in Zig.

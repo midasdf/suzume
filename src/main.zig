@@ -2033,6 +2033,9 @@ pub fn main() !void {
     _ = window_mgr.createInitialWindow() catch {};
 
     // WebDriver server (if --webdriver=PORT specified)
+    // Set global window manager for window.open() JS function
+    web_api.global_window_mgr = &window_mgr;
+
     var wd_slot = CommandSlot{};
     var wd_server: ?WebDriverServer = null;
     if (webdriver_port) |port| {
