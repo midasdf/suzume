@@ -1834,23 +1834,61 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\        if(ch.tagName==='BODY')bodyEl=ch;
         \\      }
         \\      var fakeDoc={
+        \\        nodeType:9,nodeName:'#document',ownerDocument:null,
+        \\        contentType:type||'text/html',characterSet:'UTF-8',
+        \\        URL:'about:blank',documentURI:'about:blank',compatMode:'CSS1Compat',
         \\        documentElement:container,
         \\        body:bodyEl||container,
         \\        head:headEl||null,
         \\        childNodes:container.childNodes,
+        \\        children:[container],
         \\        firstChild:container.firstChild,
+        \\        lastChild:container.lastChild,
         \\        querySelector:function(s){return container.querySelector(s);},
         \\        querySelectorAll:function(s){return container.querySelectorAll(s);},
-        \\        getElementById:function(id){return container.querySelector('#'+id);},
+        \\        getElementById:function(id){return container.querySelector('#'+CSS.escape(id));},
         \\        getElementsByTagName:function(t){return container.querySelectorAll(t);},
         \\        getElementsByClassName:function(c){return container.querySelectorAll('.'+c);},
         \\        createElement:function(t){return document.createElement(t);},
+        \\        createElementNS:function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);},
         \\        createTextNode:function(t){return document.createTextNode(t);},
-        \\        createDocumentFragment:function(){return document.createDocumentFragment();}
+        \\        createComment:function(t){return document.createComment(t);},
+        \\        createDocumentFragment:function(){return document.createDocumentFragment();},
+        \\        createAttribute:function(n){return document.createAttribute(n);},
+        \\        importNode:function(n,d){return n.cloneNode(d);},
+        \\        adoptNode:function(n){return n;},
+        \\        implementation:document.implementation,
+        \\        defaultView:null,
+        \\        doctype:null
         \\      };
         \\      return fakeDoc;
         \\    }
+        \\    if(type==='text/xml'||type==='application/xml'||type==='application/xhtml+xml'){
+        \\      var c=document.createElement('div');c.innerHTML=str;
+        \\      var fDoc={nodeType:9,nodeName:'#document',ownerDocument:null,contentType:type,
+        \\        documentElement:c.firstChild||c,childNodes:c.childNodes,firstChild:c.firstChild,
+        \\        querySelector:function(s){return c.querySelector(s);},
+        \\        querySelectorAll:function(s){return c.querySelectorAll(s);},
+        \\        getElementsByTagName:function(t){return c.querySelectorAll(t);},
+        \\        createElement:function(t){return document.createElement(t);},
+        \\        createElementNS:function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);},
+        \\        createTextNode:function(t){return document.createTextNode(t);},
+        \\        createComment:function(t){return document.createComment(t);},
+        \\        importNode:function(n,d){return n.cloneNode(d);},
+        \\        implementation:document.implementation};
+        \\      return fDoc;
+        \\    }
         \\    return null;
+        \\  };
+        \\}
+        \\if(typeof XMLSerializer==='undefined'){
+        \\  globalThis.XMLSerializer=function(){};
+        \\  XMLSerializer.prototype.serializeToString=function(node){
+        \\    if(node.outerHTML!==undefined)return node.outerHTML;
+        \\    if(node.nodeType===3)return node.data||node.textContent||'';
+        \\    if(node.nodeType===8)return '<!--'+(node.data||node.textContent||'')+'-->';
+        \\    if(node.nodeType===9||node.nodeType===11){var s='';if(node.childNodes)for(var i=0;i<node.childNodes.length;i++)s+=new XMLSerializer().serializeToString(node.childNodes[i]);return s;}
+        \\    return '';
         \\  };
         \\}
         \\if(typeof history==='undefined'){
