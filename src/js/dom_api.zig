@@ -2730,6 +2730,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeName", qjs.JS_NewString(ctx, "#document"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "defaultView", qjs.JS_DupValue(ctx, global)); // window
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "ownerDocument", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "parentNode", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "parentElement", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nextSibling", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "previousSibling", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "isConnected", quickjs.JS_NewBool(true));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compatMode", qjs.JS_NewString(ctx, "CSS1Compat"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "contentType", qjs.JS_NewString(ctx, "text/html"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "characterSet", qjs.JS_NewString(ctx, "UTF-8"));
@@ -2969,6 +2974,20 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         const ctor = qjs.JS_Eval(ctx, doc_ctor_js, doc_ctor_js.len, "<Document>", qjs.JS_EVAL_TYPE_GLOBAL);
         _ = qjs.JS_SetPropertyStr(ctx, global, "Document", ctor);
+    }
+
+    // XMLDocument extends Document
+    {
+        const xml_doc_js =
+            \\(function(){
+            \\  function XMLDocument(){Document.call(this);this.contentType='application/xml';}
+            \\  XMLDocument.prototype=Object.create(Document.prototype);
+            \\  XMLDocument.prototype.constructor=XMLDocument;
+            \\  return XMLDocument;
+            \\})()
+        ;
+        const xml_ctor = qjs.JS_Eval(ctx, xml_doc_js, xml_doc_js.len, "<XMLDocument>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "XMLDocument", xml_ctor);
     }
 
     // window.location

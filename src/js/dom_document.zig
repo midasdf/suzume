@@ -7,6 +7,17 @@ const events = @import("events.zig");
 
 // ── External Lexbor functions ────────────────────────────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
+/// Validate an HTML element name (not XML — more permissive)
+fn isValidElementName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |ch| {
+        // Invalid chars per HTML spec: whitespace, NUL, /, >, "
+        if (ch <= 0x20 or ch == 0x7F) return false; // control chars + space
+        if (ch == '/' or ch == '>' or ch == '"') return false;
+    }
+    return true;
+}
+
 extern fn lxb_dom_document_create_text_node(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_document_create_comment(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
@@ -573,6 +584,11 @@ pub fn documentCreateElement(
     const args = argv orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+
+    // Validate element name
+    const tag = s.ptr[0..s.len];
+    if (tag.len == 0 or !isValidElementName(tag))
+        return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
     const doc = api.g_document orelse return quickjs.JS_NULL();
     const elem = lxb_dom_document_create_element(doc, s.ptr, s.len, null) orelse return quickjs.JS_NULL();
