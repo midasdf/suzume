@@ -9,6 +9,7 @@ pub const dom_sel = @import("dom_selector.zig");
 pub const dom_node = @import("dom_node.zig");
 pub const dom_elem = @import("dom_element.zig");
 pub const dom_doc = @import("dom_document.zig");
+pub const dom_style = @import("dom_style.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -107,7 +108,7 @@ pub fn setRootBox(root: ?*const Box) void {
 }
 
 /// Global styles pointer — set from main after cascade, used for getComputedStyle.
-var g_styles: ?*const cascade_mod.StyleMap = null;
+pub var g_styles: ?*const cascade_mod.StyleMap = null;
 
 /// Set the styles pointer (called from main after cascade/restyle).
 pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
@@ -115,8 +116,8 @@ pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
 }
 
 /// Viewport dimensions for getComputedStyle resolution.
-var g_viewport_width: f32 = 800;
-var g_viewport_height: f32 = 600;
+pub var g_viewport_width: f32 = 800;
+pub var g_viewport_height: f32 = 600;
 
 /// Set viewport dimensions (called from main after layout).
 /// For CSS viewport units (vw/vh), use the actual window viewport size,
@@ -828,7 +829,7 @@ fn reconstructBoxShorthandJS(c: *qjs.JSContext, style_str: []const u8, shorthand
 }
 
 /// Reconstruct a box shorthand from expanded longhands, optionally resolving values.
-fn reconstructBoxShorthandJSWithElem(c: *qjs.JSContext, style_str: []const u8, shorthand: []const u8, elem_val: qjs.JSValue) ?qjs.JSValue {
+pub fn reconstructBoxShorthandJSWithElem(c: *qjs.JSContext, style_str: []const u8, shorthand: []const u8, elem_val: qjs.JSValue) ?qjs.JSValue {
     const longhands = getBoxLonghands(shorthand) orelse return null;
     const top_raw = getStyleProperty(style_str, longhands[0]) orelse return null;
     const right_raw = getStyleProperty(style_str, longhands[1]) orelse return null;
@@ -875,7 +876,7 @@ fn reconstructBoxShorthandJSWithElem(c: *qjs.JSContext, style_str: []const u8, s
 }
 
 /// Extract a longhand value from a stored shorthand in the style string.
-fn getLonghandFromShorthand(style_str: []const u8, longhand: []const u8) ?[]const u8 {
+pub fn getLonghandFromShorthand(style_str: []const u8, longhand: []const u8) ?[]const u8 {
     const info = getShorthandInfoForLonghand(longhand) orelse return null;
     const shorthand_val = getStyleProperty(style_str, info.shorthand) orelse return null;
 
@@ -4536,12 +4537,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, global, "location", createLocationObject(ctx));
 
     // window.getComputedStyle
-    _ = qjs.JS_SetPropertyStr(ctx, global, "getComputedStyle", qjs.JS_NewCFunction(ctx, &windowGetComputedStyle, "getComputedStyle", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "getComputedStyle", qjs.JS_NewCFunction(ctx, &dom_style.windowGetComputedStyle, "getComputedStyle", 1));
 
     // CSS global object with supports() method
     {
         const css_obj = qjs.JS_NewObject(ctx);
-        _ = qjs.JS_SetPropertyStr(ctx, css_obj, "supports", qjs.JS_NewCFunction(ctx, &cssSupports, "supports", 2));
+        _ = qjs.JS_SetPropertyStr(ctx, css_obj, "supports", qjs.JS_NewCFunction(ctx, &dom_style.cssSupports, "supports", 2));
         _ = qjs.JS_SetPropertyStr(ctx, global, "CSS", css_obj);
     }
 
