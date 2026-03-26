@@ -169,7 +169,7 @@ The simplest approach: add a comptime `skip_bg: bool` parameter to `renderCell`.
 
 ---
 
-## Optimization 4: PTY Read Buffer Enlargement
+## Optimization 4: PTY Read Buffer Enlargement (Build-Time Configurable)
 
 ### Problem
 
@@ -177,25 +177,44 @@ PTY read buffer is 256KB. During dense ASCII at 15fps, ~5.6MB is parsed per 66ms
 
 ### Solution
 
-Increase PTY read buffer to 1MB:
+Make PTY buffer size a build-time option via `-Dpty_buf_kb=N` (default: 1024). This follows the existing pattern of `-Dscale`, `-Dmax_fps`, etc.
+
+`build.zig`:
 ```zig
-var pty_buf: [1_048_576]u8 = undefined;
+const pty_buf_kb_opt = b.option(u32, "pty_buf_kb", "PTY read buffer size in KB (default: 1024)") orelse 1024;
+options.addOption(u32, "pty_buf_kb", pty_buf_kb_opt);
 ```
 
-Also increase extra drain cap from 1MB to 4MB to allow more parsing between frames:
+`config.zig`:
 ```zig
-while (extra_total < 4_194_304) {
+pub const pty_buf_size: u32 = build_options.pty_buf_kb * 1024;
 ```
 
-**Impact**: Read syscalls per frame: 22 → ~6. Extra drain processes more data per frame interval.
+`main.zig`:
+```zig
+var pty_buf: [config.pty_buf_size]u8 = undefined;
+```
 
-**Memory**: +768KB stack. Single-threaded, no concern.
+Extra drain cap scales with buffer size (4× PTY buffer):
+```zig
+while (extra_total < config.pty_buf_size * 4) {
+```
+
+**Usage examples**:
+- PC (max throughput): `zig build -Dbackend=x11 -Dpty_buf_kb=1024 -Doptimize=ReleaseFast`
+- HackberryPi (conservative): `zig build -Dpty_buf_kb=256 -Doptimize=ReleaseSmall`
+
+**Impact**: At 1024KB: read syscalls per frame 22 → ~6. Extra drain processes more data per frame interval.
+
+**Memory**: Configurable per platform. Default 1MB is fine for both x86_64 and aarch64 (512MB RAM).
 
 ### Files Changed
 
 | File | Change |
 |------|--------|
-| `src/main.zig` | Change `pty_buf` size to 1MB, extra drain cap to 4MB |
+| `build.zig` | Add `-Dpty_buf_kb` option |
+| `config.zig` | Add `pty_buf_size` constant |
+| `src/main.zig` | Use `config.pty_buf_size` for `pty_buf` and extra drain cap |
 
 ---
 
