@@ -2871,6 +2871,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dir", qjs.JS_NewString(ctx, ""));
     // document.designMode
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "designMode", qjs.JS_NewString(ctx, "off"));
+    // Document event methods
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "addEventListener", qjs.JS_NewCFunction(ctx, &events.jsAddEventListenerPub, "addEventListener", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "removeEventListener", qjs.JS_NewCFunction(ctx, &events.jsRemoveEventListenerPub, "removeEventListener", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dispatchEvent", qjs.JS_NewCFunction(ctx, &events.jsWindowDispatchEventPub, "dispatchEvent", 1));
     // document.cloneNode(deep) — returns a new document-like object
     {
         const cn_js =

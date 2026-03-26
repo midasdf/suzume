@@ -1230,10 +1230,28 @@ fn jsWindowDispatchEvent(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NewBool(false);
-    if (argc < 1) return quickjs.JS_NewBool(false);
+    if (argc < 1) return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': 1 argument required");
     const args = argv orelse return quickjs.JS_NewBool(false);
+    // DOM spec: TypeError if not an Event (check by trying to get .type property)
+    const type_val = qjs.JS_GetPropertyStr(c, args[0], "type");
+    if (dom_api.jsStringToSlice(c, type_val) == null) {
+        qjs.JS_FreeValue(c, type_val);
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
+    }
+    // DOM spec: InvalidStateError if event's dispatch flag is set or not initialized
+    const dispatch_flag = qjs.JS_GetPropertyStr(c, args[0], "_dispatching");
+    defer qjs.JS_FreeValue(c, dispatch_flag);
+    if (qjs.JS_ToBool(c, dispatch_flag) > 0) {
+        qjs.JS_FreeValue(c, type_val);
+        return dom_api.throwDOMException(c, "InvalidStateError", "The event is already being dispatched.");
+    }
+    const init_flag = qjs.JS_GetPropertyStr(c, args[0], "_initialized");
+    defer qjs.JS_FreeValue(c, init_flag);
+    if (init_flag.tag != qjs.JS_TAG_UNDEFINED and qjs.JS_ToBool(c, init_flag) == 0) {
+        qjs.JS_FreeValue(c, type_val);
+        return dom_api.throwDOMException(c, "InvalidStateError", "The event has not been initialized.");
+    }
     const event_obj = args[0];
-    const type_val = qjs.JS_GetPropertyStr(c, event_obj, "type");
     const type_s = dom_api.jsStringToSlice(c, type_val) orelse {
         qjs.JS_FreeValue(c, type_val);
         return quickjs.JS_NewBool(false);
@@ -1419,7 +1437,26 @@ fn jsElementDispatchEvent(
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': 1 argument required");
     }
     const args = argv orelse return quickjs.JS_EXCEPTION();
-    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_EXCEPTION();
+
+    // DOM spec: TypeError if not an Event object
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
+    }
+
+    // DOM spec: InvalidStateError if event's dispatch flag is set or not initialized
+    const dispatch_flag = qjs.JS_GetPropertyStr(c, args[0], "_dispatching");
+    defer qjs.JS_FreeValue(c, dispatch_flag);
+    if (qjs.JS_ToBool(c, dispatch_flag) > 0) {
+        return dom_api.throwDOMException(c, "InvalidStateError", "The event is already being dispatched.");
+    }
+    const init_flag = qjs.JS_GetPropertyStr(c, args[0], "_initialized");
+    defer qjs.JS_FreeValue(c, init_flag);
+    if (init_flag.tag != qjs.JS_TAG_UNDEFINED and qjs.JS_ToBool(c, init_flag) == 0) {
+        return dom_api.throwDOMException(c, "InvalidStateError", "The event has not been initialized.");
+    }
+
+    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_NewBool(true);
+
     // Get event type from event object's .type property
     const type_val = qjs.JS_GetPropertyStr(c, args[0], "type");
     defer qjs.JS_FreeValue(c, type_val);
@@ -1427,10 +1464,17 @@ fn jsElementDispatchEvent(
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'");
     };
     defer qjs.JS_FreeCString(c, type_str.ptr);
-    // W3C: pass the original event object through dispatch, returns false if preventDefault() was called
+    // Set dispatch flag, dispatch, then clear
+    _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(true));
     const not_cancelled = dispatchEventWithObj(c, node, type_str.ptr[0..type_str.len], args[0]);
+    _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(false));
     return quickjs.JS_NewBool(not_cancelled);
 }
+
+// Pub wrappers for document event methods
+pub const jsAddEventListenerPub = jsAddEventListener;
+pub const jsRemoveEventListenerPub = jsRemoveEventListener;
+pub const jsWindowDispatchEventPub = jsWindowDispatchEvent;
 
 /// Expose the element_class_id for the event system to inject methods.
 pub fn getElementClassId() qjs.JSClassID {
