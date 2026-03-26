@@ -7924,6 +7924,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\P.replaceData=function(o,c,d){if(arguments.length<3)throw new TypeError("Failed to execute 'replaceData': 3 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o+c);};
             \\P.substringData=function(o,c){if(arguments.length<2)throw new TypeError("Failed to execute 'substringData': 2 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');return s.slice(o,o+c);};
             \\delete P.__nativeGetData;delete P.__nativeSetData;
+            \\function noChild(m){return function(){throw new DOMException("Failed to execute '"+m+"' on 'Node': This node type does not support this method.",'HierarchyRequestError');};}
+            \\P.appendChild=noChild('appendChild');P.insertBefore=noChild('insertBefore');
+            \\P.removeChild=noChild('removeChild');P.replaceChild=noChild('replaceChild');
+            \\P.replaceChildren=noChild('replaceChildren');P.prepend=noChild('prepend');P.append=noChild('append');
             \\})(__tp);delete __tp;
         ;
         const r = qjs.JS_Eval(ctx, cd_js, cd_js.len, "<chardata>", qjs.JS_EVAL_TYPE_GLOBAL);
