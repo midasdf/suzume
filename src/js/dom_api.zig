@@ -2918,6 +2918,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.documentURI = 'about:blank';
             \\    this.compatMode = 'CSS1Compat';
             \\    this.implementation = document.implementation;
+            \\    this.location = null;
+            \\    this.defaultView = null;
+            \\    this.hidden = false;
+            \\    this.visibilityState = 'visible';
             \\  }
             \\  Object.setPrototypeOf(Document.prototype, Node.prototype);
             \\  Document.prototype.createElement = function(t) { return document.createElement(t); };

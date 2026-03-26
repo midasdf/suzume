@@ -93,11 +93,12 @@ pub fn documentAdoptNode(
 /// Validate an XML qualified name per https://dom.spec.whatwg.org/#validate
 fn isValidXmlName(name: []const u8) bool {
     if (name.len == 0) return false;
-    // First char must be letter, underscore, or colon
     const first = name[0];
-    if (!std.ascii.isAlphabetic(first) and first != '_' and first != ':' and first < 0xC0) return false;
+    // First char: letter, underscore, colon, or non-ASCII (UTF-8 multibyte)
+    if (!std.ascii.isAlphabetic(first) and first != '_' and first != ':' and first < 0x80) return false;
     for (name[1..]) |ch| {
-        if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != ':' and ch != '-' and ch != '.' and ch < 0xB7) return false;
+        // Subsequent: alphanumeric, _, :, -, ., or non-ASCII
+        if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != ':' and ch != '-' and ch != '.' and ch < 0x80) return false;
     }
     return true;
 }
@@ -213,7 +214,7 @@ pub fn implCreateDocument(
 
     // Build XML document-like object via Document constructor
     const js =
-        \\(function(){var d=new Document();d.contentType='application/xml';d.characterSet='UTF-8';d.charset='UTF-8';d.inputEncoding='UTF-8';d.URL='about:blank';d.documentURI='about:blank';d.compatMode='CSS1Compat';return d;})()
+        \\(function(){var d=typeof XMLDocument!=='undefined'?new XMLDocument():new Document();d.contentType='application/xml';d.characterSet='UTF-8';d.charset='UTF-8';d.inputEncoding='UTF-8';d.URL='about:blank';d.documentURI='about:blank';d.compatMode='CSS1Compat';return d;})()
     ;
     const doc = qjs.JS_Eval(c, js, js.len, "<createDoc>", qjs.JS_EVAL_TYPE_GLOBAL);
 
