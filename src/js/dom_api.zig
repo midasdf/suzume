@@ -3196,11 +3196,50 @@ fn implCreateDocument(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    _ = argc;
-    _ = argv;
-    // Return a minimal document-like object via JS eval
-    const js = "(document.implementation.createHTMLDocument(''))";
-    return qjs.JS_Eval(c, js, js.len, "<createDoc>", qjs.JS_EVAL_TYPE_GLOBAL);
+    const args = argv orelse return quickjs.JS_NULL();
+
+    // Get namespace and qualifiedName
+    var ns: ?[]const u8 = null;
+    var ns_ptr: ?[*]const u8 = null;
+    var qname: ?[]const u8 = null;
+    var qname_ptr: ?[*]const u8 = null;
+    if (argc >= 1 and !quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
+        if (jsStringToSlice(c, args[0])) |s| {
+            ns = s.ptr[0..s.len];
+            ns_ptr = s.ptr;
+        }
+    }
+    if (argc >= 2 and !quickjs.JS_IsNull(args[1]) and !quickjs.JS_IsUndefined(args[1])) {
+        if (jsStringToSlice(c, args[1])) |s| {
+            qname = s.ptr[0..s.len];
+            qname_ptr = s.ptr;
+        }
+    }
+    defer {
+        if (ns_ptr) |p| qjs.JS_FreeCString(c, p);
+        if (qname_ptr) |p| qjs.JS_FreeCString(c, p);
+    }
+
+    // Build XML document-like object via Document constructor
+    const js =
+        \\(function(){var d=new Document();d.contentType='application/xml';d.characterSet='UTF-8';d.charset='UTF-8';d.inputEncoding='UTF-8';d.URL='about:blank';d.documentURI='about:blank';d.compatMode='CSS1Compat';return d;})()
+    ;
+    const doc = qjs.JS_Eval(c, js, js.len, "<createDoc>", qjs.JS_EVAL_TYPE_GLOBAL);
+
+    // If qualifiedName is provided, create and append document element
+    if (qname) |qn| {
+        if (qn.len > 0) {
+            const create_js = "(function(d,ns,qn){var e=document.createElementNS(ns,qn);d.appendChild(e);d.documentElement=e;return d;})";
+            const fn_val = qjs.JS_Eval(c, create_js, create_js.len, "<createDocEl>", qjs.JS_EVAL_TYPE_GLOBAL);
+            var call_args = [3]qjs.JSValue{ doc, if (ns != null) args[0] else quickjs.JS_NULL(), args[1] };
+            const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 3, &call_args);
+            qjs.JS_FreeValue(c, fn_val);
+            qjs.JS_FreeValue(c, doc);
+            return result;
+        }
+    }
+
+    return doc;
 }
 
 fn documentImportNode(
