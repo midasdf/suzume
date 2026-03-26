@@ -4384,16 +4384,35 @@ fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return null;
 
-    // Handle comma-separated selectors (e.g. ".foo, .bar")
-    if (std.mem.indexOfScalar(u8, trimmed, ',')) |_| {
-        var comma_iter = std.mem.splitScalar(u8, trimmed, ',');
-        while (comma_iter.next()) |sub_sel| {
-            const sub = std.mem.trim(u8, sub_sel, " \t");
+    // Handle comma-separated selectors at top level (not inside :not(), :is() etc.)
+    {
+        var depth: u32 = 0;
+        var has_top_comma = false;
+        for (trimmed) |ch| {
+            if (ch == '(' or ch == '[') depth += 1
+            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+            else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+        }
+        if (has_top_comma) {
+            var start: usize = 0;
+            depth = 0;
+            for (trimmed, 0..) |ch, idx| {
+                if (ch == '(' or ch == '[') depth += 1
+                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+                else if (ch == ',' and depth == 0) {
+                    const sub = std.mem.trim(u8, trimmed[start..idx], " \t");
+                    if (sub.len > 0) {
+                        if (walkTreeBySelector(node, sub)) |found| return found;
+                    }
+                    start = idx + 1;
+                }
+            }
+            const sub = std.mem.trim(u8, trimmed[start..], " \t");
             if (sub.len > 0) {
                 if (walkTreeBySelector(node, sub)) |found| return found;
             }
+            return null;
         }
-        return null;
     }
 
     // Parse selector with combinators (>, +, ~, space)
@@ -4742,18 +4761,19 @@ fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
             continue;
         }
 
-        // Read selector token (until space or combinator)
+        // Read selector token (until space or combinator, respecting () and [])
         const start = i;
+        var paren_depth: u32 = 0;
+        var bracket_depth: u32 = 0;
         while (i < trimmed.len) {
             const c = trimmed[i];
-            if (c == ' ' or c == '\t' or c == '>' or c == '+' or c == '~') break;
-            if (c == '[') {
-                // Skip attribute selector brackets
-                while (i < trimmed.len and trimmed[i] != ']') i += 1;
-                if (i < trimmed.len) i += 1;
-            } else {
-                i += 1;
-            }
+            if (paren_depth == 0 and bracket_depth == 0 and
+                (c == ' ' or c == '\t' or c == '>' or c == '+' or c == '~')) break;
+            if (c == '(') paren_depth += 1
+            else if (c == ')' and paren_depth > 0) paren_depth -= 1
+            else if (c == '[') bracket_depth += 1
+            else if (c == ']' and bracket_depth > 0) bracket_depth -= 1;
+            i += 1;
         }
 
         if (i > start) {
@@ -4842,14 +4862,31 @@ fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector: []c
     const trimmed = std.mem.trim(u8, selector, " \t");
     if (trimmed.len == 0) return;
 
-    // Handle comma-separated selectors
-    if (std.mem.indexOfScalar(u8, trimmed, ',')) |_| {
-        var comma_iter = std.mem.splitScalar(u8, trimmed, ',');
-        while (comma_iter.next()) |sub_sel| {
-            const sub = std.mem.trim(u8, sub_sel, " \t");
-            if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
+    // Handle comma-separated selectors (top-level only, not inside :not() etc.)
+    {
+        var depth: u32 = 0;
+        var has_top_comma = false;
+        for (trimmed) |ch| {
+            if (ch == '(' or ch == '[') depth += 1
+            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+            else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
         }
-        return;
+        if (has_top_comma) {
+            var start: usize = 0;
+            depth = 0;
+            for (trimmed, 0..) |ch, i| {
+                if (ch == '(' or ch == '[') depth += 1
+                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+                else if (ch == ',' and depth == 0) {
+                    const sub = std.mem.trim(u8, trimmed[start..i], " \t");
+                    if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
+                    start = i + 1;
+                }
+            }
+            const sub = std.mem.trim(u8, trimmed[start..], " \t");
+            if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
+            return;
+        }
     }
 
     var parts_buf: [16]SelectorPart = undefined;
