@@ -8598,6 +8598,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      return nd;
             \\    },
             \\  };
+            \\  if(typeof Document!=='undefined')Object.setPrototypeOf(doc,Document.prototype);
             \\  return doc;
             \\})
         ;
@@ -8649,6 +8650,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.lastChild = null;
             \\    this.documentElement = null;
             \\  }
+            \\  Object.setPrototypeOf(Document.prototype, Node.prototype);
             \\  Document.prototype.createElement = function(t) { return document.createElement(t); };
             \\  Document.prototype.createElementNS = function(ns,t) { return document.createElementNS(ns,t); };
             \\  Document.prototype.createTextNode = function(t) { return document.createTextNode(t); };
