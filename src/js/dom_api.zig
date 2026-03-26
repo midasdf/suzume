@@ -7588,8 +7588,19 @@ fn documentCreateEvent(
             }
         }
     }
-    var buf: [64]u8 = undefined;
-    const js_code = std.fmt.bufPrint(&buf, "(new {s}(''))", .{iface}) catch return quickjs.JS_UNDEFINED();
+    // Use direct string literals to avoid buffer issues
+    const js_code: []const u8 = if (std.mem.eql(u8, iface, "CustomEvent"))
+        "(new CustomEvent(''))"
+    else if (std.mem.eql(u8, iface, "MouseEvent"))
+        "(new MouseEvent(''))"
+    else if (std.mem.eql(u8, iface, "KeyboardEvent"))
+        "(new KeyboardEvent(''))"
+    else if (std.mem.eql(u8, iface, "UIEvent"))
+        "(new UIEvent(''))"
+    else if (std.mem.eql(u8, iface, "FocusEvent"))
+        "(new FocusEvent(''))"
+    else
+        "(new Event(''))";
     return qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
 }
 
