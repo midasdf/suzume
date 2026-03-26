@@ -1113,6 +1113,63 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         _ = qjs.JS_SetPropertyStr(ctx, global, "InputEvent", ctor);
     }
 
+    // PointerEvent extends MouseEvent
+    {
+        const js =
+            \\(function(){
+            \\  function PointerEvent(t,o){MouseEvent.call(this,t,o);o=o||{};
+            \\    this.pointerId=o.pointerId||0;this.width=o.width||1;this.height=o.height||1;
+            \\    this.pressure=o.pressure||0;this.tangentialPressure=o.tangentialPressure||0;
+            \\    this.tiltX=o.tiltX||0;this.tiltY=o.tiltY||0;this.twist=o.twist||0;
+            \\    this.pointerType=o.pointerType||'';this.isPrimary=o.isPrimary!==undefined?!!o.isPrimary:false;
+            \\  }
+            \\  PointerEvent.prototype=Object.create(MouseEvent.prototype);PointerEvent.prototype.constructor=PointerEvent;
+            \\  PointerEvent.prototype.getCoalescedEvents=function(){return[];};
+            \\  PointerEvent.prototype.getPredictedEvents=function(){return[];};
+            \\  return PointerEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<PointerEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "PointerEvent", ctor);
+    }
+    // TouchEvent extends UIEvent (stub)
+    {
+        const js =
+            \\(function(){
+            \\  function TouchEvent(t,o){UIEvent.call(this,t,o);o=o||{};
+            \\    this.touches=o.touches||[];this.targetTouches=o.targetTouches||[];
+            \\    this.changedTouches=o.changedTouches||[];
+            \\  }
+            \\  TouchEvent.prototype=Object.create(UIEvent.prototype);TouchEvent.prototype.constructor=TouchEvent;
+            \\  return TouchEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<TouchEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "TouchEvent", ctor);
+    }
+    // CompositionEvent, HashChangeEvent, PopStateEvent stubs
+    {
+        const js =
+            \\(function(){
+            \\  function CompositionEvent(t,o){UIEvent.call(this,t,o);this.data=(o&&o.data)||'';}
+            \\  CompositionEvent.prototype=Object.create(UIEvent.prototype);CompositionEvent.prototype.constructor=CompositionEvent;
+            \\  globalThis.CompositionEvent=CompositionEvent;
+            \\  function HashChangeEvent(t,o){Event.call(this,t,o);o=o||{};this.oldURL=o.oldURL||'';this.newURL=o.newURL||'';}
+            \\  HashChangeEvent.prototype=Object.create(Event.prototype);HashChangeEvent.prototype.constructor=HashChangeEvent;
+            \\  globalThis.HashChangeEvent=HashChangeEvent;
+            \\  function PopStateEvent(t,o){Event.call(this,t,o);this.state=(o&&o.state)||null;}
+            \\  PopStateEvent.prototype=Object.create(Event.prototype);PopStateEvent.prototype.constructor=PopStateEvent;
+            \\  globalThis.PopStateEvent=PopStateEvent;
+            \\  function ErrorEvent(t,o){Event.call(this,t,o);o=o||{};this.message=o.message||'';this.filename=o.filename||'';this.lineno=o.lineno||0;this.colno=o.colno||0;this.error=o.error||null;}
+            \\  ErrorEvent.prototype=Object.create(Event.prototype);ErrorEvent.prototype.constructor=ErrorEvent;
+            \\  globalThis.ErrorEvent=ErrorEvent;
+            \\  function ProgressEvent(t,o){Event.call(this,t,o);o=o||{};this.lengthComputable=!!o.lengthComputable;this.loaded=o.loaded||0;this.total=o.total||0;}
+            \\  ProgressEvent.prototype=Object.create(Event.prototype);ProgressEvent.prototype.constructor=ProgressEvent;
+            \\  globalThis.ProgressEvent=ProgressEvent;
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, js, js.len, "<misc-events>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
     // Set up window global (alias to global)
     _ = qjs.JS_SetPropertyStr(ctx, global, "window", qjs.JS_DupValue(ctx, global));
 }
