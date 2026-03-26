@@ -159,6 +159,13 @@ pub fn elementSetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, name.ptr);
+    // Validate attribute name
+    const attr_name = name.ptr[0..name.len];
+    if (attr_name.len == 0) return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+    for (attr_name) |ch| {
+        if (ch <= 0x20 or ch == 0x7F or ch == '/' or ch == '>' or ch == '"' or ch == '=' or ch == '<')
+            return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+    }
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
     _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, val.ptr, val.len);
