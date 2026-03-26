@@ -1479,6 +1479,22 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "requestAnimationFrame", qjs.JS_NewCFunction(ctx, &jsRequestAnimationFrame, "requestAnimationFrame", 1));
     _ = qjs.JS_SetPropertyStr(ctx, global, "cancelAnimationFrame", qjs.JS_NewCFunction(ctx, &jsClearTimeout, "cancelAnimationFrame", 1));
 
+    // -- queueMicrotask --
+    {
+        const qmt_js =
+            \\(function(cb){Promise.resolve().then(cb);})
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, global, "queueMicrotask", qjs.JS_Eval(ctx, qmt_js, qmt_js.len, "<qmt>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+
+    // -- structuredClone (basic) --
+    {
+        const sc_js =
+            \\(function(obj){return JSON.parse(JSON.stringify(obj));})
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, global, "structuredClone", qjs.JS_Eval(ctx, sc_js, sc_js.len, "<sc>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+
     // -- performance object --
     const perf_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "now", qjs.JS_NewCFunction(ctx, &jsPerformanceNow, "now", 0));
