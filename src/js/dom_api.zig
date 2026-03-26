@@ -3,6 +3,7 @@ const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const events = @import("events.zig");
+pub const serialize = @import("dom_serialize.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -45,7 +46,7 @@ pub var text_class_id: qjs.JSClassID = 0;
 // ── Global state ────────────────────────────────────────────────────
 /// The lxb_dom_document_t pointer (cast to *anyopaque because of cImport limitations).
 /// Set once during registerDomApis.
-var g_document: ?*anyopaque = null;
+pub var g_document: ?*anyopaque = null;
 
 /// DOM dirty flag — set when JS mutates the DOM tree. Checked by the main loop.
 pub var dom_dirty: bool = false;
@@ -175,6 +176,10 @@ pub fn setLoadedScriptUrls(urls: ?*std.StringHashMap(void)) void {
 
 /// Check if a node is a <script> element and execute it dynamically.
 /// Called from elementAppendChild/elementInsertBefore when a script is inserted into the DOM.
+pub fn maybeExecuteDynamicScriptPublic(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t, js_val: qjs.JSValue) void {
+    maybeExecuteDynamicScript(ctx, node, js_val);
+}
+
 fn maybeExecuteDynamicScript(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t, js_val: qjs.JSValue) void {
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return;
 
@@ -380,49 +385,10 @@ fn clearDynamicCurrentScript(ctx: *qjs.JSContext) void {
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "currentScript", quickjs.JS_NULL());
 }
 
-// ── Serialization helper (for innerHTML/outerHTML) ──────────────────
+// ── Serialization (moved to dom_serialize.zig) ─────────────────────
+const SerializeAccum = serialize.SerializeAccum;
 
-const SerializeAccum = struct {
-    buf: []u8,
-    pos: usize,
-    overflow: bool,
-    heap_buf: ?[]u8, // if stack buf overflows, we switch to heap
-
-    fn init(stack_buf: []u8) SerializeAccum {
-        return .{ .buf = stack_buf, .pos = 0, .overflow = false, .heap_buf = null };
-    }
-
-    fn deinit(self: *SerializeAccum) void {
-        if (self.heap_buf) |hb| std.heap.c_allocator.free(hb);
-    }
-
-    fn result(self: *SerializeAccum) []const u8 {
-        return self.buf[0..self.pos];
-    }
-
-    fn append(self: *SerializeAccum, data: []const u8) bool {
-        if (self.pos + data.len > self.buf.len) {
-            // Need to grow
-            const new_size = @max(self.buf.len * 2, self.pos + data.len + 1024);
-            const new_buf = std.heap.c_allocator.alloc(u8, new_size) catch return false;
-            @memcpy(new_buf[0..self.pos], self.buf[0..self.pos]);
-            if (self.heap_buf) |old| std.heap.c_allocator.free(old);
-            self.heap_buf = new_buf;
-            self.buf = new_buf;
-        }
-        @memcpy(self.buf[self.pos..][0..data.len], data);
-        self.pos += data.len;
-        return true;
-    }
-};
-
-fn serializeCallback(data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(.c) lxb.lxb_status_t {
-    if (len == 0) return 0;
-    const accum: *SerializeAccum = @ptrCast(@alignCast(ctx orelse return 1));
-    const d = data orelse return 1;
-    if (!accum.append(d[0..len])) return 1;
-    return 0;
-}
+const serializeCallback = serialize.serializeCallback;
 
 // ── Helpers ─────────────────────────────────────────────────────────
 
@@ -450,7 +416,7 @@ pub fn clearNodeCache(ctx: *qjs.JSContext) void {
     }
 }
 
-fn wrapNode(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
+pub fn wrapNode(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     initNodeCache();
     const key = @intFromPtr(node);
 
@@ -559,7 +525,7 @@ fn getNodeFromText(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
 
 /// Get the lxb_dom_node_t* from a JS Element/Text value.
 /// Tries both element and text class IDs.
-fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
+pub fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
     // Try element class first
     const ptr1 = qjs.JS_GetOpaque2(ctx, val, element_class_id);
     if (ptr1) |p| return @ptrCast(@alignCast(p));
@@ -577,7 +543,7 @@ pub fn getNodePublic(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t
     return getNode(ctx, val);
 }
 
-fn getElement(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_element_t {
+pub fn getElement(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_element_t {
     const node = getNode(ctx, val) orelse return null;
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
     return @ptrCast(node);
@@ -8061,12 +8027,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     {
         const innerHTMLAtom = qjs.JS_NewAtom(ctx, "innerHTML");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, innerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerHTML, "get innerHTML", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerHTML, "set innerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, innerHTMLAtom, qjs.JS_NewCFunction(ctx, &serialize.elementGetInnerHTML, "get innerHTML", 0), qjs.JS_NewCFunction(ctx, &serialize.elementSetInnerHTML, "set innerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, innerHTMLAtom);
     }
     {
         const outerHTMLAtom = qjs.JS_NewAtom(ctx, "outerHTML");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, outerHTMLAtom, qjs.JS_NewCFunction(ctx, &elementGetOuterHTML, "get outerHTML", 0), qjs.JS_NewCFunction(ctx, &elementSetOuterHTML, "set outerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, outerHTMLAtom, qjs.JS_NewCFunction(ctx, &serialize.elementGetOuterHTML, "get outerHTML", 0), qjs.JS_NewCFunction(ctx, &serialize.elementSetOuterHTML, "set outerHTML", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, outerHTMLAtom);
     }
     {
@@ -8076,7 +8042,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
 
     // insertAdjacentHTML
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentHTML", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentHTML, "insertAdjacentHTML", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentHTML", qjs.JS_NewCFunction(ctx, &serialize.elementInsertAdjacentHTML, "insertAdjacentHTML", 2));
     // attachShadow stub — returns the element itself as a pseudo-shadow root
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "attachShadow", qjs.JS_NewCFunction(ctx, &elementAttachShadow, "attachShadow", 1));
     // shadowRoot default = null (not undefined — many libs check `el.shadowRoot &&`)
