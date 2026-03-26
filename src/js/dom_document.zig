@@ -7,13 +7,12 @@ const events = @import("events.zig");
 
 // ── External Lexbor functions ────────────────────────────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
-/// Validate an HTML element name (not XML — more permissive)
+/// Validate an HTML element name per HTML spec §13.1.2.1
+/// HTML is very permissive — only empty and NUL are rejected
 fn isValidElementName(name: []const u8) bool {
     if (name.len == 0) return false;
     for (name) |ch| {
-        // Invalid chars per HTML spec: whitespace, NUL, /, >, "
-        if (ch <= 0x20 or ch == 0x7F) return false; // control chars + space
-        if (ch == '/' or ch == '>' or ch == '"') return false;
+        if (ch == 0) return false; // NUL character
     }
     return true;
 }
