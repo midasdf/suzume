@@ -4,6 +4,7 @@ const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const events = @import("events.zig");
 pub const serialize = @import("dom_serialize.zig");
+pub const dom_text = @import("dom_text.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -453,74 +454,6 @@ fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));
     return obj;
-}
-
-// ── CharacterData.data getter/setter (Text, Comment, PI) ────────────
-
-fn textGetData(
-    ctx: ?*qjs.JSContext,
-    this_val: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
-) callconv(.c) qjs.JSValue {
-    const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = getNodeFromText(c, this_val) orelse return qjs.JS_NewString(c, "");
-    var len: usize = 0;
-    const txt = lxb_dom_node_text_content(node, &len);
-    if (txt) |t| return qjs.JS_NewStringLen(c, t, len);
-    return qjs.JS_NewString(c, "");
-}
-
-fn textSetData(
-    ctx: ?*qjs.JSContext,
-    this_val: qjs.JSValue,
-    argc: c_int,
-    argv: ?[*]qjs.JSValue,
-) callconv(.c) qjs.JSValue {
-    const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
-    const args = argv orelse return quickjs.JS_UNDEFINED();
-    const node = getNodeFromText(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    const s = jsStringToSlice(c, args[0]) orelse {
-        // null/undefined → empty string (JS wrapper should handle this, but be safe)
-        _ = lxb_dom_node_text_content_set(node, "", 0);
-        events.recordMutation(node, "characterData", null, null, null);
-        setDomDirty();
-        return quickjs.JS_UNDEFINED();
-    };
-    defer qjs.JS_FreeCString(c, s.ptr);
-    _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
-    events.recordMutation(node, "characterData", null, null, null);
-    setDomDirty();
-    return quickjs.JS_UNDEFINED();
-}
-
-/// nodeValue getter for node_proto — returns null for Element/Document, data for Text/Comment
-fn nodeGetNodeValue(
-    ctx: ?*qjs.JSContext,
-    this_val: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
-) callconv(.c) qjs.JSValue {
-    const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
-    // Text, Comment, PI have nodeValue = their data; everything else returns null
-    if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT or
-        node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT or
-        node.type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
-    {
-        var len: usize = 0;
-        const txt = lxb_dom_node_text_content(node, &len);
-        if (txt) |t| return qjs.JS_NewStringLen(c, t, len);
-        return qjs.JS_NewString(c, "");
-    }
-    return quickjs.JS_NULL();
-}
-
-fn getNodeFromText(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
-    const ptr = qjs.JS_GetOpaque2(ctx, val, text_class_id);
-    if (ptr) |p| return @ptrCast(@alignCast(p));
-    return null;
 }
 
 /// Get the lxb_dom_node_t* from a JS Element/Text value.
@@ -7685,7 +7618,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // nodeValue: null for Element/Document, overridden on text_proto for CharacterData
     {
         const nodeValueAtom = qjs.JS_NewAtom(ctx, "nodeValue");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nodeValueAtom, qjs.JS_NewCFunction(ctx, &nodeGetNodeValue, "get nodeValue", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, nodeValueAtom, qjs.JS_NewCFunction(ctx, &dom_text.nodeGetNodeValue, "get nodeValue", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, nodeValueAtom);
     }
     {
@@ -8080,8 +8013,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // CharacterData: data/nodeValue native getter + JS-wrapped setter (handles null→"" per DOM spec)
     // We expose native getter as __nativeGetData and native setter as __nativeSetData,
     // then wrap them in JS to handle type coercion.
-    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "__nativeGetData", qjs.JS_NewCFunction(ctx, &textGetData, "__nativeGetData", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "__nativeSetData", qjs.JS_NewCFunction(ctx, &textSetData, "__nativeSetData", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "__nativeGetData", qjs.JS_NewCFunction(ctx, &dom_text.textGetData, "__nativeGetData", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, text_proto, "__nativeSetData", qjs.JS_NewCFunction(ctx, &dom_text.textSetData, "__nativeSetData", 1));
 
     // CharacterData methods via JS — wraps native data access with proper coercion
     {
