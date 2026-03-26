@@ -1955,6 +1955,24 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof Response==='undefined'){globalThis.Response=function(body,opts){this.body=body;this.status=(opts&&opts.status)||200;this.ok=this.status>=200&&this.status<300;this.headers=new Headers((opts&&opts.headers)||{});this.text=function(){return Promise.resolve(String(body||''));};this.json=function(){return Promise.resolve(JSON.parse(body||'null'));};};}
         \\if(typeof window!=='undefined'&&!window.onerror){window.onerror=function(){};}
         \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
+        \\if(typeof matchMedia==='undefined'){
+        \\  globalThis.matchMedia=function(q){
+        \\    var m=false;q=q||'';
+        \\    if(q==='(prefers-color-scheme: light)'||q==='screen'||q==='all')m=true;
+        \\    else if(q.indexOf('min-width')>=0||q.indexOf('max-width')>=0){
+        \\      var n=parseFloat(q.replace(/[^0-9.]/g,''));
+        \\      if(q.indexOf('min-width')>=0)m=(innerWidth||800)>=n;
+        \\      else m=(innerWidth||800)<=n;
+        \\    }
+        \\    var mql={matches:m,media:q,onchange:null,
+        \\      addEventListener:function(t,fn){this._listeners=this._listeners||[];this._listeners.push(fn);},
+        \\      removeEventListener:function(t,fn){if(this._listeners)this._listeners=this._listeners.filter(function(f){return f!==fn;});},
+        \\      addListener:function(fn){this.addEventListener('change',fn);},
+        \\      removeListener:function(fn){this.removeEventListener('change',fn);},
+        \\      dispatchEvent:function(){return true;}};
+        \\    return mql;
+        \\  };
+        \\}
         \\if(typeof visualViewport==='undefined'){globalThis.visualViewport={width:innerWidth,height:innerHeight,offsetLeft:0,offsetTop:0,scale:1,addEventListener:function(){}};}
         \\if(typeof CSS==='undefined'){
         \\  var _cssprops='display,position,color,background,background-color,background-image,background-size,background-position,background-repeat,margin,margin-top,margin-right,margin-bottom,margin-left,padding,padding-top,padding-right,padding-bottom,padding-left,border,border-top,border-right,border-bottom,border-left,border-color,border-width,border-style,border-radius,width,height,min-width,min-height,max-width,max-height,top,right,bottom,left,float,clear,overflow,overflow-x,overflow-y,z-index,opacity,visibility,cursor,pointer-events,flex,flex-direction,flex-wrap,flex-grow,flex-shrink,flex-basis,justify-content,align-items,align-self,align-content,order,gap,row-gap,column-gap,grid,grid-template-columns,grid-template-rows,grid-column,grid-row,grid-area,grid-gap,font,font-size,font-weight,font-family,font-style,text-align,text-decoration,text-transform,text-overflow,line-height,letter-spacing,word-spacing,white-space,vertical-align,list-style,list-style-type,table-layout,border-collapse,outline,box-shadow,text-shadow,transform,transition,animation,content,box-sizing,object-fit,object-position,resize,user-select,appearance,filter,backdrop-filter,clip-path,will-change,contain,aspect-ratio,accent-color,container-type,container-name,scroll-behavior,overscroll-behavior,touch-action,isolation';
