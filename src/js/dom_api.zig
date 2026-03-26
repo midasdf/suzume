@@ -3198,6 +3198,18 @@ fn implCreateDocumentType(
     return obj;
 }
 
+/// Validate an XML qualified name per https://dom.spec.whatwg.org/#validate
+fn isValidXmlName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    // First char must be letter, underscore, or colon
+    const first = name[0];
+    if (!std.ascii.isAlphabetic(first) and first != '_' and first != ':' and first < 0xC0) return false;
+    for (name[1..]) |ch| {
+        if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != ':' and ch != '-' and ch != '.' and ch < 0xB7) return false;
+    }
+    return true;
+}
+
 /// document.implementation.createDocument(namespace, qualifiedName, doctype)
 fn implCreateDocument(
     ctx: ?*qjs.JSContext,
@@ -3228,6 +3240,31 @@ fn implCreateDocument(
     defer {
         if (ns_ptr) |p| qjs.JS_FreeCString(c, p);
         if (qname_ptr) |p| qjs.JS_FreeCString(c, p);
+    }
+
+    // Validate qualifiedName per DOM spec
+    if (qname) |qn| {
+        if (qn.len > 0 and !isValidXmlName(qn)) {
+            return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+        }
+        // Check namespace constraints
+        if (std.mem.indexOfScalar(u8, qn, ':')) |colon_pos| {
+            // Has prefix — namespace must not be null
+            if (ns == null) return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+            const prefix = qn[0..colon_pos];
+            const local = qn[colon_pos + 1 ..];
+            if (local.len == 0) return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+            // xml: prefix requires XML namespace
+            if (std.mem.eql(u8, prefix, "xml") and !std.mem.eql(u8, ns.?, "http://www.w3.org/XML/1998/namespace"))
+                return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+            // xmlns: prefix requires XMLNS namespace
+            if (std.mem.eql(u8, prefix, "xmlns") and !std.mem.eql(u8, ns.?, "http://www.w3.org/2000/xmlns/"))
+                return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+        } else {
+            // No prefix — xmlns localname requires XMLNS namespace
+            if (std.mem.eql(u8, qn, "xmlns") and (ns == null or !std.mem.eql(u8, ns.?, "http://www.w3.org/2000/xmlns/")))
+                return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+        }
     }
 
     // Build XML document-like object via Document constructor
