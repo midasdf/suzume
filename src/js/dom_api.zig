@@ -7918,11 +7918,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\Object.defineProperty(P,'nodeValue',{get:G,set:sd,configurable:true,enumerable:true});
             \\Object.defineProperty(P,'length',{get:function(){return this.data.length;},configurable:true});
             \\Object.defineProperty(P,'wholeText',{get:function(){return this.data;},configurable:true});
-            \\P.appendData=function(d){this.data+=d;};
-            \\P.insertData=function(o,d){var s=this.data;o=o>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o);};
-            \\P.deleteData=function(o,c){var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+s.slice(o+c);};
-            \\P.replaceData=function(o,c,d){var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o+c);};
-            \\P.substringData=function(o,c){var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');return s.slice(o,o+c);};
+            \\P.appendData=function(d){if(arguments.length<1)throw new TypeError("Failed to execute 'appendData': 1 argument required");this.data+=''+d;};
+            \\P.insertData=function(o,d){if(arguments.length<2)throw new TypeError("Failed to execute 'insertData': 2 arguments required");var s=this.data;o=o>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o);};
+            \\P.deleteData=function(o,c){if(arguments.length<2)throw new TypeError("Failed to execute 'deleteData': 2 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+s.slice(o+c);};
+            \\P.replaceData=function(o,c,d){if(arguments.length<3)throw new TypeError("Failed to execute 'replaceData': 3 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o+c);};
+            \\P.substringData=function(o,c){if(arguments.length<2)throw new TypeError("Failed to execute 'substringData': 2 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');return s.slice(o,o+c);};
             \\delete P.__nativeGetData;delete P.__nativeSetData;
             \\})(__tp);delete __tp;
         ;
