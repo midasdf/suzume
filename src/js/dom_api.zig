@@ -3876,7 +3876,7 @@ fn isRoot(node: *lxb.lxb_dom_node_t) bool {
 }
 
 fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
-    const parent = node.parent orelse return false;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return false;
@@ -3894,7 +3894,7 @@ fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
 }
 
 fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
-    const parent = node.parent orelse return false;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return false;
@@ -3912,7 +3912,7 @@ fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
 }
 
 fn getNthIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent = node.parent orelse return 0;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 0;
     var idx: u32 = 0;
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
