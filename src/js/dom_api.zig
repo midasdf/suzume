@@ -7,6 +7,7 @@ pub const serialize = @import("dom_serialize.zig");
 pub const dom_text = @import("dom_text.zig");
 pub const dom_sel = @import("dom_selector.zig");
 pub const dom_node = @import("dom_node.zig");
+pub const dom_elem = @import("dom_element.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -85,7 +86,7 @@ fn isElementConnected(elem: *lxb.lxb_dom_element_t) bool {
 
 /// Set DOM dirty flag only if the element is connected to the document tree.
 /// Disconnected elements (e.g. from createElement) don't need restyle.
-fn setDomDirtyIfConnected(elem: *lxb.lxb_dom_element_t) void {
+pub fn setDomDirtyIfConnected(elem: *lxb.lxb_dom_element_t) void {
     if (isElementConnected(elem)) setDomDirty();
 }
 
@@ -97,7 +98,7 @@ const computed_mod = @import("../css/computed.zig");
 const ComputedStyle = computed_mod.ComputedStyle;
 const css_ast = @import("../css/ast.zig");
 const css_properties = @import("../css/properties.zig");
-var g_root_box: ?*const Box = null;
+pub var g_root_box: ?*const Box = null;
 
 /// Set the root box pointer (called from main after layout).
 pub fn setRootBox(root: ?*const Box) void {
@@ -129,7 +130,7 @@ pub fn setViewport(w: f32, h: f32) void {
 }
 
 /// Find the Box in the tree that corresponds to a given DOM node pointer.
-fn findBoxForNode(root: *const Box, target: *lxb.lxb_dom_node_t) ?*const Box {
+pub fn findBoxForNode(root: *const Box, target: *lxb.lxb_dom_node_t) ?*const Box {
     if (root.dom_node) |dn| {
         if (dn.lxb_node == target) return root;
     }
@@ -6018,22 +6019,22 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPrototype(ctx, elem_proto, node_proto);
 
     // Element methods
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttribute", qjs.JS_NewCFunction(ctx, &elementGetAttribute, "getAttribute", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "setAttribute", qjs.JS_NewCFunction(ctx, &elementSetAttribute, "setAttribute", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeAttribute", qjs.JS_NewCFunction(ctx, &elementRemoveAttribute, "removeAttribute", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttribute", qjs.JS_NewCFunction(ctx, &elementHasAttribute, "hasAttribute", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetAttribute, "getAttribute", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "setAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementSetAttribute, "setAttribute", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementRemoveAttribute, "removeAttribute", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementHasAttribute, "hasAttribute", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "matches", qjs.JS_NewCFunction(ctx, &dom_sel.elementMatches, "matches", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "closest", qjs.JS_NewCFunction(ctx, &dom_sel.elementClosest, "closest", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect", qjs.JS_NewCFunction(ctx, &elementGetBoundingClientRect, "getBoundingClientRect", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetBoundingClientRect, "getBoundingClientRect", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &elementGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagNameNS", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &elementToggleAttribute, "toggleAttribute", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &elementGetAttributeNames, "getAttributeNames", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &elementScrollIntoView, "scrollIntoView", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getContext", qjs.JS_NewCFunction(ctx, &elementGetContext, "getContext", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementToggleAttribute, "toggleAttribute", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetAttributeNames, "getAttributeNames", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &dom_elem.elementScrollIntoView, "scrollIntoView", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getContext", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetContext, "getContext", 1));
 
     // attributes (NamedNodeMap) getter
     {
@@ -6062,17 +6063,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     {
         const idAtom = qjs.JS_NewAtom(ctx, "id");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, idAtom, qjs.JS_NewCFunction(ctx, &elementGetId, "get id", 0), qjs.JS_NewCFunction(ctx, &elementSetId, "set id", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, idAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetId, "get id", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetId, "set id", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, idAtom);
     }
     {
         const classNameAtom = qjs.JS_NewAtom(ctx, "className");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classNameAtom, qjs.JS_NewCFunction(ctx, &elementGetClassName, "get className", 0), qjs.JS_NewCFunction(ctx, &elementSetClassName, "set className", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classNameAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClassName, "get className", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetClassName, "set className", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, classNameAtom);
     }
     {
         const classListAtom = qjs.JS_NewAtom(ctx, "classList");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &elementGetClassList, "get classList", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClassList, "get classList", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, classListAtom);
     }
     {
@@ -6094,21 +6095,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // insertAdjacentHTML
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentHTML", qjs.JS_NewCFunction(ctx, &serialize.elementInsertAdjacentHTML, "insertAdjacentHTML", 2));
     // attachShadow stub — returns the element itself as a pseudo-shadow root
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "attachShadow", qjs.JS_NewCFunction(ctx, &elementAttachShadow, "attachShadow", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "attachShadow", qjs.JS_NewCFunction(ctx, &dom_elem.elementAttachShadow, "attachShadow", 1));
     // shadowRoot default = null (not undefined — many libs check `el.shadowRoot &&`)
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "shadowRoot", quickjs.JS_NULL());
     // HTMLTemplateElement.content getter (returns DocumentFragment for <template> elements)
     {
         const contentAtom = qjs.JS_NewAtom(ctx, "content");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, contentAtom, qjs.JS_NewCFunction(ctx, &templateGetContent, "get content", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, contentAtom, qjs.JS_NewCFunction(ctx, &dom_elem.templateGetContent, "get content", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, contentAtom);
     }
     // Popover API stubs (GitHub checks showPopover existence)
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "showPopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "showPopover", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hidePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "hidePopover", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "togglePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "togglePopover", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentElement", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentElement, "insertAdjacentElement", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentText", qjs.JS_NewCFunction(ctx, &elementInsertAdjacentText, "insertAdjacentText", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentElement", qjs.JS_NewCFunction(ctx, &dom_elem.elementInsertAdjacentElement, "insertAdjacentElement", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentText", qjs.JS_NewCFunction(ctx, &dom_elem.elementInsertAdjacentText, "insertAdjacentText", 2));
 
     // ── HTMLElement.prototype (inherits Element.prototype) ──────────
     const html_element_proto = qjs.JS_NewObject(ctx);
@@ -6122,81 +6123,81 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     {
         const datasetAtom = qjs.JS_NewAtom(ctx, "dataset");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, datasetAtom, qjs.JS_NewCFunction(ctx, &elementGetDataset, "get dataset", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, datasetAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetDataset, "get dataset", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, datasetAtom);
     }
     {
         const offsetWidthAtom = qjs.JS_NewAtom(ctx, "offsetWidth");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetWidthAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetWidth, "get offsetWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetWidthAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetOffsetWidth, "get offsetWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, offsetWidthAtom);
     }
     {
         const offsetHeightAtom = qjs.JS_NewAtom(ctx, "offsetHeight");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetHeightAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetHeight, "get offsetHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetHeightAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetOffsetHeight, "get offsetHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, offsetHeightAtom);
     }
     {
         const offsetTopAtom = qjs.JS_NewAtom(ctx, "offsetTop");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetTopAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetTop, "get offsetTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetTopAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetOffsetTop, "get offsetTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, offsetTopAtom);
     }
     {
         const offsetLeftAtom = qjs.JS_NewAtom(ctx, "offsetLeft");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetOffsetLeft, "get offsetLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, offsetLeftAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetOffsetLeft, "get offsetLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, offsetLeftAtom);
     }
     // clientWidth/clientHeight (padding box) and clientTop/clientLeft (border widths)
     {
         const cwAtom = qjs.JS_NewAtom(ctx, "clientWidth");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, cwAtom, qjs.JS_NewCFunction(ctx, &elementGetClientWidth, "get clientWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, cwAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClientWidth, "get clientWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, cwAtom);
     }
     {
         const chAtom = qjs.JS_NewAtom(ctx, "clientHeight");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, chAtom, qjs.JS_NewCFunction(ctx, &elementGetClientHeight, "get clientHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, chAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClientHeight, "get clientHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, chAtom);
     }
     {
         const ctAtom = qjs.JS_NewAtom(ctx, "clientTop");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, ctAtom, qjs.JS_NewCFunction(ctx, &elementGetClientTop, "get clientTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, ctAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClientTop, "get clientTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, ctAtom);
     }
     {
         const clAtom = qjs.JS_NewAtom(ctx, "clientLeft");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, clAtom, qjs.JS_NewCFunction(ctx, &elementGetClientLeft, "get clientLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, clAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClientLeft, "get clientLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, clAtom);
     }
     // scrollWidth/scrollHeight (same as clientWidth/Height for now — no overflow tracking)
     {
         const swAtom = qjs.JS_NewAtom(ctx, "scrollWidth");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, swAtom, qjs.JS_NewCFunction(ctx, &elementGetClientWidth, "get scrollWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, swAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClientWidth, "get scrollWidth", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, swAtom);
     }
     {
         const shAtom = qjs.JS_NewAtom(ctx, "scrollHeight");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, shAtom, qjs.JS_NewCFunction(ctx, &elementGetClientHeight, "get scrollHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, shAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClientHeight, "get scrollHeight", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, shAtom);
     }
     {
         const scrollTopAtom = qjs.JS_NewAtom(ctx, "scrollTop");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollTop, "get scrollTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetScrollTop, "get scrollTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, scrollTopAtom);
     }
     {
         const scrollLeftAtom = qjs.JS_NewAtom(ctx, "scrollLeft");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &elementGetScrollLeft, "get scrollLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetScrollLeft, "get scrollLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, scrollLeftAtom);
     }
     {
         const hiddenAtom = qjs.JS_NewAtom(ctx, "hidden");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, hiddenAtom, qjs.JS_NewCFunction(ctx, &elementGetHidden, "get hidden", 0), qjs.JS_NewCFunction(ctx, &elementSetHidden, "set hidden", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, hiddenAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetHidden, "get hidden", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetHidden, "set hidden", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, hiddenAtom);
     }
 
     // input.value / textarea.value / select.value
     {
         const valueAtom = qjs.JS_NewAtom(ctx, "value");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, valueAtom, qjs.JS_NewCFunction(ctx, &elementGetValue, "get value", 0), qjs.JS_NewCFunction(ctx, &elementSetValue, "set value", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, valueAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetValue, "get value", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetValue, "set value", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, valueAtom);
     }
 
