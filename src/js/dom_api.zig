@@ -995,9 +995,13 @@ fn elementReplaceChild(
     if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': 2 arguments required");
     const args = argv orelse return quickjs.JS_NULL();
     _ = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const parent = getNode(c, this_val) orelse return quickjs.JS_NULL();
     const new_node = getNode(c, args[0]) orelse return quickjs.JS_NULL();
-    const old_node = getNode(c, args[1]) orelse return quickjs.JS_NULL();
-    // Insert new before old, then remove old
+    const old_node = getNode(c, args[1]) orelse
+        return throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
+    if (old_node.parent != parent)
+        return throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
+    if (new_node.parent != null) lxb_dom_node_remove(new_node);
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
     setDomDirty();
