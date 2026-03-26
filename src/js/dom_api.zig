@@ -8219,16 +8219,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "characterSet", qjs.JS_NewString(ctx, "UTF-8"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "charset", qjs.JS_NewString(ctx, "UTF-8")); // alias
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "inputEncoding", qjs.JS_NewString(ctx, "UTF-8")); // alias
-    // document.doctype — stub as simple object matching the page's DOCTYPE
+    // document.doctype — plain JS object (no eval to avoid 'document is not defined')
     {
-        const dt_js =
-            \\(function(){return {nodeType:10,name:'html',publicId:'',systemId:'',
-            \\  nodeName:'html',ownerDocument:document,
-            \\  isEqualNode:function(o){return o&&o.nodeType===10&&o.name===this.name&&o.publicId===this.publicId&&o.systemId===this.systemId;},
-            \\  isSameNode:function(o){return this===o;}
-            \\};})()
-        ;
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "doctype", qjs.JS_Eval(ctx, dt_js, dt_js.len, "<doctype>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const dt_obj = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "nodeType", qjs.JS_NewInt32(ctx, 10));
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "name", qjs.JS_NewString(ctx, "html"));
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "nodeName", qjs.JS_NewString(ctx, "html"));
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "publicId", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "systemId", qjs.JS_NewString(ctx, ""));
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "ownerDocument", quickjs.JS_NULL()); // will be patched after doc registered
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "doctype", dt_obj);
     }
 
     // document.forms / links / images (query-based getters)
