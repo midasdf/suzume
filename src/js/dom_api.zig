@@ -5,6 +5,7 @@ const lxb = @import("../bindings/lexbor.zig").c;
 const events = @import("events.zig");
 pub const serialize = @import("dom_serialize.zig");
 pub const dom_text = @import("dom_text.zig");
+pub const dom_sel = @import("dom_selector.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -1253,7 +1254,7 @@ fn normalizeClassAttribute(elem: *lxb.lxb_dom_element_t) void {
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
 }
 
-fn classContains(class_str: []const u8, needle: []const u8) bool {
+pub fn classContains(class_str: []const u8, needle: []const u8) bool {
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (std.mem.eql(u8, cls, needle)) return true;
@@ -4445,7 +4446,7 @@ fn documentGetElementById(
     return wrapNode(c, found);
 }
 
-fn getDocumentNode() ?*lxb.lxb_dom_node_t {
+pub fn getDocumentNode() ?*lxb.lxb_dom_node_t {
     const doc = g_document orelse return null;
     return @ptrCast(@alignCast(doc));
 }
@@ -4525,7 +4526,7 @@ fn walkTreeBySimpleSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*l
     }
 }
 
-fn walkTreeByTagAndClass(root: *lxb.lxb_dom_node_t, tag_name: []const u8, class_name: []const u8) ?*lxb.lxb_dom_node_t {
+pub fn walkTreeByTagAndClass(root: *lxb.lxb_dom_node_t, tag_name: []const u8, class_name: []const u8) ?*lxb.lxb_dom_node_t {
     var current: ?*lxb.lxb_dom_node_t = root;
     while (current) |node| {
         if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -4559,7 +4560,7 @@ fn nextDfsNode(node: *lxb.lxb_dom_node_t, root: *lxb.lxb_dom_node_t) ?*lxb.lxb_d
     return null;
 }
 
-fn walkTreeByClass(root: *lxb.lxb_dom_node_t, class_name: []const u8) ?*lxb.lxb_dom_node_t {
+pub fn walkTreeByClass(root: *lxb.lxb_dom_node_t, class_name: []const u8) ?*lxb.lxb_dom_node_t {
     var current: ?*lxb.lxb_dom_node_t = root;
     while (current) |node| {
         if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -4575,7 +4576,7 @@ fn walkTreeByClass(root: *lxb.lxb_dom_node_t, class_name: []const u8) ?*lxb.lxb_
     return null;
 }
 
-fn walkTreeByTag(root: *lxb.lxb_dom_node_t, tag_name: []const u8) ?*lxb.lxb_dom_node_t {
+pub fn walkTreeByTag(root: *lxb.lxb_dom_node_t, tag_name: []const u8) ?*lxb.lxb_dom_node_t {
     var current: ?*lxb.lxb_dom_node_t = root;
     while (current) |node| {
         if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -7696,11 +7697,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "setAttribute", qjs.JS_NewCFunction(ctx, &elementSetAttribute, "setAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeAttribute", qjs.JS_NewCFunction(ctx, &elementRemoveAttribute, "removeAttribute", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttribute", qjs.JS_NewCFunction(ctx, &elementHasAttribute, "hasAttribute", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "matches", qjs.JS_NewCFunction(ctx, &elementMatches, "matches", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "closest", qjs.JS_NewCFunction(ctx, &elementClosest, "closest", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "matches", qjs.JS_NewCFunction(ctx, &dom_sel.elementMatches, "matches", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "closest", qjs.JS_NewCFunction(ctx, &dom_sel.elementClosest, "closest", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect", qjs.JS_NewCFunction(ctx, &elementGetBoundingClientRect, "getBoundingClientRect", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelector", qjs.JS_NewCFunction(ctx, &elementQuerySelector, "querySelector", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &elementGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagNameNS", 2));
@@ -7931,8 +7932,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const document_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Document", 0, qjs.JS_CFUNC_constructor, 0);
     const doc_proto = qjs.JS_NewObject(ctx);
     // Document.prototype needs DOM query methods (popover polyfill monkey-patches these)
-    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelector", qjs.JS_NewCFunction(ctx, &documentQuerySelector, "querySelector", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &documentQuerySelectorAll, "querySelectorAll", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelector, "querySelector", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementById", qjs.JS_NewCFunction(ctx, &documentGetElementById, "getElementById", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &documentGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
@@ -7942,8 +7943,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     {
         const dfp = qjs.JS_NewObject(ctx);
-        _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &elementQuerySelector, "querySelector", 1));
-        _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
         _ = qjs.JS_SetPropertyStr(ctx, doc_frag_ctor, "prototype", dfp);
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
@@ -8073,8 +8074,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Build document global
     const doc_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementById", qjs.JS_NewCFunction(ctx, &documentGetElementById, "getElementById", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelector", qjs.JS_NewCFunction(ctx, &documentQuerySelector, "querySelector", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelectorAll", qjs.JS_NewCFunction(ctx, &documentQuerySelectorAll, "querySelectorAll", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelector, "querySelector", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &documentCreateElementNS, "createElementNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
