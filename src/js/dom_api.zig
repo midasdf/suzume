@@ -7427,18 +7427,25 @@ fn documentCreateEvent(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    // Check if interface is "CustomEvent"
-    var is_custom = false;
+    // Map interface names to constructors per DOM spec
+    var iface: []const u8 = "Event";
     if (argc >= 1) {
-        if (argv) |args| {
-            if (jsStringToSlice(c, args[0])) |s| {
+        if (argv) |a| {
+            if (jsStringToSlice(c, a[0])) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
-                is_custom = std.mem.eql(u8, s.ptr[0..s.len], "CustomEvent");
+                const name = s.ptr[0..s.len];
+                if (std.ascii.eqlIgnoreCase(name, "customevent") or std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents")) iface = "Event"
+                else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent";
             }
         }
     }
-    const js_code = if (is_custom) "(new CustomEvent(''))" else "(new Event(''))";
-    return qjs.JS_Eval(c, js_code, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+    var buf: [64]u8 = undefined;
+    const js_code = std.fmt.bufPrint(&buf, "(new {s}(''))", .{iface}) catch return quickjs.JS_UNDEFINED();
+    return qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
 }
 
 // ── document.write ─────────────────────────────────────────────────
