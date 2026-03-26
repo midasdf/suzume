@@ -2895,8 +2895,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function Document() {
             \\    this.nodeType = 9;
             \\    this.nodeName = '#document';
-            \\    this.childNodes = [];
-            \\    this.children = [];
+            \\    this._childNodes = [];
+            \\    this._children = [];
+            \\    Object.defineProperty(this,'childNodes',{get:function(){return this._childNodes;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'children',{get:function(){return this._children;},configurable:true,enumerable:true});
             \\    this.firstChild = null;
             \\    this.lastChild = null;
             \\    this.documentElement = null;
@@ -2933,19 +2935,19 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Document.prototype.appendChild = function(n) {
             \\    if(n.parentNode)n.parentNode.removeChild(n);
             \\    n.parentNode=this;n.ownerDocument=this;
-            \\    this.childNodes.push(n);
-            \\    if(n.nodeType===1)this.children.push(n);
-            \\    this.firstChild = this.childNodes[0];
-            \\    this.lastChild = this.childNodes[this.childNodes.length-1];
+            \\    this._childNodes.push(n);
+            \\    if(n.nodeType===1)this._children.push(n);
+            \\    this.firstChild = this._childNodes[0];
+            \\    this.lastChild = this._childNodes[this._childNodes.length-1];
             \\    if(n.nodeType===1 && !this.documentElement) this.documentElement = n;
             \\    if(n.nodeType===10) this.doctype = n;
             \\    return n;
             \\  };
             \\  Document.prototype.removeChild = function(n) {
-            \\    var i=this.childNodes.indexOf(n);if(i>=0)this.childNodes.splice(i,1);
-            \\    var j=this.children.indexOf(n);if(j>=0)this.children.splice(j,1);
+            \\    var i=this._childNodes.indexOf(n);if(i>=0)this._childNodes.splice(i,1);
+            \\    var j=this._children.indexOf(n);if(j>=0)this._children.splice(j,1);
             \\    n.parentNode=null;
-            \\    this.firstChild=this.childNodes[0]||null;this.lastChild=this.childNodes[this.childNodes.length-1]||null;
+            \\    this.firstChild=this._childNodes[0]||null;this.lastChild=this._childNodes[this._childNodes.length-1]||null;
             \\    if(this.documentElement===n)this.documentElement=null;
             \\    if(this.doctype===n)this.doctype=null;
             \\    return n;
@@ -2954,9 +2956,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(!ref)return this.appendChild(n);
             \\    if(n.parentNode)n.parentNode.removeChild(n);
             \\    n.parentNode=this;n.ownerDocument=this;
-            \\    var i=this.childNodes.indexOf(ref);if(i>=0)this.childNodes.splice(i,0,n);else this.childNodes.push(n);
-            \\    if(n.nodeType===1){var j=this.children.indexOf(ref);if(j>=0)this.children.splice(j,0,n);else this.children.push(n);}
-            \\    this.firstChild=this.childNodes[0];this.lastChild=this.childNodes[this.childNodes.length-1];
+            \\    var i=this._childNodes.indexOf(ref);if(i>=0)this._childNodes.splice(i,0,n);else this._childNodes.push(n);
+            \\    if(n.nodeType===1){var j=this._children.indexOf(ref);if(j>=0)this._children.splice(j,0,n);else this._children.push(n);}
+            \\    this.firstChild=this._childNodes[0];this.lastChild=this._childNodes[this._childNodes.length-1];
             \\    if(n.nodeType===1&&!this.documentElement)this.documentElement=n;
             \\    if(n.nodeType===10)this.doctype=n;
             \\    return n;
