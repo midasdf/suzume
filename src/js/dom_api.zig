@@ -3690,17 +3690,64 @@ fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":first-child")) return isFirstChild(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":last-child")) return isLastChild(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":root")) return isRoot(@ptrCast(elem));
+        if (std.ascii.eqlIgnoreCase(sel, ":scope")) return true; // :scope matches the context element
+        if (std.ascii.eqlIgnoreCase(sel, ":empty")) {
+            const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+            return node.first_child == null;
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":enabled")) {
+            return !lxb_dom_element_has_attribute(elem, "disabled", 8);
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":disabled")) {
+            return lxb_dom_element_has_attribute(elem, "disabled", 8);
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":checked")) {
+            return lxb_dom_element_has_attribute(elem, "checked", 7);
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":required")) {
+            return lxb_dom_element_has_attribute(elem, "required", 8);
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":optional")) {
+            return !lxb_dom_element_has_attribute(elem, "required", 8);
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":only-child")) {
+            return isFirstChild(@ptrCast(elem)) and isLastChild(@ptrCast(elem));
+        }
         // Unknown pseudo — return false (conservative)
         return false;
     }
 
+    // Check for attribute selector embedded in compound: tag[attr], .class[attr], etc.
+    if (sel[0] != '[') {
+        // Find first '[' not inside parens
+        var depth_b: u32 = 0;
+        var bracket_pos: ?usize = null;
+        for (sel, 0..) |ch, bi| {
+            if (ch == '(') depth_b += 1
+            else if (ch == ')' and depth_b > 0) depth_b -= 1
+            else if (ch == '[' and depth_b == 0) { bracket_pos = bi; break; }
+        }
+        if (bracket_pos) |bp| {
+            if (bp > 0) {
+                // Match prefix (tag, .class, etc.) and attr part separately
+                if (!matchSingleSimple(elem, sel[0..bp])) return false;
+                return matchSingleSimple(elem, sel[bp..]);
+            }
+        }
+    }
+
     // [attr] or [attr=value] etc.
     if (sel[0] == '[') {
-        if (std.mem.indexOfScalar(u8, sel, ']')) |close| {
-            const attr_expr = sel[1..close];
-            return matchAttributeSelector(elem, attr_expr);
+        // May have multiple: [attr1][attr2]
+        var pos: usize = 0;
+        while (pos < sel.len and sel[pos] == '[') {
+            const close = std.mem.indexOfScalarPos(u8, sel, pos + 1, ']') orelse return false;
+            if (!matchAttributeSelector(elem, sel[pos + 1 .. close])) return false;
+            pos = close + 1;
         }
-        return false;
+        // If there's remaining text after ], it's a pseudo-class etc.
+        if (pos < sel.len) return matchSingleSimple(elem, sel[pos..]);
+        return true;
     }
     // #id
     if (sel[0] == '#') {
