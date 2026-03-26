@@ -920,6 +920,8 @@ fn elementAppendChild(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const child = getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM spec: remove from old parent first
+    if (child.parent != null) lxb_dom_node_remove(child);
     lxb_dom_node_insert_child(parent, child);
     events.recordMutation(parent, "childList", child, null, null);
     setDomDirty();
@@ -942,7 +944,7 @@ fn elementRemoveChild(
     const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const child = getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
-    if (child.parent != parent) return quickjs.JS_UNDEFINED();
+    if (child.parent != parent) return throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
     lxb_dom_node_remove(child);
     events.recordMutation(parent, "childList", null, child, null);
     setDomDirty();
@@ -956,16 +958,21 @@ fn elementInsertBefore(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 2) return quickjs.JS_UNDEFINED();
+    if (argc < 2) return throwDOMException(c, "TypeError", "Failed to execute 'insertBefore': 2 arguments required.");
     const args = argv orelse return quickjs.JS_UNDEFINED();
-    _ = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const new_node = getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // Remove from old parent if needed
+    if (new_node.parent != null) lxb_dom_node_remove(new_node);
     if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1])) {
         // If reference is null, act like appendChild
-        const parent = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_child(parent, new_node);
     } else {
-        const ref_node = getNode(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+        const ref_node = getNode(c, args[1]) orelse
+            return throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
+        // Verify ref_node is a child of parent
+        if (ref_node.parent != parent)
+            return throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
         lxb_dom_node_insert_before(ref_node, new_node);
     }
     const parent_node = getNode(c, this_val) orelse new_node;
