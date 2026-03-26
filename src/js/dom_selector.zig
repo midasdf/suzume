@@ -530,19 +530,19 @@ pub fn walkTreeBySimpleSelector(node: *lxb.lxb_dom_node_t, selector: []const u8)
         return walkTreeById(node, selector[1..]);
     } else if (selector[0] == '.') {
         // Class selector
-        return api.walkTreeByClass(node, selector[1..]);
+        return api.dom_doc.walkTreeByClass(node, selector[1..]);
     } else {
         // Check for tag.class or tag#id compound (e.g. "div.special")
         if (std.mem.indexOfScalar(u8, selector, '.')) |dot_idx| {
             // tag.class — find by tag first, then filter by class
-            return api.walkTreeByTagAndClass(node, selector[0..dot_idx], selector[dot_idx + 1 ..]);
+            return api.dom_doc.walkTreeByTagAndClass(node, selector[0..dot_idx], selector[dot_idx + 1 ..]);
         }
         if (std.mem.indexOfScalar(u8, selector, '#')) |hash_idx| {
             // tag#id — find by id (tag is redundant but valid)
             return walkTreeById(node, selector[hash_idx + 1 ..]);
         }
         // Tag name selector
-        return api.walkTreeByTag(node, selector);
+        return api.dom_doc.walkTreeByTag(node, selector);
     }
 }
 
@@ -570,7 +570,7 @@ pub fn documentQuerySelector(
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    const doc_node = api.getDocumentNode() orelse return quickjs.JS_NULL();
+    const doc_node = api.dom_doc.getDocumentNode() orelse return quickjs.JS_NULL();
     const found = walkTreeBySelector(doc_node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
     return api.wrapNode(c, found);
 }
@@ -590,7 +590,7 @@ pub fn documentQuerySelectorAll(
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
 
-    const doc_node = api.getDocumentNode() orelse return arr;
+    const doc_node = api.dom_doc.getDocumentNode() orelse return arr;
     var idx: u32 = 0;
     walkTreeCollect(c, doc_node, s.ptr[0..s.len], arr, &idx);
     return arr;
