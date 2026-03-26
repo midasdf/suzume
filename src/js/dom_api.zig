@@ -3652,6 +3652,16 @@ fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) bool 
 fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel.len == 0) return false;
 
+    // Check for compound selector with pseudo-classes: "div:not(.x)", "span.foo:is(.bar)"
+    // Split at first ':' that's not inside brackets/parens and match each part
+    if (findPseudoStart(sel)) |pseudo_start| {
+        if (pseudo_start > 0) {
+            // Has a prefix before the pseudo: e.g. "div" in "div:not(.x)"
+            if (!matchSingleSimple(elem, sel[0..pseudo_start])) return false;
+            return matchSingleSimple(elem, sel[pseudo_start..]);
+        }
+    }
+
     // :not(inner) — negate inner match
     if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":not(") and sel[sel.len - 1] == ')') {
         return !elementMatchesSelector(@ptrCast(elem), sel[5 .. sel.len - 1]);
@@ -3662,6 +3672,15 @@ fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     }
     if (sel.len > 7 and std.ascii.eqlIgnoreCase(sel[0..7], ":where(") and sel[sel.len - 1] == ')') {
         return elementMatchesSelector(@ptrCast(elem), sel[7 .. sel.len - 1]);
+    }
+    // Other pseudo-classes
+    if (sel[0] == ':') {
+        // :first-child, :last-child, :only-child, :empty, :root, :enabled, :disabled, :checked
+        if (std.ascii.eqlIgnoreCase(sel, ":first-child")) return isFirstChild(@ptrCast(elem));
+        if (std.ascii.eqlIgnoreCase(sel, ":last-child")) return isLastChild(@ptrCast(elem));
+        if (std.ascii.eqlIgnoreCase(sel, ":root")) return isRoot(@ptrCast(elem));
+        // Unknown pseudo — return false (conservative)
+        return false;
     }
 
     // [attr] or [attr=value] etc.
@@ -3725,6 +3744,43 @@ fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         return std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], sel);
     }
     return false;
+}
+
+fn findPseudoStart(sel: []const u8) ?usize {
+    // Find ':' that's not inside [] or () — marks start of pseudo-class
+    var depth: u32 = 0;
+    var i: usize = 0;
+    while (i < sel.len) : (i += 1) {
+        if (sel[i] == '(' or sel[i] == '[') depth += 1
+        else if ((sel[i] == ')' or sel[i] == ']') and depth > 0) depth -= 1
+        else if (sel[i] == ':' and depth == 0) return i;
+    }
+    return null;
+}
+
+fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    var child: ?*lxb.lxb_dom_node_t = parent.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return @intFromPtr(ch) == @intFromPtr(node);
+        child = ch.next;
+    }
+    return false;
+}
+
+fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    var child = lxb_dom_node_last_child_noi(parent);
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return @intFromPtr(ch) == @intFromPtr(node);
+        child = lxb_dom_node_prev_noi(ch);
+    }
+    return false;
+}
+
+fn isRoot(node: *lxb.lxb_dom_node_t) bool {
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    return parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
 fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bool {
