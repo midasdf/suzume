@@ -3950,12 +3950,25 @@ fn elementReplaceWith(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    const new_node = getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     if (node.parent == null) return quickjs.JS_UNDEFINED();
-    lxb_dom_node_insert_before(node, new_node);
+    // Insert all args before this node, then remove this node
+    var i: c_int = 0;
+    while (i < argc) : (i += 1) {
+        const arg = args[@intCast(i)];
+        if (getNode(c, arg)) |new_node| {
+            if (new_node.parent != null) lxb_dom_node_remove(new_node);
+            lxb_dom_node_insert_before(node, new_node);
+        } else {
+            if (jsStringToSlice(c, arg)) |s| {
+                defer qjs.JS_FreeCString(c, s.ptr);
+                const doc = g_document orelse continue;
+                const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+                lxb_dom_node_insert_before(node, text);
+            }
+        }
+    }
     lxb_dom_node_remove(node);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
