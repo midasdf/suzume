@@ -8658,6 +8658,22 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.firstChild = null;
             \\    this.lastChild = null;
             \\    this.documentElement = null;
+            \\    this.ownerDocument = null;
+            \\    this.parentNode = null;
+            \\    this.parentElement = null;
+            \\    this.nextSibling = null;
+            \\    this.previousSibling = null;
+            \\    this.doctype = null;
+            \\    this.head = null;
+            \\    this.body = null;
+            \\    this.contentType = 'application/xml';
+            \\    this.characterSet = 'UTF-8';
+            \\    this.charset = 'UTF-8';
+            \\    this.inputEncoding = 'UTF-8';
+            \\    this.URL = 'about:blank';
+            \\    this.documentURI = 'about:blank';
+            \\    this.compatMode = 'CSS1Compat';
+            \\    this.implementation = document.implementation;
             \\  }
             \\  Object.setPrototypeOf(Document.prototype, Node.prototype);
             \\  Document.prototype.createElement = function(t) { return document.createElement(t); };
