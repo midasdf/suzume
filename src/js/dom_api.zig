@@ -8689,11 +8689,34 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Document.prototype.querySelectorAll = function(s) { if(this.documentElement) return this.documentElement.querySelectorAll(s); return []; };
             \\  Document.prototype.getElementsByTagName = function(t) { if(this.documentElement) return this.documentElement.getElementsByTagName(t); return []; };
             \\  Document.prototype.appendChild = function(n) {
+            \\    if(n.parentNode)n.parentNode.removeChild(n);
+            \\    n.parentNode=this;n.ownerDocument=this;
             \\    this.childNodes.push(n);
-            \\    this.children.push(n);
+            \\    if(n.nodeType===1)this.children.push(n);
             \\    this.firstChild = this.childNodes[0];
             \\    this.lastChild = this.childNodes[this.childNodes.length-1];
             \\    if(n.nodeType===1 && !this.documentElement) this.documentElement = n;
+            \\    if(n.nodeType===10) this.doctype = n;
+            \\    return n;
+            \\  };
+            \\  Document.prototype.removeChild = function(n) {
+            \\    var i=this.childNodes.indexOf(n);if(i>=0)this.childNodes.splice(i,1);
+            \\    var j=this.children.indexOf(n);if(j>=0)this.children.splice(j,1);
+            \\    n.parentNode=null;
+            \\    this.firstChild=this.childNodes[0]||null;this.lastChild=this.childNodes[this.childNodes.length-1]||null;
+            \\    if(this.documentElement===n)this.documentElement=null;
+            \\    if(this.doctype===n)this.doctype=null;
+            \\    return n;
+            \\  };
+            \\  Document.prototype.insertBefore = function(n,ref) {
+            \\    if(!ref)return this.appendChild(n);
+            \\    if(n.parentNode)n.parentNode.removeChild(n);
+            \\    n.parentNode=this;n.ownerDocument=this;
+            \\    var i=this.childNodes.indexOf(ref);if(i>=0)this.childNodes.splice(i,0,n);else this.childNodes.push(n);
+            \\    if(n.nodeType===1){var j=this.children.indexOf(ref);if(j>=0)this.children.splice(j,0,n);else this.children.push(n);}
+            \\    this.firstChild=this.childNodes[0];this.lastChild=this.childNodes[this.childNodes.length-1];
+            \\    if(n.nodeType===1&&!this.documentElement)this.documentElement=n;
+            \\    if(n.nodeType===10)this.doctype=n;
             \\    return n;
             \\  };
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
