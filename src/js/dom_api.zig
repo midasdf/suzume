@@ -4619,6 +4619,22 @@ fn documentGetElementsByName(
 fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
     if (selector.len == 0) return false;
+
+    // * (universal selector)
+    if (selector.len == 1 and selector[0] == '*') return true;
+
+    // :not(inner) — negate inner match
+    if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":not(") and selector[selector.len - 1] == ')') {
+        return !elementMatchesSelector(node, selector[5 .. selector.len - 1]);
+    }
+    // :is(inner) / :where(inner) — OR match
+    if (selector.len > 4 and std.ascii.eqlIgnoreCase(selector[0..4], ":is(") and selector[selector.len - 1] == ')') {
+        return elementMatchesSelector(node, selector[4 .. selector.len - 1]);
+    }
+    if (selector.len > 7 and std.ascii.eqlIgnoreCase(selector[0..7], ":where(") and selector[selector.len - 1] == ')') {
+        return elementMatchesSelector(node, selector[7 .. selector.len - 1]);
+    }
+
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
     // #id selector
