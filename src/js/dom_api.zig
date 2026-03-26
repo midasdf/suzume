@@ -7980,7 +7980,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\Object.defineProperty(P,'data',{get:G,set:sd,configurable:true,enumerable:true});
             \\Object.defineProperty(P,'nodeValue',{get:G,set:sd,configurable:true,enumerable:true});
             \\Object.defineProperty(P,'length',{get:function(){return this.data.length;},configurable:true});
-            \\Object.defineProperty(P,'wholeText',{get:function(){return this.data;},configurable:true});
+            \\Object.defineProperty(P,'wholeText',{get:function(){if(this.nodeType!==3)return this.data;var t='',n=this;while(n.previousSibling&&n.previousSibling.nodeType===3)n=n.previousSibling;while(n&&n.nodeType===3){t+=n.data;n=n.nextSibling;}return t;},configurable:true});
             \\P.appendData=function(d){if(arguments.length<1)throw new TypeError("Failed to execute 'appendData': 1 argument required");this.data+=''+d;};
             \\P.insertData=function(o,d){if(arguments.length<2)throw new TypeError("Failed to execute 'insertData': 2 arguments required");var s=this.data;o=o>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o);};
             \\P.deleteData=function(o,c){if(arguments.length<2)throw new TypeError("Failed to execute 'deleteData': 2 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+s.slice(o+c);};
