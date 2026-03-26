@@ -1494,6 +1494,10 @@ pub fn registerWebApis(js_rt: anytype) void {
         ;
         _ = qjs.JS_SetPropertyStr(ctx, global, "structuredClone", qjs.JS_Eval(ctx, sc_js, sc_js.len, "<sc>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
+    // isSecureContext (always false for http://)
+    _ = qjs.JS_SetPropertyStr(ctx, global, "isSecureContext", quickjs.JS_NewBool(false));
+    // origin
+    _ = qjs.JS_SetPropertyStr(ctx, global, "origin", qjs.JS_NewString(ctx, "http://127.0.0.1"));
 
     // -- performance object --
     const perf_obj = qjs.JS_NewObject(ctx);
