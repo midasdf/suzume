@@ -8029,11 +8029,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const range_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Range", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Range", range_ctor);
 
-    const comment_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
-    _ = qjs.JS_SetPropertyStr(ctx, global, "Comment", comment_ctor);
+    // DocumentType constructor
+    const doctype_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentType", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentType", doctype_ctor);
 
-    const text_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
-    _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
+    // DocumentFragment constructor
+    const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", docfrag_ctor);
 
     const shadow_root_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "ShadowRoot", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "ShadowRoot", shadow_root_ctor);
@@ -8109,6 +8111,24 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
 
     qjs.JS_SetClassProto(ctx, text_class_id, text_proto);
+
+    // Text/CharacterData/Comment/PI constructors with prototype for instanceof
+    {
+        const tp = qjs.JS_GetClassProto(ctx, text_class_id);
+        const text_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
+        _ = qjs.JS_SetPropertyStr(ctx, text_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
+        const chardata_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "CharacterData", 0, qjs.JS_CFUNC_constructor, 0);
+        _ = qjs.JS_SetPropertyStr(ctx, chardata_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "CharacterData", chardata_ctor);
+        const comment_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
+        _ = qjs.JS_SetPropertyStr(ctx, comment_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "Comment", comment_ctor);
+        const pi_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "ProcessingInstruction", 0, qjs.JS_CFUNC_constructor, 0);
+        _ = qjs.JS_SetPropertyStr(ctx, pi_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "ProcessingInstruction", pi_ctor);
+        qjs.JS_FreeValue(ctx, tp);
+    }
 
     // Free local proto references (class proto + constructors hold refs)
     qjs.JS_FreeValue(ctx, event_target_proto);
