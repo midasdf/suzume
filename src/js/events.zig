@@ -138,6 +138,7 @@ pub fn jsAddEventListener(
     // Parse 3rd argument: options object or boolean (legacy useCapture)
     var capture: bool = false;
     var passive: bool = false;
+    var passive_explicit: bool = false;
     var once: bool = false;
     if (argc >= 3) {
         if (args[2].tag == qjs.JS_TAG_BOOL) {
@@ -150,12 +151,38 @@ pub fn jsAddEventListener(
             qjs.JS_FreeValue(c, cap_val);
 
             const pass_val = qjs.JS_GetPropertyStr(c, args[2], "passive");
-            if (pass_val.tag != qjs.JS_TAG_UNDEFINED) passive = qjs.JS_ToBool(c, pass_val) > 0;
+            if (pass_val.tag != qjs.JS_TAG_UNDEFINED) {
+                passive = qjs.JS_ToBool(c, pass_val) > 0;
+                passive_explicit = true;
+            }
             qjs.JS_FreeValue(c, pass_val);
 
             const once_val = qjs.JS_GetPropertyStr(c, args[2], "once");
             if (once_val.tag != qjs.JS_TAG_UNDEFINED) once = qjs.JS_ToBool(c, once_val) > 0;
             qjs.JS_FreeValue(c, once_val);
+        }
+    }
+    // Passive-by-default: touchstart, touchmove, wheel on window/document/body
+    if (!passive_explicit and event_type.len > 0) {
+        if (std.mem.eql(u8, event_type, "touchstart") or
+            std.mem.eql(u8, event_type, "touchmove") or
+            std.mem.eql(u8, event_type, "wheel") or
+            std.mem.eql(u8, event_type, "mousewheel"))
+        {
+            // Check if target is window, document, or body
+            if (dom_api.getNodePublic(c, this_val)) |node| {
+                if (node.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+                    passive = true;
+                } else if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                    var name_len: usize = 0;
+                    const name_ptr = @import("dom_api.zig").lxb_dom_element_local_name(@ptrCast(node), &name_len);
+                    if (name_ptr != null and name_len == 4 and std.mem.eql(u8, name_ptr.?[0..4], "body")) passive = true;
+                    if (name_ptr != null and name_len == 4 and std.mem.eql(u8, name_ptr.?[0..4], "html")) passive = true;
+                }
+            } else {
+                // No node = window/global → passive by default
+                passive = true;
+            }
         }
     }
 
@@ -485,7 +512,15 @@ fn callListenersOnNode(ctx: *qjs.JSContext, entry: *ListenerEntry, event_obj: qj
         }
 
         const this = dom_api.wrapNodePublic(ctx, node);
-        invokeListener(ctx, rec.callback, this, event_obj);
+        // Passive listeners: temporarily make event non-cancelable
+        if (rec.passive) {
+            const saved = qjs.JS_GetPropertyStr(ctx, event_obj, "cancelable");
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "cancelable", quickjs.JS_NewBool(false));
+            invokeListener(ctx, rec.callback, this, event_obj);
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "cancelable", saved);
+        } else {
+            invokeListener(ctx, rec.callback, this, event_obj);
+        }
         qjs.JS_FreeValue(ctx, this);
 
         // Sync JS-side stop flags to native (e.g. cancelBubble setter)
@@ -516,7 +551,14 @@ fn callEntryListeners(ctx: *qjs.JSContext, entries: *std.ArrayListUnmanaged(Wind
                     i += 1;
                     continue;
                 }
-                invokeListener(ctx, rec.callback, this_obj, event_obj);
+                if (rec.passive) {
+                    const saved = qjs.JS_GetPropertyStr(ctx, event_obj, "cancelable");
+                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "cancelable", quickjs.JS_NewBool(false));
+                    invokeListener(ctx, rec.callback, this_obj, event_obj);
+                    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "cancelable", saved);
+                } else {
+                    invokeListener(ctx, rec.callback, this_obj, event_obj);
+                }
                 syncStopFlags(ctx, event_obj);
                 if (rec.once) {
                     qjs.JS_FreeValue(ctx, rec.callback);
