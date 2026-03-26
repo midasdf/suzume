@@ -7988,6 +7988,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\P.substringData=function(o,c){if(arguments.length<2)throw new TypeError("Failed to execute 'substringData': 2 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');return s.slice(o,o+c);};
             \\delete P.__nativeGetData;delete P.__nativeSetData;
             \\function noChild(m){return function(){throw new DOMException("Failed to execute '"+m+"' on 'Node': This node type does not support this method.",'HierarchyRequestError');};}
+            \\P.splitText=function(o){if(this.nodeType!==3)throw new DOMException("Not a Text node",'InvalidNodeTypeError');o=o>>>0;var s=this.data;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');var newData=s.slice(o);this.data=s.slice(0,o);var n=document.createTextNode(newData);if(this.parentNode)this.parentNode.insertBefore(n,this.nextSibling);return n;};
             \\P.appendChild=noChild('appendChild');P.insertBefore=noChild('insertBefore');
             \\P.removeChild=noChild('removeChild');P.replaceChild=noChild('replaceChild');
             \\P.replaceChildren=noChild('replaceChildren');P.prepend=noChild('prepend');P.append=noChild('append');
