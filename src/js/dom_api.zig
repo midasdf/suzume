@@ -8533,6 +8533,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dir", qjs.JS_NewString(ctx, ""));
     // document.designMode
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "designMode", qjs.JS_NewString(ctx, "off"));
+    // document.cloneNode(deep) — returns a new document-like object
+    {
+        const cn_js =
+            \\(function(deep){
+            \\  var nd = document.implementation.createHTMLDocument(document.title);
+            \\  if(deep && document.documentElement) nd.documentElement.innerHTML = document.documentElement.innerHTML;
+            \\  return nd;
+            \\})
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "cloneNode", qjs.JS_Eval(ctx, cn_js, cn_js.len, "<doc-clone>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
     // document.lastModified
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "lastModified", qjs.JS_NewString(ctx, ""));
 
