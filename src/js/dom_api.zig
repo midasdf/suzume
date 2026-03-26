@@ -8392,6 +8392,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     // document.adoptedStyleSheets (used by CSS-in-JS / popover polyfills)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptedStyleSheets", qjs.JS_NewArray(ctx));
+    // Page Visibility API
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hidden", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "visibilityState", qjs.JS_NewString(ctx, "visible"));
+    // document.dir
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dir", qjs.JS_NewString(ctx, ""));
+    // document.designMode
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "designMode", qjs.JS_NewString(ctx, "off"));
+    // document.lastModified
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "lastModified", qjs.JS_NewString(ctx, ""));
 
     // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
