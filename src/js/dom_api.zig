@@ -3178,6 +3178,16 @@ fn implCreateDocumentType(
         _ = qjs.JS_SetPropertyStr(c, obj, "systemId", qjs.JS_NewString(c, ""));
     }
     _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
+    // ownerDocument = the calling document
+    {
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        const doc_val = qjs.JS_GetPropertyStr(c, global, "document");
+        _ = qjs.JS_SetPropertyStr(c, obj, "ownerDocument", doc_val);
+    }
+    _ = qjs.JS_SetPropertyStr(c, obj, "parentNode", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "nextSibling", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "previousSibling", quickjs.JS_NULL());
     // isEqualNode for DocumentType
     const ieq_js = "(function(o){if(!o||o.nodeType!==10)return false;return this.name===o.name&&this.publicId===o.publicId&&this.systemId===o.systemId;})";
     const ieq_fn = qjs.JS_Eval(c, ieq_js, ieq_js.len, "<dt-ieq>", qjs.JS_EVAL_TYPE_GLOBAL);
