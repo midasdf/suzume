@@ -8237,6 +8237,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // DocumentType constructor
     const doctype_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentType", 0, qjs.JS_CFUNC_constructor, 0);
+    // DocumentType.prototype inherits Node.prototype
+    {
+        const dtp = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPrototype(ctx, dtp, qjs.JS_GetClassProto(ctx, @import("dom_api.zig").element_class_id)); // Node proto via element class
+        _ = qjs.JS_SetPropertyStr(ctx, doctype_ctor, "prototype", dtp);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentType", doctype_ctor);
 
     // DocumentFragment constructor
@@ -8554,10 +8560,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  d.appendChild(head);
             \\  d.appendChild(body);
+            \\  var dt={nodeType:10,name:'html',nodeName:'html',publicId:'',systemId:'',ownerDocument:null,parentNode:null,nextSibling:d,previousSibling:null};
+            \\  if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);
             \\  var doc = {
             \\    nodeType: 9, nodeName: '#document',
             \\    documentElement: d, head: head, body: body,
-            \\    childNodes: [d], children: [d], firstChild: d, lastChild: d,
+            \\    doctype: dt,
+            \\    childNodes: [dt,d], children: [d], firstChild: dt, lastChild: d,
             \\    createElement: function(t) { return document.createElement(t); },
             \\    createElementNS: function(ns, t) { return document.createElementNS ? document.createElementNS(ns, t) : document.createElement(t); },
             \\    createTextNode: function(t) { return document.createTextNode(t); },
