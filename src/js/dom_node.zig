@@ -229,6 +229,16 @@ pub fn elementGetChildNodes(
     return arr;
 }
 
+/// Check if `node` is an ancestor of `target` (or the same node).
+fn isAncestorOrSelf(node: *lxb.lxb_dom_node_t, target: *lxb.lxb_dom_node_t) bool {
+    var cur: ?*lxb.lxb_dom_node_t = target;
+    while (cur) |c| {
+        if (@intFromPtr(c) == @intFromPtr(node)) return true;
+        cur = c.parent;
+    }
+    return false;
+}
+
 pub fn elementAppendChild(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -240,6 +250,9 @@ pub fn elementAppendChild(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const child = api.getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM spec step 2: If node is a host-including inclusive ancestor of parent, throw
+    if (isAncestorOrSelf(child, parent))
+        return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
     // DOM spec: remove from old parent first
     if (child.parent != null) lxb_dom_node_remove(child);
     lxb_dom_node_insert_child(parent, child);
@@ -282,6 +295,9 @@ pub fn elementInsertBefore(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const new_node = api.getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM spec step 2: If node is a host-including inclusive ancestor of parent, throw
+    if (isAncestorOrSelf(new_node, parent))
+        return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
     // Remove from old parent if needed
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
     if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1])) {
@@ -314,9 +330,10 @@ pub fn elementReplaceChild(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': 2 arguments required");
     const args = argv orelse return quickjs.JS_NULL();
-    _ = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
     const new_node = api.getNode(c, args[0]) orelse return quickjs.JS_NULL();
+    if (isAncestorOrSelf(new_node, parent))
+        return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
     const old_node = api.getNode(c, args[1]) orelse
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
     if (old_node.parent != parent)
