@@ -1019,6 +1019,100 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
     const custom_event_ctor = qjs.JS_Eval(ctx, custom_event_js, custom_event_js.len, "<CustomEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
     _ = qjs.JS_SetPropertyStr(ctx, global, "CustomEvent", custom_event_ctor);
 
+    // UIEvent extends Event
+    {
+        const js =
+            \\(function(){
+            \\  function UIEvent(t,o){Event.call(this,t,o);o=o||{};this.view=o.view||null;this.detail=o.detail||0;}
+            \\  UIEvent.prototype=Object.create(Event.prototype);UIEvent.prototype.constructor=UIEvent;
+            \\  UIEvent.prototype.initUIEvent=function(t,b,c,v,d){this.initEvent(t,b,c);this.view=v;this.detail=d;};
+            \\  return UIEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<UIEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "UIEvent", ctor);
+    }
+    // MouseEvent extends UIEvent
+    {
+        const js =
+            \\(function(){
+            \\  function MouseEvent(t,o){UIEvent.call(this,t,o);o=o||{};
+            \\    this.screenX=o.screenX||0;this.screenY=o.screenY||0;
+            \\    this.clientX=o.clientX||0;this.clientY=o.clientY||0;
+            \\    this.pageX=o.pageX||this.clientX;this.pageY=o.pageY||this.clientY;
+            \\    this.button=o.button||0;this.buttons=o.buttons||0;
+            \\    this.relatedTarget=o.relatedTarget||null;
+            \\    this.ctrlKey=!!o.ctrlKey;this.shiftKey=!!o.shiftKey;
+            \\    this.altKey=!!o.altKey;this.metaKey=!!o.metaKey;
+            \\  }
+            \\  MouseEvent.prototype=Object.create(UIEvent.prototype);MouseEvent.prototype.constructor=MouseEvent;
+            \\  MouseEvent.prototype.initMouseEvent=function(t,b,c,v,d,sx,sy,cx,cy,ctrl,alt,shift,meta,btn,rt){
+            \\    this.initUIEvent(t,b,c,v,d);this.screenX=sx;this.screenY=sy;this.clientX=cx;this.clientY=cy;
+            \\    this.ctrlKey=ctrl;this.altKey=alt;this.shiftKey=shift;this.metaKey=meta;this.button=btn;this.relatedTarget=rt;
+            \\  };
+            \\  MouseEvent.prototype.getModifierState=function(){return false;};
+            \\  return MouseEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<MouseEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "MouseEvent", ctor);
+    }
+    // KeyboardEvent extends UIEvent
+    {
+        const js =
+            \\(function(){
+            \\  function KeyboardEvent(t,o){UIEvent.call(this,t,o);o=o||{};
+            \\    this.key=o.key||'';this.code=o.code||'';
+            \\    this.keyCode=o.keyCode||0;this.which=o.which||o.keyCode||0;
+            \\    this.ctrlKey=!!o.ctrlKey;this.shiftKey=!!o.shiftKey;
+            \\    this.altKey=!!o.altKey;this.metaKey=!!o.metaKey;
+            \\    this.repeat=!!o.repeat;this.location=o.location||0;
+            \\  }
+            \\  KeyboardEvent.prototype=Object.create(UIEvent.prototype);KeyboardEvent.prototype.constructor=KeyboardEvent;
+            \\  KeyboardEvent.prototype.getModifierState=function(){return false;};
+            \\  KeyboardEvent.DOM_KEY_LOCATION_STANDARD=0;KeyboardEvent.DOM_KEY_LOCATION_LEFT=1;
+            \\  KeyboardEvent.DOM_KEY_LOCATION_RIGHT=2;KeyboardEvent.DOM_KEY_LOCATION_NUMPAD=3;
+            \\  return KeyboardEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<KeyboardEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "KeyboardEvent", ctor);
+    }
+    // FocusEvent extends UIEvent
+    {
+        const js =
+            \\(function(){
+            \\  function FocusEvent(t,o){UIEvent.call(this,t,o);o=o||{};this.relatedTarget=o.relatedTarget||null;}
+            \\  FocusEvent.prototype=Object.create(UIEvent.prototype);FocusEvent.prototype.constructor=FocusEvent;
+            \\  return FocusEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<FocusEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "FocusEvent", ctor);
+    }
+    // WheelEvent extends MouseEvent
+    {
+        const js =
+            \\(function(){
+            \\  function WheelEvent(t,o){MouseEvent.call(this,t,o);o=o||{};
+            \\    this.deltaX=o.deltaX||0;this.deltaY=o.deltaY||0;this.deltaZ=o.deltaZ||0;
+            \\    this.deltaMode=o.deltaMode||0;
+            \\  }
+            \\  WheelEvent.prototype=Object.create(MouseEvent.prototype);WheelEvent.prototype.constructor=WheelEvent;
+            \\  WheelEvent.DOM_DELTA_PIXEL=0;WheelEvent.DOM_DELTA_LINE=1;WheelEvent.DOM_DELTA_PAGE=2;
+            \\  return WheelEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<WheelEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "WheelEvent", ctor);
+    }
+    // InputEvent extends UIEvent
+    {
+        const js =
+            \\(function(){
+            \\  function InputEvent(t,o){UIEvent.call(this,t,o);o=o||{};this.inputType=o.inputType||'';this.data=o.data||null;this.isComposing=!!o.isComposing;}
+            \\  InputEvent.prototype=Object.create(UIEvent.prototype);InputEvent.prototype.constructor=InputEvent;
+            \\  return InputEvent;})()
+        ;
+        const ctor = qjs.JS_Eval(ctx, js, js.len, "<InputEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, global, "InputEvent", ctor);
+    }
+
     // Set up window global (alias to global)
     _ = qjs.JS_SetPropertyStr(ctx, global, "window", qjs.JS_DupValue(ctx, global));
 }
