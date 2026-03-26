@@ -8,6 +8,7 @@ pub const dom_text = @import("dom_text.zig");
 pub const dom_sel = @import("dom_selector.zig");
 pub const dom_node = @import("dom_node.zig");
 pub const dom_elem = @import("dom_element.zig");
+pub const dom_doc = @import("dom_document.zig");
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -148,7 +149,7 @@ pub fn setReadyState(state: @TypeOf(g_ready_state)) void {
 }
 
 /// Current page URL — set from main when navigating.
-var g_current_url: ?[]const u8 = null;
+pub var g_current_url: ?[]const u8 = null;
 
 /// Set the current page URL (called from main on navigation).
 pub fn setCurrentUrl(url: ?[]const u8) void {
@@ -4766,9 +4767,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, contentAtom);
     }
     // Popover API stubs (GitHub checks showPopover existence)
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "showPopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "showPopover", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hidePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "hidePopover", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "togglePopover", qjs.JS_NewCFunction(ctx, &jsReturnNull, "togglePopover", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "showPopover", qjs.JS_NewCFunction(ctx, &dom_doc.jsReturnNull, "showPopover", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hidePopover", qjs.JS_NewCFunction(ctx, &dom_doc.jsReturnNull, "hidePopover", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "togglePopover", qjs.JS_NewCFunction(ctx, &dom_doc.jsReturnNull, "togglePopover", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentElement", qjs.JS_NewCFunction(ctx, &dom_elem.elementInsertAdjacentElement, "insertAdjacentElement", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "insertAdjacentText", qjs.JS_NewCFunction(ctx, &dom_elem.elementInsertAdjacentText, "insertAdjacentText", 2));
 
@@ -4868,11 +4869,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // ── Expose constructors as globals for instanceof ──────────────
     const global = qjs.JS_GetGlobalObject(ctx);
 
-    const event_target_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "EventTarget", 0, qjs.JS_CFUNC_constructor, 0);
+    const event_target_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "EventTarget", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, event_target_ctor, "prototype", qjs.JS_DupValue(ctx, event_target_proto));
     _ = qjs.JS_SetPropertyStr(ctx, global, "EventTarget", event_target_ctor);
 
-    const node_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Node", 0, qjs.JS_CFUNC_constructor, 0);
+    const node_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Node", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "prototype", qjs.JS_DupValue(ctx, node_proto));
     // Node constants on the constructor too
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
@@ -4882,11 +4883,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_FRAGMENT_NODE", qjs.JS_NewInt32(ctx, 11));
     _ = qjs.JS_SetPropertyStr(ctx, global, "Node", node_ctor);
 
-    const element_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Element", 0, qjs.JS_CFUNC_constructor, 0);
+    const element_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Element", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, element_ctor, "prototype", qjs.JS_DupValue(ctx, elem_proto));
     _ = qjs.JS_SetPropertyStr(ctx, global, "Element", element_ctor);
 
-    const html_element_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "HTMLElement", 0, qjs.JS_CFUNC_constructor, 0);
+    const html_element_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "HTMLElement", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, html_element_ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
     _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLElement", html_element_ctor);
 
@@ -4907,27 +4908,27 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         "HTMLSummaryElement",   "HTMLFieldSetElement",  "HTMLLegendElement",
     };
     for (html_subclasses) |name| {
-        const ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);
+        const ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
         _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
     }
 
     // DOM interface constructors (for instanceof checks in frameworks)
-    const window_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Window", 0, qjs.JS_CFUNC_constructor, 0);
+    const window_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Window", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Window", window_ctor);
 
-    const document_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Document", 0, qjs.JS_CFUNC_constructor, 0);
+    const document_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Document", 0, qjs.JS_CFUNC_constructor, 0);
     const doc_proto = qjs.JS_NewObject(ctx);
     // Document.prototype needs DOM query methods (popover polyfill monkey-patches these)
     _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelector, "querySelector", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelectorAll, "querySelectorAll", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementById", qjs.JS_NewCFunction(ctx, &documentGetElementById, "getElementById", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &documentGetElementsByClassName, "getElementsByClassName", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementById", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementById, "getElementById", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByClassName, "getElementsByClassName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "getElementsByTagName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, document_ctor, "prototype", doc_proto);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Document", document_ctor);
 
-    const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
+    const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     {
         const dfp = qjs.JS_NewObject(ctx);
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
@@ -4936,17 +4937,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
 
-    const nodelist_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "NodeList", 0, qjs.JS_CFUNC_constructor, 0);
+    const nodelist_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "NodeList", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "NodeList", nodelist_ctor);
 
-    const htmlcol_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "HTMLCollection", 0, qjs.JS_CFUNC_constructor, 0);
+    const htmlcol_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "HTMLCollection", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLCollection", htmlcol_ctor);
 
-    const range_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Range", 0, qjs.JS_CFUNC_constructor, 0);
+    const range_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Range", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Range", range_ctor);
 
     // DocumentType constructor
-    const doctype_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentType", 0, qjs.JS_CFUNC_constructor, 0);
+    const doctype_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentType", 0, qjs.JS_CFUNC_constructor, 0);
     // DocumentType.prototype inherits Node.prototype
     {
         const dtp = qjs.JS_NewObject(ctx);
@@ -4956,10 +4957,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentType", doctype_ctor);
 
     // DocumentFragment constructor
-    const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
+    const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", docfrag_ctor);
 
-    const shadow_root_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "ShadowRoot", 0, qjs.JS_CFUNC_constructor, 0);
+    const shadow_root_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "ShadowRoot", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "ShadowRoot", shadow_root_ctor);
 
     // window.top / window.parent / window.self / window.frames
@@ -5037,16 +5038,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Text/CharacterData/Comment/PI constructors with prototype for instanceof
     {
         const tp = qjs.JS_GetClassProto(ctx, text_class_id);
-        const text_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
+        const text_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, text_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
-        const chardata_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "CharacterData", 0, qjs.JS_CFUNC_constructor, 0);
+        const chardata_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "CharacterData", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, chardata_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "CharacterData", chardata_ctor);
-        const comment_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
+        const comment_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, comment_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "Comment", comment_ctor);
-        const pi_ctor = qjs.JS_NewCFunction2(ctx, &jsNoOpConstructor, "ProcessingInstruction", 0, qjs.JS_CFUNC_constructor, 0);
+        const pi_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "ProcessingInstruction", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, pi_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "ProcessingInstruction", pi_ctor);
         qjs.JS_FreeValue(ctx, tp);
@@ -5060,12 +5061,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // Build document global
     const doc_obj = qjs.JS_NewObject(ctx);
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementById", qjs.JS_NewCFunction(ctx, &documentGetElementById, "getElementById", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementById", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementById, "getElementById", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelector, "querySelector", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.documentQuerySelectorAll, "querySelectorAll", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &documentCreateElement, "createElement", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &documentCreateElementNS, "createElementNS", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &documentCreateTextNode, "createTextNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElement", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateElement, "createElement", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateElementNS, "createElementNS", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTextNode, "createTextNode", 1));
     // createAttribute(localName) + createAttributeNS(namespace, qualifiedName)
     {
         const attr_js =
@@ -5083,20 +5084,20 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &documentCreateDocumentFragment, "createDocumentFragment", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &documentCreateEvent, "createEvent", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "write", qjs.JS_NewCFunction(ctx, &documentWrite, "write", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "writeln", qjs.JS_NewCFunction(ctx, &documentWrite, "writeln", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &documentGetElementsByClassName, "getElementsByClassName", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagNameNS", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByName", qjs.JS_NewCFunction(ctx, &documentGetElementsByName, "getElementsByName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateDocumentFragment, "createDocumentFragment", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateEvent, "createEvent", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "write", qjs.JS_NewCFunction(ctx, &dom_doc.documentWrite, "write", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "writeln", qjs.JS_NewCFunction(ctx, &dom_doc.documentWrite, "writeln", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByClassName, "getElementsByClassName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "getElementsByTagNameNS", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByName, "getElementsByName", 1));
 
     // document.adoptNode / importNode (stub — return the node as-is)
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptNode", qjs.JS_NewCFunction(ctx, &documentAdoptNode, "adoptNode", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &documentImportNode, "importNode", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentAdoptNode, "adoptNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentImportNode, "importNode", 2));
     // document.createRange (stub)
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &documentCreateRange, "createRange", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateRange, "createRange", 0));
     // document.elementFromPoint(x, y) — stub returns body or documentElement
     {
         const efp_js = "(function(x,y){return document.body||document.documentElement||null;})";
@@ -5107,19 +5108,19 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             "<efps>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
     // document.createTreeWalker
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &documentCreateTreeWalker, "createTreeWalker", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createTreeWalker", 3));
     // document.createNodeIterator
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createNodeIterator", qjs.JS_NewCFunction(ctx, &documentCreateTreeWalker, "createNodeIterator", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createNodeIterator", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createNodeIterator", 3));
 
     // document.readyState (getter)
     const readyStateAtom = qjs.JS_NewAtom(ctx, "readyState");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, readyStateAtom, qjs.JS_NewCFunction(ctx, &documentGetReadyState, "get readyState", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, readyStateAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetReadyState, "get readyState", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, readyStateAtom);
 
     // document.activeElement (getter)
     {
         const activeElementAtom = qjs.JS_NewAtom(ctx, "activeElement");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, activeElementAtom, qjs.JS_NewCFunction(ctx, &documentGetActiveElement, "get activeElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, activeElementAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetActiveElement, "get activeElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, activeElementAtom);
     }
 
@@ -5131,17 +5132,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // document.body (getter)
     const bodyAtom = qjs.JS_NewAtom(ctx, "body");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, bodyAtom, qjs.JS_NewCFunction(ctx, &documentGetBody, "get body", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, bodyAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetBody, "get body", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, bodyAtom);
 
     // document.title (getter)
     const titleAtom = qjs.JS_NewAtom(ctx, "title");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, titleAtom, qjs.JS_NewCFunction(ctx, &documentGetTitle, "get title", 0), qjs.JS_NewCFunction(ctx, &documentSetTitle, "set title", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, titleAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetTitle, "get title", 0), qjs.JS_NewCFunction(ctx, &dom_doc.documentSetTitle, "set title", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, titleAtom);
 
     // document.documentElement (getter)
     const docElemAtom = qjs.JS_NewAtom(ctx, "documentElement");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, docElemAtom, qjs.JS_NewCFunction(ctx, &documentGetDocumentElement, "get documentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, docElemAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetDocumentElement, "get documentElement", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, docElemAtom);
 
     // document.currentScript (null when not in script execution)
@@ -5149,18 +5150,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // document.head (getter)
     const headAtom = qjs.JS_NewAtom(ctx, "head");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, headAtom, qjs.JS_NewCFunction(ctx, &documentGetHead, "get head", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, headAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetHead, "get head", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, headAtom);
 
     // document.cookie (getter/setter)
     const cookieAtom = qjs.JS_NewAtom(ctx, "cookie");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, cookieAtom, qjs.JS_NewCFunction(ctx, &documentGetCookie, "get cookie", 0), qjs.JS_NewCFunction(ctx, &documentSetCookie, "set cookie", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, cookieAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetCookie, "get cookie", 0), qjs.JS_NewCFunction(ctx, &dom_doc.documentSetCookie, "set cookie", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, cookieAtom);
 
     // document.URL / referrer / domain
     if (g_current_url) |url| {
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "URL", qjs.JS_NewStringLen(ctx, url.ptr, url.len));
-        const domain = extractDomain(url) orelse "";
+        const domain = dom_doc.extractDomain(url) orelse "";
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "domain", qjs.JS_NewStringLen(ctx, domain.ptr, domain.len));
     } else {
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "URL", qjs.JS_NewString(ctx, ""));
@@ -5178,7 +5179,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const hf_js = "(function(){return true;})";
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hasFocus", qjs.JS_Eval(ctx, hf_js, hf_js.len, "<hasFocus>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createComment", qjs.JS_NewCFunction(ctx, &documentCreateComment, "createComment", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createComment", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateComment, "createComment", 1));
 
     // document.createProcessingInstruction(target, data)
     {
@@ -5326,8 +5327,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const has_feature_js = "(function() { return true; })";
         _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx,
             has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
-        _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &implCreateDocumentType, "createDocumentType", 3));
-        _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &implCreateDocument, "createDocument", 3));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocumentType, "createDocumentType", 3));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocument, "createDocument", 3));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
     }
     // document.adoptedStyleSheets (used by CSS-in-JS / popover polyfills)
