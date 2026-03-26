@@ -3713,6 +3713,40 @@ fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":only-child")) {
             return isFirstChild(@ptrCast(elem)) and isLastChild(@ptrCast(elem));
         }
+        if (std.ascii.eqlIgnoreCase(sel, ":first-of-type")) return isFirstOfType(@ptrCast(elem));
+        if (std.ascii.eqlIgnoreCase(sel, ":last-of-type")) return isLastOfType(@ptrCast(elem));
+        if (std.ascii.eqlIgnoreCase(sel, ":only-of-type")) return isFirstOfType(@ptrCast(elem)) and isLastOfType(@ptrCast(elem));
+        if (std.ascii.eqlIgnoreCase(sel, ":link")) {
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and (std.mem.eql(u8, name_ptr.?[0..name_len], "a") or std.mem.eql(u8, name_ptr.?[0..name_len], "area")))
+                return lxb_dom_element_has_attribute(elem, "href", 4);
+            return false;
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":any-link")) {
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and (std.mem.eql(u8, name_ptr.?[0..name_len], "a") or std.mem.eql(u8, name_ptr.?[0..name_len], "area")))
+                return lxb_dom_element_has_attribute(elem, "href", 4);
+            return false;
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":read-write")) return false;
+        if (std.ascii.eqlIgnoreCase(sel, ":read-only")) return true;
+        if (std.ascii.eqlIgnoreCase(sel, ":defined")) return true;
+        // :nth-child(N) — basic support for simple numeric N
+        if (sel.len > 11 and std.ascii.eqlIgnoreCase(sel[0..11], ":nth-child(") and sel[sel.len - 1] == ')') {
+            const arg = std.mem.trim(u8, sel[11 .. sel.len - 1], " \t");
+            if (std.ascii.eqlIgnoreCase(arg, "odd")) return (getNthIndex(@ptrCast(elem)) % 2) == 1;
+            if (std.ascii.eqlIgnoreCase(arg, "even")) return (getNthIndex(@ptrCast(elem)) % 2) == 0;
+            if (std.fmt.parseInt(u32, arg, 10)) |n| return getNthIndex(@ptrCast(elem)) == n
+            else |_| {}
+        }
+        // :nth-last-child(N)
+        if (sel.len > 16 and std.ascii.eqlIgnoreCase(sel[0..16], ":nth-last-child(") and sel[sel.len - 1] == ')') {
+            const arg = std.mem.trim(u8, sel[16 .. sel.len - 1], " \t");
+            if (std.fmt.parseInt(u32, arg, 10)) |n| return getNthLastIndex(@ptrCast(elem)) == n
+            else |_| {}
+        }
         // Unknown pseudo — return false (conservative)
         return false;
     }
@@ -3839,6 +3873,70 @@ fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
 fn isRoot(node: *lxb.lxb_dom_node_t) bool {
     const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     return parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
+    const parent = node.parent orelse return false;
+    var name_len: usize = 0;
+    const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name == null) return false;
+    var child: ?*lxb.lxb_dom_node_t = parent.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            var ch_len: usize = 0;
+            const ch_name = lxb_dom_element_local_name(@ptrCast(ch), &ch_len);
+            if (ch_name != null and ch_len == name_len and std.mem.eql(u8, ch_name.?[0..ch_len], name.?[0..name_len]))
+                return @intFromPtr(ch) == @intFromPtr(node);
+        }
+        child = ch.next;
+    }
+    return false;
+}
+
+fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
+    const parent = node.parent orelse return false;
+    var name_len: usize = 0;
+    const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name == null) return false;
+    var child = lxb_dom_node_last_child_noi(parent);
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            var ch_len: usize = 0;
+            const ch_name = lxb_dom_element_local_name(@ptrCast(ch), &ch_len);
+            if (ch_name != null and ch_len == name_len and std.mem.eql(u8, ch_name.?[0..ch_len], name.?[0..name_len]))
+                return @intFromPtr(ch) == @intFromPtr(node);
+        }
+        child = lxb_dom_node_prev_noi(ch);
+    }
+    return false;
+}
+
+fn getNthIndex(node: *lxb.lxb_dom_node_t) u32 {
+    const parent = node.parent orelse return 0;
+    var idx: u32 = 0;
+    var child: ?*lxb.lxb_dom_node_t = parent.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            idx += 1;
+            if (@intFromPtr(ch) == @intFromPtr(node)) return idx;
+        }
+        child = ch.next;
+    }
+    return 0;
+}
+
+fn getNthLastIndex(node: *lxb.lxb_dom_node_t) u32 {
+    const parent = node.parent orelse return 0;
+    var idx: u32 = 0;
+    var child = lxb_dom_node_last_child_noi(parent);
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            idx += 1;
+            if (@intFromPtr(ch) == @intFromPtr(node)) return idx;
+        }
+        child = lxb_dom_node_prev_noi(ch);
+    }
+    return 0;
 }
 
 fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bool {
@@ -8316,6 +8414,20 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const imagesAtom = qjs.JS_NewAtom(ctx, "images");
         _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, imagesAtom, qjs.JS_Eval(ctx, images_js, images_js.len, "<images>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, imagesAtom);
+    }
+
+    // document.scripts
+    {
+        const scripts_js = "(function(){return document.querySelectorAll('script');})";
+        const scriptsAtom = qjs.JS_NewAtom(ctx, "scripts");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, scriptsAtom, qjs.JS_Eval(ctx, scripts_js, scripts_js.len, "<scripts>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, scriptsAtom);
+    }
+    // document.embeds/plugins (empty)
+    {
+        const empty_js = "(function(){return [];})";
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "embeds", qjs.JS_Eval(ctx, empty_js, empty_js.len, "<embeds>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "plugins", qjs.JS_Eval(ctx, empty_js, empty_js.len, "<plugins>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
 
     // document.implementation
