@@ -8401,7 +8401,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
         const create_attr_js =
-            \\(function(name){return document.createAttributeNS(null,name.toLowerCase());})
+            \\(function(name){if(!name||name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');return document.createAttributeNS(null,name.toLowerCase());})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
@@ -8753,6 +8753,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  };
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
             \\  Document.prototype.adoptNode = function(n) { return n; };
+            \\  Document.prototype.createAttribute = function(n) { return document.createAttribute(n); };
+            \\  Document.prototype.createAttributeNS = function(ns,qn) { return document.createAttributeNS(ns,qn); };
+            \\  Document.prototype.createRange = function() { return document.createRange(); };
+            \\  Document.prototype.createTreeWalker = function(r,w,f) { return document.createTreeWalker(r,w,f); };
+            \\  Document.prototype.createNodeIterator = function(r,w,f) { return document.createNodeIterator(r,w,f); };
             \\  Document.prototype.implementation = document.implementation;
             \\  return Document;
             \\})()
