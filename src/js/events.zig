@@ -493,6 +493,12 @@ fn syncStopFlags(ctx: *qjs.JSContext, event_obj: qjs.JSValue) void {
     if (qjs.JS_ToBool(ctx, stop_imm) > 0) {
         current_event_flags.stop_immediate_propagation = true;
     }
+    // Sync defaultPrevented → prevent_default flag
+    const dp = qjs.JS_GetPropertyStr(ctx, event_obj, "defaultPrevented");
+    defer qjs.JS_FreeValue(ctx, dp);
+    if (qjs.JS_ToBool(ctx, dp) > 0) {
+        current_event_flags.prevent_default = true;
+    }
 }
 
 /// Call listeners on a specific node for the given event type and phase.
