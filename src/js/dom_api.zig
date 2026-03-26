@@ -7754,10 +7754,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // Node constants
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "ATTRIBUTE_NODE", qjs.JS_NewInt32(ctx, 2));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "TEXT_NODE", qjs.JS_NewInt32(ctx, 3));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "CDATA_SECTION_NODE", qjs.JS_NewInt32(ctx, 4));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "PROCESSING_INSTRUCTION_NODE", qjs.JS_NewInt32(ctx, 7));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "COMMENT_NODE", qjs.JS_NewInt32(ctx, 8));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_NODE", qjs.JS_NewInt32(ctx, 9));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_TYPE_NODE", qjs.JS_NewInt32(ctx, 10));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_FRAGMENT_NODE", qjs.JS_NewInt32(ctx, 11));
+    // DOCUMENT_POSITION constants
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_POSITION_DISCONNECTED", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_POSITION_PRECEDING", qjs.JS_NewInt32(ctx, 2));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_POSITION_FOLLOWING", qjs.JS_NewInt32(ctx, 4));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_POSITION_CONTAINS", qjs.JS_NewInt32(ctx, 8));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_POSITION_CONTAINED_BY", qjs.JS_NewInt32(ctx, 16));
+    _ = qjs.JS_SetPropertyStr(ctx, node_proto, "DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", qjs.JS_NewInt32(ctx, 32));
 
     // Node getters
     {
