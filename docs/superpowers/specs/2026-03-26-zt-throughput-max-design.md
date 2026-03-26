@@ -53,6 +53,25 @@ In `main.zig`, before the render loop: apply accumulated memmove via `std.mem.co
 
 **Saturation**: When `|shift| >= region_height`, skip memmove — all rows already dirty from per-row marking. This is the `cat bigfile` case.
 
+**Double-buffer safety (X11)**: The X11 backend uses double-buffered SHM. After `present()`, only the dirty region is copied from front → back (x11.zig:597-599). The non-dirty regions in the back buffer are from 2 frames ago. If memmove shifts pixels from a non-dirty region, those pixels are stale.
+
+Solution: add `syncBuffer(y_start, y_end)` to both backends. X11 copies the specified region from the other buffer to the current buffer. fbdev is a no-op (single buffer). Call `syncBuffer` for the scroll region before memmove:
+
+```zig
+// X11 backend
+pub fn syncBuffer(self: *Self, y_start: u32, y_end: u32) void {
+    const other: u1 = self.buf_idx ^ 1;
+    const byte_start = y_start * self.stride;
+    const byte_end = @min(y_end, self.height) * self.stride;
+    @memcpy(self.buffers[self.buf_idx][byte_start..byte_end], self.buffers[other][byte_start..byte_end]);
+}
+
+// fbdev backend
+pub fn syncBuffer(_: *Self, _: u32, _: u32) void {}
+```
+
+This ensures the memmove source pixels are always current, regardless of the previous frame's dirty region.
+
 **Impact**: Interactive scrolling (git log, man, moderate output): 24× render reduction. Dense ASCII saturated: no effect (degrades gracefully to full re-render).
 
 ### Files Changed
@@ -60,7 +79,9 @@ In `main.zig`, before the render loop: apply accumulated memmove via `std.mem.co
 | File | Change |
 |------|--------|
 | `src/term.zig` | Add scroll accumulator fields, modify `scrollUp`/`scrollDown` dirty strategy |
-| `src/main.zig` | Add pixel buffer memmove before render loop |
+| `src/main.zig` | Add pixel buffer memmove before render loop (with syncBuffer call) |
+| `src/backend/x11.zig` | Add `syncBuffer` method |
+| `src/backend/fbdev.zig` | Add `syncBuffer` no-op |
 
 ---
 
@@ -72,7 +93,7 @@ The render loop calls `term.getCell(x, y)`, `term.getFgRgb(x, y)`, `term.getBgRg
 
 ### Solution
 
-Resolve the physical row pointer once per row, then iterate columns with direct array access:
+Resolve the physical row pointer once per row, then iterate columns with direct array access. Also precompute the dirty bitmap row base to avoid per-cell `y * cols` multiplication in `isDirty`:
 
 ```zig
 while (y < term.rows) : (y += 1) {
@@ -82,10 +103,11 @@ while (y < term.rows) : (y += 1) {
     const row_cells = term.cells[row_base..][0..term.cols];
     const row_fg = term.fg_rgb[row_base..][0..term.cols];
     const row_bg = term.bg_rgb[row_base..][0..term.cols];
+    const dirty_row_base = @as(usize, y) * @as(usize, term.cols);
 
     var x: u32 = 0;
     while (x < term.cols) : (x += 1) {
-        if (skip_dirty_check or term.isDirty(x, y)) {
+        if (skip_dirty_check or term.dirty.isSet(dirty_row_base + x)) {
             const cell = &row_cells[x];
             if (cell.attrs.wide_dummy) continue;
             const fg_rgb = row_fg[x];
@@ -96,7 +118,7 @@ while (y < term.rows) : (y += 1) {
 }
 ```
 
-**Impact**: Per-cell overhead reduced by ~40%. 5,760 multiplications → 24. 5,760 bounds checks eliminated.
+**Impact**: Per-cell overhead reduced by ~40%. 5,760 multiplications → 48 (24 physical + 24 dirty). 5,760 bounds checks eliminated. Dirty check bypasses `isDirty` method overhead.
 
 ### Files Changed
 
@@ -135,6 +157,8 @@ When `all_dirty = false` (interactive use, cursor blink): use the existing per-c
 **Implementation detail**: To avoid duplicating render logic, call `renderCell` normally but pass a flag or use a wrapper that skips the background fill step when global fill was already applied. Alternatively, split `renderCell` internals so background fill and glyph blit are independently callable.
 
 The simplest approach: add a comptime `skip_bg: bool` parameter to `renderCell`. When true, skip the background fill loop (section 6 in renderCell). Since it's comptime, the unused code path is eliminated entirely.
+
+**Binary size note**: Adding a 6th comptime parameter doubles `renderCell` instantiations (currently 18 variants → 36). For ReleaseSmall (HackberryPi), this is a minor concern. In practice, only the build's specific pixel_format × scale × wide combination is instantiated, so the actual increase is 2 variants (skip_bg true/false for the build's config), not a full 2× explosion.
 
 ### Files Changed
 
@@ -202,7 +226,7 @@ const effective_frame_ns: i128 = if (config.frame_min_ns == 0) 0
 
 **Impact**: 3× more parse time per frame interval during extreme output. Visual impact: none — content scrolls too fast to read at these data rates.
 
-**Recovery**: Once output stops, `bytes_since_render` resets to 0 after the next render, immediately restoring 120fps responsiveness.
+**Recovery**: Once output stops, `bytes_since_render` resets to 0 after the next render, immediately restoring 120fps responsiveness. The tier transition is intentionally abrupt (no hysteresis) to keep the logic simple and maximize responsiveness recovery.
 
 ### Files Changed
 
@@ -216,29 +240,31 @@ const effective_frame_ns: i128 = if (config.frame_min_ns == 0) 0
 
 ### Problem
 
-`scrollUp` calls `clearRgbRow(phys)` on every recycled row — `@memset` of `cols × sizeof(?[3]u8)` for both fg_rgb and bg_rgb arrays (~640 bytes per scroll). During `cat bigfile`, thousands of scrolls occur per frame. When `all_dirty` is already true and no TrueColor is active, the RGB arrays will be overwritten by incoming data before the next render.
+`scrollUp` calls `clearRgbRow(phys)` on every recycled row — `@memset` of `cols × sizeof(?[3]u8)` for both fg_rgb and bg_rgb arrays (~640 bytes per scroll). During `cat bigfile`, thousands of scrolls occur per frame. When no TrueColor has been used, all RGB values are already null, making the clear redundant.
 
 ### Solution
 
-Skip RGB clear when conditions guarantee overwrite:
+Track whether TrueColor content exists via a `has_truecolor_cells: bool` flag in `Term`. Set to true when any TrueColor SGR writes to `fg_rgb`/`bg_rgb` arrays (in `setFgRgb`/`setBgRgb` and in `feedBulk`'s TrueColor path). Reset to false on `eraseDisplay(2)` (full screen clear) which already clears all RGB data.
+
+Skip RGB clear when the flag is false:
 
 ```zig
-if (!self.all_dirty or self.current_fg_rgb != null or self.current_bg_rgb != null) {
+if (self.has_truecolor_cells) {
     self.clearRgbRow(phys);
 }
 ```
 
-When `all_dirty = true` AND no TrueColor is active (the common dense ASCII case), skip the clear entirely. The bulk write path in `feedBulk` (vt.zig:461-465) already sets rgb values via `@memset` for the entire written range, and the cell write overwrites the recycled row's content.
+**Why not check `current_fg_rgb`/`current_bg_rgb`**: Those reflect the instantaneous drawing state, not whether stale TrueColor values exist in recycled rows. An application could set TrueColor, write colored content, reset SGR, then output plain text causing scrolls. The recycled rows would still contain stale RGB values from the earlier colored content.
 
-**Safety**: When TrueColor IS active (`current_fg_rgb != null` or `current_bg_rgb != null`), always clear to prevent stale RGB values from appearing. When `all_dirty = false`, always clear because partial renders might expose stale data.
+**Safety**: The `has_truecolor_cells` flag is conservative — once set, it stays true until a full screen erase. This means after ANY TrueColor usage, RGB clears resume until the screen is fully reset. For the target workload (dense ASCII, no TrueColor), the flag is never set.
 
-**Impact**: ~640 bytes × thousands of scrolls per frame = several MB of memset eliminated per frame interval.
+**Impact**: ~640 bytes × thousands of scrolls per frame = several MB of memset eliminated per frame interval (when TrueColor has never been used in the session).
 
 ### Files Changed
 
 | File | Change |
 |------|--------|
-| `src/term.zig` | Conditional `clearRgbRow` in `scrollUp`/`scrollDown` |
+| `src/term.zig` | Add `has_truecolor_cells` flag, conditional `clearRgbRow` |
 
 ---
 
@@ -246,7 +272,7 @@ When `all_dirty = true` AND no TrueColor is active (the common dense ASCII case)
 
 ### Problem
 
-`std.time.nanoTimestamp()` (maps to `clock_gettime(CLOCK_MONOTONIC)`) is called twice per main loop iteration: once for epoll timeout calculation, once for `last_render_ns` update after render. Each is a syscall.
+`std.time.nanoTimestamp()` (maps to `clock_gettime(CLOCK_MONOTONIC)`) is called up to 3 times per main loop iteration: epoll timeout calculation (line 351), frame rate check (line 531), and `last_render_ns` update (line 576). On modern Linux (x86_64 and aarch64), `clock_gettime(CLOCK_MONOTONIC)` is served by the vDSO — a shared memory page read, not a kernel syscall. Cost is ~20-50ns per call, not microsecond-level.
 
 ### Solution
 
@@ -255,10 +281,13 @@ Call once at loop start, reuse the value:
 ```zig
 const loop_now = std.time.nanoTimestamp();
 // Use loop_now for epoll timeout calculation
+// Use loop_now for frame rate check
 // Use loop_now for last_render_ns after render
 ```
 
-The timing inaccuracy (loop processing time between the two uses) is <1ms, negligible relative to 8-200ms frame intervals.
+The timing inaccuracy (loop processing time between the uses) is <1ms, negligible relative to 8-200ms frame intervals.
+
+**Impact**: Negligible (~60-150ns saved per loop iteration). Primarily a code simplification — reduces 3 call sites to 1, making the timing logic easier to reason about.
 
 ### Files Changed
 
@@ -274,7 +303,7 @@ The timing inaccuracy (loop processing time between the two uses) is <1ms, negli
 |-------|-------------|------|----------------------|
 | 1 | Tier 3 frame limiter | None | High — 3× more parse time |
 | 2 | PTY buffer 1MB | None | Medium — fewer syscalls |
-| 3 | nanoTimestamp dedup | None | Low — minor syscall reduction |
+| 3 | nanoTimestamp dedup | None | Negligible — code simplification |
 | 4 | Direct cell access | Low | Medium — ~40% per-cell overhead reduction |
 | 5 | All-dirty global BG fill | Low | High — 30K memsets → 1 memset |
 | 6 | scrollUp RGB clear skip | Low | Medium — MB of memset eliminated |
