@@ -2893,20 +2893,20 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const doc_ctor_js =
             \\(function() {
             \\  function Document() {
-            \\    this.nodeType = 9;
-            \\    this.nodeName = '#document';
+            \\    Object.defineProperty(this,'nodeType',{value:9,writable:false,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'nodeName',{value:'#document',writable:false,configurable:true,enumerable:true});
             \\    this._childNodes = [];
             \\    this._children = [];
             \\    Object.defineProperty(this,'childNodes',{get:function(){return this._childNodes;},configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'children',{get:function(){return this._children;},configurable:true,enumerable:true});
-            \\    this.firstChild = null;
-            \\    this.lastChild = null;
-            \\    this.documentElement = null;
-            \\    this.ownerDocument = null;
-            \\    this.parentNode = null;
-            \\    this.parentElement = null;
-            \\    this.nextSibling = null;
-            \\    this.previousSibling = null;
+            \\    Object.defineProperty(this,'firstChild',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'lastChild',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'documentElement',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'ownerDocument',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'parentNode',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'parentElement',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'nextSibling',{value:null,writable:true,configurable:true,enumerable:true});
+            \\    Object.defineProperty(this,'previousSibling',{value:null,writable:true,configurable:true,enumerable:true});
             \\    this.doctype = null;
             \\    this.head = null;
             \\    this.body = null;
