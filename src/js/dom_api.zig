@@ -720,7 +720,13 @@ fn elementSetTextContent(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM spec: setting textContent to null is treated as empty string
+    const s = jsStringToSlice(c, args[0]) orelse {
+        _ = lxb_dom_node_text_content_set(node, "", 0);
+        events.recordMutation(node, "childList", null, null, null);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    };
     defer qjs.JS_FreeCString(c, s.ptr);
     _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
     events.recordMutation(node, "childList", null, null, null);
@@ -7603,6 +7609,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &elementQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &elementGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagNameNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &elementToggleAttribute, "toggleAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &elementGetAttributeNames, "getAttributeNames", 0));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &elementScrollIntoView, "scrollIntoView", 1));
@@ -7973,6 +7980,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "writeln", qjs.JS_NewCFunction(ctx, &documentWrite, "writeln", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &documentGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagName", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &documentGetElementsByTagName, "getElementsByTagNameNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByName", qjs.JS_NewCFunction(ctx, &documentGetElementsByName, "getElementsByName", 1));
 
     // document.adoptNode / importNode (stub — return the node as-is)
@@ -8074,6 +8082,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // Document properties required by jQuery/Sizzle
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeType", qjs.JS_NewInt32(ctx, 9)); // DOCUMENT_NODE
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeName", qjs.JS_NewString(ctx, "#document"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "defaultView", qjs.JS_DupValue(ctx, global)); // window
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "ownerDocument", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compatMode", qjs.JS_NewString(ctx, "CSS1Compat"));
