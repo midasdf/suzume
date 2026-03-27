@@ -45,8 +45,8 @@ pub const FrameState = struct {
 
 /// Get FrameState from a JSContext's opaque pointer.
 pub fn getFrameStateFromCtx(ctx: *qjs.JSContext) ?*FrameState {
-    const opaque: ?*anyopaque = @ptrCast(qjs.JS_GetContextOpaque(ctx));
-    if (opaque) |ptr| {
+    const raw = qjs.JS_GetContextOpaque(ctx);
+    if (raw) |ptr| {
         return @ptrCast(@alignCast(ptr));
     }
     return null;

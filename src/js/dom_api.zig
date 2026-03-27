@@ -10,6 +10,8 @@ pub const dom_node = @import("dom_node.zig");
 pub const dom_elem = @import("dom_element.zig");
 pub const dom_doc = @import("dom_document.zig");
 pub const dom_style = @import("dom_style.zig");
+pub const frame_state = @import("frame_state.zig");
+pub const FrameState = frame_state.FrameState;
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
@@ -70,6 +72,42 @@ pub var scroll_y: f32 = 0;
 /// Scroll request from JS (scrollTo/scrollBy). null = no pending request.
 pub var pending_scroll_x: ?f32 = null;
 pub var pending_scroll_y: ?f32 = null;
+
+/// Top-level frame state (fallback during migration to per-frame architecture)
+pub var g_top_frame: FrameState = .{};
+
+// ── Per-frame accessor helpers ──────────────────────────────────────
+// These check the JSContext's opaque FrameState first, then fall back to globals.
+// During iframe support, each Context will have its own FrameState.
+
+pub fn getDocument(ctx: *qjs.JSContext) ?*anyopaque {
+    if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
+        if (fs.document) |doc| return doc;
+    }
+    return g_document;
+}
+
+pub fn getRootBox(ctx: *qjs.JSContext) ?*const Box {
+    if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
+        if (fs.root_box) |rb| return rb;
+    }
+    return g_root_box;
+}
+
+pub fn getStylesForCtx(ctx: *qjs.JSContext) ?*const cascade_mod.StyleMap {
+    if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
+        if (fs.styles) |s| return s;
+    }
+    return g_styles;
+}
+
+pub fn getViewportForCtx(ctx: *qjs.JSContext) struct { w: f32, h: f32 } {
+    if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
+        if (fs.viewport_width != 0 or fs.viewport_height != 0)
+            return .{ .w = fs.viewport_width, .h = fs.viewport_height };
+    }
+    return .{ .w = g_viewport_width, .h = g_viewport_height };
+}
 
 pub fn setDomDirty() void {
     dom_dirty = true;
