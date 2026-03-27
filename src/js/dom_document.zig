@@ -464,6 +464,10 @@ pub fn documentCreateTreeWalker(
         \\      return null;
         \\    }
         \\  };
+        \\  Object.defineProperty(tw,'root',{value:tw.root,writable:false,enumerable:true});
+        \\  Object.defineProperty(tw,'whatToShow',{value:tw.whatToShow,writable:false,enumerable:true});
+        \\  Object.defineProperty(tw,'filter',{value:tw.filter,writable:false,enumerable:true});
+        \\  tw[Symbol.toStringTag]='TreeWalker';
         \\  return tw;
         \\})
     ;
@@ -499,14 +503,18 @@ pub fn documentCreateNodeIterator(
     // Add NodeIterator-specific properties
     const ni_js =
         \\(function(ni){
-        \\  ni.referenceNode = ni.root;
-        \\  ni.pointerBeforeReferenceNode = true;
+        \\  var _ref = ni.root, _before = true;
+        \\  Object.defineProperty(ni,'referenceNode',{get:function(){return _ref;},enumerable:true});
+        \\  Object.defineProperty(ni,'pointerBeforeReferenceNode',{get:function(){return _before;},enumerable:true});
+        \\  Object.defineProperty(ni,'root',{value:ni.root,writable:false,enumerable:true});
+        \\  Object.defineProperty(ni,'whatToShow',{value:ni.whatToShow,writable:false,enumerable:true});
+        \\  Object.defineProperty(ni,'filter',{value:ni.filter,writable:false,enumerable:true});
         \\  ni.detach = function(){};
         \\  ni[Symbol.toStringTag] = 'NodeIterator';
         \\  var origNext = ni.nextNode;
-        \\  ni.nextNode = function(){var n=origNext.call(this);if(n)this.referenceNode=n;this.pointerBeforeReferenceNode=false;return n;};
+        \\  ni.nextNode = function(){var n=origNext.call(this);if(n){_ref=n;_before=false;}return n;};
         \\  var origPrev = ni.previousNode;
-        \\  ni.previousNode = function(){var n=origPrev.call(this);if(n)this.referenceNode=n;this.pointerBeforeReferenceNode=true;return n;};
+        \\  ni.previousNode = function(){var n=origPrev.call(this);if(n){_ref=n;_before=true;}return n;};
         \\})
     ;
     const ni_fn = qjs.JS_Eval(c, ni_js, ni_js.len, "<nodeiter>", qjs.JS_EVAL_TYPE_GLOBAL);
