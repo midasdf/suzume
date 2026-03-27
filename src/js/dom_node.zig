@@ -49,7 +49,20 @@ pub fn elementGetTagName(
     const name_ptr = lxb_dom_element_local_name(elem, &len);
     if (name_ptr == null or len == 0) return quickjs.JS_NULL();
 
-    // Convert to uppercase (DOM spec: tagName is uppercase for HTML elements)
+    // Check namespace: only uppercase for HTML namespace elements
+    const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
+    var is_html = true;
+    if (!quickjs.JS_IsNull(ns_val) and !quickjs.JS_IsUndefined(ns_val)) {
+        if (api.jsStringToSlice(c, ns_val)) |ns_s| {
+            defer qjs.JS_FreeCString(c, ns_s.ptr);
+            if (!std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml")) is_html = false;
+        }
+    }
+    qjs.JS_FreeValue(c, ns_val);
+
+    if (!is_html) return qjs.JS_NewStringLen(c, name_ptr.?, len);
+
+    // HTML namespace: convert to uppercase per DOM spec
     var stack_buf: [256]u8 = undefined;
     const use_heap = len > stack_buf.len;
     const buf = if (use_heap)
