@@ -241,10 +241,10 @@ pub fn computedStyleGetPropertyValue(
 
     // Fall back to cascade computed style, using layout box used values where available
     const node = getNode(c, elem_val);
-    if (node != null and api.g_styles != null) {
-        if (api.g_styles.?.get(@intFromPtr(node.?))) |style| {
+    if (node != null and api.getStylesForCtx(c) != null) {
+        if (api.getStylesForCtx(c).?.get(@intFromPtr(node.?))) |style| {
             // Try to use layout box for resolved margin/padding/dimension values
-            const box_opt = if (api.g_root_box) |root| api.findBoxForNode(root, node.?) else null;
+            const box_opt = if (api.getRootBox(c)) |root| api.findBoxForNode(root, node.?) else null;
             return computedStyleToStringWithBox(c, &style, prop, box_opt);
         }
     }
@@ -1074,8 +1074,8 @@ pub fn isComputedLengthProperty(prop: []const u8) bool {
 /// Get the element's computed font-size from the global style map.
 pub fn getElementFontSizeFromStyle(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
     const node = getNode(c, elem_val);
-    if (node != null and api.g_styles != null) {
-        if (api.g_styles.?.get(@intFromPtr(node.?))) |style| {
+    if (node != null and api.getStylesForCtx(c) != null) {
+        if (api.getStylesForCtx(c).?.get(@intFromPtr(node.?))) |style| {
             return style.font_size_px;
         }
     }
@@ -1085,7 +1085,7 @@ pub fn getElementFontSizeFromStyle(c: *qjs.JSContext, elem_val: qjs.JSValue) f32
 /// Get containing block width from the layout tree.
 /// For abs-pos elements, walks up to find nearest positioned ancestor (CSS spec).
 pub fn getContainingBlockWidth(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
-    const root = api.g_root_box orelse return api.g_viewport_width;
+    const root = api.getRootBox(c) orelse return api.g_viewport_width;
     const lxb_node: *lxb.lxb_dom_node_t = getNode(c, elem_val) orelse return api.g_viewport_width;
     const box = api.findBoxForNode(root, lxb_node) orelse return api.g_viewport_width;
 
@@ -1108,7 +1108,7 @@ pub fn getContainingBlockWidth(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
 
 /// Get containing block height from the layout tree.
 pub fn getContainingBlockHeight(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
-    const root = api.g_root_box orelse return api.g_viewport_height;
+    const root = api.getRootBox(c) orelse return api.g_viewport_height;
     const lxb_node: *lxb.lxb_dom_node_t = getNode(c, elem_val) orelse return api.g_viewport_height;
     const box = api.findBoxForNode(root, lxb_node) orelse return api.g_viewport_height;
 
@@ -1337,7 +1337,7 @@ pub fn getInheritedComputedValue(c: *qjs.JSContext, elem_val: qjs.JSValue, prop:
     // Guard: only element nodes have attributes
     const parent_ptr: *lxb.lxb_dom_node_t = @ptrCast(parent);
     if (parent_ptr.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-        if (api.g_styles) |styles| {
+        if (api.getStylesForCtx(c)) |styles| {
             if (styles.get(@intFromPtr(parent))) |style| {
                 return computedStyleToString(c, &style, prop);
             }
@@ -1365,7 +1365,7 @@ pub fn getInheritedComputedValue(c: *qjs.JSContext, elem_val: qjs.JSValue, prop:
     }
 
     // Fall back to cascade computed style
-    if (api.g_styles) |styles| {
+    if (api.getStylesForCtx(c)) |styles| {
         if (styles.get(@intFromPtr(parent))) |style| {
             return computedStyleToString(c, &style, prop);
         }
@@ -1451,14 +1451,14 @@ pub fn windowGetComputedStyle(
     // This avoids the memory management issues (DupValue/FreeValue) that
     // caused segfaults during navigation with the previous eval approach.
     const node = getNode(c, args[0]);
-    const style_opt: ?ComputedStyle = if (node != null and api.g_styles != null)
-        api.g_styles.?.get(@intFromPtr(node.?))
+    const style_opt: ?ComputedStyle = if (node != null and api.getStylesForCtx(c) != null)
+        api.getStylesForCtx(c).?.get(@intFromPtr(node.?))
     else
         null;
 
     // Find layout box for used-value resolution (margin/padding/width % → px)
-    const box_opt: ?*const Box = if (node != null and api.g_root_box != null)
-        api.findBoxForNode(api.g_root_box.?, node.?)
+    const box_opt: ?*const Box = if (node != null and api.getRootBox(c) != null)
+        api.findBoxForNode(api.getRootBox(c).?, node.?)
     else
         null;
 

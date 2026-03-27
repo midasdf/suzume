@@ -379,14 +379,14 @@ pub fn elementCloneNode(
 
     // Text/Comment/PI nodes: create new node with same data
     if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
-        const doc = api.g_document orelse return quickjs.JS_NULL();
+        const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
         var len: usize = 0;
         const txt = lxb_dom_node_text_content(node, &len);
         const new_text = lxb_dom_document_create_text_node(doc, if (txt) |t| t else "", if (txt != null) len else 0) orelse return quickjs.JS_NULL();
         return api.wrapNode(c, new_text);
     }
     if (node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
-        const doc = api.g_document orelse return quickjs.JS_NULL();
+        const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
         var len: usize = 0;
         const txt = lxb_dom_node_text_content(node, &len);
         const new_comment = lxb_dom_document_create_comment(doc, if (txt) |t| t else "", if (txt != null) len else 0) orelse return quickjs.JS_NULL();
@@ -409,7 +409,7 @@ pub fn elementCloneNode(
     const html = accum.result();
     if (html.len == 0) return quickjs.JS_NULL();
 
-    const doc = api.g_document orelse return quickjs.JS_NULL();
+    const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const frag = lxb_html_document_parse_fragment(doc, elem, html.ptr, html.len) orelse return quickjs.JS_NULL();
 
@@ -443,7 +443,7 @@ pub fn elementReplaceWith(
         } else {
             if (api.jsStringToSlice(c, arg)) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
-                const doc = api.g_document orelse continue;
+                const doc = api.getDocument(c) orelse continue;
                 const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
                 lxb_dom_node_insert_before(node, text);
             }
@@ -487,7 +487,7 @@ pub fn elementBefore(
         } else {
             if (api.jsStringToSlice(c, arg)) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
-                const doc = api.g_document orelse continue;
+                const doc = api.getDocument(c) orelse continue;
                 const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
                 if (node.parent == null) {
                     if (next_sib) |ns| lxb_dom_node_insert_before(ns, text) else lxb_dom_node_insert_child(parent, text);
@@ -535,7 +535,7 @@ pub fn elementAfter(
         } else {
             if (api.jsStringToSlice(c, arg)) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
-                const doc = api.g_document orelse continue;
+                const doc = api.getDocument(c) orelse continue;
                 const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
                 if (anchor.parent == null) {
                     if (prev_sib) |ps| lxb_dom_node_insert_after(ps, text) else {

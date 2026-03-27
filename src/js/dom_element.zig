@@ -1250,7 +1250,7 @@ pub fn templateGetContent(
 
 /// Helper: get Box dimensions for the element attached to this_val.
 pub fn getBoxForThis(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?*const Box {
-    const root = api.g_root_box orelse return null;
+    const root = api.getRootBox(ctx) orelse return null;
     const node = getNodeFromThis(ctx, this_val) orelse return null;
     return findBoxForNode(root, node);
 }

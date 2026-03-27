@@ -56,7 +56,7 @@ pub fn documentCreateComment(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const doc = api.g_document orelse return quickjs.JS_NULL();
+    const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
 
     // Get the data string (default to empty)
     var data_ptr: [*]const u8 = "";
@@ -590,7 +590,7 @@ pub fn documentCreateElement(
     if (tag.len == 0 or !isValidElementName(tag))
         return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
-    const doc = api.g_document orelse return quickjs.JS_NULL();
+    const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     const elem = lxb_dom_document_create_element(doc, s.ptr, s.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const js_elem = wrapNode(c, node);
@@ -613,7 +613,7 @@ pub fn documentCreateElementNS(
     const s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    const doc = api.g_document orelse return quickjs.JS_NULL();
+    const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     // Handle qualified name (prefix:localName)
     const tag = s.ptr[0..s.len];
     const elem = lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return quickjs.JS_NULL();
@@ -643,7 +643,7 @@ pub fn documentCreateTextNode(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    const doc = api.g_document orelse return quickjs.JS_NULL();
+    const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse return quickjs.JS_NULL();
     return wrapNode(c, text);
 }
@@ -806,7 +806,7 @@ pub fn documentCreateDocumentFragment(
 ) callconv(.c) qjs.JSValue {
     // Simplified: create a div element (fragments are complex to implement properly)
     const c = ctx orelse return quickjs.JS_NULL();
-    const doc = api.g_document orelse return quickjs.JS_NULL();
+    const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     const elem = lxb_dom_document_create_element(doc, "div", 3, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     return wrapNode(c, node);
@@ -911,7 +911,7 @@ pub fn documentWrite(
     std.log.info("[JS] document.write: {d} bytes", .{html.len});
 
     // Parse HTML fragment and append to body
-    const doc_ptr = api.g_document orelse return quickjs.JS_UNDEFINED();
+    const doc_ptr = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     const doc_node = getDocumentNode() orelse return quickjs.JS_UNDEFINED();
     const body_node = walkTreeByTag(doc_node, "body") orelse return quickjs.JS_UNDEFINED();
     const body_elem: *lxb.lxb_dom_element_t = @ptrCast(body_node);

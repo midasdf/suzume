@@ -113,7 +113,7 @@ pub fn elementSetInnerHTML(
     removeAllChildren(node);
 
     // Parse fragment
-    const doc = api.g_document orelse return quickjs.JS_UNDEFINED();
+    const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     if (s.len > 0) {
         const frag = lxb_html_document_parse_fragment(doc, elem, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
         // Move children from fragment to element
@@ -170,7 +170,7 @@ pub fn elementSetOuterHTML(
         return quickjs.JS_UNDEFINED();
     }
 
-    const doc = api.g_document orelse return quickjs.JS_UNDEFINED();
+    const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     const frag = lxb_html_document_parse_fragment(doc, elem, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
 
     // Insert all fragment children before this node, then remove this node
@@ -204,7 +204,7 @@ pub fn elementInsertAdjacentHTML(
 
     if (html_s.len == 0) return quickjs.JS_UNDEFINED();
 
-    const doc = api.g_document orelse return quickjs.JS_UNDEFINED();
+    const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     const frag = lxb_html_document_parse_fragment(doc, elem, html_s.ptr, html_s.len) orelse return quickjs.JS_UNDEFINED();
 
     const position = pos_s.ptr[0..pos_s.len];
