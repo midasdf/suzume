@@ -1345,13 +1345,23 @@ fn jsDocumentDispatchEvent(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NewBool(false);
-    if (argc < 1) return quickjs.JS_NewBool(false);
+    if (argc < 1) return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': 1 argument required");
     const args = argv orelse return quickjs.JS_NewBool(false);
+    // DOM spec: TypeError if argument is null/undefined/not an Event
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
+    }
     const event_obj = args[0];
+    // Check _initialized flag (createEvent events start uninitialized)
+    const init_flag = qjs.JS_GetPropertyStr(c, event_obj, "_initialized");
+    defer qjs.JS_FreeValue(c, init_flag);
+    if (init_flag.tag != qjs.JS_TAG_UNDEFINED and qjs.JS_ToBool(c, init_flag) == 0) {
+        return dom_api.throwDOMException(c, "InvalidStateError", "The event has not been initialized.");
+    }
     const type_val = qjs.JS_GetPropertyStr(c, event_obj, "type");
     const type_s = dom_api.jsStringToSlice(c, type_val) orelse {
         qjs.JS_FreeValue(c, type_val);
-        return quickjs.JS_NewBool(false);
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
     };
     defer qjs.JS_FreeCString(c, type_s.ptr);
     qjs.JS_FreeValue(c, type_val);

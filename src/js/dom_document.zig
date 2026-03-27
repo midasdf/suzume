@@ -1006,7 +1006,14 @@ pub fn documentCreateEvent(
         "(new DragEvent(''))"
     else
         "(new Event(''))";
-    return qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+    const event_obj = qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(event_obj)) {
+        // DOM spec: createEvent returns an uninitialized event (type='', _initialized=false)
+        _ = qjs.JS_SetPropertyStr(c, event_obj, "type", qjs.JS_NewString(c, ""));
+        _ = qjs.JS_SetPropertyStr(c, event_obj, "_initialized", quickjs.JS_NewBool(false));
+        _ = qjs.JS_SetPropertyStr(c, event_obj, "isTrusted", quickjs.JS_NewBool(false));
+    }
+    return event_obj;
 }
 
 // ── document.write ─────────────────────────────────────────────────
