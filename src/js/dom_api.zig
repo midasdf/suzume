@@ -2816,6 +2816,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createComment", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateComment, "createComment", 1));
 
+    // document.createCDATASection — HTML documents must throw NotSupportedError
+    {
+        const cdata_js = "(function(){throw new DOMException('This is an HTML document.','NotSupportedError');})";
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createCDATASection", qjs.JS_Eval(ctx, cdata_js, cdata_js.len, "<cdata>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+
     // document.createProcessingInstruction(target, data)
     {
         const pi_js =
