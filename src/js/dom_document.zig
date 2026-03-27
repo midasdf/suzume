@@ -167,6 +167,12 @@ pub fn implCreateDocumentType(
         _ = qjs.JS_SetPropertyStr(c, obj, "systemId", qjs.JS_NewString(c, ""));
     }
     _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
+    _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "textContent", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "firstChild", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "lastChild", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "parentElement", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, obj, "internalSubset", quickjs.JS_NULL());
     // ownerDocument = the calling document
     {
         const global = qjs.JS_GetGlobalObject(c);
