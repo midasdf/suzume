@@ -2855,6 +2855,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // Document properties required by jQuery/Sizzle
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeType", qjs.JS_NewInt32(ctx, 9)); // DOCUMENT_NODE
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "textContent", quickjs.JS_NULL()); // Document.textContent is null per spec
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeValue", quickjs.JS_NULL()); // Document.nodeValue is null per spec
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeName", qjs.JS_NewString(ctx, "#document"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "defaultView", qjs.JS_DupValue(ctx, global)); // window
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "ownerDocument", quickjs.JS_NULL());

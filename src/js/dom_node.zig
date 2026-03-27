@@ -99,7 +99,13 @@ pub fn elementSetTextContent(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    // DOM spec: setting textContent to null is treated as empty string
+    // DOM spec: setting textContent to null/undefined is treated as empty string
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
+        _ = lxb_dom_node_text_content_set(node, "", 0);
+        events.recordMutation(node, "childList", null, null, null);
+        api.setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
     const s = api.jsStringToSlice(c, args[0]) orelse {
         _ = lxb_dom_node_text_content_set(node, "", 0);
         events.recordMutation(node, "childList", null, null, null);
