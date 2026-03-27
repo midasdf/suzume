@@ -2632,6 +2632,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, r);
     }
 
+    // Element @@unscopables per DOM spec
+    {
+        const unscopables_js =
+            \\(function(){
+            \\  Element.prototype[Symbol.unscopables]={before:true,after:true,replaceWith:true,remove:true,prepend:true,append:true,slot:true};
+            \\})()
+        ;
+        const ur = qjs.JS_Eval(ctx, unscopables_js, unscopables_js.len, "<unscopables>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, ur);
+    }
+
     // ── Text prototype (inherits Node.prototype) ─────────────────────
     // Text/Comment/PI nodes get CharacterData methods via this prototype.
     const text_proto = qjs.JS_NewObject(ctx);
