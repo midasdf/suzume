@@ -873,12 +873,16 @@ pub fn documentCreateDocumentFragment(
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Simplified: create a div element (fragments are complex to implement properly)
     const c = ctx orelse return quickjs.JS_NULL();
+    // Use a real Lexbor element but override nodeType/nodeName for spec compliance
     const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     const elem = lxb_dom_document_create_element(doc, "div", 3, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    return wrapNode(c, node);
+    const obj = wrapNode(c, node);
+    // Override nodeType and nodeName to match DocumentFragment spec
+    _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 11));
+    _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_NewString(c, "#document-fragment"));
+    return obj;
 }
 
 // ── document.readyState getter ──────────────────────────────────────
