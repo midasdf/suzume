@@ -299,6 +299,8 @@ pub fn elementToggleAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
+    // Validate name per DOM spec
+    if (s.len == 0) return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
     const has = lxb_dom_element_has_attribute(elem, s.ptr, s.len);
 
