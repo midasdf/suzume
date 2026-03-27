@@ -716,6 +716,10 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     events.dispatchWindowEvent(js_rt.ctx, "load");
     js_rt.executePending();
 
+    // Fire iframe load events (after scripts have set onload handlers)
+    dom_api.iframe.fireIframeLoadEvents(js_rt.ctx);
+    js_rt.executePending();
+
     // Final timer tick
     {
         var timer_iters: u32 = 0;
@@ -2226,6 +2230,8 @@ pub fn main() !void {
                     web_api.tickWebSockets(js_rt.ctx);
                     web_api.tickWorkers(js_rt.ctx);
                     js_rt.executePending();
+                    // Tick timers for all active iframe contexts
+                    dom_api.iframe.tickAllIframeTimers();
                     if (dom_api.dom_dirty) {
                         dom_api.dom_dirty = false;
                         restylePage(pg, allocator, &fonts, surface.width, surface.height);

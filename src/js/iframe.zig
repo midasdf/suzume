@@ -207,6 +207,26 @@ fn setupIframe(
 
     _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", content_window);
     _ = qjs.JS_SetPropertyStr(parent_ctx, content_window, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+
+    // Fire load event on iframe element (in parent context)
+    // Many WPT tests depend on iframe.onload
+    {
+        const load_js =
+            \\(function(el){
+            \\  var e = new Event('load');
+            \\  if(el.onload) el.onload(e);
+            \\  el.dispatchEvent(e);
+            \\})
+        ;
+        const load_fn = qjs.JS_Eval(parent_ctx, load_js, load_js.len, "<iframe-load>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(load_fn)) {
+            var load_args = [1]qjs.JSValue{qjs.JS_DupValue(parent_ctx, js_elem)};
+            const load_result = qjs.JS_Call(parent_ctx, load_fn, quickjs.JS_UNDEFINED(), 1, &load_args);
+            qjs.JS_FreeValue(parent_ctx, load_result);
+            qjs.JS_FreeValue(parent_ctx, load_args[0]);
+            qjs.JS_FreeValue(parent_ctx, load_fn);
+        }
+    }
 }
 
 // ── Content Fetching ────────────────────────────────────────────────
@@ -314,4 +334,38 @@ pub fn getFrameByIndex(idx: u32) ?*const FrameState {
 /// Get current iframe count
 pub fn getIframeCount() u32 {
     return iframe_count;
+}
+
+/// Tick timers and pending jobs for all active iframe contexts.
+/// Called from main event loop.
+pub fn tickAllIframeTimers() void {
+    var i: u32 = 0;
+    while (i < iframe_count) : (i += 1) {
+        if (iframe_contexts[i]) |ctx| {
+            _ = web_api.tickTimers(ctx);
+            // Execute pending promises/microtasks for this context
+            // Note: JS_ExecutePendingJob works at Runtime level, handles all contexts
+        }
+    }
+}
+
+/// Fire load events on all iframe elements after page scripts have executed.
+/// This ensures onload handlers set by scripts are called.
+pub fn fireIframeLoadEvents(parent_ctx: *qjs.JSContext) void {
+    const js =
+        \\(function(){
+        \\  var iframes = document.querySelectorAll('iframe');
+        \\  for(var i=0; i<iframes.length; i++){
+        \\    var e = new Event('load');
+        \\    var handler = iframes[i].onload || null;
+        \\    if(!handler && iframes[i].getAttribute('onload')){
+        \\      try { handler = new Function('event', iframes[i].getAttribute('onload')); } catch(ex){}
+        \\    }
+        \\    if(handler) try { handler.call(iframes[i], e); } catch(ex){}
+        \\    try { iframes[i].dispatchEvent(e); } catch(ex){}
+        \\  }
+        \\})()
+    ;
+    const r = qjs.JS_Eval(parent_ctx, js, js.len, "<iframe-load-events>", qjs.JS_EVAL_TYPE_GLOBAL);
+    qjs.JS_FreeValue(parent_ctx, r);
 }
