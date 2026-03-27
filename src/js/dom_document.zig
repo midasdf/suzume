@@ -457,20 +457,36 @@ pub fn documentCreateTreeWalker(
         \\      return null;
         \\    },
         \\    nextSibling: function() {
-        \\      var node = this.currentNode.nextSibling;
-        \\      while (node) {
-        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\        node = node.nextSibling;
+        \\      var node = this.currentNode;
+        \\      if (node === this.root) return null;
+        \\      while (true) {
+        \\        var sib = node.nextSibling;
+        \\        while (sib) {
+        \\          var r = this._check(sib);
+        \\          if (r === 1) { this.currentNode = sib; return sib; }
+        \\          if (r === 3 && sib.firstChild) { sib = sib.firstChild; continue; }
+        \\          sib = sib.nextSibling;
+        \\        }
+        \\        node = node.parentNode;
+        \\        if (!node || node === this.root) return null;
+        \\        if (this._check(node) === 1) return null;
         \\      }
-        \\      return null;
         \\    },
         \\    previousSibling: function() {
-        \\      var node = this.currentNode.previousSibling;
-        \\      while (node) {
-        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\        node = node.previousSibling;
+        \\      var node = this.currentNode;
+        \\      if (node === this.root) return null;
+        \\      while (true) {
+        \\        var sib = node.previousSibling;
+        \\        while (sib) {
+        \\          var r = this._check(sib);
+        \\          if (r === 1) { this.currentNode = sib; return sib; }
+        \\          if (r === 3 && sib.lastChild) { sib = sib.lastChild; continue; }
+        \\          sib = sib.previousSibling;
+        \\        }
+        \\        node = node.parentNode;
+        \\        if (!node || node === this.root) return null;
+        \\        if (this._check(node) === 1) return null;
         \\      }
-        \\      return null;
         \\    }
         \\  };
         \\  Object.defineProperty(tw,'root',{value:tw.root,writable:false,enumerable:true});
