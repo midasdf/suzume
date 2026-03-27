@@ -1086,7 +1086,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\  }
         \\  CustomEvent.prototype = Object.create(Event.prototype);
         \\  CustomEvent.prototype.constructor = CustomEvent;
-        \\  CustomEvent.prototype.initCustomEvent = function(t, b, c, d) { this.initEvent(t, b, c); this.detail = d; };
+        \\  CustomEvent.prototype.initCustomEvent = function(t, b, c, d) { if(arguments.length<1)throw new TypeError("Failed to execute 'initCustomEvent': 1 argument required.");this.initEvent(t, b, c); this.detail = d!==undefined?d:null; };
         \\  return CustomEvent;
         \\})()
     ;
