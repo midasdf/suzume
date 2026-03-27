@@ -369,3 +369,25 @@ pub fn fireIframeLoadEvents(parent_ctx: *qjs.JSContext) void {
     const r = qjs.JS_Eval(parent_ctx, js, js.len, "<iframe-load-events>", qjs.JS_EVAL_TYPE_GLOBAL);
     qjs.JS_FreeValue(parent_ctx, r);
 }
+
+/// Check if two URLs have the same origin (protocol + host + port)
+pub fn isSameOrigin(url1: []const u8, url2: []const u8) bool {
+    // Extract origin from URLs
+    const origin1 = extractOrigin(url1);
+    const origin2 = extractOrigin(url2);
+    return std.mem.eql(u8, origin1, origin2);
+}
+
+fn extractOrigin(url: []const u8) []const u8 {
+    // Find "://" 
+    if (std.mem.indexOf(u8, url, "://")) |proto_end| {
+        const after_proto = url[proto_end + 3 ..];
+        // Find end of host:port (next "/" or end of string)
+        if (std.mem.indexOfScalar(u8, after_proto, '/')) |slash| {
+            return url[0 .. proto_end + 3 + slash];
+        }
+        return url;
+    }
+    // Relative URL or about:blank — same origin as parent
+    return "";
+}
