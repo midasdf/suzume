@@ -185,6 +185,14 @@ var next_timer_id: u32 = 1;
 /// We use a global since QuickJS is single-threaded.
 var global_ctx: ?*qjs.JSContext = null;
 
+pub fn getGlobalCtx() ?*qjs.JSContext {
+    return global_ctx;
+}
+
+pub fn setGlobalCtx(ctx: ?*qjs.JSContext) void {
+    global_ctx = ctx;
+}
+
 fn currentTimeMs() i64 {
     const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
     return @divTrunc(ts.sec * 1000 + @divTrunc(ts.nsec, 1_000_000), 1);
