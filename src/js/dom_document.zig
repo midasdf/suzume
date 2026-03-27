@@ -490,6 +490,15 @@ pub fn jsReturnNull(
     return quickjs.JS_NULL();
 }
 
+pub fn jsReturnTrue(
+    _: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return quickjs.JS_NewBool(true);
+}
+
 pub fn getDocumentNode() ?*lxb.lxb_dom_node_t {
     const doc = api.g_document orelse return null;
     return @ptrCast(@alignCast(doc));

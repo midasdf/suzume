@@ -2746,6 +2746,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // document.adoptNode / importNode (stub — return the node as-is)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "adoptNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentAdoptNode, "adoptNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "contains", qjs.JS_NewCFunction(ctx, &dom_node.elementContains, "contains", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &dom_node.nodeCompareDocumentPosition, "compareDocumentPosition", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hasChildNodes", qjs.JS_NewCFunction(ctx, &dom_doc.jsReturnTrue, "hasChildNodes", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentImportNode, "importNode", 2));
     // document.createRange (stub)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateRange, "createRange", 0));
