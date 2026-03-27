@@ -831,26 +831,24 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
         qjs.JS_FreeAtom(ctx, valueAtom);
     }
 
-    // Set indexed properties and Symbol.iterator via JS eval
+    // Wrap classList in a Proxy for dynamic indexed access and Symbol.iterator
     const iter_js =
         \\(function(cl){
-        \\  var elem=cl.__element;
-        \\  if(elem){
-        \\    var c=elem.getAttribute('class');
-        \\    if(c){
-        \\      var parts=c.split(/\s+/).filter(function(s){return s.length>0;});
-        \\      for(var i=0;i<parts.length;i++)Object.defineProperty(cl,i,{value:parts[i],configurable:true,enumerable:true});
-        \\    }
-        \\  }
         \\  cl[Symbol.iterator]=function(){var idx=0,self=this;return{next:function(){var v=self.item(idx++);return v===null?{done:true}:{done:false,value:v};}};};
+        \\  cl._tokens=function(){var e=this.__element;if(!e)return[];var c=e.getAttribute('class');if(!c)return[];var seen={},r=[];c.split(/[\x20\t\n\r\f]+/).forEach(function(s){if(s&&!seen[s]){seen[s]=1;r.push(s);}});return r;};
+        \\  return new Proxy(cl,{get:function(t,p,r){if(typeof p==='string'&&/^\d+$/.test(p)){var toks=t._tokens();var i=parseInt(p);return i<toks.length?toks[i]:undefined;}return Reflect.get(t,p,r);}});
         \\})
     ;
     const iter_fn = qjs.JS_Eval(ctx, iter_js, iter_js.len, "<classList>", qjs.JS_EVAL_TYPE_GLOBAL);
     if (!quickjs.JS_IsException(iter_fn)) {
         var call_args = [_]qjs.JSValue{obj};
-        const ret = qjs.JS_Call(ctx, iter_fn, quickjs.JS_UNDEFINED(), 1, &call_args);
-        qjs.JS_FreeValue(ctx, ret);
+        const proxy = qjs.JS_Call(ctx, iter_fn, quickjs.JS_UNDEFINED(), 1, &call_args);
         qjs.JS_FreeValue(ctx, iter_fn);
+        if (!quickjs.JS_IsException(proxy)) {
+            qjs.JS_FreeValue(ctx, obj); // Release original, return Proxy
+            return proxy;
+        }
+        qjs.JS_FreeValue(ctx, proxy);
     }
 
     return obj;
