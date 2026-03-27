@@ -343,9 +343,12 @@ pub fn documentCreateTreeWalker(
     const root_val = if (argc >= 1) args[0] else return quickjs.JS_NULL();
 
     // Get whatToShow (default: SHOW_ALL = 0xFFFFFFFF)
-    var what_to_show: i32 = -1; // 0xFFFFFFFF as signed
-    if (argc >= 2) {
-        _ = qjs.JS_ToInt32(c, &what_to_show, args[1]);
+    // Use unsigned to match DOM spec (4294967295, not -1)
+    var what_to_show: u32 = 0xFFFFFFFF;
+    if (argc >= 2 and !quickjs.JS_IsUndefined(args[1])) {
+        var signed: i32 = -1;
+        _ = qjs.JS_ToInt32(c, &signed, args[1]);
+        what_to_show = @bitCast(signed);
     }
 
     // Build TreeWalker as a JS polyfill that uses native DOM traversal
@@ -357,7 +360,7 @@ pub fn documentCreateTreeWalker(
         \\    whatToShow: whatToShow,
         \\    filter: filter || null,
         \\    _accepts: function(node) {
-        \\      if (whatToShow !== -1 && whatToShow !== 0xFFFFFFFF) {
+        \\      if (whatToShow !== 0xFFFFFFFF) {
         \\        var nt = node.nodeType;
         \\        var mask = 1 << (nt - 1);
         \\        if (!(whatToShow & mask)) return false;
@@ -471,7 +474,7 @@ pub fn documentCreateTreeWalker(
     const filter_val = if (argc >= 3) qjs.JS_DupValue(c, args[2]) else quickjs.JS_NULL();
     var call_args = [_]qjs.JSValue{
         qjs.JS_DupValue(c, root_val),
-        qjs.JS_NewInt32(c, what_to_show),
+        qjs.JS_NewFloat64(c, @floatFromInt(what_to_show)),
         filter_val,
     };
     const result = qjs.JS_Call(c, walker_fn, quickjs.JS_UNDEFINED(), 3, &call_args);
