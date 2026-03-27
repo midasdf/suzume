@@ -87,7 +87,39 @@ pub fn documentAdoptNode(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    return qjs.JS_DupValue(c, args[0]);
+    const node_val = args[0];
+
+    // DOM spec: throw NotSupportedError for Document nodes
+    const nt = qjs.JS_GetPropertyStr(c, node_val, "nodeType");
+    defer qjs.JS_FreeValue(c, nt);
+    var node_type: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &node_type, nt);
+    if (node_type == 9) { // DOCUMENT_NODE
+        return throwDOMException(c, "NotSupportedError", "Cannot adopt a document node.");
+    }
+
+    // Remove from parent if it has one (both Lexbor DOM and JS-level)
+    const node_opt = api.getNode(c, node_val);
+    if (node_opt) |node| {
+        if (node.parent != null) {
+            lxb_dom_node_remove(node);
+        }
+    } else {
+        // JS-level Document constructor nodes: remove via JS parentNode
+        const parent_val = qjs.JS_GetPropertyStr(c, node_val, "parentNode");
+        defer qjs.JS_FreeValue(c, parent_val);
+        if (!quickjs.JS_IsNull(parent_val) and !quickjs.JS_IsUndefined(parent_val)) {
+            const remove_fn = qjs.JS_GetPropertyStr(c, parent_val, "removeChild");
+            defer qjs.JS_FreeValue(c, remove_fn);
+            if (!quickjs.JS_IsUndefined(remove_fn)) {
+                var rm_args = [1]qjs.JSValue{qjs.JS_DupValue(c, node_val)};
+                const rm_result = qjs.JS_Call(c, remove_fn, parent_val, 1, &rm_args);
+                qjs.JS_FreeValue(c, rm_result);
+                qjs.JS_FreeValue(c, rm_args[0]);
+            }
+        }
+    }
+    return qjs.JS_DupValue(c, node_val);
 }
 
 /// Validate an XML qualified name per https://dom.spec.whatwg.org/#validate
@@ -287,20 +319,23 @@ pub fn documentCreateTreeWalker(
 
     // Build TreeWalker as a JS polyfill that uses native DOM traversal
     const walker_js =
-        \\(function(root, whatToShow) {
+        \\(function(root, whatToShow, filter) {
         \\  var tw = {
         \\    root: root,
         \\    currentNode: root,
         \\    whatToShow: whatToShow,
+        \\    filter: filter || null,
         \\    _accepts: function(node) {
-        \\      if (whatToShow === -1 || whatToShow === 0xFFFFFFFF) return true;
-        \\      var nt = node.nodeType;
-        \\      if (nt === 1 && (whatToShow & 0x1)) return true;
-        \\      if (nt === 3 && (whatToShow & 0x4)) return true;
-        \\      if (nt === 8 && (whatToShow & 0x80)) return true;
-        \\      if (nt === 9 && (whatToShow & 0x100)) return true;
-        \\      if (nt === 11 && (whatToShow & 0x400)) return true;
-        \\      return false;
+        \\      if (whatToShow !== -1 && whatToShow !== 0xFFFFFFFF) {
+        \\        var nt = node.nodeType;
+        \\        var mask = 1 << (nt - 1);
+        \\        if (!(whatToShow & mask)) return false;
+        \\      }
+        \\      if (this.filter) {
+        \\        var r = typeof this.filter === 'function' ? this.filter(node) : this.filter.acceptNode(node);
+        \\        return r === 1; /* NodeFilter.FILTER_ACCEPT */
+        \\      }
+        \\      return true;
         \\    },
         \\    nextNode: function() {
         \\      var node = this.currentNode;
@@ -402,13 +437,16 @@ pub fn documentCreateTreeWalker(
     if (quickjs.JS_IsException(walker_fn)) return quickjs.JS_NULL();
     defer qjs.JS_FreeValue(c, walker_fn);
 
+    const filter_val = if (argc >= 3) qjs.JS_DupValue(c, args[2]) else quickjs.JS_NULL();
     var call_args = [_]qjs.JSValue{
         qjs.JS_DupValue(c, root_val),
         qjs.JS_NewInt32(c, what_to_show),
+        filter_val,
     };
-    const result = qjs.JS_Call(c, walker_fn, quickjs.JS_UNDEFINED(), 2, &call_args);
+    const result = qjs.JS_Call(c, walker_fn, quickjs.JS_UNDEFINED(), 3, &call_args);
     qjs.JS_FreeValue(c, call_args[0]);
     qjs.JS_FreeValue(c, call_args[1]);
+    qjs.JS_FreeValue(c, call_args[2]);
     return result;
 }
 
@@ -864,7 +902,18 @@ pub fn documentCreateEvent(
                 else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent";
+                else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "wheelevent")) iface = "WheelEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "compositionevent")) iface = "CompositionEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "inputevent")) iface = "InputEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "pointerevent")) iface = "PointerEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "errorevent")) iface = "ErrorEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "closeevent")) iface = "CloseEvent";
             }
         }
     }
@@ -879,6 +928,28 @@ pub fn documentCreateEvent(
         "(new UIEvent(''))"
     else if (std.mem.eql(u8, iface, "FocusEvent"))
         "(new FocusEvent(''))"
+    else if (std.mem.eql(u8, iface, "WheelEvent"))
+        "(new WheelEvent(''))"
+    else if (std.mem.eql(u8, iface, "CompositionEvent"))
+        "(new CompositionEvent(''))"
+    else if (std.mem.eql(u8, iface, "MessageEvent"))
+        "(new MessageEvent(''))"
+    else if (std.mem.eql(u8, iface, "InputEvent"))
+        "(new InputEvent(''))"
+    else if (std.mem.eql(u8, iface, "PointerEvent"))
+        "(new PointerEvent(''))"
+    else if (std.mem.eql(u8, iface, "TouchEvent"))
+        "(new TouchEvent(''))"
+    else if (std.mem.eql(u8, iface, "HashChangeEvent"))
+        "(new HashChangeEvent(''))"
+    else if (std.mem.eql(u8, iface, "PopStateEvent"))
+        "(new PopStateEvent(''))"
+    else if (std.mem.eql(u8, iface, "ErrorEvent"))
+        "(new ErrorEvent(''))"
+    else if (std.mem.eql(u8, iface, "ProgressEvent"))
+        "(new ProgressEvent(''))"
+    else if (std.mem.eql(u8, iface, "CloseEvent"))
+        "(new CloseEvent(''))"
     else
         "(new Event(''))";
     return qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);

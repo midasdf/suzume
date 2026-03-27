@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html>
+<head><title>Custom Element Test</title></head>
+<body>
+<test-el id="t1"><span class="inner">hello</span></test-el>
+<script>
+var el = document.querySelector('test-el');
+console.log('qs type: ' + typeof el.querySelectorAll);
+console.log('qsa type: ' + typeof el.querySelector);
+
+// Test customElements.define
+class TestEl extends HTMLElement {
+  connectedCallback() {
+    console.log('connectedCallback called');
+    var inner = this.querySelectorAll('.inner');
+    console.log('inner found: ' + inner.length);
+  }
+}
+customElements.define('test-el', TestEl);
+console.log('define done');
+console.log('registry get: ' + (customElements.get('test-el') === TestEl));
+</script>
+</body>
+</html>

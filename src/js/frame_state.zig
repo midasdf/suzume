@@ -36,6 +36,7 @@ pub const FrameState = struct {
     // Navigation
     current_url: ?[]const u8 = null,
     ready_state: ReadyState = .loading,
+    is_xml: bool = false, // True for XML/XHTML/SVG iframe documents
 
     // Frame hierarchy
     parent_frame: ?*FrameState = null,

@@ -170,6 +170,89 @@ pub fn elementSetAttribute(
     return quickjs.JS_UNDEFINED();
 }
 
+// ── Namespace-aware attribute methods ──────────────────────────────
+// In HTML documents, these work like their non-NS counterparts using the local name.
+
+pub fn elementGetAttributeNS(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 2) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
+    // args[0] = namespace (ignored in HTML), args[1] = localName
+    const local = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, local.ptr);
+    var val_len: usize = 0;
+    const val_ptr = lxb_dom_element_get_attribute(elem, local.ptr, local.len, &val_len);
+    if (val_ptr == null) return quickjs.JS_NULL();
+    return qjs.JS_NewStringLen(c, val_ptr.?, val_len);
+}
+
+pub fn elementSetAttributeNS(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 3) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // args[0] = namespace (ignored), args[1] = qualifiedName, args[2] = value
+    const qname = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, qname.ptr);
+    const val = jsStringToSlice(c, args[2]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, val.ptr);
+    // Extract local name (after colon if present)
+    const qname_s = qname.ptr[0..qname.len];
+    var local_start: usize = 0;
+    if (std.mem.indexOfScalar(u8, qname_s, ':')) |colon| local_start = colon + 1;
+    const local_name = qname_s[local_start..];
+    _ = lxb_dom_element_set_attribute(elem, local_name.ptr, local_name.len, val.ptr, val.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutation(node, "attributes", null, null, local_name);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+pub fn elementHasAttributeNS(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    if (argc < 2) return quickjs.JS_NewBool(false);
+    const args = argv orelse return quickjs.JS_NewBool(false);
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+    const local = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
+    defer qjs.JS_FreeCString(c, local.ptr);
+    return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, local.ptr, local.len));
+}
+
+pub fn elementRemoveAttributeNS(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 2) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const local = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, local.ptr);
+    _ = lxb_dom_element_remove_attribute(elem, local.ptr, local.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutation(node, "attributes", null, null, local.ptr[0..local.len]);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 pub fn elementRemoveAttribute(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,

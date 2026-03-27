@@ -89,12 +89,14 @@ fn setupIframe(
     var fetched_html: ?[]u8 = null;
     defer if (fetched_html) |fh| allocator.free(fh);
 
+    var is_xml = false;
     if (srcdoc_ptr != null and srcdoc_len > 0) {
         html_content = srcdoc_ptr.?[0..srcdoc_len];
         iframe_url = "about:srcdoc";
     } else if (src_ptr != null and src_len > 0) {
         // Fetch src URL
         const src = src_ptr.?[0..src_len];
+        is_xml = isXmlUrl(src);
         if (fetchIframeContent(src, allocator)) |content| {
             fetched_html = content;
             html_content = content;
@@ -127,6 +129,7 @@ fn setupIframe(
         .current_url = iframe_url,
         .parent_frame = parent_frame,
         .depth = depth + 1,
+        .is_xml = is_xml,
     };
     qjs.JS_SetContextOpaque(iframe_ctx, @ptrCast(&iframe_frames[idx]));
 
@@ -166,6 +169,31 @@ fn setupIframe(
     // Get the iframe context's document object
     const iframe_global = qjs.JS_GetGlobalObject(iframe_ctx);
     const iframe_doc_obj = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global, "document");
+
+    // For XML iframes: override documentElement to return body.firstChild (the actual XML root)
+    // Lexbor (HTML5 parser) wraps XML content in <html><head></head><body>...</body></html>
+    if (is_xml) {
+        const xml_fix_js =
+            \\(function(doc){
+            \\  doc.contentType='application/xml';
+            \\  var b=doc.body||doc.getElementsByTagName('body')[0];
+            \\  if(b&&b.firstChild){
+            \\    var xmlRoot=b.firstChild;
+            \\    Object.defineProperty(doc,'documentElement',{get:function(){return xmlRoot;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(doc,'body',{get:function(){return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(doc,'head',{get:function(){return null;},configurable:true,enumerable:true});
+            \\  }
+            \\})
+        ;
+        const xml_fn = qjs.JS_Eval(iframe_ctx, xml_fix_js, xml_fix_js.len, "<xml-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(xml_fn)) {
+            var xml_args = [1]qjs.JSValue{qjs.JS_DupValue(iframe_ctx, iframe_doc_obj)};
+            const xml_result = qjs.JS_Call(iframe_ctx, xml_fn, quickjs.JS_UNDEFINED(), 1, &xml_args);
+            qjs.JS_FreeValue(iframe_ctx, xml_result);
+            qjs.JS_FreeValue(iframe_ctx, xml_args[0]);
+            qjs.JS_FreeValue(iframe_ctx, xml_fn);
+        }
+    }
 
     // Set contentDocument (cross-context: we set it as a property on the parent element)
     // Note: This is a simplified cross-context bridge — the document object
@@ -368,6 +396,22 @@ pub fn fireIframeLoadEvents(parent_ctx: *qjs.JSContext) void {
     ;
     const r = qjs.JS_Eval(parent_ctx, js, js.len, "<iframe-load-events>", qjs.JS_EVAL_TYPE_GLOBAL);
     qjs.JS_FreeValue(parent_ctx, r);
+}
+
+/// Check if a URL points to XML content (by extension)
+fn isXmlUrl(url: []const u8) bool {
+    // Strip query string and fragment
+    var path = url;
+    if (std.mem.indexOfScalar(u8, path, '?')) |q| path = path[0..q];
+    if (std.mem.indexOfScalar(u8, path, '#')) |h| path = path[0..h];
+    // Check extension
+    if (std.mem.endsWith(u8, path, ".xml")) return true;
+    if (std.mem.endsWith(u8, path, ".xhtml")) return true;
+    if (std.mem.endsWith(u8, path, ".svg")) return true;
+    if (std.mem.endsWith(u8, path, ".xsl")) return true;
+    if (std.mem.endsWith(u8, path, ".xslt")) return true;
+    if (std.mem.endsWith(u8, path, ".mathml")) return true;
+    return false;
 }
 
 /// Check if two URLs have the same origin (protocol + host + port)

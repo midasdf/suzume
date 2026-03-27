@@ -2090,11 +2090,30 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  };
         \\}
         \\if(typeof AbortController==='undefined'){
-        \\  globalThis.AbortSignal=function(){this.aborted=false;this._listeners=[];};
-        \\  AbortSignal.prototype.addEventListener=function(t,fn){this._listeners.push(fn);};
-        \\  AbortSignal.prototype.removeEventListener=function(){};
-        \\  globalThis.AbortController=function(){this.signal=new AbortSignal();};
-        \\  AbortController.prototype.abort=function(){this.signal.aborted=true;this.signal._listeners.forEach(function(fn){try{fn();}catch(e){}});};
+        \\  function AbortSignal(){this.aborted=false;this.reason=undefined;this._evtMap={};this.onabort=null;}
+        \\  AbortSignal.prototype.addEventListener=function(t,fn,o){if(!this._evtMap[t])this._evtMap[t]=[];this._evtMap[t].push({fn:fn,once:!!(o&&o.once)});};
+        \\  AbortSignal.prototype.removeEventListener=function(t,fn){var a=this._evtMap[t];if(a)for(var i=a.length-1;i>=0;i--)if(a[i].fn===fn)a.splice(i,1);};
+        \\  AbortSignal.prototype.dispatchEvent=function(e){var a=this._evtMap[e.type];if(a){a=a.slice();for(var i=0;i<a.length;i++){try{a[i].fn.call(this,e);}catch(ex){}if(a[i].once)this.removeEventListener(e.type,a[i].fn);}}return!e.defaultPrevented;};
+        \\  AbortSignal.prototype.throwIfAborted=function(){if(this.aborted)throw this.reason;};
+        \\  AbortSignal.abort=function(reason){var s=new AbortSignal();s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');return s;};
+        \\  AbortSignal.timeout=function(ms){var s=new AbortSignal();setTimeout(function(){s.aborted=true;s.reason=new DOMException('The operation timed out.','TimeoutError');var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);},ms);return s;};
+        \\  AbortSignal.any=function(signals){var s=new AbortSignal();for(var i=0;i<signals.length;i++){if(signals[i].aborted){s.aborted=true;s.reason=signals[i].reason;return s;}}
+        \\    for(var i=0;i<signals.length;i++){(function(sig){sig.addEventListener('abort',function(){if(!s.aborted){s.aborted=true;s.reason=sig.reason;var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}});})(signals[i]);}return s;};
+        \\  globalThis.AbortSignal=AbortSignal;
+        \\  function AbortController(){this.signal=new AbortSignal();}
+        \\  AbortController.prototype.abort=function(reason){var s=this.signal;if(!s.aborted){s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};
+        \\  globalThis.AbortController=AbortController;
+        \\}
+        \\if(typeof MessageEvent==='undefined'){
+        \\  function MessageEvent(t,o){Event.call(this,t,o);o=o||{};this.data=o.data!==undefined?o.data:null;this.origin=o.origin||'';this.lastEventId=o.lastEventId||'';this.source=o.source||null;this.ports=o.ports||[];}
+        \\  MessageEvent.prototype=Object.create(Event.prototype);MessageEvent.prototype.constructor=MessageEvent;
+        \\  MessageEvent.prototype.initMessageEvent=function(t,b,c,d,o,l,s,p){this.initEvent(t,b,c);this.data=d;this.origin=o;this.lastEventId=l;this.source=s;this.ports=p||[];};
+        \\  globalThis.MessageEvent=MessageEvent;
+        \\}
+        \\if(typeof CloseEvent==='undefined'){
+        \\  function CloseEvent(t,o){Event.call(this,t,o);o=o||{};this.wasClean=!!o.wasClean;this.code=o.code||0;this.reason=o.reason||'';}
+        \\  CloseEvent.prototype=Object.create(Event.prototype);CloseEvent.prototype.constructor=CloseEvent;
+        \\  globalThis.CloseEvent=CloseEvent;
         \\}
         \\if(typeof atob==='undefined'){
         \\  globalThis.atob=function(s){var b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=',r='',i=0;s=s.replace(/[^A-Za-z0-9\+\/\=]/g,'');

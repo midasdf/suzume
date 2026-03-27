@@ -2265,6 +2265,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "setAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementSetAttribute, "setAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementRemoveAttribute, "removeAttribute", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementHasAttribute, "hasAttribute", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNS", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetAttributeNS, "getAttributeNS", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "setAttributeNS", qjs.JS_NewCFunction(ctx, &dom_elem.elementSetAttributeNS, "setAttributeNS", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttributeNS", qjs.JS_NewCFunction(ctx, &dom_elem.elementHasAttributeNS, "hasAttributeNS", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "removeAttributeNS", qjs.JS_NewCFunction(ctx, &dom_elem.elementRemoveAttributeNS, "removeAttributeNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "matches", qjs.JS_NewCFunction(ctx, &dom_sel.elementMatches, "matches", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "closest", qjs.JS_NewCFunction(ctx, &dom_sel.elementClosest, "closest", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getBoundingClientRect", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetBoundingClientRect, "getBoundingClientRect", 0));
@@ -2518,9 +2522,38 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
 
     const nodelist_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "NodeList", 0, qjs.JS_CFUNC_constructor, 0);
+    {
+        const nlp_js =
+            \\(function(){
+            \\  var p={};
+            \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  p.forEach=function(cb,t){for(var i=0;i<this.length;i++)cb.call(t,this[i],i,this);};
+            \\  p.entries=function(){var a=[];for(var i=0;i<this.length;i++)a.push([i,this[i]]);return a[Symbol.iterator]();};
+            \\  p.keys=function(){var a=[];for(var i=0;i<this.length;i++)a.push(i);return a[Symbol.iterator]();};
+            \\  p.values=function(){var a=[];for(var i=0;i<this.length;i++)a.push(this[i]);return a[Symbol.iterator]();};
+            \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
+            \\  return p;
+            \\})()
+        ;
+        const nlp = qjs.JS_Eval(ctx, nlp_js, nlp_js.len, "<NodeList.p>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, nodelist_ctor, "prototype", nlp);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "NodeList", nodelist_ctor);
 
     const htmlcol_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "HTMLCollection", 0, qjs.JS_CFUNC_constructor, 0);
+    {
+        const hcp_js =
+            \\(function(){
+            \\  var p={};
+            \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  p.namedItem=function(n){for(var i=0;i<this.length;i++){if(this[i].id===n||this[i].name===n)return this[i];}return null;};
+            \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
+            \\  return p;
+            \\})()
+        ;
+        const hcp = qjs.JS_Eval(ctx, hcp_js, hcp_js.len, "<HTMLCollection.p>", qjs.JS_EVAL_TYPE_GLOBAL);
+        _ = qjs.JS_SetPropertyStr(ctx, htmlcol_ctor, "prototype", hcp);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLCollection", htmlcol_ctor);
 
     const range_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Range", 0, qjs.JS_CFUNC_constructor, 0);

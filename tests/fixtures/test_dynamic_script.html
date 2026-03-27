@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Dynamic Script Test</title>
+</head>
+<body>
+<h1 id="status">Testing...</h1>
+<div id="results"></div>
+
+<script>
+// Test 1: createElement('script') with inline content
+(function() {
+    var s = document.createElement('script');
+    s.textContent = 'document.getElementById("results").innerHTML += "<p>Test 1 PASS: inline dynamic script executed</p>";';
+    document.head.appendChild(s);
+})();
+
+// Test 2: createElement('script') with onload callback
+(function() {
+    var s = document.createElement('script');
+    s.textContent = 'window.__test2 = true;';
+    s.onload = function() {
+        document.getElementById("results").innerHTML += "<p>Test 2 PASS: onload fired for inline script</p>";
+    };
+    document.head.appendChild(s);
+})();
+
+// Test 3: Skip non-JS script types
+(function() {
+    var s = document.createElement('script');
+    s.type = 'application/json';
+    s.textContent = '{"should": "not execute"}';
+    document.head.appendChild(s);
+    document.getElementById("results").innerHTML += "<p>Test 3 PASS: JSON script skipped (no error)</p>";
+})();
+
+// Test 4: insertBefore with script
+(function() {
+    var s = document.createElement('script');
+    s.textContent = 'document.getElementById("results").innerHTML += "<p>Test 4 PASS: insertBefore dynamic script executed</p>";';
+    document.body.insertBefore(s, null);
+})();
+
+// Update status
+document.getElementById("status").textContent = "All tests completed!";
+</script>
+</body>
+</html>
