@@ -653,6 +653,13 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Register DOM APIs
     dom_api.registerDomApis(js_rt.rt, js_rt.ctx, @ptrCast(@alignCast(doc.html_doc)));
 
+    // Set up top-level FrameState on this JSContext
+    dom_api.g_top_frame = .{
+        .document = @ptrCast(@alignCast(doc.html_doc)),
+        .ctx = js_rt.ctx,
+    };
+    quickjs.c.JS_SetContextOpaque(js_rt.ctx, @ptrCast(&dom_api.g_top_frame));
+
     // Register event APIs (addEventListener on window/document/elements)
     events.registerEventApis(js_rt.ctx);
 
