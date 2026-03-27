@@ -825,7 +825,7 @@ fn jsRequestAnimationFrame(
 var perf_origin: i64 = 0;
 
 /// Get elapsed ms since origin (for performance.now and rAF timestamp).
-fn getPerformanceNow() f64 {
+pub fn getPerformanceNow() f64 {
     if (perf_origin == 0) perf_origin = currentTimeMs();
     return @floatFromInt(currentTimeMs() - perf_origin);
 }

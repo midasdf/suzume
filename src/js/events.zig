@@ -408,7 +408,7 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
     const is_composed = isComposedEvent(event_type);
     _ = qjs.JS_SetPropertyStr(ctx, event, "composed", quickjs.JS_NewBool(is_composed));
     _ = qjs.JS_SetPropertyStr(ctx, event, "isTrusted", quickjs.JS_NewBool(false));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "timeStamp", qjs.JS_NewFloat64(ctx, @as(f64, @floatFromInt(std.time.milliTimestamp()))));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "timeStamp", qjs.JS_NewFloat64(ctx, @import("web_api.zig").getPerformanceNow()));
     _ = qjs.JS_SetPropertyStr(ctx, event, "srcElement", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(ctx, event, "composedPath", qjs.JS_NewCFunction(ctx, &jsComposedPath, "composedPath", 0));
     _ = qjs.JS_SetPropertyStr(ctx, event, "initEvent", qjs.JS_NewCFunction(ctx, &jsInitEvent, "initEvent", 3));
@@ -1035,7 +1035,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\    this.isTrusted = false;
         \\    this.eventPhase = 0;
         \\    this._cancelBubble = false;
-        \\    this.timeStamp = Date.now();
+        \\    this.timeStamp = (typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
         \\    this.target = null;
         \\    this.currentTarget = null;
         \\    this.srcElement = null;
