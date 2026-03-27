@@ -2490,6 +2490,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         "HTMLHeadElement",      "HTMLHtmlElement",      "HTMLOptionElement",
         "HTMLTemplateElement",  "HTMLDialogElement",    "HTMLDetailsElement",
         "HTMLSummaryElement",   "HTMLFieldSetElement",  "HTMLLegendElement",
+        "HTMLTitleElement",     "HTMLBaseElement",      "HTMLAreaElement",
+        "HTMLDataElement",      "HTMLTimeElement",      "HTMLOutputElement",
+        "HTMLProgressElement",  "HTMLMeterElement",     "HTMLDataListElement",
+        "HTMLOptGroupElement",  "HTMLObjectElement",    "HTMLEmbedElement",
+        "HTMLSourceElement",    "HTMLTrackElement",     "HTMLMapElement",
+        "HTMLTableSectionElement", "HTMLTableColElement", "HTMLTableCaptionElement",
+        "HTMLQuoteElement",     "HTMLModElement",       "HTMLPictureElement",
+        "HTMLSlotElement",      "HTMLMenuElement",      "HTMLUnknownElement",
     };
     for (html_subclasses) |name| {
         const ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);
@@ -2906,7 +2914,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  d.appendChild(head);
             \\  d.appendChild(body);
-            \\  var dt={nodeType:10,name:'html',nodeName:'html',publicId:'',systemId:'',ownerDocument:null,parentNode:null,nextSibling:d,previousSibling:null};
+            \\  var dt={nodeType:10,name:'html',nodeName:'html',publicId:'',systemId:'',ownerDocument:null,parentNode:null,nextSibling:d,previousSibling:null,firstChild:null,lastChild:null,childNodes:[],nodeValue:null,textContent:null,parentElement:null,internalSubset:null};
             \\  if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);
             \\  var doc = {
             \\    nodeType: 9, nodeName: '#document',
@@ -2941,11 +2949,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    ownerDocument: null,
             \\    contentType: 'text/html',
             \\    characterSet: 'UTF-8',
+            \\    charset: 'UTF-8',
+            \\    inputEncoding: 'UTF-8',
             \\    URL: 'about:blank',
             \\    documentURI: 'about:blank',
             \\    compatMode: 'CSS1Compat',
-            \\    doctype: null,
             \\    defaultView: null,
+            \\    location: null,
+            \\    hidden: true,
+            \\    visibilityState: 'hidden',
+            \\    readyState: 'complete',
             \\    hasFocus: function() { return false; },
             \\    cloneNode: function(deep) {
             \\      var nd = document.implementation.createHTMLDocument(title);
