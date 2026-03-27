@@ -1469,12 +1469,17 @@ fn elementGetAttributes(
             const name_str = np[0..name_len];
             const val_str = if (val_ptr) |vp| vp[0..val_len] else "";
 
-            // Create Attr-like object
+            // Create Attr-like object per DOM spec
             const attr_obj = qjs.JS_NewObject(c);
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeType", qjs.JS_NewInt32(c, 2));
             _ = qjs.JS_SetPropertyStr(c, attr_obj, "name", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
             _ = qjs.JS_SetPropertyStr(c, attr_obj, "value", qjs.JS_NewStringLen(c, val_str.ptr, val_str.len));
             _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeName", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
             _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeValue", qjs.JS_NewStringLen(c, val_str.ptr, val_str.len));
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "localName", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "namespaceURI", quickjs.JS_NULL());
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "prefix", quickjs.JS_NULL());
+            _ = qjs.JS_SetPropertyStr(c, attr_obj, "ownerElement", qjs.JS_DupValue(c, this_val));
             _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
 
             // Indexed access
