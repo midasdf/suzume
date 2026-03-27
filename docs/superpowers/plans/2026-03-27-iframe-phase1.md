@@ -109,9 +109,10 @@ pub var g_top_frame: FrameState = .{};
 
 ```zig
 /// Get document for current frame (from ctx opaque, fallback to global)
+/// NOTE: Falls through to global if FrameState field is null (defensive migration)
 pub fn getDocument(ctx: *qjs.JSContext) ?*anyopaque {
     if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
-        return fs.document;
+        if (fs.document) |doc| return doc;
     }
     return g_document;
 }
@@ -119,7 +120,7 @@ pub fn getDocument(ctx: *qjs.JSContext) ?*anyopaque {
 /// Get root box for current frame
 pub fn getRootBox(ctx: *qjs.JSContext) ?*const Box {
     if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
-        return fs.root_box;
+        if (fs.root_box) |rb| return rb;
     }
     return g_root_box;
 }
@@ -127,7 +128,7 @@ pub fn getRootBox(ctx: *qjs.JSContext) ?*const Box {
 /// Get styles for current frame
 pub fn getStyles(ctx: *qjs.JSContext) ?*const cascade_mod.StyleMap {
     if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
-        return fs.styles;
+        if (fs.styles) |s| return s;
     }
     return g_styles;
 }
@@ -135,7 +136,8 @@ pub fn getStyles(ctx: *qjs.JSContext) ?*const cascade_mod.StyleMap {
 /// Get viewport dimensions for current frame
 pub fn getViewport(ctx: *qjs.JSContext) struct { w: f32, h: f32 } {
     if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
-        return .{ .w = fs.viewport_width, .h = fs.viewport_height };
+        if (fs.viewport_width != 0 or fs.viewport_height != 0)
+            return .{ .w = fs.viewport_width, .h = fs.viewport_height };
     }
     return .{ .w = g_viewport_width, .h = g_viewport_height };
 }
@@ -191,6 +193,56 @@ Expected: Pass rate >= 45% (no regression)
 ```bash
 git add src/main.zig
 git commit -m "feat: wire up top-level FrameState via JS_SetContextOpaque"
+```
+
+---
+
+### Task 3.5: Sync global setters to g_top_frame (MUST come before module replacements)
+
+**Files:**
+- Modify: `src/js/dom_api.zig`
+
+**Why before Task 4**: setRootBox/setStyles are called repeatedly during relayout. If they don't sync to g_top_frame, the accessor helpers (getDocument/getRootBox/getStyles) will find a valid FrameState but with null fields, returning null instead of falling through to the global. This would cause regressions.
+
+- [ ] **Step 1: Update all setters to sync g_top_frame**
+
+```zig
+pub fn setRootBox(root: ?*const Box) void {
+    g_root_box = root;
+    g_top_frame.root_box = root;
+}
+
+pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
+    g_styles = styles;
+    g_top_frame.styles = styles;
+}
+
+pub fn setViewport(w: f32, h: f32) void {
+    g_viewport_width = w;
+    g_viewport_height = h;
+    g_top_frame.viewport_width = w;
+    g_top_frame.viewport_height = h;
+}
+
+pub fn setCurrentUrl(url: ?[]const u8) void {
+    g_current_url = url;
+    g_top_frame.current_url = url;
+}
+```
+
+Also in `registerDomApis`:
+```zig
+g_document = document_ptr;
+g_top_frame.document = document_ptr;
+```
+
+- [ ] **Step 2: Build**
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/js/dom_api.zig
+git commit -m "feat: sync all global setters to g_top_frame"
 ```
 
 ---

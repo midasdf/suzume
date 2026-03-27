@@ -200,12 +200,27 @@ Max iframe depth: 5 levels. Beyond that, iframe src is not loaded (prevents recu
 
 ### Phase 1: FrameState + Global Replacement
 - Create FrameState struct
-- Implement getFrameState/getDocument helpers
+- Implement getFrameState/getDocument helpers (with null-field fallback to globals)
+- Split registerDomApis into registerClasses (once per Runtime) + registerContextApis (per Context)
 - Set up JS_SetContextOpaque for top-level page
-- Replace g_document → getDocument(ctx) in all DOM modules
+- Sync global setters (setRootBox, setStyles) to g_top_frame BEFORE module replacements
+- Replace g_document → getDocument(ctx) in all DOM modules (including ~15 globals: dom_dirty, active_element, scroll, viewport, timers, etc.)
 - Verify no regression
 
 ### Phase 2: iframe Element Detection + Loading
+- Detect `<iframe>` in DOM tree after parse
+- Handle srcdoc attribute (inline HTML, common in WPT)
+- Handle no-src (about:blank) iframes
+- Handle dynamic iframe creation via JS (createElement + appendChild)
+- Fetch iframe src via Loader
+- Parse into new Lexbor Document
+- Create new JS Context + FrameState
+- Fire iframe load event (critical for WPT test harnesses)
+
+### Phase 2.5: Cross-Context Object Strategy
+- Define how contentDocument/contentWindow JSValues are accessed across Contexts
+- Options: proxy objects, shared document in parent context, or bridge pattern
+- This must be solved before Phase 3
 - Detect `<iframe>` in DOM tree after parse
 - Fetch iframe src via Loader
 - Parse into new Lexbor Document
