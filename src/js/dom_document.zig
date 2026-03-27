@@ -360,18 +360,19 @@ pub fn documentCreateTreeWalker(
         \\    currentNode: root,
         \\    whatToShow: whatToShow,
         \\    filter: filter || null,
-        \\    _accepts: function(node) {
+        \\    _check: function(node) {
         \\      if (whatToShow !== 0xFFFFFFFF) {
         \\        var nt = node.nodeType;
         \\        var mask = 1 << (nt - 1);
-        \\        if (!(whatToShow & mask)) return false;
+        \\        if (!(whatToShow & mask)) return 3; /* FILTER_SKIP */
         \\      }
         \\      if (this.filter) {
         \\        var r = typeof this.filter === 'function' ? this.filter(node) : this.filter.acceptNode(node);
-        \\        return r === 1; /* NodeFilter.FILTER_ACCEPT */
+        \\        return r; /* 1=ACCEPT, 2=REJECT, 3=SKIP */
         \\      }
-        \\      return true;
+        \\      return 1; /* FILTER_ACCEPT */
         \\    },
+        \\    _accepts: function(node) { return this._check(node) === 1; },
         \\    nextNode: function() {
         \\      var node = this.currentNode;
         \\      // Try first child
@@ -427,24 +428,31 @@ pub fn documentCreateTreeWalker(
         \\    firstChild: function() {
         \\      var node = this.currentNode.firstChild;
         \\      while (node) {
-        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\        node = node.nextSibling;
+        \\        var r = this._check(node);
+        \\        if (r === 1) { this.currentNode = node; return node; }
+        \\        if (r === 3 && node.firstChild) { node = node.firstChild; continue; } /* SKIP: descend */
+        \\        /* REJECT or SKIP with no children: try sibling */
+        \\        while (node && !node.nextSibling && node !== this.currentNode) node = node.parentNode;
+        \\        node = node && node !== this.currentNode ? node.nextSibling : null;
         \\      }
         \\      return null;
         \\    },
         \\    lastChild: function() {
         \\      var node = this.currentNode.lastChild;
         \\      while (node) {
-        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\        node = node.previousSibling;
+        \\        var r = this._check(node);
+        \\        if (r === 1) { this.currentNode = node; return node; }
+        \\        if (r === 3 && node.lastChild) { node = node.lastChild; continue; }
+        \\        while (node && !node.previousSibling && node !== this.currentNode) node = node.parentNode;
+        \\        node = node && node !== this.currentNode ? node.previousSibling : null;
         \\      }
         \\      return null;
         \\    },
         \\    parentNode: function() {
         \\      var node = this.currentNode.parentNode;
-        \\      if (node && node !== this.root && this._accepts(node)) {
-        \\        this.currentNode = node;
-        \\        return node;
+        \\      while (node && node !== this.root) {
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\        node = node.parentNode;
         \\      }
         \\      return null;
         \\    },
