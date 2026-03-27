@@ -687,6 +687,12 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Must be done before script execution so scripts can reference elements by id
     _ = js_rt.eval("try{document.querySelectorAll('[id]').forEach(function(e){if(e.id&&!window[e.id])window[e.id]=e;})}catch(e){}");
 
+    // Process <iframe> elements before scripts (so contentDocument is available)
+    {
+        const doc_node = doc.documentNode().lxb_node;
+        dom_api.iframe.processIframes(js_rt.ctx, js_rt.rt, doc_node, &dom_api.g_top_frame, allocator);
+    }
+
     // Execute <script> tags (including external scripts via src attribute)
     executeScripts(doc, &js_rt, allocator, loader, base_url);
 

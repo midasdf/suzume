@@ -11,6 +11,7 @@ pub const dom_elem = @import("dom_element.zig");
 pub const dom_doc = @import("dom_document.zig");
 pub const dom_style = @import("dom_style.zig");
 pub const frame_state = @import("frame_state.zig");
+pub const iframe = @import("iframe.zig");
 pub const FrameState = frame_state.FrameState;
 
 // ── External Lexbor functions (avoid cImport issues) ────────────────
@@ -2054,12 +2055,11 @@ const MAX_CSS_LENGTH: f32 = 33554432.0; // 2^25, implementation-defined max CSS 
 
 /// Register DOM API classes and the `document` global.
 /// Must be called after page parse and before script execution.
-pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *anyopaque) void {
-    g_document = document_ptr;
-    g_top_frame.document = document_ptr;
-    dom_dirty = false;
+/// Register Element and Text classes on the Runtime. Call ONCE per Runtime.
+/// Must be called before registerDomApis.
+pub fn registerDomClasses(rt: *qjs.JSRuntime) void {
+    if (element_class_id != 0) return; // Already registered
 
-    // Register Element class
     _ = qjs.JS_NewClassID(rt, &element_class_id);
     const elem_class_def = qjs.JSClassDef{
         .class_name = "Element",
@@ -2070,7 +2070,6 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     };
     _ = qjs.JS_NewClass(rt, element_class_id, &elem_class_def);
 
-    // Register Text class
     _ = qjs.JS_NewClassID(rt, &text_class_id);
     const text_class_def = qjs.JSClassDef{
         .class_name = "Text",
@@ -2080,6 +2079,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         .exotic = null,
     };
     _ = qjs.JS_NewClass(rt, text_class_id, &text_class_def);
+}
+
+/// Register DOM APIs on a JSContext. Can be called multiple times (once per iframe).
+/// Requires registerDomClasses(rt) to have been called first.
+pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *anyopaque) void {
+    // Ensure classes are registered (idempotent)
+    registerDomClasses(rt);
+
+    g_document = document_ptr;
+    g_top_frame.document = document_ptr;
+    dom_dirty = false;
 
     // ── DOM Prototype Chain ──────────────────────────────────────────
     // EventTarget.prototype → Node.prototype → Element.prototype → HTMLElement.prototype
