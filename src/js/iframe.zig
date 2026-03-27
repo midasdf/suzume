@@ -1,5 +1,4 @@
 // iframe support — detection, loading, context creation
-// Phase 2 of iframe implementation.
 
 const std = @import("std");
 const quickjs = @import("../bindings/quickjs.zig");
@@ -9,28 +8,16 @@ const api = @import("dom_api.zig");
 const frame_state = @import("frame_state.zig");
 const FrameState = frame_state.FrameState;
 const events = @import("events.zig");
+const Document = @import("../dom/tree.zig").Document;
+const Loader = @import("../net/loader.zig").Loader;
+const resolveUrl = @import("../net/loader.zig").resolveUrl;
 
 extern fn lxb_dom_element_get_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value_len: *usize) ?[*]const u8;
 extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
 
-// ── iframe Frame Storage ────────────────────────────────────────────
-
-var iframe_frames: [frame_state.MAX_IFRAME_COUNT]FrameState = [_]FrameState{.{}} ** frame_state.MAX_IFRAME_COUNT;
-var iframe_count: u32 = 0;
-
-/// Allocate a new FrameState for an iframe. Returns null if limit reached.
-pub fn allocFrame() ?*FrameState {
-    if (iframe_count >= frame_state.MAX_IFRAME_COUNT) return null;
-    const idx = iframe_count;
-    iframe_count += 1;
-    iframe_frames[idx] = .{};
-    return &iframe_frames[idx];
-}
-
 // ── iframe Detection ────────────────────────────────────────────────
 
 /// Walk DOM tree and set up contentDocument/contentWindow for each <iframe>.
-/// Called after page scripts execute, from main.zig.
 pub fn processIframes(
     parent_ctx: *qjs.JSContext,
     rt: *qjs.JSRuntime,
@@ -38,12 +25,12 @@ pub fn processIframes(
     parent_frame: *FrameState,
     allocator: std.mem.Allocator,
 ) void {
-    walkForIframes(parent_ctx, rt, doc_node, parent_frame, allocator, 0);
+    _ = rt;
+    walkForIframes(parent_ctx, doc_node, parent_frame, allocator, 0);
 }
 
 fn walkForIframes(
     parent_ctx: *qjs.JSContext,
-    rt: *qjs.JSRuntime,
     node: *lxb.lxb_dom_node_t,
     parent_frame: *FrameState,
     allocator: std.mem.Allocator,
@@ -54,15 +41,13 @@ fn walkForIframes(
     var child: ?*lxb.lxb_dom_node_t = node.first_child;
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            // Check if this is an <iframe>
             const elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
             var name_len: usize = 0;
             const name = lxb_dom_element_local_name(elem, &name_len);
             if (name != null and name_len == 6 and std.mem.eql(u8, name.?[0..6], "iframe")) {
-                setupIframe(parent_ctx, rt, elem, parent_frame, allocator, depth);
+                setupIframe(parent_ctx, elem, parent_frame, allocator, depth);
             }
-            // Recurse into children (but not into iframe content)
-            walkForIframes(parent_ctx, rt, ch, parent_frame, allocator, depth);
+            walkForIframes(parent_ctx, ch, parent_frame, allocator, depth);
         }
         child = ch.next;
     }
@@ -70,41 +55,101 @@ fn walkForIframes(
 
 fn setupIframe(
     parent_ctx: *qjs.JSContext,
-    rt: *qjs.JSRuntime,
     elem: *lxb.lxb_dom_element_t,
     parent_frame: *FrameState,
     allocator: std.mem.Allocator,
     depth: u32,
 ) void {
-    _ = rt;
-    _ = allocator;
+    _ = parent_frame;
+    _ = depth;
 
-    // Get src attribute
+    // Get src and srcdoc attributes
     var src_len: usize = 0;
     const src_ptr = lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
-
-    // Get srcdoc attribute
     var srcdoc_len: usize = 0;
     const srcdoc_ptr = lxb_dom_element_get_attribute(elem, "srcdoc", 6, &srcdoc_len);
 
-    // Determine what to load
-    var content_url: ?[]const u8 = null;
-    var inline_html: ?[]const u8 = null;
-
-    if (srcdoc_ptr != null and srcdoc_len > 0) {
-        inline_html = srcdoc_ptr.?[0..srcdoc_len];
-    } else if (src_ptr != null and src_len > 0) {
-        content_url = src_ptr.?[0..src_len];
-    }
-    // If neither src nor srcdoc, it's an about:blank iframe
-
-    // For now, set contentDocument/contentWindow as stubs on the JS element
-    // Full implementation (fetch + parse + new context) comes next
+    // Wrap the iframe element for JS property setting
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const js_elem = api.wrapNode(parent_ctx, node);
+    defer qjs.JS_FreeValue(parent_ctx, js_elem);
 
-    // Create a minimal contentDocument (about:blank)
-    const cd_js =
+    // Try to load iframe content
+    var content_doc_js: qjs.JSValue = quickjs.JS_UNDEFINED();
+    var iframe_url: []const u8 = "about:blank";
+
+    if (srcdoc_ptr != null and srcdoc_len > 0) {
+        // srcdoc: parse inline HTML
+        content_doc_js = createDocumentFromHTML(parent_ctx, srcdoc_ptr.?[0..srcdoc_len], "about:srcdoc");
+        iframe_url = "about:srcdoc";
+    } else if (src_ptr != null and src_len > 0) {
+        // src: fetch URL and parse
+        const src = src_ptr.?[0..src_len];
+        content_doc_js = fetchAndCreateDocument(parent_ctx, src, allocator);
+        iframe_url = src;
+    }
+
+    // If no content loaded, create about:blank
+    if (quickjs.JS_IsUndefined(content_doc_js) or quickjs.JS_IsException(content_doc_js)) {
+        content_doc_js = createAboutBlankDocument(parent_ctx);
+    }
+
+    // Set URL on the document
+    _ = qjs.JS_SetPropertyStr(parent_ctx, content_doc_js, "URL", qjs.JS_NewStringLen(parent_ctx, iframe_url.ptr, iframe_url.len));
+    _ = qjs.JS_SetPropertyStr(parent_ctx, content_doc_js, "documentURI", qjs.JS_NewStringLen(parent_ctx, iframe_url.ptr, iframe_url.len));
+
+    // Set contentDocument
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", qjs.JS_DupValue(parent_ctx, content_doc_js));
+
+    // Create contentWindow
+    const cw_js =
+        \\(function(doc, url){
+        \\  var w = {
+        \\    document: doc,
+        \\    parent: window,
+        \\    top: window.top || window,
+        \\    self: null,
+        \\    location: { href: url, protocol: 'http:', host: location.host, hostname: location.hostname },
+        \\    navigator: window.navigator,
+        \\    addEventListener: function(t,f,o){doc.addEventListener(t,f,o);},
+        \\    removeEventListener: function(t,f,o){doc.removeEventListener(t,f,o);},
+        \\    dispatchEvent: function(e){return true;},
+        \\    getComputedStyle: window.getComputedStyle,
+        \\    setTimeout: window.setTimeout,
+        \\    setInterval: window.setInterval,
+        \\    clearTimeout: window.clearTimeout,
+        \\    clearInterval: window.clearInterval,
+        \\    matchMedia: window.matchMedia,
+        \\    CSS: window.CSS,
+        \\    Node: window.Node,
+        \\    Element: window.Element,
+        \\    Document: window.Document,
+        \\    Event: window.Event,
+        \\    CustomEvent: window.CustomEvent,
+        \\    MouseEvent: window.MouseEvent,
+        \\    KeyboardEvent: window.KeyboardEvent
+        \\  };
+        \\  w.self = w;
+        \\  w.window = w;
+        \\  return w;
+        \\})
+    ;
+    const cw_fn = qjs.JS_Eval(parent_ctx, cw_js, cw_js.len, "<iframe-cw>", qjs.JS_EVAL_TYPE_GLOBAL);
+    var cw_args = [2]qjs.JSValue{ content_doc_js, qjs.JS_NewStringLen(parent_ctx, iframe_url.ptr, iframe_url.len) };
+    const content_window = qjs.JS_Call(parent_ctx, cw_fn, quickjs.JS_UNDEFINED(), 2, &cw_args);
+    qjs.JS_FreeValue(parent_ctx, cw_fn);
+    qjs.JS_FreeValue(parent_ctx, cw_args[1]);
+
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", content_window);
+    _ = qjs.JS_SetPropertyStr(parent_ctx, content_window, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+
+    qjs.JS_FreeValue(parent_ctx, content_doc_js);
+}
+
+// ── Document Creation Helpers ───────────────────────────────────────
+
+fn createAboutBlankDocument(ctx: *qjs.JSContext) qjs.JSValue {
+    const js =
         \\(function(){
         \\  var d = new Document();
         \\  d.contentType = 'text/html';
@@ -113,50 +158,64 @@ fn setupIframe(
         \\  return d;
         \\})()
     ;
-    const content_doc = qjs.JS_Eval(parent_ctx, cd_js, cd_js.len, "<iframe-doc>", qjs.JS_EVAL_TYPE_GLOBAL);
+    return qjs.JS_Eval(ctx, js, js.len, "<iframe-blank>", qjs.JS_EVAL_TYPE_GLOBAL);
+}
 
-    // Set contentDocument on iframe element
-    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", qjs.JS_DupValue(parent_ctx, content_doc));
-
-    // Create contentWindow
-    const cw_js =
-        \\(function(doc){
-        \\  return {
-        \\    document: doc,
-        \\    parent: window,
-        \\    top: window.top || window,
-        \\    self: null,
-        \\    location: { href: 'about:blank' },
-        \\    navigator: window.navigator,
-        \\    addEventListener: function(){},
-        \\    removeEventListener: function(){},
-        \\    dispatchEvent: function(){return true;},
-        \\    getComputedStyle: window.getComputedStyle,
-        \\    setTimeout: window.setTimeout,
-        \\    setInterval: window.setInterval,
-        \\    clearTimeout: window.clearTimeout,
-        \\    clearInterval: window.clearInterval
-        \\  };
+fn createDocumentFromHTML(ctx: *qjs.JSContext, html: []const u8, url: []const u8) qjs.JSValue {
+    _ = url;
+    // Parse HTML using DOMParser polyfill
+    // This creates a Document-like object with querySelector etc.
+    const parser_js =
+        \\(function(html){
+        \\  var p = new DOMParser();
+        \\  return p.parseFromString(html, 'text/html');
         \\})
     ;
-    const cw_fn = qjs.JS_Eval(parent_ctx, cw_js, cw_js.len, "<iframe-cw>", qjs.JS_EVAL_TYPE_GLOBAL);
-    var cw_args = [1]qjs.JSValue{content_doc};
-    const content_window = qjs.JS_Call(parent_ctx, cw_fn, quickjs.JS_UNDEFINED(), 1, &cw_args);
-    qjs.JS_FreeValue(parent_ctx, cw_fn);
+    const fn_val = qjs.JS_Eval(ctx, parser_js, parser_js.len, "<iframe-parse>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(fn_val)) return fn_val;
 
-    // Set self-reference
-    _ = qjs.JS_SetPropertyStr(parent_ctx, content_window, "self", qjs.JS_DupValue(parent_ctx, content_window));
+    var args = [1]qjs.JSValue{qjs.JS_NewStringLen(ctx, html.ptr, html.len)};
+    const result = qjs.JS_Call(ctx, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+    qjs.JS_FreeValue(ctx, fn_val);
+    qjs.JS_FreeValue(ctx, args[0]);
+    return result;
+}
 
-    // Set contentWindow on iframe element
-    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", content_window);
+fn fetchAndCreateDocument(ctx: *qjs.JSContext, src: []const u8, allocator: std.mem.Allocator) qjs.JSValue {
+    const loader = api.g_loader orelse return quickjs.JS_UNDEFINED();
 
-    // Set frameElement on contentWindow
-    _ = qjs.JS_SetPropertyStr(parent_ctx, content_window, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+    // Resolve relative URL
+    const base = api.g_top_frame.current_url orelse "";
+    const resolved = resolveUrl(allocator, src, base) catch return quickjs.JS_UNDEFINED();
+    defer allocator.free(resolved);
 
-    qjs.JS_FreeValue(parent_ctx, content_doc);
-    qjs.JS_FreeValue(parent_ctx, js_elem);
+    // Fetch content
+    const response = loader.loadBytes(resolved) catch return quickjs.JS_UNDEFINED();
+    defer allocator.free(response.body);
 
-    // TODO Phase 2 continued: use content_url/inline_html to fetch+parse real content
-    // For now, about:blank stub is sufficient for basic contentDocument access
-    _ = .{ content_url, inline_html, parent_frame, depth };
+    // Determine content type from URL
+    const is_xml = std.mem.endsWith(u8, src, ".xml") or std.mem.endsWith(u8, src, ".xhtml") or std.mem.endsWith(u8, src, ".svg");
+
+    if (is_xml) {
+        // Create XML document via DOMParser
+        const parser_js =
+            \\(function(text){
+            \\  var p = new DOMParser();
+            \\  var d = p.parseFromString(text, 'application/xml');
+            \\  d.contentType = 'application/xml';
+            \\  return d;
+            \\})
+        ;
+        const fn_val = qjs.JS_Eval(ctx, parser_js, parser_js.len, "<iframe-xml>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (quickjs.JS_IsException(fn_val)) return fn_val;
+
+        var args = [1]qjs.JSValue{qjs.JS_NewStringLen(ctx, response.body.ptr, response.body.len)};
+        const result = qjs.JS_Call(ctx, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+        qjs.JS_FreeValue(ctx, fn_val);
+        qjs.JS_FreeValue(ctx, args[0]);
+        return result;
+    } else {
+        // HTML document
+        return createDocumentFromHTML(ctx, response.body, src);
+    }
 }

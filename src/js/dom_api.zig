@@ -208,7 +208,7 @@ const resolveUrl = @import("../net/loader.zig").resolveUrl;
 const adblock_mod = @import("../features/adblock.zig");
 
 var g_js_rt: ?*JsRuntime = null;
-var g_loader: ?*Loader = null;
+pub var g_loader: ?*Loader = null;
 /// Track loaded script URLs to prevent duplicate execution
 var g_loaded_script_urls: ?*std.StringHashMap(void) = null;
 
