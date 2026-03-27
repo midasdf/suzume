@@ -644,7 +644,7 @@ fn collectAndExecScripts(node: *lxb.lxb_dom_node_t, js_rt: *JsRuntime, allocator
 }
 
 /// Initialize JavaScript for a loaded page: set up DOM APIs, execute scripts, fire events.
-fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
+fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, fonts: ?*painter_mod.FontCache) void {
     var js_rt = JsRuntime.init() catch {
         std.debug.print("[JS] Failed to init JS runtime\n", .{});
         return;
@@ -690,7 +690,7 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     // Process <iframe> elements before scripts (so contentDocument is available)
     {
         const doc_node = doc.documentNode().lxb_node;
-        dom_api.iframe.processIframes(js_rt.ctx, js_rt.rt, doc_node, &dom_api.g_top_frame, allocator);
+        dom_api.iframe.processIframes(js_rt.ctx, js_rt.rt, doc_node, &dom_api.g_top_frame, allocator, fonts);
     }
 
     // Execute <script> tags (including external scripts via src attribute)
@@ -1161,7 +1161,7 @@ fn navigateTo(
     dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
-    initPageJs(&page.doc.?, page, allocator, loader, base_url_copy);
+    initPageJs(&page.doc.?, page, allocator, loader, base_url_copy, fonts);
 
     // After JS execution, remove anti-flicker class if present.
     // Only add w-mod-ix3 if anti-flicker was found (indicates Webflow site).
@@ -4117,7 +4117,7 @@ fn submitForm(
 
         // Execute JS on the POST result page
         if (page.doc) |*pd| {
-            initPageJs(pd, page, allocator, loader, resolved_action);
+            initPageJs(pd, page, allocator, loader, resolved_action, fonts);
         }
 
         const final_url = allocator.dupe(u8, resolved_action) catch {

@@ -25,14 +25,17 @@ var iframe_count: u32 = 0;
 
 // ── iframe Detection ────────────────────────────────────────────────
 
+const FontCache = @import("../paint/painter.zig").FontCache;
+
 pub fn processIframes(
     parent_ctx: *qjs.JSContext,
     rt: *qjs.JSRuntime,
     doc_node: *lxb.lxb_dom_node_t,
     parent_frame: *FrameState,
     allocator: std.mem.Allocator,
+    fonts: ?*FontCache,
 ) void {
-    walkForIframes(parent_ctx, rt, doc_node, parent_frame, allocator, 0);
+    walkForIframes(parent_ctx, rt, doc_node, parent_frame, allocator, 0, fonts);
 }
 
 fn walkForIframes(
@@ -42,6 +45,7 @@ fn walkForIframes(
     parent_frame: *FrameState,
     allocator: std.mem.Allocator,
     depth: u32,
+    fonts: ?*FontCache,
 ) void {
     if (depth > frame_state.MAX_IFRAME_DEPTH) return;
 
@@ -52,11 +56,10 @@ fn walkForIframes(
             var name_len: usize = 0;
             const name = lxb_dom_element_local_name(elem, &name_len);
             if (name != null and name_len == 6 and std.mem.eql(u8, name.?[0..6], "iframe")) {
-                setupIframe(parent_ctx, rt, elem, parent_frame, allocator, depth);
+                setupIframe(parent_ctx, rt, elem, parent_frame, allocator, depth, fonts);
             }
-            // Don't recurse INTO iframe content — only scan parent document
             if (name == null or name_len != 6 or !std.mem.eql(u8, name.?[0..6], "iframe")) {
-                walkForIframes(parent_ctx, rt, ch, parent_frame, allocator, depth);
+                walkForIframes(parent_ctx, rt, ch, parent_frame, allocator, depth, fonts);
             }
         }
         child = ch.next;
@@ -70,6 +73,7 @@ fn setupIframe(
     parent_frame: *FrameState,
     allocator: std.mem.Allocator,
     depth: u32,
+    fonts: ?*FontCache,
 ) void {
     if (iframe_count >= frame_state.MAX_IFRAME_COUNT) return;
 
@@ -152,7 +156,7 @@ fn setupIframe(
     web_api.setGlobalCtx(saved_web_ctx);
 
     // Build iframe layout (cascade → box tree → layout)
-    buildIframeLayout(iframe_doc, elem, allocator, idx);
+    buildIframeLayout(iframe_doc, elem, allocator, idx, fonts);
 
     // Set contentDocument on parent's iframe element
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -247,7 +251,7 @@ pub fn resetIframes() void {
     iframe_count = 0;
 }
 
-fn buildIframeLayout(maybe_doc: ?Document, elem: *lxb.lxb_dom_element_t, allocator: std.mem.Allocator, idx: u32) void {
+fn buildIframeLayout(maybe_doc: ?Document, elem: *lxb.lxb_dom_element_t, allocator: std.mem.Allocator, idx: u32, fonts: ?*FontCache) void {
     const doc = maybe_doc orelse return;
     const root_node = doc.root() orelse return;
 
@@ -274,10 +278,10 @@ fn buildIframeLayout(maybe_doc: ?Document, elem: *lxb.lxb_dom_element_t, allocat
         return;
     };
     iframe_root_box.margin = .{};
-    // Layout requires font cache — skip for now, just store box tree
-    // block_layout.layoutBlockVp(iframe_root_box, iw, 0, fonts, ih);
-    // Without layout, boxes have zero dimensions but the tree structure is correct.
-    _ = block_layout;
+    // Layout with font cache (if available)
+    if (fonts) |f| {
+        block_layout.layoutBlockVp(iframe_root_box, iw, 0, f, ih);
+    }
 
     // Store in FrameState (styles field is StyleMap pointer, get from CascadeResult)
     iframe_frames[idx].root_box = iframe_root_box;
