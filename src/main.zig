@@ -1003,6 +1003,8 @@ fn navigateTo(
     layout_width: i32,
     layout_height: i32,
 ) bool {
+    // Clean up iframes before page
+    dom_api.iframe.resetIframes();
     // Clean up old page
     page.deinit();
 

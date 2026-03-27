@@ -224,3 +224,25 @@ fn fetchIframeContent(src: []const u8, allocator: std.mem.Allocator) ?[]u8 {
     response.deinit();
     return body_copy;
 }
+
+// ── Cleanup ─────────────────────────────────────────────────────────
+
+/// Reset all iframe state. Call on page navigation.
+pub fn resetIframes() void {
+    var i: u32 = 0;
+    while (i < iframe_count) : (i += 1) {
+        // Free JSContext
+        if (iframe_contexts[i]) |ctx| {
+            qjs.JS_FreeContext(ctx);
+            iframe_contexts[i] = null;
+        }
+        // Free Lexbor Document
+        if (iframe_docs[i]) |*doc| {
+            doc.deinit();
+            iframe_docs[i] = null;
+        }
+        // Reset FrameState
+        iframe_frames[i] = .{};
+    }
+    iframe_count = 0;
+}
