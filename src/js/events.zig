@@ -355,6 +355,27 @@ fn jsInitEvent(ctx: ?*qjs.JSContext, this_val: qjs.JSValue, argc: c_int, argv: ?
     return quickjs.JS_UNDEFINED();
 }
 
+/// Per DOM spec, these event types are composed (cross shadow DOM boundary).
+fn isComposedEvent(event_type: []const u8) bool {
+    // UI Events that are always composed
+    const composed_events = [_][]const u8{
+        "click", "dblclick", "mousedown", "mouseup", "mousemove", "mouseover", "mouseout",
+        "mouseenter", "mouseleave", "contextmenu", "wheel",
+        "keydown", "keyup", "keypress",
+        "input", "beforeinput", "compositionstart", "compositionupdate", "compositionend",
+        "focus", "blur", "focusin", "focusout",
+        "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout",
+        "pointerenter", "pointerleave", "pointercancel", "gotpointercapture", "lostpointercapture",
+        "touchstart", "touchmove", "touchend", "touchcancel",
+        "dragstart", "drag", "dragend", "dragenter", "dragleave", "dragover", "drop",
+        "select", "selectionchange",
+    };
+    for (composed_events) |e| {
+        if (std.mem.eql(u8, event_type, e)) return true;
+    }
+    return false;
+}
+
 fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.lxb_dom_node_t, current_target: ?*lxb.lxb_dom_node_t) qjs.JSValue {
     const event = qjs.JS_NewObject(ctx);
     if (quickjs.JS_IsException(event)) return event;
@@ -383,7 +404,9 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
 
     // Additional DOM Event interface properties
     _ = qjs.JS_SetPropertyStr(ctx, event, "_cancelBubble", quickjs.JS_NewBool(false));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "composed", quickjs.JS_NewBool(false));
+    // Per spec: UI events (click, input, focus, etc.) are composed by default
+    const is_composed = isComposedEvent(event_type);
+    _ = qjs.JS_SetPropertyStr(ctx, event, "composed", quickjs.JS_NewBool(is_composed));
     _ = qjs.JS_SetPropertyStr(ctx, event, "isTrusted", quickjs.JS_NewBool(false));
     _ = qjs.JS_SetPropertyStr(ctx, event, "timeStamp", qjs.JS_NewFloat64(ctx, @as(f64, @floatFromInt(std.time.milliTimestamp()))));
     _ = qjs.JS_SetPropertyStr(ctx, event, "srcElement", quickjs.JS_NULL());

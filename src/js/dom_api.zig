@@ -2805,13 +2805,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     {
         const pi_js =
             \\(function(target, data) {
+            \\  if(!target||target.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
+            \\  if(data&&data.indexOf('?>')>=0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
             \\  var pi = {nodeType:7, nodeName:target, target:target, data:data||'',
-            \\          textContent:data||'', nodeValue:data||'', childNodes:[]};
+            \\          textContent:data||'', nodeValue:data||'', childNodes:[],
+            \\          parentNode:null, parentElement:null, ownerDocument:document,
+            \\          previousSibling:null, nextSibling:null, firstChild:null, lastChild:null};
             \\  pi.isEqualNode = function(o) {
             \\    if (!o || o.nodeType !== 7) return false;
             \\    return this.target === o.target && this.data === o.data;
             \\  };
             \\  pi.isSameNode = function(o) { return this === o; };
+            \\  pi.cloneNode = function() { return document.createProcessingInstruction(this.target, this.data); };
+            \\  pi.lookupPrefix = function() { return null; };
+            \\  pi.lookupNamespaceURI = function() { return null; };
+            \\  pi.isDefaultNamespace = function() { return false; };
             \\  return pi;
             \\})
         ;
