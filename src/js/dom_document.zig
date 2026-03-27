@@ -285,17 +285,42 @@ pub fn documentCreateRange(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const range = qjs.JS_NewObject(c);
-    _ = qjs.JS_SetPropertyStr(c, range, "startOffset", qjs.JS_NewInt32(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, range, "endOffset", qjs.JS_NewInt32(c, 0));
-    _ = qjs.JS_SetPropertyStr(c, range, "collapsed", quickjs.JS_NewBool(true));
-    _ = qjs.JS_SetPropertyStr(c, range, "setStart", qjs.JS_NewCFunction(c, &jsReturnNull, "setStart", 2));
-    _ = qjs.JS_SetPropertyStr(c, range, "setEnd", qjs.JS_NewCFunction(c, &jsReturnNull, "setEnd", 2));
-    _ = qjs.JS_SetPropertyStr(c, range, "selectNode", qjs.JS_NewCFunction(c, &jsReturnNull, "selectNode", 1));
-    _ = qjs.JS_SetPropertyStr(c, range, "selectNodeContents", qjs.JS_NewCFunction(c, &jsReturnNull, "selectNodeContents", 1));
-    _ = qjs.JS_SetPropertyStr(c, range, "collapse", qjs.JS_NewCFunction(c, &jsReturnNull, "collapse", 1));
-    _ = qjs.JS_SetPropertyStr(c, range, "cloneRange", qjs.JS_NewCFunction(c, &documentCreateRange, "cloneRange", 0));
-    _ = qjs.JS_SetPropertyStr(c, range, "getBoundingClientRect", qjs.JS_NewCFunction(c, &api.dom_elem.elementGetBoundingClientRect, "getBoundingClientRect", 0));
+    const range_js =
+        \\(function(){
+        \\  var r={startContainer:document,startOffset:0,endContainer:document,endOffset:0,commonAncestorContainer:document};
+        \\  Object.defineProperty(r,'collapsed',{get:function(){return this.startContainer===this.endContainer&&this.startOffset===this.endOffset;},configurable:true,enumerable:true});
+        \\  r._updateAncestor=function(){var a=this.startContainer,b=this.endContainer;if(a===b){this.commonAncestorContainer=a;return;}
+        \\    var pa=[],n=a;while(n){pa.push(n);n=n.parentNode;}n=b;while(n){for(var i=0;i<pa.length;i++)if(pa[i]===n){this.commonAncestorContainer=n;return;}n=n.parentNode;}
+        \\    this.commonAncestorContainer=document;};
+        \\  r.setStart=function(n,o){this.startContainer=n;this.startOffset=o;this._updateAncestor();};
+        \\  r.setEnd=function(n,o){this.endContainer=n;this.endOffset=o;this._updateAncestor();};
+        \\  r.setStartBefore=function(n){this.startContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.startOffset=i;this._updateAncestor();};
+        \\  r.setStartAfter=function(n){this.startContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.startOffset=i+1;this._updateAncestor();};
+        \\  r.setEndBefore=function(n){this.endContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.endOffset=i;this._updateAncestor();};
+        \\  r.setEndAfter=function(n){this.endContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.endOffset=i+1;this._updateAncestor();};
+        \\  r.selectNode=function(n){if(n.parentNode){this.setStartBefore(n);this.setEndAfter(n);}};
+        \\  r.selectNodeContents=function(n){this.startContainer=n;this.startOffset=0;this.endContainer=n;this.endOffset=n.childNodes?n.childNodes.length:0;this._updateAncestor();};
+        \\  r.collapse=function(toStart){if(toStart){this.endContainer=this.startContainer;this.endOffset=this.startOffset;}else{this.startContainer=this.endContainer;this.startOffset=this.endOffset;}this._updateAncestor();};
+        \\  r.cloneRange=function(){var nr=document.createRange();nr.setStart(this.startContainer,this.startOffset);nr.setEnd(this.endContainer,this.endOffset);return nr;};
+        \\  r.cloneContents=function(){return document.createDocumentFragment();};
+        \\  r.deleteContents=function(){};
+        \\  r.extractContents=function(){return document.createDocumentFragment();};
+        \\  r.insertNode=function(n){var sc=this.startContainer;if(sc.nodeType===3){var p=sc.parentNode;if(p)p.insertBefore(n,sc);}else{var ref=sc.childNodes[this.startOffset]||null;sc.insertBefore(n,ref);}};
+        \\  r.surroundContents=function(n){};
+        \\  r.compareBoundaryPoints=function(how,sr){return 0;};
+        \\  r.isPointInRange=function(n,o){return false;};
+        \\  r.comparePoint=function(n,o){return 0;};
+        \\  r.intersectsNode=function(n){return false;};
+        \\  r.detach=function(){};
+        \\  r.toString=function(){return '';};
+        \\  r.createContextualFragment=function(html){var t=document.createElement('div');t.innerHTML=html;var f=document.createDocumentFragment();while(t.firstChild)f.appendChild(t.firstChild);return f;};
+        \\  r.getBoundingClientRect=function(){return{x:0,y:0,width:0,height:0,top:0,right:0,bottom:0,left:0};};
+        \\  r.getClientRects=function(){return[];};
+        \\  r.START_TO_START=0;r.START_TO_END=1;r.END_TO_END=2;r.END_TO_START=3;
+        \\  return r;
+        \\})()
+    ;
+    const range = qjs.JS_Eval(c, range_js, range_js.len, "<range>", qjs.JS_EVAL_TYPE_GLOBAL);
     return range;
 }
 

@@ -2596,6 +2596,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  });
             \\  Object.defineProperty(EP,'tabIndex',{get:function(){var v=this.getAttribute('tabindex');return v!==null?parseInt(v,10)||0:-1;},set:function(v){this.setAttribute('tabindex',String(v));},configurable:true});
             \\  Object.defineProperty(EP,'id',{get:function(){return this.getAttribute('id')||'';},set:function(v){this.setAttribute('id',v);},configurable:true});
+            \\  Object.defineProperty(EP,'translate',{get:function(){var v=this.getAttribute('translate');if(v==='yes'||v==='')return true;if(v==='no')return false;var p=this.parentElement;return p?p.translate:true;},set:function(v){this.setAttribute('translate',v?'yes':'no');},configurable:true});
+            \\  Object.defineProperty(EP,'draggable',{get:function(){var v=this.getAttribute('draggable');return v==='true';},set:function(v){this.setAttribute('draggable',v?'true':'false');},configurable:true});
+            \\  Object.defineProperty(EP,'spellcheck',{get:function(){var v=this.getAttribute('spellcheck');return v!=='false';},set:function(v){this.setAttribute('spellcheck',v?'true':'false');},configurable:true});
+            \\  Object.defineProperty(EP,'contentEditable',{get:function(){return this.getAttribute('contenteditable')||'inherit';},set:function(v){this.setAttribute('contenteditable',v);},configurable:true});
+            \\  Object.defineProperty(EP,'isContentEditable',{get:function(){var v=this.getAttribute('contenteditable');return v==='true'||v==='';},configurable:true});
+            \\  Object.defineProperty(EP,'slot',{get:function(){return this.getAttribute('slot')||'';},set:function(v){this.setAttribute('slot',v);},configurable:true});
+            \\  Object.defineProperty(EP,'accessKey',{get:function(){return this.getAttribute('accesskey')||'';},set:function(v){this.setAttribute('accesskey',v);},configurable:true});
             \\  EP.getAttributeNode=function(n){if(!this.hasAttribute(n))return null;return{nodeType:2,name:n,localName:n.toLowerCase(),value:this.getAttribute(n),namespaceURI:null,prefix:null,specified:true,ownerElement:this,get nodeValue(){return this.value;},set nodeValue(v){this.value=v;this.ownerElement.setAttribute(this.name,v);}};};
             \\  EP.getAttributeNodeNS=function(ns,ln){return this.getAttributeNode(ln);};
             \\  EP.setAttributeNode=function(attr){var old=this.getAttributeNode(attr.name);this.setAttribute(attr.name,attr.value);attr.ownerElement=this;return old;};
