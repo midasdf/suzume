@@ -1059,3 +1059,52 @@ pub fn jsNoOpConstructor(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     return qjs.JS_NewObject(c);
 }
+
+/// new Text(data?) — creates a real text node via document.createTextNode
+pub fn jsTextConstructor(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
+    if (argc >= 1) {
+        if (argv) |args| {
+            if (!quickjs.JS_IsUndefined(args[0])) {
+                if (api.jsStringToSlice(c, args[0])) |s| {
+                    defer qjs.JS_FreeCString(c, s.ptr);
+                    const node = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
+                    return wrapNode(c, node);
+                }
+            }
+        }
+    }
+    const node = lxb_dom_document_create_text_node(doc, "", 0) orelse return quickjs.JS_UNDEFINED();
+    return wrapNode(c, node);
+}
+
+/// new Comment(data?) — creates a real comment node via document.createComment
+pub fn jsCommentConstructor(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
+    if (argc >= 1) {
+        if (argv) |args| {
+            // Convert to string (handles undefined -> "undefined" per JS, but spec says default is "")
+            if (!quickjs.JS_IsUndefined(args[0])) {
+                if (api.jsStringToSlice(c, args[0])) |s| {
+                    defer qjs.JS_FreeCString(c, s.ptr);
+                    const node = lxb_dom_document_create_comment(doc, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
+                    return wrapNode(c, node);
+                }
+            }
+        }
+    }
+    const node = lxb_dom_document_create_comment(doc, "", 0) orelse return quickjs.JS_UNDEFINED();
+    return wrapNode(c, node);
+}

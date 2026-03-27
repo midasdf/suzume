@@ -2658,13 +2658,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Text/CharacterData/Comment/PI constructors with prototype for instanceof
     {
         const tp = qjs.JS_GetClassProto(ctx, text_class_id);
-        const text_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
+        // Text constructor: new Text(data?) creates a real text node
+        const text_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsTextConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, text_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
         const chardata_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "CharacterData", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, chardata_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "CharacterData", chardata_ctor);
-        const comment_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
+        // Comment constructor: new Comment(data?) creates a real comment node
+        const comment_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsCommentConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, comment_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "Comment", comment_ctor);
         const pi_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "ProcessingInstruction", 0, qjs.JS_CFUNC_constructor, 0);
