@@ -337,10 +337,11 @@ pub fn documentCreateTreeWalker(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return qjs.JS_ThrowTypeError(c, "Failed to execute 'createTreeWalker': 1 argument required.");
     const args = argv orelse return quickjs.JS_NULL();
 
     // Get root node
-    const root_val = if (argc >= 1) args[0] else return quickjs.JS_NULL();
+    const root_val = args[0];
 
     // Get whatToShow (default: SHOW_ALL = 0xFFFFFFFF)
     // Use unsigned to match DOM spec (4294967295, not -1)
