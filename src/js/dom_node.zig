@@ -14,6 +14,10 @@ extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_
 extern fn lxb_dom_node_remove(node: *lxb.lxb_dom_node_t) void;
 extern fn lxb_dom_node_destroy(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
+extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
+extern fn lxb_dom_element_next_attribute_noi(attr: *anyopaque) ?*anyopaque;
+extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
+extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
 extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
@@ -680,17 +684,39 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
         if (la != null and lb != null) {
             if (!std.mem.eql(u8, la.?[0..la_len], lb.?[0..lb_len])) return false;
         }
-        // Compare number of attributes (simplified — count via walking)
-        var attr_count_a: usize = 0;
-        var attr_count_b: usize = 0;
+        // Compare attributes: count and values
         {
-            // Count attributes of a
-            const style_a_ptr = lxb_dom_element_get_attribute(ea, "id", 2, &la_len);
-            _ = style_a_ptr;
-            // Simplified: use attribute count from lexbor (not directly available)
-            // For now, skip attribute count check (partial isEqualNode)
-            _ = &attr_count_a;
-            _ = &attr_count_b;
+            var count_a: usize = 0;
+            var count_b: usize = 0;
+            var aa: ?*anyopaque = lxb_dom_element_first_attribute_noi(ea);
+            while (aa) |a_attr| {
+                count_a += 1;
+                aa = lxb_dom_element_next_attribute_noi(a_attr);
+            }
+            var ab: ?*anyopaque = lxb_dom_element_first_attribute_noi(eb);
+            while (ab) |b_attr| {
+                count_b += 1;
+                ab = lxb_dom_element_next_attribute_noi(b_attr);
+            }
+            if (count_a != count_b) return false;
+            // Verify each attribute of a exists with same value in b
+            aa = lxb_dom_element_first_attribute_noi(ea);
+            while (aa) |a_attr| {
+                var an_len: usize = 0;
+                const an = lxb_dom_attr_qualified_name(a_attr, &an_len);
+                var av_len: usize = 0;
+                const av = lxb_dom_attr_value_noi(a_attr, &av_len);
+                if (an) |name| {
+                    var bv_len: usize = 0;
+                    const bv = lxb_dom_element_get_attribute(eb, name, an_len, &bv_len);
+                    if (bv == null) return false;
+                    if (av_len != bv_len) return false;
+                    if (av != null and bv != null) {
+                        if (!std.mem.eql(u8, av.?[0..av_len], bv.?[0..bv_len])) return false;
+                    }
+                }
+                aa = lxb_dom_element_next_attribute_noi(a_attr);
+            }
         }
     } else if (a.type == lxb.LXB_DOM_NODE_TYPE_TEXT or a.type == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
         // Compare text content
