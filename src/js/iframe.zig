@@ -190,11 +190,16 @@ fn fetchAndCreateDocument(ctx: *qjs.JSContext, src: []const u8, allocator: std.m
     defer allocator.free(resolved);
 
     // Fetch content
-    const response = loader.loadBytes(resolved) catch return quickjs.JS_UNDEFINED();
-    defer allocator.free(response.body);
+    var response = loader.loadBytes(resolved) catch return quickjs.JS_UNDEFINED();
+    defer response.deinit();
 
-    // Determine content type from URL
-    const is_xml = std.mem.endsWith(u8, src, ".xml") or std.mem.endsWith(u8, src, ".xhtml") or std.mem.endsWith(u8, src, ".svg");
+    // Determine content type from HTTP header or URL extension
+    const ct = response.content_type;
+    const is_xml = std.mem.indexOf(u8, ct, "xml") != null or
+        std.mem.indexOf(u8, ct, "svg") != null or
+        std.mem.endsWith(u8, src, ".xml") or
+        std.mem.endsWith(u8, src, ".xhtml") or
+        std.mem.endsWith(u8, src, ".svg");
 
     if (is_xml) {
         // Create XML document via DOMParser
