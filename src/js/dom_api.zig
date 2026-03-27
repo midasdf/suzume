@@ -2131,9 +2131,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  NP.isDefaultNamespace=function(ns){return this.lookupNamespaceURI(null)===ns;};
             \\  NP.isSameNode=function(o){return this===o;};
             \\  NP.hasChildNodes=function(){return this.childNodes&&this.childNodes.length>0;};
-            \\  NP.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a=document.createTextNode(a);this.appendChild(a);}};
-            \\  NP.prepend=NP.prepend||function(){var f=this.firstChild;for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a=document.createTextNode(a);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
-            \\  NP.append=NP.append||function(){for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a=document.createTextNode(a);this.appendChild(a);}};
+            \\  function _toNode(a){return(a&&typeof a==='object'&&a.nodeType)?a:document.createTextNode(String(a));}
+            \\  NP.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
+            \\  NP.prepend=NP.prepend||function(){var f=this.firstChild;for(var i=0;i<arguments.length;i++){var a=_toNode(arguments[i]);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
+            \\  NP.append=NP.append||function(){for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, ns_js, ns_js.len, "<ns>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -3061,7 +3062,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Document.prototype.querySelector = function(s) { if(this.documentElement) return this.documentElement.querySelector(s); return null; };
             \\  Document.prototype.querySelectorAll = function(s) { if(this.documentElement) return this.documentElement.querySelectorAll(s); return []; };
             \\  Document.prototype.getElementsByTagName = function(t) { if(this.documentElement) return this.documentElement.getElementsByTagName(t); return []; };
+            \\  function _docPreInsert(doc,n){
+            \\    var nt=n.nodeType;
+            \\    if(nt!==1&&nt!==3&&nt!==7&&nt!==8&&nt!==10&&nt!==11)throw new DOMException("HierarchyRequestError","HierarchyRequestError");
+            \\    if(nt===3)throw new DOMException("HierarchyRequestError","HierarchyRequestError");
+            \\    var p=doc;while(p){if(p===n)throw new DOMException("HierarchyRequestError","HierarchyRequestError");p=p.parentNode;}
+            \\    if(nt===1&&doc.documentElement&&doc.documentElement!==n)throw new DOMException("HierarchyRequestError","HierarchyRequestError");
+            \\    if(nt===10&&doc.doctype&&doc.doctype!==n)throw new DOMException("HierarchyRequestError","HierarchyRequestError");
+            \\    if(nt===11){var ec=0;for(var i=0;i<(n.childNodes?n.childNodes.length:0);i++){if(n.childNodes[i].nodeType===1)ec++;if(n.childNodes[i].nodeType===3)throw new DOMException("HierarchyRequestError","HierarchyRequestError");}if(ec>1||(ec===1&&doc.documentElement))throw new DOMException("HierarchyRequestError","HierarchyRequestError");}
+            \\  }
             \\  Document.prototype.appendChild = function(n) {
+            \\    _docPreInsert(this,n);
             \\    if(n.parentNode)n.parentNode.removeChild(n);
             \\    n.parentNode=this;n.ownerDocument=this;
             \\    this._childNodes.push(n);
@@ -3083,6 +3094,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  };
             \\  Document.prototype.insertBefore = function(n,ref) {
             \\    if(!ref)return this.appendChild(n);
+            \\    _docPreInsert(this,n);
             \\    if(n.parentNode)n.parentNode.removeChild(n);
             \\    n.parentNode=this;n.ownerDocument=this;
             \\    var i=this._childNodes.indexOf(ref);if(i>=0)this._childNodes.splice(i,0,n);else this._childNodes.push(n);
@@ -3092,6 +3104,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(n.nodeType===10)this.doctype=n;
             \\    return n;
             \\  };
+            \\  Document.prototype.prepend = function(){var f=this._childNodes[0]||null;for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};_docPreInsert(this,a);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
+            \\  Document.prototype.append = function(){for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
+            \\  Document.prototype.replaceChildren = function(){while(this._childNodes.length>0)this.removeChild(this._childNodes[this._childNodes.length-1]);for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
             \\  Document.prototype.adoptNode = function(n) { return n; };
             \\  Document.prototype.createAttribute = function(n) { return document.createAttribute(n); };
