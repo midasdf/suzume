@@ -484,6 +484,41 @@ pub fn documentCreateTreeWalker(
     return result;
 }
 
+/// document.createNodeIterator(root, whatToShow, filter)
+/// Wraps TreeWalker with NodeIterator-specific properties
+pub fn documentCreateNodeIterator(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    // Create a TreeWalker first, then wrap as NodeIterator
+    const tw = documentCreateTreeWalker(ctx, this_val, argc, argv);
+    if (quickjs.JS_IsException(tw) or quickjs.JS_IsNull(tw)) return tw;
+    // Add NodeIterator-specific properties
+    const ni_js =
+        \\(function(ni){
+        \\  ni.referenceNode = ni.root;
+        \\  ni.pointerBeforeReferenceNode = true;
+        \\  ni.detach = function(){};
+        \\  ni[Symbol.toStringTag] = 'NodeIterator';
+        \\  var origNext = ni.nextNode;
+        \\  ni.nextNode = function(){var n=origNext.call(this);if(n)this.referenceNode=n;this.pointerBeforeReferenceNode=false;return n;};
+        \\  var origPrev = ni.previousNode;
+        \\  ni.previousNode = function(){var n=origPrev.call(this);if(n)this.referenceNode=n;this.pointerBeforeReferenceNode=true;return n;};
+        \\})
+    ;
+    const ni_fn = qjs.JS_Eval(c, ni_js, ni_js.len, "<nodeiter>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(ni_fn)) {
+        var ni_args = [1]qjs.JSValue{tw};
+        const ni_r = qjs.JS_Call(c, ni_fn, quickjs.JS_UNDEFINED(), 1, &ni_args);
+        qjs.JS_FreeValue(c, ni_r);
+        qjs.JS_FreeValue(c, ni_fn);
+    }
+    return tw;
+}
+
 pub fn jsReturnNull(
     _: ?*qjs.JSContext,
     _: qjs.JSValue,

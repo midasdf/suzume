@@ -2784,7 +2784,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // document.createTreeWalker
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createTreeWalker", 3));
     // document.createNodeIterator
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createNodeIterator", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createNodeIterator", 3));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createNodeIterator", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateNodeIterator, "createNodeIterator", 3));
 
     // document.readyState (getter)
     const readyStateAtom = qjs.JS_NewAtom(ctx, "readyState");
