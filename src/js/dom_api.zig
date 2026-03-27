@@ -143,6 +143,7 @@ pub var g_root_box: ?*const Box = null;
 /// Set the root box pointer (called from main after layout).
 pub fn setRootBox(root: ?*const Box) void {
     g_root_box = root;
+    g_top_frame.root_box = root;
 }
 
 /// Global styles pointer — set from main after cascade, used for getComputedStyle.
@@ -151,6 +152,7 @@ pub var g_styles: ?*const cascade_mod.StyleMap = null;
 /// Set the styles pointer (called from main after cascade/restyle).
 pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
     g_styles = styles;
+    g_top_frame.styles = styles;
 }
 
 /// Viewport dimensions for getComputedStyle resolution.
@@ -167,6 +169,8 @@ pub fn setViewport(w: f32, h: f32) void {
     const vh: f32 = @floatFromInt(web_api.getViewportHeight());
     g_viewport_width = if (vw > 0) vw else w;
     g_viewport_height = if (vh > 0) vh else h;
+    g_top_frame.viewport_width = g_viewport_width;
+    g_top_frame.viewport_height = g_viewport_height;
 }
 
 /// Find the Box in the tree that corresponds to a given DOM node pointer.
@@ -193,6 +197,7 @@ pub var g_current_url: ?[]const u8 = null;
 /// Set the current page URL (called from main on navigation).
 pub fn setCurrentUrl(url: ?[]const u8) void {
     g_current_url = url;
+    g_top_frame.current_url = url;
 }
 
 // ── Dynamic script execution support ────────────────────────────────
@@ -2051,6 +2056,7 @@ const MAX_CSS_LENGTH: f32 = 33554432.0; // 2^25, implementation-defined max CSS 
 /// Must be called after page parse and before script execution.
 pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *anyopaque) void {
     g_document = document_ptr;
+    g_top_frame.document = document_ptr;
     dom_dirty = false;
 
     // Register Element class
