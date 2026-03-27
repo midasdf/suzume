@@ -944,7 +944,14 @@ pub fn documentCreateEvent(
                 else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "errorevent")) iface = "ErrorEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "closeevent")) iface = "CloseEvent";
+                else if (std.ascii.eqlIgnoreCase(name, "closeevent")) iface = "CloseEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "storageevent")) iface = "StorageEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "transitionevent")) iface = "TransitionEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "animationevent")) iface = "AnimationEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "pagetransitionevent")) iface = "PageTransitionEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "dragevent") or std.ascii.eqlIgnoreCase(name, "dragevents")) iface = "DragEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event";
             }
         }
     }
@@ -981,6 +988,18 @@ pub fn documentCreateEvent(
         "(new ProgressEvent(''))"
     else if (std.mem.eql(u8, iface, "CloseEvent"))
         "(new CloseEvent(''))"
+    else if (std.mem.eql(u8, iface, "BeforeUnloadEvent"))
+        "(new BeforeUnloadEvent(''))"
+    else if (std.mem.eql(u8, iface, "StorageEvent"))
+        "(new StorageEvent(''))"
+    else if (std.mem.eql(u8, iface, "TransitionEvent"))
+        "(new TransitionEvent(''))"
+    else if (std.mem.eql(u8, iface, "AnimationEvent"))
+        "(new AnimationEvent(''))"
+    else if (std.mem.eql(u8, iface, "PageTransitionEvent"))
+        "(new PageTransitionEvent(''))"
+    else if (std.mem.eql(u8, iface, "DragEvent"))
+        "(new DragEvent(''))"
     else
         "(new Event(''))";
     return qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);

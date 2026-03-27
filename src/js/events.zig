@@ -1235,6 +1235,40 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
             \\  function ProgressEvent(t,o){Event.call(this,t,o);o=o||{};this.lengthComputable=!!o.lengthComputable;this.loaded=o.loaded||0;this.total=o.total||0;}
             \\  ProgressEvent.prototype=Object.create(Event.prototype);ProgressEvent.prototype.constructor=ProgressEvent;
             \\  globalThis.ProgressEvent=ProgressEvent;
+            \\  function BeforeUnloadEvent(t,o){Event.call(this,t||'beforeunload',o);this.returnValue='';}
+            \\  BeforeUnloadEvent.prototype=Object.create(Event.prototype);BeforeUnloadEvent.prototype.constructor=BeforeUnloadEvent;
+            \\  globalThis.BeforeUnloadEvent=BeforeUnloadEvent;
+            \\  function StorageEvent(t,o){Event.call(this,t,o);o=o||{};this.key=o.key||null;this.oldValue=o.oldValue||null;this.newValue=o.newValue||null;this.url=o.url||'';this.storageArea=o.storageArea||null;}
+            \\  StorageEvent.prototype=Object.create(Event.prototype);StorageEvent.prototype.constructor=StorageEvent;
+            \\  StorageEvent.prototype.initStorageEvent=function(t,b,c,k,o,n,u,s){this.initEvent(t,b,c);this.key=k;this.oldValue=o;this.newValue=n;this.url=u;this.storageArea=s;};
+            \\  globalThis.StorageEvent=StorageEvent;
+            \\  function TransitionEvent(t,o){Event.call(this,t,o);o=o||{};this.propertyName=o.propertyName||'';this.elapsedTime=o.elapsedTime||0;this.pseudoElement=o.pseudoElement||'';}
+            \\  TransitionEvent.prototype=Object.create(Event.prototype);TransitionEvent.prototype.constructor=TransitionEvent;
+            \\  globalThis.TransitionEvent=TransitionEvent;
+            \\  function AnimationEvent(t,o){Event.call(this,t,o);o=o||{};this.animationName=o.animationName||'';this.elapsedTime=o.elapsedTime||0;this.pseudoElement=o.pseudoElement||'';}
+            \\  AnimationEvent.prototype=Object.create(Event.prototype);AnimationEvent.prototype.constructor=AnimationEvent;
+            \\  globalThis.AnimationEvent=AnimationEvent;
+            \\  function PageTransitionEvent(t,o){Event.call(this,t,o);this.persisted=!!(o&&o.persisted);}
+            \\  PageTransitionEvent.prototype=Object.create(Event.prototype);PageTransitionEvent.prototype.constructor=PageTransitionEvent;
+            \\  globalThis.PageTransitionEvent=PageTransitionEvent;
+            \\  function SecurityPolicyViolationEvent(t,o){Event.call(this,t,o);o=o||{};this.documentURI=o.documentURI||'';this.referrer=o.referrer||'';this.blockedURI=o.blockedURI||'';this.violatedDirective=o.violatedDirective||'';this.effectiveDirective=o.effectiveDirective||'';this.originalPolicy=o.originalPolicy||'';this.sourceFile=o.sourceFile||'';this.lineNumber=o.lineNumber||0;this.columnNumber=o.columnNumber||0;this.statusCode=o.statusCode||0;this.disposition=o.disposition||'enforce';this.sample=o.sample||'';}
+            \\  SecurityPolicyViolationEvent.prototype=Object.create(Event.prototype);SecurityPolicyViolationEvent.prototype.constructor=SecurityPolicyViolationEvent;
+            \\  globalThis.SecurityPolicyViolationEvent=SecurityPolicyViolationEvent;
+            \\  function PromiseRejectionEvent(t,o){Event.call(this,t,o);this.promise=(o&&o.promise)||null;this.reason=(o&&o.reason)||undefined;}
+            \\  PromiseRejectionEvent.prototype=Object.create(Event.prototype);PromiseRejectionEvent.prototype.constructor=PromiseRejectionEvent;
+            \\  globalThis.PromiseRejectionEvent=PromiseRejectionEvent;
+            \\  function DragEvent(t,o){MouseEvent.call(this,t,o);this.dataTransfer=(o&&o.dataTransfer)||null;}
+            \\  DragEvent.prototype=Object.create(MouseEvent.prototype);DragEvent.prototype.constructor=DragEvent;
+            \\  globalThis.DragEvent=DragEvent;
+            \\  function FormDataEvent(t,o){Event.call(this,t,o);this.formData=(o&&o.formData)||null;}
+            \\  FormDataEvent.prototype=Object.create(Event.prototype);FormDataEvent.prototype.constructor=FormDataEvent;
+            \\  globalThis.FormDataEvent=FormDataEvent;
+            \\  function SubmitEvent(t,o){Event.call(this,t,o);this.submitter=(o&&o.submitter)||null;}
+            \\  SubmitEvent.prototype=Object.create(Event.prototype);SubmitEvent.prototype.constructor=SubmitEvent;
+            \\  globalThis.SubmitEvent=SubmitEvent;
+            \\  function ToggleEvent(t,o){Event.call(this,t,o);o=o||{};this.oldState=o.oldState||'';this.newState=o.newState||'';}
+            \\  ToggleEvent.prototype=Object.create(Event.prototype);ToggleEvent.prototype.constructor=ToggleEvent;
+            \\  globalThis.ToggleEvent=ToggleEvent;
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, js, js.len, "<misc-events>", qjs.JS_EVAL_TYPE_GLOBAL);
