@@ -235,7 +235,7 @@ fn fetchIframeContent(src: []const u8, allocator: std.mem.Allocator) ?[]u8 {
     const loader = api.g_loader orelse return null;
     const base = api.g_top_frame.current_url orelse "";
 
-    const resolved = resolveUrl(allocator, src, base) catch return null;
+    const resolved = resolveUrl(allocator, base, src) catch return null;
     defer allocator.free(resolved);
 
     var response = loader.loadBytes(resolved) catch return null;
