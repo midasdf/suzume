@@ -2498,6 +2498,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         "HTMLTableSectionElement", "HTMLTableColElement", "HTMLTableCaptionElement",
         "HTMLQuoteElement",     "HTMLModElement",       "HTMLPictureElement",
         "HTMLSlotElement",      "HTMLMenuElement",      "HTMLUnknownElement",
+        "HTMLDirectoryElement", "HTMLDListElement",     "HTMLFontElement",
+        "HTMLFrameElement",     "HTMLFrameSetElement",  "HTMLMarqueeElement",
+        "HTMLTableHeaderCellElement", "HTMLTableDataCellElement",
+        "HTMLParamElement",
     };
     for (html_subclasses) |name| {
         const ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);

@@ -13,6 +13,7 @@ extern fn lxb_dom_node_insert_before(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom
 extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 extern fn lxb_dom_node_remove(node: *lxb.lxb_dom_node_t) void;
 extern fn lxb_dom_node_destroy(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
+extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
 extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
@@ -410,8 +411,10 @@ pub fn elementCloneNode(
     if (html.len == 0) return quickjs.JS_NULL();
 
     const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
-    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    const frag = lxb_html_document_parse_fragment(doc, elem, html.ptr, html.len) orelse return quickjs.JS_NULL();
+    // Use a <template> element as context for parse_fragment to avoid
+    // HTML5 parser special handling of body/form/caption/col/colgroup etc.
+    const template_elem = lxb_dom_document_create_element(doc, "template", 8, null) orelse return quickjs.JS_NULL();
+    const frag = lxb_html_document_parse_fragment(doc, template_elem, html.ptr, html.len) orelse return quickjs.JS_NULL();
 
     // Get the first child from fragment (the cloned element)
     if (frag.first_child) |cloned| {
