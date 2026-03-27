@@ -1054,9 +1054,12 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\  Event.prototype.stopImmediatePropagation = function() { this._stopped = true; this._stopImmediate = true; this._cancelBubble = true; };
         \\  Event.prototype.composedPath = function() { return this._path ? this._path.slice() : []; };
         \\  Event.prototype.initEvent = function(t, b, c) {
+        \\    if(arguments.length<1)throw new TypeError("Failed to execute 'initEvent': 1 argument required, but only 0 present.");
+        \\    if(this._dispatching)return;
         \\    this.type = t; this.bubbles = !!b; this.cancelable = !!c;
         \\    this.defaultPrevented = false; this._stopped = false; this._stopImmediate = false;
         \\    this._cancelBubble = false; this.returnValue = true; this._initialized = true;
+        \\    this.target = null; this.currentTarget = null;
         \\  };
         \\  Object.defineProperty(Event.prototype, 'cancelBubble', {
         \\    get: function() { return this._cancelBubble || false; },
@@ -1320,6 +1323,8 @@ fn jsWindowDispatchEvent(
     const saved_flags = current_event_flags;
     current_event_flags = .{};
 
+    _ = qjs.JS_SetPropertyStr(c, event_obj, "_dispatching", quickjs.JS_NewBool(true));
+
     const global = qjs.JS_GetGlobalObject(c);
     defer qjs.JS_FreeValue(c, global);
 
@@ -1331,6 +1336,7 @@ fn jsWindowDispatchEvent(
 
     updateEventPhase(c, event_obj, 0);
     setEventCurrentTarget(c, event_obj, quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, event_obj, "_dispatching", quickjs.JS_NewBool(false));
 
     const result = !current_event_flags.prevent_default;
     current_event_flags = saved_flags;
@@ -1370,6 +1376,8 @@ fn jsDocumentDispatchEvent(
     const saved_flags = current_event_flags;
     current_event_flags = .{};
 
+    _ = qjs.JS_SetPropertyStr(c, event_obj, "_dispatching", quickjs.JS_NewBool(true));
+
     const global = qjs.JS_GetGlobalObject(c);
     defer qjs.JS_FreeValue(c, global);
     const doc_obj = qjs.JS_GetPropertyStr(c, global, "document");
@@ -1394,6 +1402,7 @@ fn jsDocumentDispatchEvent(
 
     updateEventPhase(c, event_obj, 0);
     setEventCurrentTarget(c, event_obj, quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, event_obj, "_dispatching", quickjs.JS_NewBool(false));
 
     const result = !current_event_flags.prevent_default;
     current_event_flags = saved_flags;
