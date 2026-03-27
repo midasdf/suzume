@@ -2749,6 +2749,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "contains", qjs.JS_NewCFunction(ctx, &dom_node.elementContains, "contains", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &dom_node.nodeCompareDocumentPosition, "compareDocumentPosition", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hasChildNodes", qjs.JS_NewCFunction(ctx, &dom_doc.jsReturnTrue, "hasChildNodes", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "normalize", qjs.JS_NewCFunction(ctx, &dom_node.nodeNormalize, "normalize", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "isEqualNode", qjs.JS_NewCFunction(ctx, &dom_node.nodeIsEqualNode, "isEqualNode", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getRootNode", qjs.JS_NewCFunction(ctx, &dom_node.nodeGetRootNode, "getRootNode", 0));
+    // document.isSameNode, lookupPrefix, lookupNamespaceURI, isDefaultNamespace
+    {
+        const doc_ns_js =
+            \\(function(d){
+            \\  d.isSameNode=function(o){return d===o;};
+            \\  d.lookupPrefix=function(){return null;};
+            \\  d.lookupNamespaceURI=function(p){if(!p)return 'http://www.w3.org/1999/xhtml';return null;};
+            \\  d.isDefaultNamespace=function(ns){return ns==='http://www.w3.org/1999/xhtml';};
+            \\})
+        ;
+        const doc_ns_fn = qjs.JS_Eval(ctx, doc_ns_js, doc_ns_js.len, "<doc-ns>", qjs.JS_EVAL_TYPE_GLOBAL);
+        var doc_ns_args = [1]qjs.JSValue{qjs.JS_DupValue(ctx, doc_obj)};
+        const doc_ns_r = qjs.JS_Call(ctx, doc_ns_fn, quickjs.JS_UNDEFINED(), 1, &doc_ns_args);
+        qjs.JS_FreeValue(ctx, doc_ns_r);
+        qjs.JS_FreeValue(ctx, doc_ns_args[0]);
+        qjs.JS_FreeValue(ctx, doc_ns_fn);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentImportNode, "importNode", 2));
     // document.createRange (stub)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateRange, "createRange", 0));
