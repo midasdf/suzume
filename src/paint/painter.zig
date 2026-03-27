@@ -744,6 +744,19 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             const dst_w: u32 = @intFromFloat(@max(box.content.width, 0));
             const dst_h: u32 = @intFromFloat(@max(box.content.height, 0));
 
+            // Check if this is an iframe replaced element
+            if (box.iframe_frame) |frame| {
+                if (frame.root_box) |iframe_root| {
+                    // Paint iframe content into the iframe's box area
+                    // Offset iframe content to iframe box position
+                    const iframe_scroll_y = frame.scroll_y;
+                    paint(iframe_root, surface, fonts, iframe_scroll_y, frame.scroll_x,
+                        @max(screen_y, clip_top), @min(screen_bottom, clip_bottom),
+                        image_cache);
+                }
+                return; // Don't paint as image
+            }
+
             var painted = false;
             if (image_cache) |cache| {
                 if (box.image_url) |url| {

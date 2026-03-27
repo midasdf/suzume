@@ -131,11 +131,15 @@ fn pickSrcsetUrl(srcset: []const u8) ?[]const u8 {
     return best_url;
 }
 
+/// Tracks iframe index during box tree construction (reset per buildBoxTree call)
+var iframe_idx: u32 = 0;
+
 pub fn buildBoxTree(
     body_node: DomNode,
     styles: *const cascade_mod.CascadeResult,
     allocator: std.mem.Allocator,
 ) !*Box {
+    iframe_idx = 0; // Reset iframe counter
     // Reset CSS counters for this build
     css_counters.clearRetainingCapacity();
 
@@ -425,6 +429,28 @@ fn buildChildren(
                         }
                         child_box.intrinsic_width = img_w;
                         child_box.intrinsic_height = img_h;
+                    }
+
+                    // Handle <iframe> elements as replaced boxes
+                    if (std.mem.eql(u8, tag, "iframe")) {
+                        child_box.box_type = .replaced;
+                        var iframe_w: f32 = 300;
+                        var iframe_h: f32 = 150;
+                        if (child.getAttribute("width")) |w_str| {
+                            iframe_w = parseFloatAttr(w_str);
+                        }
+                        if (child.getAttribute("height")) |h_str| {
+                            iframe_h = parseFloatAttr(h_str);
+                        }
+                        child_box.intrinsic_width = iframe_w;
+                        child_box.intrinsic_height = iframe_h;
+                        // Link to iframe FrameState for rendering
+                        const iframe_mod = @import("../js/iframe.zig");
+                        // Find matching FrameState (iframes processed in DOM order)
+                        if (iframe_idx < iframe_mod.getIframeCount()) {
+                            child_box.iframe_frame = iframe_mod.getFrameByIndex(iframe_idx);
+                            iframe_idx += 1;
+                        }
                     }
 
                     // Handle inline <svg> elements — rasterize via lunasvg

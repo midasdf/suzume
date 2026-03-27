@@ -151,8 +151,8 @@ fn setupIframe(
     api.dom_dirty = saved_dirty;
     web_api.setGlobalCtx(saved_web_ctx);
 
-    // TODO: Execute scripts in iframe document
-    // For now, skip script execution (Phase 3 enhancement)
+    // Build iframe layout (cascade → box tree → layout)
+    buildIframeLayout(iframe_doc, elem, allocator, idx);
 
     // Set contentDocument on parent's iframe element
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -245,4 +245,69 @@ pub fn resetIframes() void {
         iframe_frames[i] = .{};
     }
     iframe_count = 0;
+}
+
+fn buildIframeLayout(maybe_doc: ?Document, elem: *lxb.lxb_dom_element_t, allocator: std.mem.Allocator, idx: u32) void {
+    const doc = maybe_doc orelse return;
+    const root_node = doc.root() orelse return;
+
+    // Get iframe dimensions from attributes (default 300x150 per spec)
+    var iw: f32 = 300;
+    var ih: f32 = 150;
+    var attr_len: usize = 0;
+    if (lxb_dom_element_get_attribute(elem, "width", 5, &attr_len)) |w| {
+        iw = std.fmt.parseFloat(f32, w[0..attr_len]) catch 300;
+    }
+    attr_len = 0;
+    if (lxb_dom_element_get_attribute(elem, "height", 6, &attr_len)) |h| {
+        ih = std.fmt.parseFloat(f32, h[0..attr_len]) catch 150;
+    }
+
+    const cascade_mod = @import("../css/cascade.zig");
+    const box_tree = @import("../layout/tree.zig");
+    const block_layout = @import("../layout/block.zig");
+
+    var iframe_styles = cascade_mod.cascade(root_node, allocator, null, @intFromFloat(iw), @intFromFloat(ih)) catch return;
+
+    const iframe_root_box = box_tree.buildBoxTree(root_node, &iframe_styles, allocator) catch {
+        iframe_styles.deinit();
+        return;
+    };
+    iframe_root_box.margin = .{};
+    // Layout requires font cache — skip for now, just store box tree
+    // block_layout.layoutBlockVp(iframe_root_box, iw, 0, fonts, ih);
+    // Without layout, boxes have zero dimensions but the tree structure is correct.
+    _ = block_layout;
+
+    // Store in FrameState (styles field is StyleMap pointer, get from CascadeResult)
+    iframe_frames[idx].root_box = iframe_root_box;
+    iframe_frames[idx].styles = &iframe_styles.styles;
+    iframe_frames[idx].viewport_width = iw;
+    iframe_frames[idx].viewport_height = ih;
+    // Note: iframe_styles ownership transferred — don't deinit here
+}
+
+/// Find the FrameState for an iframe element's DOM node.
+pub fn findFrameForNode(node: *lxb.lxb_dom_node_t) ?*const FrameState {
+    const target = @intFromPtr(node);
+    var i: u32 = 0;
+    while (i < iframe_count) : (i += 1) {
+        // Compare the DOM node that was passed to setupIframe
+        // We stored the FrameState's document, not the iframe element itself.
+        // For now, match by index order (iframes are processed in DOM order)
+        // TODO: Store iframe element pointer in FrameState for precise matching
+        _ = target;
+    }
+    return null;
+}
+
+/// Get FrameState by index (for tree.zig to set iframe_frame on Box)
+pub fn getFrameByIndex(idx: u32) ?*const FrameState {
+    if (idx < iframe_count) return &iframe_frames[idx];
+    return null;
+}
+
+/// Get current iframe count
+pub fn getIframeCount() u32 {
+    return iframe_count;
 }

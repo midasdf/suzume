@@ -61,6 +61,8 @@ pub const Box = struct {
     is_hr: bool = false,
     /// For list items: the 1-based index within parent list.
     list_index: u32 = 0,
+    /// For iframe replaced boxes: pointer to the iframe's FrameState (has root_box for painting)
+    iframe_frame: ?*const @import("../js/frame_state.zig").FrameState = null,
 
     /// Returns the margin box (content + padding + border + margin).
     pub fn marginBox(self: *const Box) Rect {
