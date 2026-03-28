@@ -2475,10 +2475,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "prototype", qjs.JS_DupValue(ctx, node_proto));
     // Node constants on the constructor too
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "ELEMENT_NODE", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "ATTRIBUTE_NODE", qjs.JS_NewInt32(ctx, 2));
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "TEXT_NODE", qjs.JS_NewInt32(ctx, 3));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "CDATA_SECTION_NODE", qjs.JS_NewInt32(ctx, 4));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "PROCESSING_INSTRUCTION_NODE", qjs.JS_NewInt32(ctx, 7));
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "COMMENT_NODE", qjs.JS_NewInt32(ctx, 8));
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_NODE", qjs.JS_NewInt32(ctx, 9));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_TYPE_NODE", qjs.JS_NewInt32(ctx, 10));
     _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_FRAGMENT_NODE", qjs.JS_NewInt32(ctx, 11));
+    // DOCUMENT_POSITION constants on constructor (for Node.DOCUMENT_POSITION_*)
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_POSITION_DISCONNECTED", qjs.JS_NewInt32(ctx, 1));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_POSITION_PRECEDING", qjs.JS_NewInt32(ctx, 2));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_POSITION_FOLLOWING", qjs.JS_NewInt32(ctx, 4));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_POSITION_CONTAINS", qjs.JS_NewInt32(ctx, 8));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_POSITION_CONTAINED_BY", qjs.JS_NewInt32(ctx, 16));
+    _ = qjs.JS_SetPropertyStr(ctx, node_ctor, "DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC", qjs.JS_NewInt32(ctx, 32));
     _ = qjs.JS_SetPropertyStr(ctx, global, "Node", node_ctor);
 
     const element_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Element", 0, qjs.JS_CFUNC_constructor, 0);

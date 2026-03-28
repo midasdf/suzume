@@ -872,21 +872,89 @@ pub fn nodeCompareDocumentPosition(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 1) return qjs.JS_NewInt32(c, 0);
     const args = argv orelse return qjs.JS_NewInt32(c, 0);
-    const node_a = api.getNode(c, this_val) orelse return qjs.JS_NewInt32(c, 1);
-    const node_b = api.getNode(c, args[0]) orelse return qjs.JS_NewInt32(c, 1);
+    const DISCONNECTED: i32 = 1;
+    const PRECEDING: i32 = 2;
+    const FOLLOWING: i32 = 4;
+    const CONTAINS: i32 = 8;
+    const CONTAINED_BY: i32 = 16;
+    const IMPL_SPECIFIC: i32 = 32;
+
+    const node_a = api.getNode(c, this_val) orelse return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | PRECEDING);
+    const node_b = api.getNode(c, args[0]) orelse return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | PRECEDING);
     if (node_a == node_b) return qjs.JS_NewInt32(c, 0);
-    // Simplified: check if b is descendant of a, or vice versa
-    var walk: ?*lxb.lxb_dom_node_t = node_b;
-    while (walk) |w| {
-        if (w == node_a) return qjs.JS_NewInt32(c, 16 | 4); // CONTAINS | FOLLOWING
-        walk = w.parent;
+
+    // Check if b is descendant of a (a contains b)
+    {
+        var walk: ?*lxb.lxb_dom_node_t = node_b.parent;
+        while (walk) |w| {
+            if (w == node_a) return qjs.JS_NewInt32(c, CONTAINED_BY | FOLLOWING);
+            walk = w.parent;
+        }
     }
-    walk = node_a;
-    while (walk) |w| {
-        if (w == node_b) return qjs.JS_NewInt32(c, 8 | 2); // CONTAINED_BY | PRECEDING
-        walk = w.parent;
+    // Check if a is descendant of b (b contains a)
+    {
+        var walk: ?*lxb.lxb_dom_node_t = node_a.parent;
+        while (walk) |w| {
+            if (w == node_b) return qjs.JS_NewInt32(c, CONTAINS | PRECEDING);
+            walk = w.parent;
+        }
     }
-    return qjs.JS_NewInt32(c, 1); // DISCONNECTED
+
+    // Find root of each node
+    var root_a: *lxb.lxb_dom_node_t = node_a;
+    while (root_a.parent) |p| root_a = p;
+    var root_b: *lxb.lxb_dom_node_t = node_b;
+    while (root_b.parent) |p| root_b = p;
+
+    // Different trees → disconnected
+    if (root_a != root_b) return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | FOLLOWING);
+
+    // Same tree, neither is ancestor: determine document order
+    // Walk both ancestor chains to find common ancestor, then compare sibling order
+    // Build ancestor chain for a
+    var chain_a: [64]*lxb.lxb_dom_node_t = undefined;
+    var depth_a: usize = 0;
+    {
+        var n: *lxb.lxb_dom_node_t = node_a;
+        while (depth_a < 64) {
+            chain_a[depth_a] = n;
+            depth_a += 1;
+            if (n.parent) |p| { n = p; } else break;
+        }
+    }
+    var chain_b: [64]*lxb.lxb_dom_node_t = undefined;
+    var depth_b: usize = 0;
+    {
+        var n: *lxb.lxb_dom_node_t = node_b;
+        while (depth_b < 64) {
+            chain_b[depth_b] = n;
+            depth_b += 1;
+            if (n.parent) |p| { n = p; } else break;
+        }
+    }
+
+    // Find divergence point (walk from root, which is at the END of chain arrays)
+    var ia = depth_a;
+    var ib = depth_b;
+    while (ia > 0 and ib > 0) {
+        ia -= 1;
+        ib -= 1;
+        if (chain_a[ia] != chain_b[ib]) {
+            // chain_a[ia] and chain_b[ib] are siblings under chain_a[ia+1] (== chain_b[ib+1])
+            // Compare their order among siblings
+            const sib_a = chain_a[ia];
+            const sib_b = chain_b[ib];
+            // Walk from sib_a forward to see if sib_b comes after
+            var sibling: ?*lxb.lxb_dom_node_t = sib_a.next;
+            while (sibling) |s| {
+                if (s == sib_b) return qjs.JS_NewInt32(c, FOLLOWING);
+                sibling = s.next;
+            }
+            return qjs.JS_NewInt32(c, PRECEDING);
+        }
+    }
+    // Should not reach here if nodes aren't equal and one isn't ancestor
+    return qjs.JS_NewInt32(c, FOLLOWING);
 }
 
 pub fn nodeGetRootNode(
