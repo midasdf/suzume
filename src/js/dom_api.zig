@@ -2750,6 +2750,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &dom_node.nodeCompareDocumentPosition, "compareDocumentPosition", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hasChildNodes", qjs.JS_NewCFunction(ctx, &dom_doc.jsReturnTrue, "hasChildNodes", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "normalize", qjs.JS_NewCFunction(ctx, &dom_node.nodeNormalize, "normalize", 0));
+    // Document childNodes getter (native DOM tree)
+    {
+        const cn_atom = qjs.JS_NewAtom(ctx, "childNodes");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, cn_atom, qjs.JS_NewCFunction(ctx, &dom_node.elementGetChildNodes, "get childNodes", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, cn_atom);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "isEqualNode", qjs.JS_NewCFunction(ctx, &dom_node.nodeIsEqualNode, "isEqualNode", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getRootNode", qjs.JS_NewCFunction(ctx, &dom_node.nodeGetRootNode, "getRootNode", 0));
     // document.isSameNode, lookupPrefix, lookupNamespaceURI, isDefaultNamespace
