@@ -603,34 +603,28 @@ pub fn elementBefore(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const parent: *lxb.lxb_dom_node_t = node.parent orelse return quickjs.JS_UNDEFINED();
-    // DOM spec: viable next sibling = node's next sibling not in args
-    // For simplicity: save next sibling before any mutations
-    const next_sib = node.next;
-    // Support multiple args, each can be Node or String
+
+    // Simple approach: insert all before this node, handling self-reference
     var i: c_int = 0;
     while (i < argc) : (i += 1) {
         const arg = args[@intCast(i)];
         if (api.getNode(c, arg)) |new_node| {
             if (new_node.parent != null) lxb_dom_node_remove(new_node);
-            // If node was removed (self-reference), use saved next_sib
-            if (node.parent == null) {
-                if (next_sib) |ns| {
-                    lxb_dom_node_insert_before(ns, new_node);
-                } else {
-                    lxb_dom_node_insert_child(parent, new_node);
-                }
-            } else {
+            if (node.parent != null) {
                 lxb_dom_node_insert_before(node, new_node);
+            } else {
+                // Self was removed (self-reference case) — use parent + position
+                lxb_dom_node_insert_child(parent, new_node);
             }
         } else {
             if (api.jsStringToSlice(c, arg)) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
                 const doc = api.getDocument(c) orelse continue;
                 const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
-                if (node.parent == null) {
-                    if (next_sib) |ns| lxb_dom_node_insert_before(ns, text) else lxb_dom_node_insert_child(parent, text);
-                } else {
+                if (node.parent != null) {
                     lxb_dom_node_insert_before(node, text);
+                } else {
+                    lxb_dom_node_insert_child(parent, text);
                 }
             }
         }
