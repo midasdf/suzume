@@ -2126,16 +2126,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "normalize", qjs.JS_NewCFunction(ctx, &dom_node.nodeNormalize, "normalize", 0));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "compareDocumentPosition", qjs.JS_NewCFunction(ctx, &dom_node.nodeCompareDocumentPosition, "compareDocumentPosition", 1));
     _ = qjs.JS_SetPropertyStr(ctx, node_proto, "getRootNode", qjs.JS_NewCFunction(ctx, &dom_node.nodeGetRootNode, "getRootNode", 0));
-    // Namespace methods (stub — HTML documents don't use namespaces heavily)
+    // Namespace methods + Node polyfills — set directly on node_proto (not via Node.prototype
+    // which isn't defined yet at this point)
     {
+        const g = qjs.JS_GetGlobalObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, g, "__np", qjs.JS_DupValue(ctx, node_proto));
+        qjs.JS_FreeValue(ctx, g);
         const ns_js =
             \\(function(){
-            \\  var NP=Node.prototype;
+            \\  var NP=globalThis.__np;
             \\  NP.lookupPrefix=function(ns){if(!ns)return null;var el=this.nodeType===1?this:this.parentElement;while(el){if(el.namespaceURI===ns&&el.prefix)return el.prefix;el=el.parentElement;}return null;};
             \\  NP.lookupNamespaceURI=function(prefix){var el=this.nodeType===1?this:this.parentElement;while(el){if(prefix===null||prefix===undefined){if(el.namespaceURI&&!el.prefix)return el.namespaceURI;}else if(el.prefix===prefix)return el.namespaceURI;el=el.parentElement;}if(!prefix)return 'http://www.w3.org/1999/xhtml';return null;};
             \\  NP.isDefaultNamespace=function(ns){return this.lookupNamespaceURI(null)===ns;};
             \\  NP.isSameNode=function(o){return this===o;};
             \\  NP.hasChildNodes=function(){return this.childNodes&&this.childNodes.length>0;};
+            \\  delete globalThis.__np;
             \\  function _toNode(a){return(a&&typeof a==='object'&&a.nodeType)?a:document.createTextNode(String(a));}
             \\  NP.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
             \\  NP.prepend=NP.prepend||function(){var f=this.firstChild;for(var i=0;i<arguments.length;i++){var a=_toNode(arguments[i]);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
