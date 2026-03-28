@@ -3181,13 +3181,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "addEventListener", qjs.JS_NewCFunction(ctx, &events.jsAddEventListenerPub, "addEventListener", 3));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "removeEventListener", qjs.JS_NewCFunction(ctx, &events.jsRemoveEventListenerPub, "removeEventListener", 3));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dispatchEvent", qjs.JS_NewCFunction(ctx, &events.jsWindowDispatchEventPub, "dispatchEvent", 1));
-    // document.cloneNode(deep) — returns a new document-like object
+    // document.cloneNode(deep) — uses DOMParser-style native parse to avoid script re-execution
     {
         const cn_js =
             \\(function(deep){
-            \\  var nd = document.implementation.createHTMLDocument(document.title);
-            \\  if(deep && document.documentElement) nd.documentElement.innerHTML = document.documentElement.innerHTML;
-            \\  return nd;
+            \\  if(!deep) return new DOMParser().parseFromString('','text/html');
+            \\  var html=document.documentElement?document.documentElement.outerHTML:'';
+            \\  var dt=document.doctype;
+            \\  var src=(dt?'<!DOCTYPE '+(dt.name||'html')+'>':'')+html;
+            \\  return new DOMParser().parseFromString(src,'text/html');
             \\})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "cloneNode", qjs.JS_Eval(ctx, cn_js, cn_js.len, "<doc-clone>", qjs.JS_EVAL_TYPE_GLOBAL));
@@ -3326,10 +3328,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // window.getComputedStyle
     _ = qjs.JS_SetPropertyStr(ctx, global, "getComputedStyle", qjs.JS_NewCFunction(ctx, &dom_style.windowGetComputedStyle, "getComputedStyle", 1));
 
-    // CSS global object with supports() method
+    // CSS global object with supports() and escape() methods
     {
         const css_obj = qjs.JS_NewObject(ctx);
         _ = qjs.JS_SetPropertyStr(ctx, css_obj, "supports", qjs.JS_NewCFunction(ctx, &dom_style.cssSupports, "supports", 2));
+        // CSS.escape() per CSSOM spec
+        const escape_js =
+            \\(function(v){
+            \\  v=String(v);if(!v.length)return '';
+            \\  var r='',i=0,c;
+            \\  if(v.length===1&&v.charCodeAt(0)===0)return '\uFFFD';
+            \\  for(;i<v.length;i++){c=v.charCodeAt(i);
+            \\    if(c===0){r+='\uFFFD';}
+            \\    else if(c>=1&&c<=31||c===127||(i===0&&c>=48&&c<=57)||(i===1&&c>=48&&c<=57&&v.charCodeAt(0)===45)){r+='\\'+c.toString(16)+' ';}
+            \\    else if(i===0&&c===45&&v.length===1){r+='\\'+v.charAt(i);}
+            \\    else if(c>=128||c===45||c===95||(c>=48&&c<=57)||(c>=65&&c<=90)||(c>=97&&c<=122)){r+=v.charAt(i);}
+            \\    else{r+='\\'+v.charAt(i);}
+            \\  }return r;
+            \\})
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, css_obj, "escape", qjs.JS_Eval(ctx, escape_js, escape_js.len, "<css-escape>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, global, "CSS", css_obj);
     }
 
