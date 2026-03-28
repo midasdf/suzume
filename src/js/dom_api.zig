@@ -2700,6 +2700,36 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, evt_r);
     }
 
+    // HTML global attributes reflected as IDL properties on HTMLElement.prototype
+    {
+        const html_reflect_js =
+            \\(function(){
+            \\  var EP=HTMLElement.prototype;
+            \\  function reflectStr(prop,attr){if(!(prop in EP))Object.defineProperty(EP,prop,{get:function(){return this.getAttribute(attr)||'';},set:function(v){this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
+            \\  function reflectNullStr(prop,attr){if(!(prop in EP))Object.defineProperty(EP,prop,{get:function(){return this.getAttribute(attr);},set:function(v){if(v===null)this.removeAttribute(attr);else this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
+            \\  reflectStr('inputMode','inputmode');
+            \\  reflectStr('enterKeyHint','enterkeyhint');
+            \\  reflectStr('accessKey','accesskey');
+            \\  reflectStr('autocapitalize','autocapitalize');
+            \\  reflectStr('dir','dir');
+            \\  reflectStr('lang','lang');
+            \\  reflectStr('title','title');
+            \\  reflectStr('innerText','innerText');
+            \\  reflectStr('popover','popover');
+            \\  reflectNullStr('nonce','nonce');
+            \\  reflectNullStr('slot','slot');
+            \\  if(!('contentEditable' in EP))Object.defineProperty(EP,'contentEditable',{get:function(){return this.getAttribute('contenteditable')||'inherit';},set:function(v){this.setAttribute('contenteditable',''+v);},configurable:true,enumerable:true});
+            \\  if(!('translate' in EP))Object.defineProperty(EP,'translate',{get:function(){var v=this.getAttribute('translate');return v==='no'?false:true;},set:function(v){this.setAttribute('translate',v?'yes':'no');},configurable:true,enumerable:true});
+            \\  if(!('draggable' in EP))Object.defineProperty(EP,'draggable',{get:function(){var v=this.getAttribute('draggable');return v==='true';},set:function(v){this.setAttribute('draggable',v?'true':'false');},configurable:true,enumerable:true});
+            \\  if(!('spellcheck' in EP))Object.defineProperty(EP,'spellcheck',{get:function(){var v=this.getAttribute('spellcheck');return v!=='false';},set:function(v){this.setAttribute('spellcheck',v?'true':'false');},configurable:true,enumerable:true});
+            \\  if(!('hidden' in EP))Object.defineProperty(EP,'hidden',{get:function(){return this.hasAttribute('hidden');},set:function(v){if(v)this.setAttribute('hidden','');else this.removeAttribute('hidden');},configurable:true,enumerable:true});
+            \\  if(!('tabIndex' in EP))Object.defineProperty(EP,'tabIndex',{get:function(){var v=this.getAttribute('tabindex');return v!==null?parseInt(v,10)||0:-1;},set:function(v){this.setAttribute('tabindex',''+v);},configurable:true,enumerable:true});
+            \\})()
+        ;
+        const hr = qjs.JS_Eval(ctx, html_reflect_js, html_reflect_js.len, "<htmlreflect>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, hr);
+    }
+
     // ARIA attribute reflection per ARIA in HTML spec (with enumerated support)
     {
         const aria_js =
