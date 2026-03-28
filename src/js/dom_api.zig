@@ -2707,8 +2707,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var EP=HTMLElement.prototype;
             \\  function reflectStr(prop,attr){if(!(prop in EP))Object.defineProperty(EP,prop,{get:function(){return this.getAttribute(attr)||'';},set:function(v){this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
             \\  function reflectNullStr(prop,attr){if(!(prop in EP))Object.defineProperty(EP,prop,{get:function(){return this.getAttribute(attr);},set:function(v){if(v===null)this.removeAttribute(attr);else this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
-            \\  reflectStr('inputMode','inputmode');
-            \\  reflectStr('enterKeyHint','enterkeyhint');
+            \\  function reflectEnum(prop,attr,kws){Object.defineProperty(EP,prop,{get:function(){var v=this.getAttribute(attr);if(v===null)return'';v=v.toLowerCase();for(var i=0;i<kws.length;i++)if(kws[i]===v)return v;return'';},set:function(v){this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
+            \\  reflectEnum('inputMode','inputmode',['none','text','tel','url','email','numeric','decimal','search']);
+            \\  reflectEnum('enterKeyHint','enterkeyhint',['enter','done','go','next','previous','search','send']);
             \\  reflectStr('accessKey','accesskey');
             \\  reflectStr('autocapitalize','autocapitalize');
             \\  reflectStr('dir','dir');
