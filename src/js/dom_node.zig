@@ -280,6 +280,8 @@ pub fn elementAppendChild(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
     const child = api.getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     // DOM spec step 2: If node is a host-including inclusive ancestor of parent, throw
     if (isAncestorOrSelf(child, parent))
@@ -362,9 +364,16 @@ pub fn elementReplaceChild(
     if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': 2 arguments required");
     const args = argv orelse return quickjs.JS_NULL();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
-    const new_node = api.getNode(c, args[0]) orelse return quickjs.JS_NULL();
+    // DOM spec: TypeError if node is null
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
+    const new_node = api.getNode(c, args[0]) orelse
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
     if (isAncestorOrSelf(new_node, parent))
         return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
+    // DOM spec: TypeError if child is null
+    if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]))
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 2 is not of type 'Node'.");
     const old_node = api.getNode(c, args[1]) orelse
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
     if (old_node.parent != parent)
