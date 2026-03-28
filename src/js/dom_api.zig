@@ -2614,7 +2614,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const reflected_js =
             \\(function(){
             \\  var EP=Element.prototype;
-            \\  ['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','dir','for'].forEach(function(a){
+            \\  ['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','for'].forEach(function(a){
             \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
             \\  });
             \\  ['disabled','checked','selected','autofocus'].forEach(function(a){
@@ -2629,6 +2629,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Object.defineProperty(EP,'isContentEditable',{get:function(){var v=this.getAttribute('contenteditable');return v==='true'||v==='';},configurable:true});
             \\  Object.defineProperty(EP,'slot',{get:function(){return this.getAttribute('slot')||'';},set:function(v){this.setAttribute('slot',v);},configurable:true});
             \\  Object.defineProperty(EP,'accessKey',{get:function(){return this.getAttribute('accesskey')||'';},set:function(v){this.setAttribute('accesskey',v);},configurable:true});
+            \\  Object.defineProperty(EP,'dir',{get:function(){var v=this.getAttribute('dir');if(v===null)return'';v=v.toLowerCase();if(v==='ltr'||v==='rtl'||v==='auto')return v;return'';},set:function(v){this.setAttribute('dir',v);},configurable:true,enumerable:true});
             \\  EP.getAttributeNode=function(n){if(!this.hasAttribute(n))return null;return{nodeType:2,name:n,localName:n.toLowerCase(),value:this.getAttribute(n),namespaceURI:null,prefix:null,specified:true,ownerElement:this,get nodeValue(){return this.value;},set nodeValue(v){this.value=v;this.ownerElement.setAttribute(this.name,v);}};};
             \\  EP.getAttributeNodeNS=function(ns,ln){return this.getAttributeNode(ln);};
             \\  EP.setAttributeNode=function(attr){var old=this.getAttributeNode(attr.name);this.setAttribute(attr.name,attr.value);attr.ownerElement=this;return old;};
