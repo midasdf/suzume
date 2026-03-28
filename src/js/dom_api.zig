@@ -2889,8 +2889,22 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // Document properties required by jQuery/Sizzle
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeType", qjs.JS_NewInt32(ctx, 9)); // DOCUMENT_NODE
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "textContent", quickjs.JS_NULL()); // Document.textContent is null per spec
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeValue", quickjs.JS_NULL()); // Document.nodeValue is null per spec
+    // Document.textContent: getter returns null, setter is no-op per spec
+    {
+        const tc_atom = qjs.JS_NewAtom(ctx, "textContent");
+        const tc_get_js = "(function(){return null;})";
+        const tc_set_js = "(function(){})";
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, tc_atom, qjs.JS_Eval(ctx, tc_get_js, tc_get_js.len, "<tc-g>", qjs.JS_EVAL_TYPE_GLOBAL), qjs.JS_Eval(ctx, tc_set_js, tc_set_js.len, "<tc-s>", qjs.JS_EVAL_TYPE_GLOBAL), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, tc_atom);
+    }
+    // Document.nodeValue: getter returns null, setter is no-op per spec
+    {
+        const nv_atom = qjs.JS_NewAtom(ctx, "nodeValue");
+        const nv_get_js = "(function(){return null;})";
+        const nv_set_js = "(function(){})";
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, nv_atom, qjs.JS_Eval(ctx, nv_get_js, nv_get_js.len, "<nv-g>", qjs.JS_EVAL_TYPE_GLOBAL), qjs.JS_Eval(ctx, nv_set_js, nv_set_js.len, "<nv-s>", qjs.JS_EVAL_TYPE_GLOBAL), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, nv_atom);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "nodeName", qjs.JS_NewString(ctx, "#document"));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "defaultView", qjs.JS_DupValue(ctx, global)); // window
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "ownerDocument", quickjs.JS_NULL());
