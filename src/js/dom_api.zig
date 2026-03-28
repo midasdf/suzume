@@ -2661,7 +2661,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    'volumechange','waiting','webkitanimationend','webkitanimationiteration',
             \\    'webkitanimationstart','webkittransitionend','wheel'];
             \\  var EP=HTMLElement.prototype;
-            \\  events.forEach(function(e){var prop='on'+e;if(!(prop in EP))Object.defineProperty(EP,prop,{value:null,writable:true,configurable:true,enumerable:true});});
+            \\  var _hm=new WeakMap();
+            \\  events.forEach(function(e){var prop='on'+e;if(!(prop in EP)){
+            \\    (function(ev,eid){Object.defineProperty(EP,ev,{get:function(){var m=_hm.get(this);return m?m[eid]||null:null;},set:function(v){var m=_hm.get(this);if(!m){m={};_hm.set(this,m);}m[eid]=(typeof v==='function')?v:null;},configurable:true,enumerable:true});})(prop,e);
+            \\  }});
             \\})()
         ;
         const evt_r = qjs.JS_Eval(ctx, evthandler_js, evthandler_js.len, "<evthandlers>", qjs.JS_EVAL_TYPE_GLOBAL);
