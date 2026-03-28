@@ -2632,6 +2632,33 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, r);
     }
 
+    // GlobalEventHandlers + WindowEventHandlers on HTMLElement.prototype
+    // Per spec, all on* properties must be initialized to null (not undefined)
+    {
+        const evthandler_js =
+            \\(function(){
+            \\  var events=['abort','auxclick','beforeinput','blur','cancel','canplay','canplaythrough',
+            \\    'change','click','close','contextmenu','copy','cuechange','cut','dblclick','drag','dragend',
+            \\    'dragenter','dragleave','dragover','dragstart','drop','durationchange','emptied','ended',
+            \\    'error','focus','focusin','focusout','formdata','gotpointercapture','input','invalid',
+            \\    'keydown','keypress','keyup','load','loadeddata','loadedmetadata','loadstart',
+            \\    'lostpointercapture','mousedown','mouseenter','mouseleave','mousemove','mouseout',
+            \\    'mouseover','mouseup','paste','pause','play','playing','pointercancel','pointerdown',
+            \\    'pointerenter','pointerleave','pointermove','pointerout','pointerover','pointerup',
+            \\    'progress','ratechange','reset','resize','scroll','scrollend','securitypolicyviolation',
+            \\    'seeked','seeking','select','selectionchange','selectstart','slotchange','stalled',
+            \\    'submit','suspend','timeupdate','toggle','touchcancel','touchend','touchmove',
+            \\    'touchstart','transitioncancel','transitionend','transitionrun','transitionstart',
+            \\    'volumechange','waiting','webkitanimationend','webkitanimationiteration',
+            \\    'webkitanimationstart','webkittransitionend','wheel'];
+            \\  var EP=HTMLElement.prototype;
+            \\  events.forEach(function(e){var prop='on'+e;if(!(prop in EP))Object.defineProperty(EP,prop,{value:null,writable:true,configurable:true,enumerable:true});});
+            \\})()
+        ;
+        const evt_r = qjs.JS_Eval(ctx, evthandler_js, evthandler_js.len, "<evthandlers>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, evt_r);
+    }
+
     // Element @@unscopables per DOM spec
     {
         const unscopables_js =
