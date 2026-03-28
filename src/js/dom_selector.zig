@@ -196,6 +196,29 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             if (std.fmt.parseInt(u32, arg, 10)) |n| return getNthLastIndex(@ptrCast(elem)) == n
             else |_| {}
         }
+        // :dir(ltr) / :dir(rtl)
+        if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":dir(") and sel[sel.len - 1] == ')') {
+            const dir_arg = std.mem.trim(u8, sel[5 .. sel.len - 1], " \t");
+            // Get element's directionality: check dir attribute up the tree
+            const node_ptr: *lxb.lxb_dom_node_t = @ptrCast(elem);
+            var cur: ?*lxb.lxb_dom_node_t = node_ptr;
+            var resolved_dir: []const u8 = "ltr"; // default
+            while (cur) |c| {
+                if (c.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                    const el: *lxb.lxb_dom_element_t = @ptrCast(c);
+                    var dir_len: usize = 0;
+                    const dir_val = lxb_dom_element_get_attribute(el, "dir", 3, &dir_len);
+                    if (dir_val != null and dir_len > 0) {
+                        const dv = dir_val.?[0..dir_len];
+                        if (std.ascii.eqlIgnoreCase(dv, "rtl")) { resolved_dir = "rtl"; break; }
+                        if (std.ascii.eqlIgnoreCase(dv, "ltr")) { resolved_dir = "ltr"; break; }
+                        break; // "auto" or other → default ltr
+                    }
+                }
+                cur = c.parent;
+            }
+            return std.ascii.eqlIgnoreCase(dir_arg, resolved_dir);
+        }
         // Unknown pseudo — return false (conservative)
         return false;
     }
