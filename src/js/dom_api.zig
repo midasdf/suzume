@@ -2730,6 +2730,32 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, hr);
     }
 
+    // Element-specific IDL attribute reflection
+    {
+        const elem_reflect_js =
+            \\(function(){
+            \\  function rs(C,prop,attr){if(!attr)attr=prop.toLowerCase();Object.defineProperty(C.prototype,prop,{get:function(){return this.getAttribute(attr)||'';},set:function(v){this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
+            \\  function rb(C,prop,attr){if(!attr)attr=prop.toLowerCase();Object.defineProperty(C.prototype,prop,{get:function(){return this.hasAttribute(attr);},set:function(v){if(v)this.setAttribute(attr,'');else this.removeAttribute(attr);},configurable:true,enumerable:true});}
+            \\  function rn(C,prop,attr){if(!attr)attr=prop.toLowerCase();Object.defineProperty(C.prototype,prop,{get:function(){return this.getAttribute(attr);},set:function(v){if(v===null)this.removeAttribute(attr);else this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
+            \\  function ru(C,prop,attr){if(!attr)attr=prop.toLowerCase();Object.defineProperty(C.prototype,prop,{get:function(){return this.getAttribute(attr)||'';},set:function(v){this.setAttribute(attr,''+v);},configurable:true,enumerable:true});}
+            \\  if(typeof HTMLScriptElement!=='undefined'){var S=HTMLScriptElement;rs(S,'src');rs(S,'type');rs(S,'charset');rs(S,'text');rs(S,'event');rs(S,'integrity');rs(S,'referrerPolicy','referrerpolicy');rs(S,'fetchPriority','fetchpriority');rb(S,'defer');rb(S,'noModule','nomodule');rb(S,'async');rn(S,'crossOrigin','crossorigin');rs(S,'htmlFor','for');}
+            \\  if(typeof HTMLHtmlElement!=='undefined'){rs(HTMLHtmlElement,'version');}
+            \\  if(typeof HTMLDialogElement!=='undefined'){rb(HTMLDialogElement,'open');}
+            \\  if(typeof HTMLDetailsElement!=='undefined'){rb(HTMLDetailsElement,'open');}
+            \\  if(typeof HTMLMenuElement!=='undefined'){rb(HTMLMenuElement,'compact');}
+            \\  if(typeof HTMLModElement!=='undefined'){rs(HTMLModElement,'cite');rs(HTMLModElement,'dateTime','datetime');}
+            \\  if(typeof HTMLQuoteElement!=='undefined'){rs(HTMLQuoteElement,'cite');}
+            \\  if(typeof HTMLAnchorElement!=='undefined'){var A=HTMLAnchorElement;rs(A,'href');rs(A,'target');rs(A,'download');rs(A,'rel');rs(A,'hreflang');rs(A,'type');rs(A,'text');rs(A,'referrerPolicy','referrerpolicy');}
+            \\  if(typeof HTMLImageElement!=='undefined'){var I=HTMLImageElement;rs(I,'src');rs(I,'alt');rs(I,'srcset');rs(I,'sizes');rs(I,'referrerPolicy','referrerpolicy');rs(I,'fetchPriority','fetchpriority');rb(I,'isMap','ismap');rs(I,'useMap','usemap');rs(I,'crossOrigin','crossorigin');rs(I,'decoding');rs(I,'loading');}
+            \\  if(typeof HTMLLinkElement!=='undefined'){var L=HTMLLinkElement;rs(L,'href');rs(L,'rel');rs(L,'type');rs(L,'media');rs(L,'integrity');rs(L,'crossOrigin','crossorigin');rs(L,'referrerPolicy','referrerpolicy');rs(L,'fetchPriority','fetchpriority');rb(L,'disabled');}
+            \\  if(typeof HTMLMetaElement!=='undefined'){var M=HTMLMetaElement;rs(M,'name');rs(M,'content');rs(M,'httpEquiv','http-equiv');rs(M,'media');}
+            \\  if(typeof HTMLStyleElement!=='undefined'){rs(HTMLStyleElement,'media');rb(HTMLStyleElement,'disabled');}
+            \\})()
+        ;
+        const er = qjs.JS_Eval(ctx, elem_reflect_js, elem_reflect_js.len, "<elemreflect>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, er);
+    }
+
     // ARIA attribute reflection per ARIA in HTML spec (with enumerated support)
     {
         const aria_js =
