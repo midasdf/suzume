@@ -1401,10 +1401,13 @@ fn elementAppend(
     while (i < @as(usize, @intCast(argc))) : (i += 1) {
         const child_node = getNode(c, args[i]);
         if (child_node) |cn| {
+            // Remove from old parent first (DOM spec)
+            if (cn.parent != null) lxb.lxb_dom_node_remove(cn);
             _ = lxb.lxb_dom_node_insert_child(parent, cn);
-        } else if (qjs.JS_IsString(args[i])) {
-            // String argument: create text node and append
-            const s = jsStringToSlice(c, args[i]) orelse continue;
+        } else {
+            // Non-Node argument: convert to string and create text node
+            // DOM spec: "If nodes is a string, replace it with a new Text node"
+            const s = jsStringToSlice(c, qjs.JS_ToString(c, args[i])) orelse continue;
             defer qjs.JS_FreeCString(c, s.ptr);
             if (g_document) |doc| {
                 const text_node = lxb_dom_document_create_text_node(doc, s.ptr, s.len);
@@ -1433,10 +1436,25 @@ fn elementPrepend(
     while (i < @as(usize, @intCast(argc))) : (i += 1) {
         const child_node = getNode(c, args[i]);
         if (child_node) |cn| {
+            if (cn.parent != null) lxb.lxb_dom_node_remove(cn);
             if (first_child) |fc| {
                 _ = lxb.lxb_dom_node_insert_before(fc, cn);
             } else {
                 _ = lxb.lxb_dom_node_insert_child(parent, cn);
+            }
+        } else {
+            // Non-Node argument: convert to string and create text node
+            const s = jsStringToSlice(c, qjs.JS_ToString(c, args[i])) orelse continue;
+            defer qjs.JS_FreeCString(c, s.ptr);
+            if (g_document) |doc| {
+                const text_node = lxb_dom_document_create_text_node(doc, s.ptr, s.len);
+                if (text_node) |tn| {
+                    if (first_child) |fc| {
+                        _ = lxb.lxb_dom_node_insert_before(fc, tn);
+                    } else {
+                        _ = lxb.lxb_dom_node_insert_child(parent, tn);
+                    }
+                }
             }
         }
     }
