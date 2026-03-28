@@ -1257,3 +1257,103 @@ pub fn jsCommentConstructor(
     const node = lxb_dom_document_create_comment(doc, "", 0) orelse return quickjs.JS_UNDEFINED();
     return wrapNode(c, node);
 }
+
+// ── DOMParser native parse ──────────────────────────────────────────
+// Creates a new lexbor document, parses HTML, returns wrapped nodes.
+// Called from JS as: __suzume_dom_parse(htmlString)
+// Returns: { documentElement, body, head, hasDoctype, doctypeName, doctypePublicId, doctypeSystemId }
+
+extern fn lxb_html_document_create() ?*anyopaque;
+extern fn lxb_html_document_parse(document: *anyopaque, html: [*]const u8, size: usize) u32;
+extern fn lxb_html_document_body_element_noi(document: *anyopaque) ?*lxb.lxb_dom_node_t;
+extern fn lxb_html_document_head_element_noi(document: *anyopaque) ?*lxb.lxb_dom_node_t;
+
+// Storage for DOMParser-created documents (prevent GC/free)
+var parsed_docs: [16]?*anyopaque = .{null} ** 16;
+var parsed_doc_count: usize = 0;
+
+pub fn suzumeDomParse(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+
+    const html_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, html_s.ptr);
+
+    // Create new lexbor document
+    const new_doc = lxb_html_document_create() orelse return quickjs.JS_NULL();
+    const status = lxb_html_document_parse(new_doc, html_s.ptr, html_s.len);
+    if (status != 0) return quickjs.JS_NULL();
+
+    // Store to prevent premature deallocation
+    if (parsed_doc_count < parsed_docs.len) {
+        parsed_docs[parsed_doc_count] = new_doc;
+        parsed_doc_count += 1;
+    }
+
+    // Get key elements
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_doc));
+    const body_node = lxb_html_document_body_element_noi(new_doc);
+    const head_node = lxb_html_document_head_element_noi(new_doc);
+
+    // Get document element (html) — it's the first element child of the document node
+    var doc_element: ?*lxb.lxb_dom_node_t = null;
+    {
+        var child: ?*lxb.lxb_dom_node_t = doc_node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                doc_element = ch;
+                break;
+            }
+            child = ch.next;
+        }
+    }
+
+    // Build result object
+    const result = qjs.JS_NewObject(c);
+    if (doc_element) |de| {
+        _ = qjs.JS_SetPropertyStr(c, result, "documentElement", wrapNode(c, de));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, result, "documentElement", quickjs.JS_NULL());
+    }
+    if (body_node) |bn| {
+        _ = qjs.JS_SetPropertyStr(c, result, "body", wrapNode(c, bn));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, result, "body", quickjs.JS_NULL());
+    }
+    if (head_node) |hn| {
+        _ = qjs.JS_SetPropertyStr(c, result, "head", wrapNode(c, hn));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, result, "head", quickjs.JS_NULL());
+    }
+
+    // Check for doctype (first child of document, nodeType == 10)
+    var has_doctype = false;
+    {
+        var child: ?*lxb.lxb_dom_node_t = doc_node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) {
+                has_doctype = true;
+                // Get doctype name from the element's local_name
+                const dt_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+                var name_len: usize = 0;
+                const name_ptr = lxb_dom_element_local_name(dt_elem, &name_len);
+                if (name_ptr) |np| {
+                    _ = qjs.JS_SetPropertyStr(c, result, "doctypeName", qjs.JS_NewStringLen(c, np, name_len));
+                } else {
+                    _ = qjs.JS_SetPropertyStr(c, result, "doctypeName", qjs.JS_NewString(c, "html"));
+                }
+                break;
+            }
+            child = ch.next;
+        }
+    }
+    _ = qjs.JS_SetPropertyStr(c, result, "hasDoctype", quickjs.JS_NewBool(has_doctype));
+
+    return result;
+}

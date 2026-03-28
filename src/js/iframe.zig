@@ -151,6 +151,41 @@ fn setupIframe(
     // Inject event methods into Element prototype
     events.injectElementEventMethods(iframe_ctx, api.element_class_id);
 
+    // CRITICAL: While g_document still points to the iframe's document,
+    // capture documentElement/body/head elements and override the getters
+    // using JS closures. Otherwise, after g_document is restored, the
+    // native getters would return the parent's elements.
+    {
+        const iframe_global_tmp = qjs.JS_GetGlobalObject(iframe_ctx);
+        defer qjs.JS_FreeValue(iframe_ctx, iframe_global_tmp);
+        const iframe_doc_tmp = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global_tmp, "document");
+        defer qjs.JS_FreeValue(iframe_ctx, iframe_doc_tmp);
+
+        // Get elements while g_document is correct
+        const docEl = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "documentElement");
+        const bodyEl = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "body");
+        const headEl = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "head");
+
+        // Override getters with closures that capture the correct elements
+        const fix_js =
+            \\(function(doc,de,b,h){
+            \\  Object.defineProperty(doc,'documentElement',{get:function(){return de;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'body',{get:function(){return b;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'head',{get:function(){return h;},configurable:true,enumerable:true});
+            \\})
+        ;
+        const fix_fn = qjs.JS_Eval(iframe_ctx, fix_js, fix_js.len, "<iframe-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(fix_fn)) {
+            var fix_args = [4]qjs.JSValue{ iframe_doc_tmp, docEl, bodyEl, headEl };
+            const fix_r = qjs.JS_Call(iframe_ctx, fix_fn, quickjs.JS_UNDEFINED(), 4, &fix_args);
+            qjs.JS_FreeValue(iframe_ctx, fix_r);
+        }
+        qjs.JS_FreeValue(iframe_ctx, fix_fn);
+        qjs.JS_FreeValue(iframe_ctx, docEl);
+        qjs.JS_FreeValue(iframe_ctx, bodyEl);
+        qjs.JS_FreeValue(iframe_ctx, headEl);
+    }
+
     // Restore parent globals (registerDomApis/registerWebApis overwrote them)
     api.g_document = saved_doc;
     api.g_top_frame.document = saved_doc;
@@ -172,8 +207,21 @@ fn setupIframe(
 
     // For XML iframes: override documentElement to return body.firstChild (the actual XML root)
     // Lexbor (HTML5 parser) wraps XML content in <html><head></head><body>...</body></html>
+    // Note: XHTML files (.xhtml) keep standard HTML document structure
     if (is_xml) {
-        const xml_fix_js =
+        // Determine if this is pure XML vs XHTML/MathML
+        const is_xhtml = blk: {
+            var path = iframe_url;
+            if (std.mem.indexOfScalar(u8, path, '?')) |q| path = path[0..q];
+            if (std.mem.indexOfScalar(u8, path, '#')) |h| path = path[0..h];
+            if (std.mem.endsWith(u8, path, ".xhtml")) break :blk true;
+            break :blk false;
+        };
+        const xml_fix_js = if (is_xhtml)
+            \\(function(doc){
+            \\  doc.contentType='application/xhtml+xml';
+            \\})
+        else
             \\(function(doc){
             \\  doc.contentType='application/xml';
             \\  var b=doc.body||doc.getElementsByTagName('body')[0];
@@ -205,7 +253,7 @@ fn setupIframe(
     // This is a bridge object that delegates to the iframe's global
     const cw_js =
         \\(function(iframeGlobal){
-        \\  return {
+        \\  var cw={
         \\    document: iframeGlobal.document,
         \\    parent: window,
         \\    top: window.top || window,
@@ -222,6 +270,22 @@ fn setupIframe(
         \\    clearTimeout: iframeGlobal.clearTimeout,
         \\    clearInterval: iframeGlobal.clearInterval
         \\  };
+        \\  var names=['Element','Node','HTMLElement','Document','DocumentFragment','DocumentType',
+        \\    'Text','Comment','ProcessingInstruction','Event','CustomEvent','DOMException',
+        \\    'HTMLHtmlElement','HTMLHeadElement','HTMLBodyElement','HTMLDivElement','HTMLSpanElement',
+        \\    'HTMLParagraphElement','HTMLInputElement','HTMLFormElement','HTMLAnchorElement',
+        \\    'HTMLImageElement','HTMLScriptElement','HTMLStyleElement','HTMLLinkElement',
+        \\    'HTMLIFrameElement','HTMLUnknownElement','NodeList','HTMLCollection',
+        \\    'NodeFilter','DOMParser','XMLSerializer','CSS','MutationObserver',
+        \\    'HTMLTableElement','HTMLTableRowElement','HTMLTableCellElement',
+        \\    'HTMLUListElement','HTMLOListElement','HTMLLIElement','HTMLPreElement',
+        \\    'HTMLCanvasElement','HTMLVideoElement','HTMLAudioElement',
+        \\    'HTMLButtonElement','HTMLSelectElement','HTMLTextAreaElement',
+        \\    'HTMLBRElement','HTMLHRElement','HTMLOptionElement',
+        \\    'HTMLMetaElement','HTMLTitleElement','HTMLBaseElement',
+        \\    'HTMLHeadingElement','HTMLQuoteElement','HTMLLabelElement'];
+        \\  for(var i=0;i<names.length;i++){if(typeof iframeGlobal[names[i]]!=='undefined')cw[names[i]]=iframeGlobal[names[i]];}
+        \\  return cw;
         \\})
     ;
 

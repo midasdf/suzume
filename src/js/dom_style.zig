@@ -799,6 +799,12 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         {
             return formatModernColorComputed(c, trimmed_color);
         }
+        // CSS Color 5: color-mix() serializes as color(srgb ...) in computed style
+        if (trimmed_color.len >= 10 and eqlIgnoreCase(trimmed_color[0..10], "color-mix(")) {
+            if (color_mod.parseColor(trimmed_color)) |color| {
+                return formatAsColorSrgb(c, color);
+            }
+        }
         if (color_mod.parseColor(trimmed_color)) |color| {
             var color_buf: [64]u8 = undefined;
             if (color.a == 255) {
@@ -988,6 +994,26 @@ pub fn extractOriginalAlpha(color_str: []const u8) ?f64 {
 }
 
 // ── Color Formatting ───────────────────────────────────────────────
+
+/// Format a parsed Color as color(srgb R G B) or color(srgb R G B / A).
+/// Used for CSS Color 5 color-mix() computed values.
+fn formatAsColorSrgb(c: *qjs.JSContext, color: @import("../css/values.zig").Color) qjs.JSValue {
+    var buf: [128]u8 = undefined;
+    const r = @as(f64, @floatFromInt(color.r)) / 255.0;
+    const g_val = @as(f64, @floatFromInt(color.g)) / 255.0;
+    const b_val = @as(f64, @floatFromInt(color.b)) / 255.0;
+    if (color.a == 255) {
+        const s = std.fmt.bufPrint(&buf, "color(srgb {d:.6} {d:.6} {d:.6})", .{ r, g_val, b_val }) catch return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (color.a == 0) {
+        const s = std.fmt.bufPrint(&buf, "color(srgb {d:.6} {d:.6} {d:.6} / 0)", .{ r, g_val, b_val }) catch return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else {
+        const a = @as(f64, @floatFromInt(color.a)) / 255.0;
+        const s = std.fmt.bufPrint(&buf, "color(srgb {d:.6} {d:.6} {d:.6} / {d:.6})", .{ r, g_val, b_val, a }) catch return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    }
+}
 
 /// Format color() function for computed value: color(srgb R G B) or color(srgb R G B / A)
 pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {

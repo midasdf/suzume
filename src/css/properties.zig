@@ -666,14 +666,31 @@ fn findTopLevelComma(s: []const u8) ?usize {
 }
 
 fn parseColorWithPercent(part: []const u8, pct: *f32) ?values.Color {
-    // Try to find a trailing percentage: "red 30%", "rgb(255,0,0) 70%"
-    // Work backwards from end to find percentage
     const trimmed = std.mem.trim(u8, part, " \t");
     if (trimmed.len == 0) return null;
 
-    // Check if last token is a percentage
+    // Check for leading percentage: "25% hsl(120deg 10% 20%)"
+    // Pattern: digits/dot followed by % then space
+    if (trimmed[0] >= '0' and trimmed[0] <= '9') {
+        if (std.mem.indexOfScalar(u8, trimmed, '%')) |pct_end| {
+            // Make sure % is followed by a space and then a color value
+            if (pct_end + 1 < trimmed.len and trimmed[pct_end + 1] == ' ') {
+                const pct_str = trimmed[0..pct_end];
+                const color_str = std.mem.trim(u8, trimmed[pct_end + 1 ..], " \t");
+                // Only treat as leading percent if the color part parses successfully
+                if (std.fmt.parseFloat(f32, pct_str)) |v| {
+                    if (parseColor(color_str)) |color| {
+                        pct.* = v;
+                        return color;
+                    }
+                } else |_| {}
+            }
+        }
+    }
+
+    // Check for trailing percentage: "red 30%", "rgb(255,0,0) 70%"
     if (trimmed[trimmed.len - 1] == '%') {
-        // Find start of percentage number
+        // Find start of percentage number (work backwards past function calls)
         var i = trimmed.len - 2;
         while (i > 0 and (trimmed[i] == '.' or (trimmed[i] >= '0' and trimmed[i] <= '9'))) : (i -= 1) {}
         // Check for space before percentage

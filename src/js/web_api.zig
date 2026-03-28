@@ -1469,6 +1469,11 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url",
         qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
 
+    // -- DOMParser native parse (for proper Document creation) --
+    const dom_doc = @import("dom_document.zig");
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_dom_parse",
+        qjs.JS_NewCFunction(ctx, &dom_doc.suzumeDomParse, "__suzume_dom_parse", 1));
+
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, console_obj, "log", qjs.JS_NewCFunction(ctx, &consoleLog, "log", 1));
@@ -1850,61 +1855,89 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof DOMParser==='undefined'){
         \\  globalThis.DOMParser=function(){};
         \\  DOMParser.prototype.parseFromString=function(str,type){
-        \\    if(!type||type==='text/html'){
-        \\      var container=document.createElement('div');
-        \\      container.innerHTML=str;
-        \\      var body=container;
-        \\      var headEl=null;
-        \\      var bodyEl=null;
-        \\      for(var i=0;i<container.childNodes.length;i++){
-        \\        var ch=container.childNodes[i];
-        \\        if(ch.tagName==='HEAD')headEl=ch;
-        \\        if(ch.tagName==='BODY')bodyEl=ch;
-        \\      }
-        \\      var fakeDoc={
-        \\        nodeType:9,nodeName:'#document',ownerDocument:null,
-        \\        contentType:type||'text/html',characterSet:'UTF-8',
-        \\        URL:'about:blank',documentURI:'about:blank',compatMode:'CSS1Compat',
-        \\        documentElement:container,
-        \\        body:bodyEl||container,
-        \\        head:headEl||null,
-        \\        childNodes:container.childNodes,
-        \\        children:[container],
-        \\        firstChild:container.firstChild,
-        \\        lastChild:container.lastChild,
-        \\        querySelector:function(s){return container.querySelector(s);},
-        \\        querySelectorAll:function(s){return container.querySelectorAll(s);},
-        \\        getElementById:function(id){return container.querySelector('#'+CSS.escape(id));},
-        \\        getElementsByTagName:function(t){return container.querySelectorAll(t);},
-        \\        getElementsByClassName:function(c){return container.querySelectorAll('.'+c);},
-        \\        createElement:function(t){return document.createElement(t);},
-        \\        createElementNS:function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);},
-        \\        createTextNode:function(t){return document.createTextNode(t);},
-        \\        createComment:function(t){return document.createComment(t);},
-        \\        createDocumentFragment:function(){return document.createDocumentFragment();},
-        \\        createAttribute:function(n){return document.createAttribute(n);},
-        \\        importNode:function(n,d){return n.cloneNode(d);},
-        \\        adoptNode:function(n){return n;},
-        \\        implementation:document.implementation,
-        \\        defaultView:null,
-        \\        doctype:null
-        \\      };
-        \\      return fakeDoc;
+        \\    var validTypes=['text/html','text/xml','application/xml','application/xhtml+xml','image/svg+xml'];
+        \\    if(validTypes.indexOf(type)===-1)throw new TypeError("Failed to execute 'parseFromString' on 'DOMParser': The provided value '"+type+"' is not a valid enum value of type SupportedType.");
+        \\    if(type==='text/html'){
+        \\      var r=__suzume_dom_parse(str);
+        \\      if(!r||!r.documentElement){var c=document.createElement('div');c.innerHTML=str;r={documentElement:c,body:c,head:null,hasDoctype:false};}
+        \\      var docEl=r.documentElement,bodyEl=r.body,headEl=r.head;
+        \\      var doc=Object.create(Document.prototype);
+        \\      Object.defineProperties(doc,{
+        \\        nodeType:{value:9,writable:false},nodeName:{value:'#document',writable:false},
+        \\        ownerDocument:{value:null,writable:true,configurable:true},
+        \\        documentElement:{value:docEl,writable:true,configurable:true},
+        \\        body:{value:bodyEl,writable:true,configurable:true},
+        \\        head:{value:headEl,writable:true,configurable:true},
+        \\        contentType:{value:'text/html',writable:true,configurable:true},
+        \\        compatMode:{value:r.hasDoctype?'CSS1Compat':'BackCompat',writable:true,configurable:true},
+        \\        characterSet:{value:'UTF-8',writable:true,configurable:true},
+        \\        charset:{value:'UTF-8',writable:true,configurable:true},
+        \\        inputEncoding:{value:'UTF-8',writable:true,configurable:true},
+        \\        URL:{value:document.URL,writable:true,configurable:true},
+        \\        documentURI:{value:document.URL,writable:true,configurable:true},
+        \\        baseURI:{value:document.URL,writable:true,configurable:true},
+        \\        location:{value:null,writable:true,configurable:true},
+        \\        defaultView:{value:null,writable:true,configurable:true},
+        \\        hidden:{value:true,writable:true,configurable:true},
+        \\        visibilityState:{value:'hidden',writable:true,configurable:true},
+        \\        readyState:{value:'complete',writable:true,configurable:true}
+        \\      });
+        \\      var kids=[];if(r.hasDoctype){var dt=Object.create(typeof DocumentType!=='undefined'?DocumentType.prototype:null);Object.defineProperties(dt,{nodeType:{value:10},name:{value:r.doctypeName||'html'},nodeName:{value:r.doctypeName||'html'},publicId:{value:''},systemId:{value:''},ownerDocument:{value:doc},parentNode:{value:doc},childNodes:{value:[]},nodeValue:{value:null},textContent:{value:null}});kids.push(dt);doc.doctype=dt;}else{doc.doctype=null;}
+        \\      kids.push(docEl);doc.childNodes=kids;doc.children=[docEl];doc.firstChild=kids[0];doc.lastChild=kids[kids.length-1];
+        \\      doc.querySelector=function(s){return docEl.querySelector(s);};
+        \\      doc.querySelectorAll=function(s){return docEl.querySelectorAll(s);};
+        \\      doc.getElementById=function(id){return docEl.querySelector('#'+CSS.escape(id));};
+        \\      doc.getElementsByTagName=function(t){return docEl.getElementsByTagName?docEl.getElementsByTagName(t):docEl.querySelectorAll(t);};
+        \\      doc.getElementsByClassName=function(c){return docEl.getElementsByClassName?docEl.getElementsByClassName(c):docEl.querySelectorAll('.'+c);};
+        \\      doc.createElement=function(t){return document.createElement(t);};
+        \\      doc.createElementNS=function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);};
+        \\      doc.createTextNode=function(t){return document.createTextNode(t);};
+        \\      doc.createComment=function(t){return document.createComment(t);};
+        \\      doc.createDocumentFragment=function(){return document.createDocumentFragment();};
+        \\      doc.createEvent=function(t){return document.createEvent(t);};
+        \\      doc.createAttribute=function(n){return document.createAttribute(n);};
+        \\      doc.createAttributeNS=function(ns,qn){return document.createAttributeNS(ns,qn);};
+        \\      doc.importNode=function(n,d){return n.cloneNode(d!==undefined?d:false);};
+        \\      doc.adoptNode=function(n){return n;};
+        \\      doc.appendChild=function(n){return docEl.appendChild(n);};
+        \\      doc.removeChild=function(n){return docEl.removeChild(n);};
+        \\      doc.insertBefore=function(n,ref){return docEl.insertBefore(n,ref);};
+        \\      doc.replaceChild=function(n,old){return docEl.replaceChild(n,old);};
+        \\      doc.cloneNode=function(deep){var nd=new DOMParser().parseFromString(deep?docEl.outerHTML||'':'','text/html');return nd;};
+        \\      doc.implementation=document.implementation;
+        \\      doc.createTreeWalker=function(r,w,f){return document.createTreeWalker(r,w,f);};
+        \\      doc.createNodeIterator=function(r,w,f){return document.createNodeIterator(r,w,f);};
+        \\      doc.createRange=function(){return document.createRange();};
+        \\      doc.addEventListener=function(){};doc.removeEventListener=function(){};doc.dispatchEvent=function(){return true;};
+        \\      doc.hasFocus=function(){return false;};
+        \\      doc.title='';
+        \\      return doc;
         \\    }
-        \\    if(type==='text/xml'||type==='application/xml'||type==='application/xhtml+xml'){
-        \\      var c=document.createElement('div');c.innerHTML=str;
-        \\      var fDoc={nodeType:9,nodeName:'#document',ownerDocument:null,contentType:type,
-        \\        documentElement:c.firstChild||c,childNodes:c.childNodes,firstChild:c.firstChild,
-        \\        querySelector:function(s){return c.querySelector(s);},
-        \\        querySelectorAll:function(s){return c.querySelectorAll(s);},
-        \\        getElementsByTagName:function(t){return c.querySelectorAll(t);},
-        \\        createElement:function(t){return document.createElement(t);},
-        \\        createElementNS:function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);},
-        \\        createTextNode:function(t){return document.createTextNode(t);},
-        \\        createComment:function(t){return document.createComment(t);},
-        \\        importNode:function(n,d){return n.cloneNode(d);},
-        \\        implementation:document.implementation};
-        \\      return fDoc;
+        \\    if(type==='text/xml'||type==='application/xml'||type==='application/xhtml+xml'||type==='image/svg+xml'){
+        \\      var r2=__suzume_dom_parse(str);
+        \\      if(!r2||!r2.documentElement){var c2=document.createElement('div');c2.innerHTML=str;r2={documentElement:c2.firstChild||c2,body:null,head:null,hasDoctype:false};}
+        \\      var xmlDocEl=r2.documentElement;
+        \\      var xmlDoc=Object.create(Document.prototype);
+        \\      Object.defineProperties(xmlDoc,{
+        \\        nodeType:{value:9},nodeName:{value:'#document'},ownerDocument:{value:null},
+        \\        documentElement:{value:xmlDocEl,writable:true,configurable:true},
+        \\        contentType:{value:type},
+        \\        characterSet:{value:'UTF-8'},charset:{value:'UTF-8'},inputEncoding:{value:'UTF-8'},
+        \\        URL:{value:document.URL},documentURI:{value:document.URL},baseURI:{value:document.URL},
+        \\        compatMode:{value:'CSS1Compat'},location:{value:null},defaultView:{value:null}
+        \\      });
+        \\      xmlDoc.childNodes=[xmlDocEl];xmlDoc.children=[xmlDocEl];xmlDoc.firstChild=xmlDocEl;xmlDoc.lastChild=xmlDocEl;xmlDoc.doctype=null;
+        \\      xmlDoc.querySelector=function(s){return xmlDocEl.querySelector(s);};
+        \\      xmlDoc.querySelectorAll=function(s){return xmlDocEl.querySelectorAll(s);};
+        \\      xmlDoc.getElementsByTagName=function(t){return xmlDocEl.getElementsByTagName?xmlDocEl.getElementsByTagName(t):xmlDocEl.querySelectorAll(t);};
+        \\      xmlDoc.createElement=function(t){return document.createElement(t);};
+        \\      xmlDoc.createElementNS=function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);};
+        \\      xmlDoc.createTextNode=function(t){return document.createTextNode(t);};
+        \\      xmlDoc.createComment=function(t){return document.createComment(t);};
+        \\      xmlDoc.importNode=function(n,d){return n.cloneNode(d!==undefined?d:false);};
+        \\      xmlDoc.adoptNode=function(n){return n;};
+        \\      xmlDoc.implementation=document.implementation;
+        \\      return xmlDoc;
         \\    }
         \\    return null;
         \\  };
