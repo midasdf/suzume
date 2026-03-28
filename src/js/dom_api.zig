@@ -2758,6 +2758,25 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, er);
     }
 
+    // Obsolete/legacy element IDL attribute reflection
+    {
+        const obsolete_js =
+            \\(function(){
+            \\  function rs(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function rb(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.hasAttribute(a);},set:function(v){if(v)this.setAttribute(a,'');else this.removeAttribute(a);},configurable:true,enumerable:true});}
+            \\  function ri(C,p,a,d){if(!a)a=p.toLowerCase();if(d===undefined)d=0;Object.defineProperty(C.prototype,p,{get:function(){var v=parseInt(this.getAttribute(a),10);return isNaN(v)?d:v;},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function ru(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  if(typeof HTMLMarqueeElement!=='undefined'){var MQ=HTMLMarqueeElement;rs(MQ,'behavior');rs(MQ,'bgColor','bgcolor');rs(MQ,'direction');rs(MQ,'height');rs(MQ,'width');ri(MQ,'hspace',null,0);ri(MQ,'vspace',null,0);ri(MQ,'scrollAmount','scrollamount',6);ri(MQ,'scrollDelay','scrolldelay',85);rb(MQ,'trueSpeed','truespeed');}
+            \\  if(typeof HTMLFrameElement!=='undefined'){var FR=HTMLFrameElement;rs(FR,'name');rs(FR,'scrolling');ru(FR,'src');ru(FR,'longDesc','longdesc');rs(FR,'frameBorder','frameborder');rs(FR,'marginWidth','marginwidth');rs(FR,'marginHeight','marginheight');rb(FR,'noResize','noresize');}
+            \\  if(typeof HTMLFrameSetElement!=='undefined'){var FS=HTMLFrameSetElement;rs(FS,'cols');rs(FS,'rows');}
+            \\  if(typeof HTMLFontElement!=='undefined'){var FO=HTMLFontElement;rs(FO,'color');rs(FO,'face');rs(FO,'size');}
+            \\  if(typeof HTMLDirectoryElement!=='undefined'){rb(HTMLDirectoryElement,'compact');}
+            \\})()
+        ;
+        const ob = qjs.JS_Eval(ctx, obsolete_js, obsolete_js.len, "<obsolete>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, ob);
+    }
+
     // ARIA attribute reflection per ARIA in HTML spec (with enumerated support)
     {
         const aria_js =
