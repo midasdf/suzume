@@ -2700,11 +2700,33 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, evt_r);
     }
 
-    // ARIA attribute reflection per ARIA in HTML spec
+    // ARIA attribute reflection per ARIA in HTML spec (with enumerated support)
     {
         const aria_js =
             \\(function(){
             \\  var EP=Element.prototype;
+            \\  var enumDefs={
+            \\    ariaAtomic:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:null},
+            \\    ariaAutoComplete:{kw:['inline','list','both','none'],nc:{},iv:'none',dv:'none'},
+            \\    ariaBusy:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaChecked:{kw:['true','false','mixed'],nc:{'':null},iv:null,dv:null},
+            \\    ariaCurrent:{kw:['page','step','location','date','time','true','false'],nc:{'':'false'},iv:'true',dv:'false'},
+            \\    ariaDisabled:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaExpanded:{kw:['true','false'],nc:{'':null},iv:null,dv:null},
+            \\    ariaHasPopup:{kw:['true','false','menu','dialog','listbox','tree','grid'],nc:{},iv:'false',dv:null},
+            \\    ariaHidden:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaInvalid:{kw:['true','false','spelling','grammar'],nc:{'':'false'},iv:'true',dv:'false'},
+            \\    ariaLive:{kw:['polite','assertive','off'],nc:{},iv:'off',dv:'off'},
+            \\    ariaModal:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaMultiLine:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaMultiSelectable:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaOrientation:{kw:['horizontal','vertical'],nc:{'':null},iv:null,dv:null},
+            \\    ariaPressed:{kw:['true','false','mixed'],nc:{'':null},iv:null,dv:null},
+            \\    ariaReadOnly:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaRequired:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
+            \\    ariaSelected:{kw:['true','false'],nc:{'':null},iv:null,dv:null},
+            \\    ariaSort:{kw:['ascending','descending','other','none'],nc:{},iv:'none',dv:'none'}
+            \\  };
             \\  var ariaAttrs={role:'role',ariaAtomic:'aria-atomic',ariaAutoComplete:'aria-autocomplete',
             \\    ariaBrailleLabel:'aria-braillelabel',ariaBrailleRoleDescription:'aria-brailleroledescription',
             \\    ariaBusy:'aria-busy',ariaChecked:'aria-checked',ariaColCount:'aria-colcount',
@@ -2722,7 +2744,19 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    ariaValueMax:'aria-valuemax',ariaValueMin:'aria-valuemin',ariaValueNow:'aria-valuenow',
             \\    ariaValueText:'aria-valuetext'};
             \\  for(var prop in ariaAttrs){(function(p,a){
-            \\    Object.defineProperty(EP,p,{get:function(){var v=this.getAttribute(a);return(v===null||v==='')?null:v;},set:function(v){if(v===null||v===undefined)this.removeAttribute(a);else this.setAttribute(a,''+v);},configurable:true,enumerable:true});
+            \\    var ed=enumDefs[p];
+            \\    if(ed){
+            \\      Object.defineProperty(EP,p,{get:function(){
+            \\        var v=this.getAttribute(a);
+            \\        if(v===null)return ed.dv;
+            \\        if(v in ed.nc)return ed.nc[v];
+            \\        var lv=v.toLowerCase();
+            \\        for(var i=0;i<ed.kw.length;i++){if(ed.kw[i]===lv)return lv;}
+            \\        return ed.iv;
+            \\      },set:function(v){if(v===null||v===undefined)this.removeAttribute(a);else this.setAttribute(a,''+v);},configurable:true,enumerable:true});
+            \\    }else{
+            \\      Object.defineProperty(EP,p,{get:function(){var v=this.getAttribute(a);return v;},set:function(v){if(v===null||v===undefined)this.removeAttribute(a);else this.setAttribute(a,''+v);},configurable:true,enumerable:true});
+            \\    }
             \\  })(prop,ariaAttrs[prop]);}
             \\})()
         ;
