@@ -256,6 +256,15 @@ pub fn implCreateDocument(
     ;
     const doc = qjs.JS_Eval(c, js, js.len, "<createDoc>", qjs.JS_EVAL_TYPE_GLOBAL);
 
+    // Set contentType based on namespace
+    if (ns) |ns_str| {
+        if (std.mem.eql(u8, ns_str, "http://www.w3.org/1999/xhtml")) {
+            _ = qjs.JS_SetPropertyStr(c, doc, "contentType", qjs.JS_NewString(c, "application/xhtml+xml"));
+        } else if (std.mem.eql(u8, ns_str, "http://www.w3.org/2000/svg")) {
+            _ = qjs.JS_SetPropertyStr(c, doc, "contentType", qjs.JS_NewString(c, "image/svg+xml"));
+        }
+    }
+
     // If qualifiedName is provided, create and append document element
     if (qname) |qn| {
         if (qn.len > 0) {
