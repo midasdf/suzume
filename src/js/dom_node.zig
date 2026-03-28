@@ -786,8 +786,18 @@ pub fn nodeIsEqualNode(
     const c = ctx orelse return quickjs.JS_NewBool(false);
     if (argc < 1) return quickjs.JS_NewBool(false);
     const args = argv orelse return quickjs.JS_NewBool(false);
-    const node_a = api.getNode(c, this_val) orelse return quickjs.JS_NewBool(false);
-    const node_b = api.getNode(c, args[0]) orelse return quickjs.JS_NewBool(false);
+    // Handle null argument: spec says return false
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+        return quickjs.JS_NewBool(false);
+    const node_a = api.getNode(c, this_val) orelse blk: {
+        // Fallback for document object
+        const doc = api.getDocument(c) orelse return quickjs.JS_NewBool(false);
+        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
+    };
+    const node_b = api.getNode(c, args[0]) orelse blk: {
+        const doc = api.getDocument(c) orelse return quickjs.JS_NewBool(false);
+        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
+    };
     return quickjs.JS_NewBool(nodesAreEqual(node_a, node_b));
 }
 
