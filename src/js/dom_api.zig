@@ -2913,6 +2913,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "publicId", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "systemId", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "ownerDocument", quickjs.JS_NULL()); // will be patched after doc registered
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "nodeValue", quickjs.JS_NULL());
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "textContent", quickjs.JS_NULL());
+        // Set DocumentType.prototype for instanceof checks
+        const dt_proto_js = "(function(dt){if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);})";
+        const dt_proto_fn = qjs.JS_Eval(ctx, dt_proto_js, dt_proto_js.len, "<dt-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(dt_proto_fn)) {
+            var dt_args = [1]qjs.JSValue{qjs.JS_DupValue(ctx, dt_obj)};
+            const dt_r = qjs.JS_Call(ctx, dt_proto_fn, quickjs.JS_UNDEFINED(), 1, &dt_args);
+            qjs.JS_FreeValue(ctx, dt_r);
+            qjs.JS_FreeValue(ctx, dt_args[0]);
+            qjs.JS_FreeValue(ctx, dt_proto_fn);
+        }
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "doctype", dt_obj);
     }
 
@@ -2961,7 +2973,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var body = document.createElement('body');
             \\  if (title !== undefined) {
             \\    var t = document.createElement('title');
-            \\    t.textContent = title;
+            \\    t.textContent = String(title);
             \\    head.appendChild(t);
             \\  }
             \\  d.appendChild(head);
@@ -3263,6 +3275,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     ;
     const exc_result = qjs.JS_Eval(ctx, dom_exc_script.ptr, dom_exc_script.len, "<domexception>", 0);
     qjs.JS_FreeValue(ctx, exc_result);
+
+    // Fix document.doctype prototype (must happen after DocumentType is defined)
+    {
+        const fix_dt_js =
+            \\(function(){if(document.doctype&&typeof DocumentType!=='undefined')Object.setPrototypeOf(document.doctype,DocumentType.prototype);})()
+        ;
+        const fix_r = qjs.JS_Eval(ctx, fix_dt_js, fix_dt_js.len, "<fix-dt>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, fix_r);
+    }
 
     qjs.JS_FreeValue(ctx, global);
 }
