@@ -543,24 +543,51 @@ pub fn elementReplaceWith(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    if (node.parent == null) return quickjs.JS_UNDEFINED();
-    // Insert all args before this node, then remove this node
+    const parent = node.parent orelse return quickjs.JS_UNDEFINED();
+
+    // DOM spec: find viable next sibling (not in args list)
+    var viable_next: ?*lxb.lxb_dom_node_t = node.next;
+    outer: while (viable_next) |vn| {
+        var j: c_int = 0;
+        while (j < argc) : (j += 1) {
+            if (api.getNode(c, args[@intCast(j)])) |arg_node| {
+                if (@intFromPtr(arg_node) == @intFromPtr(vn)) {
+                    viable_next = vn.next;
+                    continue :outer;
+                }
+            }
+        }
+        break;
+    }
+
+    // Remove this node first
+    lxb_dom_node_remove(node);
+
+    // Insert all args before viable_next (or append to parent)
     var i: c_int = 0;
     while (i < argc) : (i += 1) {
         const arg = args[@intCast(i)];
         if (api.getNode(c, arg)) |new_node| {
             if (new_node.parent != null) lxb_dom_node_remove(new_node);
-            lxb_dom_node_insert_before(node, new_node);
+            if (viable_next) |vn| {
+                lxb_dom_node_insert_before(vn, new_node);
+            } else {
+                lxb_dom_node_insert_child(parent, new_node);
+            }
         } else {
             if (api.jsStringToSlice(c, arg)) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
                 const doc = api.getDocument(c) orelse continue;
                 const text = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
-                lxb_dom_node_insert_before(node, text);
+                if (viable_next) |vn| {
+                    lxb_dom_node_insert_before(vn, text);
+                } else {
+                    lxb_dom_node_insert_child(parent, text);
+                }
             }
         }
     }
-    lxb_dom_node_remove(node);
+    // node already removed above
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
