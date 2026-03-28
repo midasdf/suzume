@@ -184,7 +184,11 @@ pub fn elementGetFirstChild(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const node = api.getNode(c, this_val) orelse blk: {
+        // Fallback for document object
+        const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
+        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
+    };
     const child = node.first_child orelse return quickjs.JS_NULL();
     return api.wrapNode(c, child);
 }
@@ -196,7 +200,10 @@ pub fn elementGetLastChild(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const node = api.getNode(c, this_val) orelse blk: {
+        const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
+        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
+    };
     const child = lxb_dom_node_last_child_noi(node) orelse return quickjs.JS_NULL();
     return api.wrapNode(c, child);
 }
