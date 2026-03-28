@@ -837,8 +837,9 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
     const iter_js =
         \\(function(cl){
         \\  cl[Symbol.iterator]=function(){var idx=0,self=this;return{next:function(){var v=self.item(idx++);return v===null?{done:true}:{done:false,value:v};}};};
+        \\  cl[Symbol.toStringTag]='DOMTokenList';
         \\  cl._tokens=function(){var e=this.__element;if(!e)return[];var c=e.getAttribute('class');if(!c)return[];var seen={},r=[];c.split(/[\x20\t\n\r\f]+/).forEach(function(s){if(s&&!seen[s]){seen[s]=1;r.push(s);}});return r;};
-        \\  return new Proxy(cl,{get:function(t,p,r){if(typeof p==='string'&&/^\d+$/.test(p)){var toks=t._tokens();var i=parseInt(p);return i<toks.length?toks[i]:undefined;}return Reflect.get(t,p,r);}});
+        \\  return new Proxy(cl,{get:function(t,p,r){if(typeof p==='string'&&/^\d+$/.test(p)){var toks=t._tokens();var i=parseInt(p);return i<toks.length?toks[i]:undefined;}if(p===Symbol.toStringTag)return'DOMTokenList';return Reflect.get(t,p,r);}});
         \\})
     ;
     const iter_fn = qjs.JS_Eval(ctx, iter_js, iter_js.len, "<classList>", qjs.JS_EVAL_TYPE_GLOBAL);
