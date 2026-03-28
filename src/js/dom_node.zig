@@ -137,12 +137,13 @@ pub fn elementSetTextContent(
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
-    // DOM spec: empty string → remove all children (no text node created)
+    // DOM spec: empty string → remove all children (no text node)
     if (s.len == 0) {
         while (node.first_child) |child| {
             lxb_dom_node_remove(child);
         }
     } else {
+        // Use Lexbor for non-empty strings (handles internal cleanup)
         _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
     }
     events.recordMutation(node, "childList", null, null, null);
