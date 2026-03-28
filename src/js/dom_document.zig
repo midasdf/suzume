@@ -705,7 +705,7 @@ pub fn documentGetElementsByTagName(
     return arr;
 }
 
-fn wrapAsHTMLCollection(c: *qjs.JSContext, arr: qjs.JSValue) void {
+pub fn wrapAsHTMLCollection(c: *qjs.JSContext, arr: qjs.JSValue) void {
     const js =
         \\(function(a){if(typeof HTMLCollection!=='undefined')Object.setPrototypeOf(a,HTMLCollection.prototype);})
     ;

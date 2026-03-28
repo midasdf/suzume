@@ -1548,6 +1548,7 @@ fn elementGetElementsByClassName(
     if (quickjs.JS_IsException(arr)) return arr;
     var idx: u32 = 0;
     dom_sel.walkTreeCollect(c, node, selector, arr, &idx);
+    dom_doc.wrapAsHTMLCollection(c, arr);
     return arr;
 }
 
@@ -1568,6 +1569,8 @@ fn elementGetElementsByTagName(
     if (quickjs.JS_IsException(arr)) return arr;
     var idx: u32 = 0;
     dom_sel.walkTreeCollect(c, node, s.ptr[0..s.len], arr, &idx);
+    // Set HTMLCollection prototype
+    dom_doc.wrapAsHTMLCollection(c, arr);
     return arr;
 }
 
