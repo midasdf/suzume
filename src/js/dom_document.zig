@@ -984,9 +984,23 @@ pub fn documentCreateDocumentFragment(
     const elem = lxb_dom_document_create_element(doc, "div", 3, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const obj = wrapNode(c, node);
-    // Override nodeType and nodeName to match DocumentFragment spec
-    _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 11));
-    _ = qjs.JS_SetPropertyStr(c, obj, "nodeName", qjs.JS_NewString(c, "#document-fragment"));
+    // Override nodeType and nodeName with defineProperty to override prototype getters
+    {
+        const fix_js =
+            \\(function(f){
+            \\  Object.defineProperty(f,'nodeType',{value:11,writable:false,configurable:true,enumerable:true});
+            \\  Object.defineProperty(f,'nodeName',{value:'#document-fragment',writable:false,configurable:true,enumerable:true});
+            \\  Object.defineProperty(f,'nodeValue',{value:null,writable:false,configurable:true,enumerable:true});
+            \\})
+        ;
+        const fix_fn = qjs.JS_Eval(c, fix_js, fix_js.len, "<frag-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(fix_fn)) {
+            var fix_args = [1]qjs.JSValue{obj};
+            const fix_r = qjs.JS_Call(c, fix_fn, quickjs.JS_UNDEFINED(), 1, &fix_args);
+            qjs.JS_FreeValue(c, fix_r);
+            qjs.JS_FreeValue(c, fix_fn);
+        }
+    }
     return obj;
 }
 
