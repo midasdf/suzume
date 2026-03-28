@@ -137,7 +137,14 @@ pub fn elementSetTextContent(
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
-    _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    // DOM spec: empty string → remove all children (no text node created)
+    if (s.len == 0) {
+        while (node.first_child) |child| {
+            lxb_dom_node_remove(child);
+        }
+    } else {
+        _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    }
     events.recordMutation(node, "childList", null, null, null);
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
