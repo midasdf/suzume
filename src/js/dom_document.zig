@@ -423,15 +423,20 @@ pub fn documentCreateTreeWalker(
         \\    },
         \\    previousNode: function() {
         \\      var node = this.currentNode;
-        \\      if (node === this.root) return null;
-        \\      if (node.previousSibling) {
-        \\        node = node.previousSibling;
-        \\        while (node.lastChild) node = node.lastChild;
-        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
+        \\      while (node !== this.root) {
+        \\        var sib = node.previousSibling;
+        \\        while (sib) {
+        \\          node = sib;
+        \\          var r = this._check(node);
+        \\          while (r !== 2 && node.lastChild) { node = node.lastChild; r = this._check(node); }
+        \\          if (r === 1) { this.currentNode = node; return node; }
+        \\          sib = node.previousSibling;
+        \\        }
+        \\        node = node.parentNode;
+        \\        if (!node || node === this.root) return null;
+        \\        var pr = this._check(node);
+        \\        if (pr === 1) { this.currentNode = node; return node; }
         \\      }
-        \\      var parent = node.parentNode;
-        \\      if (!parent || parent === this.root) return null;
-        \\      if (this._accepts(parent)) { this.currentNode = parent; return parent; }
         \\      return null;
         \\    },
         \\    firstChild: function() {
