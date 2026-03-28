@@ -428,6 +428,28 @@ pub fn elementCloneNode(
         }
     }
 
+    // Check if this is a DocumentFragment (JS nodeType override = 11)
+    const js_nt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+    var js_node_type: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &js_node_type, js_nt);
+    qjs.JS_FreeValue(c, js_nt);
+    if (js_node_type == 11) {
+        // Clone as DocumentFragment via JS
+        const clone_js = if (deep)
+            \\(function(src){var f=document.createDocumentFragment();for(var i=0;i<src.childNodes.length;i++)f.appendChild(src.childNodes[i].cloneNode(true));return f;})
+        else
+            \\(function(){return document.createDocumentFragment();})
+        ;
+        const clone_fn = qjs.JS_Eval(c, clone_js, clone_js.len, "<frag-clone>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(clone_fn)) {
+            var clone_args = [1]qjs.JSValue{this_val};
+            const result = qjs.JS_Call(c, clone_fn, quickjs.JS_UNDEFINED(), if (deep) @as(c_int, 1) else 0, &clone_args);
+            qjs.JS_FreeValue(c, clone_fn);
+            return result;
+        }
+        qjs.JS_FreeValue(c, clone_fn);
+    }
+
     // Text/Comment/PI nodes: create new node with same data
     if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
         const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
