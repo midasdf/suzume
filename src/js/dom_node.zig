@@ -246,7 +246,11 @@ pub fn elementGetChildNodes(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
+    // Try native node first; fall back to document node for document object
+    const node = api.getNode(c, this_val) orelse blk: {
+        const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
+        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
+    };
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
 
