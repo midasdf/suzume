@@ -2690,7 +2690,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    ariaValueMax:'aria-valuemax',ariaValueMin:'aria-valuemin',ariaValueNow:'aria-valuenow',
             \\    ariaValueText:'aria-valuetext'};
             \\  for(var prop in ariaAttrs){(function(p,a){
-            \\    Object.defineProperty(EP,p,{get:function(){return this.getAttribute(a);},set:function(v){if(v===null||v===undefined)this.removeAttribute(a);else this.setAttribute(a,''+v);},configurable:true,enumerable:true});
+            \\    Object.defineProperty(EP,p,{get:function(){var v=this.getAttribute(a);return(v===null||v==='')?null:v;},set:function(v){if(v===null||v===undefined)this.removeAttribute(a);else this.setAttribute(a,''+v);},configurable:true,enumerable:true});
             \\  })(prop,ariaAttrs[prop]);}
             \\})()
         ;
