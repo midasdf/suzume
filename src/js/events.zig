@@ -1272,6 +1272,12 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
             \\  function ToggleEvent(t,o){Event.call(this,t,o);o=o||{};this.oldState=o.oldState||'';this.newState=o.newState||'';}
             \\  ToggleEvent.prototype=Object.create(Event.prototype);ToggleEvent.prototype.constructor=ToggleEvent;
             \\  globalThis.ToggleEvent=ToggleEvent;
+            \\  function DeviceMotionEvent(t,o){Event.call(this,t,o);}
+            \\  DeviceMotionEvent.prototype=Object.create(Event.prototype);DeviceMotionEvent.prototype.constructor=DeviceMotionEvent;
+            \\  globalThis.DeviceMotionEvent=DeviceMotionEvent;
+            \\  function DeviceOrientationEvent(t,o){Event.call(this,t,o);}
+            \\  DeviceOrientationEvent.prototype=Object.create(Event.prototype);DeviceOrientationEvent.prototype.constructor=DeviceOrientationEvent;
+            \\  globalThis.DeviceOrientationEvent=DeviceOrientationEvent;
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, js, js.len, "<misc-events>", qjs.JS_EVAL_TYPE_GLOBAL);

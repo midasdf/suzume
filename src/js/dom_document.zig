@@ -1028,30 +1028,29 @@ pub fn documentCreateEvent(
             if (jsStringToSlice(c, a[0])) |s| {
                 defer qjs.JS_FreeCString(c, s.ptr);
                 const name = s.ptr[0..s.len];
-                if (std.ascii.eqlIgnoreCase(name, "customevent") or std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents")) iface = "Event"
+                // Legacy event interface aliases per DOM spec §5.1
+                if (std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents") or std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event"
                 else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "wheelevent")) iface = "WheelEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "compositionevent")) iface = "CompositionEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "inputevent")) iface = "InputEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "pointerevent")) iface = "PointerEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "errorevent")) iface = "ErrorEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "closeevent")) iface = "CloseEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "storageevent")) iface = "StorageEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "transitionevent")) iface = "TransitionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "animationevent")) iface = "AnimationEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "pagetransitionevent")) iface = "PageTransitionEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "dragevent") or std.ascii.eqlIgnoreCase(name, "dragevents")) iface = "DragEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event";
+                else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "devicemotionevent")) iface = "DeviceMotionEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "deviceorientationevent")) iface = "DeviceOrientationEvent"
+                else {
+                    // Non-legacy interface → NotSupportedError per DOM spec
+                    return throwDOMException(c, "NotSupportedError", "The provided event type is not supported.");
+                }
             }
         }
     }
@@ -1066,40 +1065,30 @@ pub fn documentCreateEvent(
         "(new UIEvent(''))"
     else if (std.mem.eql(u8, iface, "FocusEvent"))
         "(new FocusEvent(''))"
-    else if (std.mem.eql(u8, iface, "WheelEvent"))
-        "(new WheelEvent(''))"
     else if (std.mem.eql(u8, iface, "CompositionEvent"))
         "(new CompositionEvent(''))"
     else if (std.mem.eql(u8, iface, "MessageEvent"))
         "(new MessageEvent(''))"
-    else if (std.mem.eql(u8, iface, "InputEvent"))
-        "(new InputEvent(''))"
-    else if (std.mem.eql(u8, iface, "PointerEvent"))
-        "(new PointerEvent(''))"
     else if (std.mem.eql(u8, iface, "TouchEvent"))
         "(new TouchEvent(''))"
     else if (std.mem.eql(u8, iface, "HashChangeEvent"))
         "(new HashChangeEvent(''))"
     else if (std.mem.eql(u8, iface, "PopStateEvent"))
         "(new PopStateEvent(''))"
-    else if (std.mem.eql(u8, iface, "ErrorEvent"))
-        "(new ErrorEvent(''))"
     else if (std.mem.eql(u8, iface, "ProgressEvent"))
         "(new ProgressEvent(''))"
-    else if (std.mem.eql(u8, iface, "CloseEvent"))
-        "(new CloseEvent(''))"
     else if (std.mem.eql(u8, iface, "BeforeUnloadEvent"))
         "(new BeforeUnloadEvent(''))"
     else if (std.mem.eql(u8, iface, "StorageEvent"))
         "(new StorageEvent(''))"
-    else if (std.mem.eql(u8, iface, "TransitionEvent"))
-        "(new TransitionEvent(''))"
-    else if (std.mem.eql(u8, iface, "AnimationEvent"))
-        "(new AnimationEvent(''))"
     else if (std.mem.eql(u8, iface, "PageTransitionEvent"))
         "(new PageTransitionEvent(''))"
     else if (std.mem.eql(u8, iface, "DragEvent"))
         "(new DragEvent(''))"
+    else if (std.mem.eql(u8, iface, "DeviceMotionEvent"))
+        "(new DeviceMotionEvent(''))"
+    else if (std.mem.eql(u8, iface, "DeviceOrientationEvent"))
+        "(new DeviceOrientationEvent(''))"
     else
         "(new Event(''))";
     const event_obj = qjs.JS_Eval(c, js_code.ptr, js_code.len, "<createEvent>", qjs.JS_EVAL_TYPE_GLOBAL);
