@@ -437,6 +437,15 @@ pub fn elementQuerySelectorAll(
     if (quickjs.JS_IsException(arr)) return arr;
     var idx: u32 = 0;
     walkTreeCollect(c, node, s.ptr[0..s.len], arr, &idx);
+    // Set NodeList prototype for instanceof checks
+    const nl_js = "(function(a){if(typeof NodeList!=='undefined')Object.setPrototypeOf(a,NodeList.prototype);})";
+    const nl_fn = qjs.JS_Eval(c, nl_js, nl_js.len, "<nl>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(nl_fn)) {
+        var nl_args = [1]qjs.JSValue{arr};
+        const nl_r = qjs.JS_Call(c, nl_fn, quickjs.JS_UNDEFINED(), 1, &nl_args);
+        qjs.JS_FreeValue(c, nl_r);
+        qjs.JS_FreeValue(c, nl_fn);
+    }
     return arr;
 }
 
@@ -593,6 +602,15 @@ pub fn documentQuerySelectorAll(
     const doc_node = api.dom_doc.getDocumentNode() orelse return arr;
     var idx: u32 = 0;
     walkTreeCollect(c, doc_node, s.ptr[0..s.len], arr, &idx);
+    // Set NodeList prototype
+    const nl_js = "(function(a){if(typeof NodeList!=='undefined')Object.setPrototypeOf(a,NodeList.prototype);})";
+    const nl_fn = qjs.JS_Eval(c, nl_js, nl_js.len, "<nl>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(nl_fn)) {
+        var nl_args = [1]qjs.JSValue{arr};
+        const nl_r = qjs.JS_Call(c, nl_fn, quickjs.JS_UNDEFINED(), 1, &nl_args);
+        qjs.JS_FreeValue(c, nl_r);
+        qjs.JS_FreeValue(c, nl_fn);
+    }
     return arr;
 }
 
