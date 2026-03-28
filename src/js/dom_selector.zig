@@ -17,7 +17,6 @@ extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_
 pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     if (selector.len == 0) return false;
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
-    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
     const sel = std.mem.trim(u8, selector, " \t\r\n");
     if (sel.len == 0) return false;
@@ -29,11 +28,85 @@ pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) b
         if (ch == '(' or ch == '[') depth += 1
         else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
         else if (ch == ',' and depth == 0) {
-            if (matchSingleSimple(elem, std.mem.trim(u8, sel[start..i], " \t"))) return true;
+            if (matchSingleSelector(node, std.mem.trim(u8, sel[start..i], " \t"))) return true;
             start = i + 1;
         }
     }
-    return matchSingleSimple(elem, std.mem.trim(u8, sel[start..], " \t"));
+    return matchSingleSelector(node, std.mem.trim(u8, sel[start..], " \t"));
+}
+
+/// Match a single (non-comma-separated) selector with combinator support
+fn matchSingleSelector(node: *lxb.lxb_dom_node_t, sel: []const u8) bool {
+    if (sel.len == 0) return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    // Parse into parts with combinators
+    var parts: [16]SelectorPart = undefined;
+    const count = parseSelectorParts(sel, &parts);
+    if (count == 0) return false;
+
+    // Simple case: no combinators
+    if (count == 1) return matchSingleSimple(elem, parts[0].selector);
+
+    // Match right-to-left: last part must match current node
+    if (!matchSingleSimple(elem, parts[count - 1].selector)) return false;
+
+    // Walk backwards through parts, checking combinators
+    var cur_node: ?*lxb.lxb_dom_node_t = node;
+    var pi: usize = count - 1;
+    while (pi > 0) {
+        pi -= 1;
+        const part = parts[pi];
+        const combinator = parts[pi + 1].combinator;
+        switch (combinator) {
+            .descendant => {
+                // Any ancestor must match
+                var found = false;
+                var anc: ?*lxb.lxb_dom_node_t = if (cur_node) |cn| cn.parent else null;
+                while (anc) |a| {
+                    if (a.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                        if (matchSingleSimple(@ptrCast(a), part.selector)) {
+                            cur_node = a;
+                            found = true;
+                            break;
+                        }
+                    }
+                    anc = a.*.parent;
+                }
+                if (!found) return false;
+            },
+            .child => {
+                // Direct parent must match
+                const par: ?*lxb.lxb_dom_node_t = if (cur_node) |cn| cn.parent else null;
+                if (par == null) return false;
+                if (par.?.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+                if (!matchSingleSimple(@ptrCast(par.?), part.selector)) return false;
+                cur_node = par;
+            },
+            .adjacent_sibling => {
+                // Previous element sibling must match
+                const prev = prevElementSibling(cur_node orelse return false);
+                if (prev == null) return false;
+                if (!matchSingleSimple(@ptrCast(prev.?), part.selector)) return false;
+                cur_node = prev;
+            },
+            .general_sibling => {
+                // Any previous element sibling must match
+                var sib = prevElementSibling(cur_node orelse return false);
+                var found = false;
+                while (sib) |s| {
+                    if (matchSingleSimple(@ptrCast(s), part.selector)) {
+                        cur_node = s;
+                        found = true;
+                        break;
+                    }
+                    sib = prevElementSibling(s);
+                }
+                if (!found) return false;
+            },
+        }
+    }
+    return true;
 }
 
 pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
