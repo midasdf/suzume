@@ -3150,6 +3150,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    },
             \\  };
             \\  if(typeof Document!=='undefined')Object.setPrototypeOf(doc,Document.prototype);
+            \\  doc.implementation={
+            \\    createDocumentType:function(n,p,s){var dt=document.implementation.createDocumentType(n,p,s);dt.ownerDocument=doc;return dt;},
+            \\    createHTMLDocument:function(t){return document.implementation.createHTMLDocument(t);},
+            \\    createDocument:function(ns,qn,dt){return document.implementation.createDocument(ns,qn,dt);},
+            \\    hasFeature:function(){return true;}
+            \\  };
             \\  return doc;
             \\})
         ;
