@@ -100,6 +100,10 @@ pub fn elementGetTextContent(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
+    // DOM spec: textContent is null for Document and DocumentType nodes
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT or
+        node.type == @as(u32, 10)) // LXB_DOM_NODE_TYPE_DOCUMENT_TYPE
+        return quickjs.JS_NULL();
     var len: usize = 0;
     const ptr = lxb_dom_node_text_content(node, &len);
     if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
@@ -116,9 +120,12 @@ pub fn elementSetTextContent(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    // DOM spec: setting textContent to null/undefined is treated as empty string
+    // DOM spec: setting textContent to null/undefined removes all children
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
-        _ = lxb_dom_node_text_content_set(node, "", 0);
+        // Remove all child nodes (don't create empty text node)
+        while (node.first_child) |child| {
+            lxb_dom_node_remove(child);
+        }
         events.recordMutation(node, "childList", null, null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
