@@ -2880,6 +2880,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  pi.lookupPrefix = function() { return null; };
             \\  pi.lookupNamespaceURI = function() { return null; };
             \\  pi.isDefaultNamespace = function() { return false; };
+            \\  pi.remove = function() { if(this.parentNode) this.parentNode.removeChild(this); };
+            \\  pi.before = function() {};
+            \\  pi.after = function() {};
+            \\  pi.replaceWith = function() {};
+            \\  pi.contains = function() { return false; };
+            \\  pi.hasChildNodes = function() { return false; };
+            \\  pi.compareDocumentPosition = function() { return 0; };
+            \\  pi.getRootNode = function() { return this.parentNode ? this.parentNode.getRootNode() : this; };
+            \\  if(typeof ProcessingInstruction!=='undefined')Object.setPrototypeOf(pi,ProcessingInstruction.prototype);
             \\  return pi;
             \\})
         ;
