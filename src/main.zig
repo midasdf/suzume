@@ -650,6 +650,9 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
         return;
     };
 
+    // Set current URL BEFORE registerDomApis so document.URL is correct
+    dom_api.setCurrentUrl(base_url);
+
     // Register DOM APIs
     dom_api.registerDomApis(js_rt.rt, js_rt.ctx, @ptrCast(@alignCast(doc.html_doc)));
 
@@ -665,9 +668,6 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
 
     // Inject click/dispatchEvent/addEventListener into Element prototype
     events.injectElementEventMethods(js_rt.ctx, dom_api.element_class_id);
-
-    // Set current URL for location object and cookie domain
-    dom_api.setCurrentUrl(base_url);
 
     // Set JsRuntime and Loader for dynamic script execution
     dom_api.setJsRuntime(&js_rt);
