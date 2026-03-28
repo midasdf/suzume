@@ -670,6 +670,7 @@ pub fn documentGetElementsByClassName(
     const doc_node = getDocumentNode() orelse return arr;
     var idx: u32 = 0;
     api.dom_sel.walkTreeCollect(c, doc_node, selector_buf[0 .. 1 + class_name.len], arr, &idx);
+    wrapAsHTMLCollection(c, arr);
     return arr;
 }
 
@@ -690,7 +691,22 @@ pub fn documentGetElementsByTagName(
     const doc_node = getDocumentNode() orelse return arr;
     var idx: u32 = 0;
     api.dom_sel.walkTreeCollect(c, doc_node, s.ptr[0..s.len], arr, &idx);
+    // Set HTMLCollection prototype for instanceof checks
+    wrapAsHTMLCollection(c, arr);
     return arr;
+}
+
+fn wrapAsHTMLCollection(c: *qjs.JSContext, arr: qjs.JSValue) void {
+    const js =
+        \\(function(a){if(typeof HTMLCollection!=='undefined')Object.setPrototypeOf(a,HTMLCollection.prototype);})
+    ;
+    const fn_val = qjs.JS_Eval(c, js, js.len, "<htmlcol>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        var args = [1]qjs.JSValue{arr};
+        const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+        qjs.JS_FreeValue(c, r);
+        qjs.JS_FreeValue(c, fn_val);
+    }
 }
 
 pub fn documentGetElementsByName(
