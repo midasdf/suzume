@@ -18,6 +18,7 @@ extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?
 extern fn lxb_dom_element_next_attribute_noi(attr: *anyopaque) ?*anyopaque;
 extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
 extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
+extern fn lxb_dom_element_set_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value: [*]const u8, val_len: usize) ?*anyopaque;
 extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
@@ -467,36 +468,70 @@ pub fn elementCloneNode(
         return api.wrapNode(c, new_comment);
     }
 
-    // Element nodes: clone by serializing and re-parsing
+    // Element nodes: clone via createElement + attribute copy
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return quickjs.JS_NULL();
-
-    var stack_buf: [8192]u8 = undefined;
-    var accum = api.serialize.SerializeAccum.init(&stack_buf);
-    defer accum.deinit();
-
-    if (deep) {
-        _ = lxb_html_serialize_tree_cb(node, &api.serialize.serializeCallback, @ptrCast(&accum));
-    } else {
-        _ = lxb_html_serialize_cb(node, &api.serialize.serializeCallback, @ptrCast(&accum));
-    }
-
-    const html = accum.result();
-    if (html.len == 0) return quickjs.JS_NULL();
-
     const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
-    // Use a <template> element as context for parse_fragment to avoid
-    // HTML5 parser special handling of body/form/caption/col/colgroup etc.
-    const template_elem = lxb_dom_document_create_element(doc, "template", 8, null) orelse return quickjs.JS_NULL();
-    const frag = lxb_html_document_parse_fragment(doc, template_elem, html.ptr, html.len) orelse return quickjs.JS_NULL();
+    const src_elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
-    // Get the first child from fragment (the cloned element)
-    if (frag.first_child) |cloned| {
-        lxb_dom_node_remove(cloned);
-        _ = lxb_dom_node_destroy(frag);
-        return api.wrapNode(c, cloned);
+    // Get tag name
+    var tag_len: usize = 0;
+    const tag_ptr = lxb_dom_element_local_name(src_elem, &tag_len);
+    if (tag_ptr == null) return quickjs.JS_NULL();
+
+    // Create new element with same tag
+    const new_elem = lxb_dom_document_create_element(doc, tag_ptr.?, tag_len, null) orelse return quickjs.JS_NULL();
+    const new_node: *lxb.lxb_dom_node_t = @ptrCast(new_elem);
+
+    // Copy all attributes
+    var attr: ?*anyopaque = lxb_dom_element_first_attribute_noi(src_elem);
+    while (attr) |a| {
+        var an_len: usize = 0;
+        const an = lxb_dom_attr_qualified_name(a, &an_len);
+        var av_len: usize = 0;
+        const av = lxb_dom_attr_value_noi(a, &av_len);
+        if (an) |name| {
+            _ = lxb_dom_element_set_attribute(new_elem, name, an_len, if (av) |v| v else "", if (av != null) av_len else 0);
+        }
+        attr = lxb_dom_element_next_attribute_noi(a);
     }
-    _ = lxb_dom_node_destroy(frag);
-    return quickjs.JS_NULL();
+
+    // Deep clone: recursively clone all children
+    if (deep) {
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            const child_js = api.wrapNode(c, ch);
+            // Recursively call cloneNode on child
+            const clone_fn = qjs.JS_GetPropertyStr(c, child_js, "cloneNode");
+            if (qjs.JS_IsFunction(c, clone_fn)) {
+                var clone_args = [1]qjs.JSValue{quickjs.JS_NewBool(true)};
+                const cloned_child = qjs.JS_Call(c, clone_fn, child_js, 1, &clone_args);
+                // Append cloned child to new element
+                if (api.getNode(c, cloned_child)) |cloned_node| {
+                    lxb_dom_node_insert_child(new_node, cloned_node);
+                }
+                qjs.JS_FreeValue(c, cloned_child);
+            }
+            qjs.JS_FreeValue(c, clone_fn);
+            qjs.JS_FreeValue(c, child_js);
+            child = ch.next;
+        }
+    }
+
+    const result = api.wrapNode(c, new_node);
+    // Preserve namespace-related JS properties from source
+    const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
+    if (!quickjs.JS_IsUndefined(ns_val)) {
+        _ = qjs.JS_SetPropertyStr(c, result, "namespaceURI", ns_val);
+    } else {
+        qjs.JS_FreeValue(c, ns_val);
+    }
+    const prefix_val = qjs.JS_GetPropertyStr(c, this_val, "prefix");
+    if (!quickjs.JS_IsNull(prefix_val) and !quickjs.JS_IsUndefined(prefix_val)) {
+        _ = qjs.JS_SetPropertyStr(c, result, "prefix", prefix_val);
+    } else {
+        qjs.JS_FreeValue(c, prefix_val);
+    }
+    return result;
 }
 
 pub fn elementReplaceWith(
