@@ -51,9 +51,12 @@ pub fn elementGetTagName(
     if (name_ptr == null or len == 0) return quickjs.JS_NULL();
 
     // Check namespace: only uppercase for HTML namespace elements
+    // null namespace = NOT HTML; undefined = HTML (default for createElement in HTML doc)
     const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
     var is_html = true;
-    if (!quickjs.JS_IsNull(ns_val) and !quickjs.JS_IsUndefined(ns_val)) {
+    if (quickjs.JS_IsNull(ns_val)) {
+        is_html = false; // null namespace = not HTML
+    } else if (!quickjs.JS_IsUndefined(ns_val)) {
         if (api.jsStringToSlice(c, ns_val)) |ns_s| {
             defer qjs.JS_FreeCString(c, ns_s.ptr);
             if (!std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml")) is_html = false;
