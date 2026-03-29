@@ -398,6 +398,10 @@ pub fn elementReplaceChild(
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
     if (old_node.parent != parent)
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
+    // DOM spec: if new_node is the same as old_node, this is a no-op
+    if (new_node == old_node) {
+        return qjs.JS_DupValue(c, args[1]);
+    }
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
