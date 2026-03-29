@@ -723,6 +723,19 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":not(") and selector[selector.len - 1] == ')') {
         return !elementMatchesSelector(node, selector[5 .. selector.len - 1]);
     }
+    // :has(inner) — matches if any descendant matches inner selector
+    if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":has(") and selector[selector.len - 1] == ')') {
+        const inner = selector[5 .. selector.len - 1];
+        // Check descendants for a match
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(ch, inner)) return true;
+            // Also check descendants recursively
+            if (walkTreeBySelector(ch, inner) != null) return true;
+            child = ch.next;
+        }
+        return false;
+    }
     // :is(inner) / :where(inner) — OR match
     if (selector.len > 4 and std.ascii.eqlIgnoreCase(selector[0..4], ":is(") and selector[selector.len - 1] == ')') {
         return elementMatchesSelector(node, selector[4 .. selector.len - 1]);
