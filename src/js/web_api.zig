@@ -1810,7 +1810,8 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  m=q.match(/\(min-width:\s*(\d+)px\)/);if(m)matches=(w>=parseInt(m[1]));
         \\  m=q.match(/\(max-height:\s*(\d+)px\)/);if(m)matches=(innerHeight<=parseInt(m[1]));
         \\  m=q.match(/\(min-height:\s*(\d+)px\)/);if(m)matches=(innerHeight>=parseInt(m[1]));
-        \\  if(q==='(prefers-color-scheme:dark)'||q==='(prefers-color-scheme: dark)')matches=true;
+        \\  if(q==='(prefers-color-scheme:dark)'||q==='(prefers-color-scheme: dark)')matches=false;
+        \\  if(q==='(prefers-color-scheme:light)'||q==='(prefers-color-scheme: light)')matches=true;
         \\  if(q==='not all')matches=false;
         \\  if(q.indexOf('prefers-reduced-motion')>=0)matches=false;
         \\  if(q.indexOf('pointer: fine')>=0||q.indexOf('pointer:fine')>=0)matches=true;
