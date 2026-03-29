@@ -2238,6 +2238,32 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof NodeFilter==='undefined'){
         \\  globalThis.NodeFilter={SHOW_ALL:0xFFFFFFFF,SHOW_ELEMENT:0x1,SHOW_ATTRIBUTE:0x2,SHOW_TEXT:0x4,SHOW_CDATA_SECTION:0x8,SHOW_ENTITY_REFERENCE:0x10,SHOW_ENTITY:0x20,SHOW_PROCESSING_INSTRUCTION:0x40,SHOW_COMMENT:0x80,SHOW_DOCUMENT:0x100,SHOW_DOCUMENT_TYPE:0x200,SHOW_DOCUMENT_FRAGMENT:0x400,SHOW_NOTATION:0x800,FILTER_ACCEPT:1,FILTER_REJECT:2,FILTER_SKIP:3};
         \\}
+        \\if(typeof Request==='undefined'){
+        \\  globalThis.Request=function(input,init){
+        \\    if(input instanceof Request){this.url=input.url;this.method=input.method;this.headers=new Headers(input.headers);}
+        \\    else{this.url=String(input);this.method='GET';this.headers=new Headers();}
+        \\    if(init){if(init.method)this.method=init.method;if(init.headers)this.headers=new Headers(init.headers);this.body=init.body||null;this.mode=init.mode||'cors';this.credentials=init.credentials||'same-origin';this.redirect=init.redirect||'follow';this.signal=init.signal||null;}
+        \\    else{this.body=null;this.mode='cors';this.credentials='same-origin';this.redirect='follow';this.signal=null;}
+        \\    this.referrer='about:client';this.cache='default';
+        \\  };
+        \\  Request.prototype.clone=function(){return new Request(this);};
+        \\  Request.prototype.text=function(){return Promise.resolve(this.body?String(this.body):'');};
+        \\  Request.prototype.json=function(){return this.text().then(JSON.parse);};
+        \\}
+        \\if(typeof File==='undefined'){
+        \\  globalThis.File=function(parts,name,opts){
+        \\    Blob.call(this,parts,opts);this.name=name;this.lastModified=(opts&&opts.lastModified)||Date.now();
+        \\  };
+        \\  File.prototype=Object.create(Blob.prototype);File.prototype.constructor=File;
+        \\}
+        \\if(typeof FileReader==='undefined'){
+        \\  globalThis.FileReader=function(){this.readyState=0;this.result=null;this.error=null;this.onload=null;this.onerror=null;this.onloadend=null;};
+        \\  FileReader.EMPTY=0;FileReader.LOADING=1;FileReader.DONE=2;
+        \\  FileReader.prototype.readAsText=function(blob){var self=this;self.readyState=1;blob.text().then(function(t){self.result=t;self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
+        \\  FileReader.prototype.readAsArrayBuffer=function(blob){var self=this;self.readyState=1;blob.arrayBuffer().then(function(b){self.result=b;self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
+        \\  FileReader.prototype.readAsDataURL=function(blob){var self=this;self.readyState=1;blob.text().then(function(t){self.result='data:'+(blob.type||'')+';base64,'+btoa(t);self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
+        \\  FileReader.prototype.abort=function(){this.readyState=2;if(this.onerror)this.onerror({target:this});};
+        \\}
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
