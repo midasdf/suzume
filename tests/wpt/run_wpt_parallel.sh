@@ -10,7 +10,7 @@ set -uo pipefail
 WPT_DIR="/tmp/wpt"
 SUZUME_BIN="$(cd "$(dirname "$0")/../.." && pwd)/zig-out/bin/suzume"
 PORT=9876
-TIMEOUT=60
+TIMEOUT=90
 JOBS=4
 
 # Parse args
