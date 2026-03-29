@@ -812,12 +812,19 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             }
 
             if (!painted) {
-                // Draw placeholder rectangle
-                const border_color = Surface.argbToColour(0xFF585b70); // Overlay2
-                surface.fillRect(dst_x, screen_y, @intCast(dst_w), 1, border_color);
-                surface.fillRect(dst_x, screen_y + @as(i32, @intCast(dst_h)) - 1, @intCast(dst_w), 1, border_color);
-                surface.fillRect(dst_x, screen_y, 1, @intCast(dst_h), border_color);
-                surface.fillRect(dst_x + @as(i32, @intCast(dst_w)) - 1, screen_y, 1, @intCast(dst_h), border_color);
+                // Only draw placeholder if image has alt text (user explicitly wants to know it's broken)
+                // Skip placeholder for decorative/layout images (no alt or empty alt)
+                const has_alt = if (box.dom_node) |node| blk: {
+                    const alt = node.getAttribute("alt");
+                    break :blk alt != null and alt.?.len > 0;
+                } else false;
+                if (has_alt and dst_w > 2 and dst_h > 2) {
+                    const border_color = Surface.argbToColour(0xFFd0d0d0); // Light gray
+                    surface.fillRect(dst_x, screen_y, @intCast(dst_w), 1, border_color);
+                    surface.fillRect(dst_x, screen_y + @as(i32, @intCast(dst_h)) - 1, @intCast(dst_w), 1, border_color);
+                    surface.fillRect(dst_x, screen_y, 1, @intCast(dst_h), border_color);
+                    surface.fillRect(dst_x + @as(i32, @intCast(dst_w)) - 1, screen_y, 1, @intCast(dst_h), border_color);
+                }
 
                 // Draw alt text or "[image]" in center
                 const alt_text = if (box.dom_node) |node| (node.getAttribute("alt") orelse "[image]") else "[image]";
