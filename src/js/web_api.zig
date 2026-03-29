@@ -2238,6 +2238,20 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof NodeFilter==='undefined'){
         \\  globalThis.NodeFilter={SHOW_ALL:0xFFFFFFFF,SHOW_ELEMENT:0x1,SHOW_ATTRIBUTE:0x2,SHOW_TEXT:0x4,SHOW_CDATA_SECTION:0x8,SHOW_ENTITY_REFERENCE:0x10,SHOW_ENTITY:0x20,SHOW_PROCESSING_INSTRUCTION:0x40,SHOW_COMMENT:0x80,SHOW_DOCUMENT:0x100,SHOW_DOCUMENT_TYPE:0x200,SHOW_DOCUMENT_FRAGMENT:0x400,SHOW_NOTATION:0x800,FILTER_ACCEPT:1,FILTER_REJECT:2,FILTER_SKIP:3};
         \\}
+        \\if(typeof MessageChannel==='undefined'){
+        \\  globalThis.MessagePort=function(){this.onmessage=null;this.onmessageerror=null;this._other=null;};
+        \\  MessagePort.prototype.postMessage=function(msg){var self=this;if(self._other&&self._other.onmessage)queueMicrotask(function(){self._other.onmessage(new MessageEvent('message',{data:msg}));});};
+        \\  MessagePort.prototype.start=function(){};MessagePort.prototype.close=function(){this._other=null;};
+        \\  MessagePort.prototype.addEventListener=function(t,f){if(t==='message')this.onmessage=f;};
+        \\  MessagePort.prototype.removeEventListener=function(){};
+        \\  globalThis.MessageChannel=function(){this.port1=new MessagePort();this.port2=new MessagePort();this.port1._other=this.port2;this.port2._other=this.port1;};
+        \\}
+        \\if(typeof ProgressEvent==='undefined'){
+        \\  globalThis.ProgressEvent=function(type,init){
+        \\    var e=new Event(type,init);Object.setPrototypeOf(e,ProgressEvent.prototype);
+        \\    e.lengthComputable=!!(init&&init.lengthComputable);e.loaded=Number((init&&init.loaded)||0);e.total=Number((init&&init.total)||0);return e;
+        \\  };ProgressEvent.prototype=Object.create(Event.prototype);ProgressEvent.prototype.constructor=ProgressEvent;
+        \\}
         \\if(typeof Request==='undefined'){
         \\  globalThis.Request=function(input,init){
         \\    if(input instanceof Request){this.url=input.url;this.method=input.method;this.headers=new Headers(input.headers);}
