@@ -1515,6 +1515,12 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- performance object --
     const perf_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "now", qjs.JS_NewCFunction(ctx, &jsPerformanceNow, "now", 0));
+    // performance.timeOrigin (ms since epoch)
+    {
+        const to_js = "(function(){return Date.now();})()";
+        _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "timeOrigin", qjs.JS_Eval(ctx, to_js, to_js.len, "<timeOrigin>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+    _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "getEntries", qjs.JS_NewCFunction(ctx, &jsReturnEmptyArray, "getEntries", 0));
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "mark", qjs.JS_NewCFunction(ctx, &jsNoOp, "mark", 1));
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "measure", qjs.JS_NewCFunction(ctx, &jsNoOp, "measure", 1));
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "clearMarks", qjs.JS_NewCFunction(ctx, &jsNoOp, "clearMarks", 0));
@@ -1534,6 +1540,12 @@ pub fn registerWebApis(js_rt: anytype) void {
         _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "navigation", qjs.JS_Eval(ctx, nav_js, nav_js.len, "<perf-nav>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "performance", perf_obj);
+
+    // -- reportError (spec: throw the error to window.onerror) --
+    {
+        const re_js = "(function(e){if(typeof console!=='undefined')console.error(e);})";
+        _ = qjs.JS_SetPropertyStr(ctx, global, "reportError", qjs.JS_Eval(ctx, re_js, re_js.len, "<reportError>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
 
     // -- fetch() (native implementation) --
     _ = qjs.JS_SetPropertyStr(ctx, global, "fetch", qjs.JS_NewCFunction(ctx, &jsFetch, "fetch", 2));

@@ -3578,12 +3578,32 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, pageYOffsetAtom);
     }
 
-    // navigator object (minimal)
+    // navigator object
     const nav_obj = qjs.JS_NewObject(ctx);
     const nav_ua = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
     _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "userAgent", qjs.JS_NewStringLen(ctx, nav_ua, nav_ua.len));
-    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "language", qjs.JS_NewStringLen(ctx, "en", 2));
-    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "platform", qjs.JS_NewStringLen(ctx, "Linux", 5));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "language", qjs.JS_NewStringLen(ctx, "ja", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "platform", qjs.JS_NewStringLen(ctx, "Linux x86_64", 12));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "vendor", qjs.JS_NewString(ctx, ""));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "appName", qjs.JS_NewString(ctx, "Netscape"));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "appVersion", qjs.JS_NewString(ctx, "5.0 (Linux)"));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "product", qjs.JS_NewString(ctx, "Gecko"));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "onLine", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "cookieEnabled", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "maxTouchPoints", qjs.JS_NewInt32(ctx, 0));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "hardwareConcurrency", qjs.JS_NewInt32(ctx, 4));
+    _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "deviceMemory", qjs.JS_NewInt32(ctx, 4));
+    {
+        const langs = qjs.JS_NewArray(ctx);
+        _ = qjs.JS_SetPropertyUint32(ctx, langs, 0, qjs.JS_NewString(ctx, "ja"));
+        _ = qjs.JS_SetPropertyUint32(ctx, langs, 1, qjs.JS_NewString(ctx, "en"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "languages", langs);
+    }
+    {
+        const geo = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, geo, "getCurrentPosition", qjs.JS_NewCFunction(ctx, &dom_doc.jsNoOpConstructor, "getCurrentPosition", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, nav_obj, "geolocation", geo);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "navigator", nav_obj);
 
     // HTML spec: window, self, globalThis all refer to the global object
