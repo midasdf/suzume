@@ -3311,7 +3311,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    removeChild: function(n) { return d.removeChild(n); },
             \\    importNode: function(n, deep) { return n.cloneNode(deep); },
             \\    adoptNode: function(n) { return n; },
-            \\    title: title || '',
+            \\    get title(){var t=head.querySelector('title');if(!t)return'';var s=t.textContent;return s.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');},set title(v){var t=head.querySelector('title');if(!t){t=document.createElement('title');head.appendChild(t);}t.textContent=String(v);},
             \\    implementation: document.implementation,
             \\    addEventListener: function(t,f,o) { d.addEventListener(t,f,o); },
             \\    removeEventListener: function(t,f,o) { d.removeEventListener(t,f,o); },

@@ -911,7 +911,21 @@ pub fn documentGetTitle(
     var len: usize = 0;
     const ptr = lxb_dom_node_text_content(title_node, &len);
     if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
-    return qjs.JS_NewStringLen(c, ptr.?, len);
+    // HTML spec: strip and collapse whitespace
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+    var in_space = true; // trim leading
+    for (ptr.?[0..len]) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0C) {
+            if (!in_space and pos < buf.len) { buf[pos] = ' '; pos += 1; in_space = true; }
+        } else {
+            if (pos < buf.len) { buf[pos] = ch; pos += 1; }
+            in_space = false;
+        }
+    }
+    // trim trailing space
+    if (pos > 0 and buf[pos - 1] == ' ') pos -= 1;
+    return qjs.JS_NewStringLen(c, &buf, pos);
 }
 
 pub fn documentSetTitle(
