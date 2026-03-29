@@ -2238,6 +2238,18 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof NodeFilter==='undefined'){
         \\  globalThis.NodeFilter={SHOW_ALL:0xFFFFFFFF,SHOW_ELEMENT:0x1,SHOW_ATTRIBUTE:0x2,SHOW_TEXT:0x4,SHOW_CDATA_SECTION:0x8,SHOW_ENTITY_REFERENCE:0x10,SHOW_ENTITY:0x20,SHOW_PROCESSING_INSTRUCTION:0x40,SHOW_COMMENT:0x80,SHOW_DOCUMENT:0x100,SHOW_DOCUMENT_TYPE:0x200,SHOW_DOCUMENT_FRAGMENT:0x400,SHOW_NOTATION:0x800,FILTER_ACCEPT:1,FILTER_REJECT:2,FILTER_SKIP:3};
         \\}
+        \\if(typeof BroadcastChannel==='undefined'){
+        \\  globalThis.BroadcastChannel=function(name){this.name=name;this.onmessage=null;};
+        \\  BroadcastChannel.prototype.postMessage=function(){};BroadcastChannel.prototype.close=function(){};
+        \\  BroadcastChannel.prototype.addEventListener=function(t,f){if(t==='message')this.onmessage=f;};
+        \\  BroadcastChannel.prototype.removeEventListener=function(){};
+        \\}
+        \\if(typeof PerformanceObserver==='undefined'){
+        \\  globalThis.PerformanceObserver=function(cb){this._cb=cb;};
+        \\  PerformanceObserver.prototype.observe=function(){};PerformanceObserver.prototype.disconnect=function(){};
+        \\  PerformanceObserver.prototype.takeRecords=function(){return[];};
+        \\  PerformanceObserver.supportedEntryTypes=[];
+        \\}
         \\if(typeof ReadableStream==='undefined'){
         \\  globalThis.ReadableStream=function(src,strategy){this._src=src;this._queue=[];this._closed=false;this._controller={enqueue:function(chunk){this._rs._queue.push(chunk);}.bind({_rs:this}),close:function(){this._rs._closed=true;}.bind({_rs:this}),error:function(){}};if(src&&src.start)src.start(this._controller);};
         \\  ReadableStream.prototype.getReader=function(){var rs=this;return{read:function(){if(rs._queue.length>0)return Promise.resolve({value:rs._queue.shift(),done:false});if(rs._closed)return Promise.resolve({value:undefined,done:true});return new Promise(function(resolve){var check=function(){if(rs._queue.length>0)resolve({value:rs._queue.shift(),done:false});else if(rs._closed)resolve({value:undefined,done:true});else setTimeout(check,10);};check();});},releaseLock:function(){},cancel:function(){rs._closed=true;return Promise.resolve();}};};
