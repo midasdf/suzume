@@ -463,10 +463,11 @@ pub fn documentCreateTreeWalker(
         \\      return null;
         \\    },
         \\    parentNode: function() {
-        \\      var node = this.currentNode.parentNode;
+        \\      var node = this.currentNode;
         \\      while (node && node !== this.root) {
-        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
         \\        node = node.parentNode;
+        \\        if (!node || node === this.root) return null;
+        \\        if (this._accepts(node)) { this.currentNode = node; return node; }
         \\      }
         \\      return null;
         \\    },
