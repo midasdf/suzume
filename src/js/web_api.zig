@@ -1521,6 +1521,18 @@ pub fn registerWebApis(js_rt: anytype) void {
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "clearMeasures", qjs.JS_NewCFunction(ctx, &jsNoOp, "clearMeasures", 0));
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "getEntriesByName", qjs.JS_NewCFunction(ctx, &jsReturnEmptyArray, "getEntriesByName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "getEntriesByType", qjs.JS_NewCFunction(ctx, &jsReturnEmptyArray, "getEntriesByType", 1));
+    // performance.timing (Navigation Timing API — legacy but widely used)
+    {
+        const timing_js =
+            \\(function(){var n=Date.now();return{navigationStart:n,unloadEventStart:0,unloadEventEnd:0,redirectStart:0,redirectEnd:0,fetchStart:n,domainLookupStart:n,domainLookupEnd:n,connectStart:n,connectEnd:n,secureConnectionStart:0,requestStart:n,responseStart:n,responseEnd:n,domLoading:n,domInteractive:n,domContentLoadedEventStart:n,domContentLoadedEventEnd:n,domComplete:n,loadEventStart:n,loadEventEnd:n};})()
+        ;
+        _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "timing", qjs.JS_Eval(ctx, timing_js, timing_js.len, "<perf-timing>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+    // performance.navigation
+    {
+        const nav_js = "(function(){return{type:0,redirectCount:0};})()";
+        _ = qjs.JS_SetPropertyStr(ctx, perf_obj, "navigation", qjs.JS_Eval(ctx, nav_js, nav_js.len, "<perf-nav>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "performance", perf_obj);
 
     // -- fetch() (native implementation) --
