@@ -551,9 +551,11 @@ pub fn documentCreateNodeIterator(
         \\  Object.defineProperty(ni,'filter',{value:ni.filter,writable:false,enumerable:true});
         \\  ni.detach = function(){};
         \\  ni[Symbol.toStringTag] = 'NodeIterator';
-        \\  var origNext = ni.nextNode;
-        \\  ni.nextNode = function(){var n=origNext.call(this);if(n){_ref=n;_before=false;}return n;};
-        \\  var origPrev = ni.previousNode;
+        \\  var origNext = ni.nextNode, origPrev = ni.previousNode, _started = false;
+        \\  ni.nextNode = function(){
+        \\    if(!_started){_started=true;var r=ni._check?ni._check(_ref):1;if(r===1){_before=false;return _ref;}}
+        \\    var n=origNext.call(this);if(n){_ref=n;_before=false;}return n;
+        \\  };
         \\  ni.previousNode = function(){var n=origPrev.call(this);if(n){_ref=n;_before=true;}return n;};
         \\})
     ;
