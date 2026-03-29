@@ -618,7 +618,8 @@ pub fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb
     if (part_count == 0) return null;
     const parts = parts_buf[0..part_count];
 
-    var current: ?*lxb.lxb_dom_node_t = node;
+    // Start from first child, not root itself (querySelectorAll returns descendants only)
+    var current: ?*lxb.lxb_dom_node_t = node.first_child;
     while (current) |n| {
         if (nodeMatchesCompound(n, parts)) return n;
         current = nextDfsNode(n, node);
@@ -970,7 +971,8 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
     if (part_count == 0) return;
     const parts = parts_buf[0..part_count];
 
-    var current: ?*lxb.lxb_dom_node_t = root;
+    // Start from first child, not root (querySelectorAll returns descendants only)
+    var current: ?*lxb.lxb_dom_node_t = root.first_child;
     while (current) |node| {
         if (nodeMatchesCompound(node, parts)) {
             _ = qjs.JS_SetPropertyUint32(ctx, arr, idx.*, api.wrapNode(ctx, node));
