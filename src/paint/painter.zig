@@ -826,7 +826,8 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     surface.fillRect(dst_x + @as(i32, @intCast(dst_w)) - 1, screen_y, 1, @intCast(dst_h), border_color);
                 }
 
-                // Draw alt text or "[image]" in center
+                // Draw alt text only for small placeholders with alt text
+                if (!has_alt or dst_w > 300 or dst_h > 200) return;
                 const alt_text = if (box.dom_node) |node| (node.getAttribute("alt") orelse "[image]") else "[image]";
                 const tr = fonts.getRenderer(12) orelse return;
                 const m = tr.measure(alt_text);
