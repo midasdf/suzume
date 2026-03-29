@@ -452,14 +452,23 @@ pub fn classListRemove(
     const current = cur.?[0..cur_len];
     const remove_str = cls_to_remove.ptr[0..cls_to_remove.len];
 
-    // Rebuild class string without the removed class (using ASCII whitespace split)
+    // Rebuild class string without the removed class, also dedup (unique token set)
     var buf: [1024]u8 = undefined;
     var pos: usize = 0;
+    var seen_buf: [64][]const u8 = undefined;
+    var seen_count: usize = 0;
     var iter = std.mem.tokenizeAny(u8, current, " \t\n\r\x0c");
     var first = true;
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
         if (std.mem.eql(u8, cls, remove_str)) continue;
+        // Dedup: skip if already seen
+        var dup = false;
+        for (seen_buf[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+        }
+        if (dup) continue;
+        if (seen_count < seen_buf.len) { seen_buf[seen_count] = cls; seen_count += 1; }
         if (!first and pos < buf.len) {
             buf[pos] = ' ';
             pos += 1;
