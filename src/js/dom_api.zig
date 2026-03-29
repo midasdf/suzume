@@ -116,7 +116,7 @@ pub fn setDomDirty() void {
 }
 
 /// Check if an element is connected to the document (has an ancestor chain reaching the document node).
-fn isElementConnected(elem: *lxb.lxb_dom_element_t) bool {
+pub fn isElementConnected(elem: *lxb.lxb_dom_element_t) bool {
     var current: ?*lxb.lxb_dom_node_t = @as(*lxb.lxb_dom_node_t, @ptrCast(elem)).parent;
     while (current) |n| {
         if (n.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) return true;

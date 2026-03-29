@@ -165,8 +165,10 @@ pub fn elementSetAttribute(
     defer qjs.JS_FreeCString(c, val.ptr);
     _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
-    setDomDirty();
+    if (api.isElementConnected(elem)) {
+        events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
+        setDomDirty();
+    }
     return quickjs.JS_UNDEFINED();
 }
 
