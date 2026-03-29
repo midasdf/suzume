@@ -818,8 +818,8 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     const alt = node.getAttribute("alt");
                     break :blk alt != null and alt.?.len > 0;
                 } else false;
-                if (has_alt and dst_w > 2 and dst_h > 2) {
-                    const border_color = Surface.argbToColour(0xFFd0d0d0); // Light gray
+                if (has_alt and dst_w > 4 and dst_h > 4 and dst_w <= 300 and dst_h <= 200) {
+                    const border_color = Surface.argbToColour(0xFFe0e0e0); // Light gray
                     surface.fillRect(dst_x, screen_y, @intCast(dst_w), 1, border_color);
                     surface.fillRect(dst_x, screen_y + @as(i32, @intCast(dst_h)) - 1, @intCast(dst_w), 1, border_color);
                     surface.fillRect(dst_x, screen_y, 1, @intCast(dst_h), border_color);

@@ -13,9 +13,10 @@ fn resolveAlignment(child: *const Box, container_align: AlignItems) AlignItems {
 
 /// Lay out a flex container and its children.
 /// The flex container box should have display: flex.
+const dom_api = @import("../js/dom_api.zig");
+
 pub fn layoutFlex(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontCache) void {
     const style = box.style;
-
     // Content position
     const content_x = box.padding.left + box.border.left;
     box.content.x = content_x;
@@ -51,7 +52,8 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
     if (children.len == 0) {
         box.content.height = switch (style.height) {
             .px => |h| h,
-            .percent, .auto, .none, .min_content, .max_content, .fit_content => 0,
+            .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+            .auto, .none, .min_content, .max_content, .fit_content => 0,
         };
         return;
     }
@@ -246,10 +248,11 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         flex_idx += 1;
     }
 
-    // Container cross size
+    // Container cross size (resolve % against viewport)
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
+        .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+        .auto, .none, .min_content, .max_content, .fit_content => null,
     };
     const container_cross = explicit_h orelse max_cross;
 
@@ -758,7 +761,8 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     if (children.len == 0) {
         box.content.height = switch (style.height) {
             .px => |h| h,
-            .percent, .auto, .none, .min_content, .max_content, .fit_content => 0,
+            .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
+            .auto, .none, .min_content, .max_content, .fit_content => 0,
         };
         return;
     }
