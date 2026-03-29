@@ -1838,10 +1838,42 @@ fn jsMutationObserverDisconnect(
 
 fn jsMutationObserverTakeRecords(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewArray(c);
+    const arr = qjs.JS_NewArray(c);
+    // Find the observer matching this_val and drain pending records
+    const obs_id_val = qjs.JS_GetPropertyStr(c, this_val, "_idx");
+    defer qjs.JS_FreeValue(c, obs_id_val);
+    const obs_id = if (obs_id_val.tag == qjs.JS_TAG_INT) @as(usize, @intCast(qjs.JS_VALUE_GET_INT(obs_id_val))) else return arr;
+    if (obs_id >= mutation_observers.items.len) return arr;
+    var obs = &mutation_observers.items[obs_id];
+    var idx: u32 = 0;
+    for (obs.pending_records.items) |rec| {
+        const record = qjs.JS_NewObject(c);
+        _ = qjs.JS_SetPropertyStr(c, record, "type", qjs.JS_NewStringLen(c, rec.type_str.ptr, rec.type_str.len));
+        _ = qjs.JS_SetPropertyStr(c, record, "target", dom_api.wrapNodePublic(c, rec.target));
+        if (rec.attribute_name) |an| {
+            _ = qjs.JS_SetPropertyStr(c, record, "attributeName", qjs.JS_NewStringLen(c, an.ptr, an.len));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "attributeName", quickjs.JS_NULL());
+        }
+        // addedNodes / removedNodes as arrays
+        const added = qjs.JS_NewArray(c);
+        for (rec.added_nodes.items, 0..) |n, j| {
+            _ = qjs.JS_SetPropertyUint32(c, added, @intCast(j), dom_api.wrapNodePublic(c, n));
+        }
+        _ = qjs.JS_SetPropertyStr(c, record, "addedNodes", added);
+        const removed = qjs.JS_NewArray(c);
+        for (rec.removed_nodes.items, 0..) |n, j| {
+            _ = qjs.JS_SetPropertyUint32(c, removed, @intCast(j), dom_api.wrapNodePublic(c, n));
+        }
+        _ = qjs.JS_SetPropertyStr(c, record, "removedNodes", removed);
+        _ = qjs.JS_SetPropertyUint32(c, arr, idx, record);
+        idx += 1;
+    }
+    obs.pending_records.clearRetainingCapacity();
+    return arr;
 }
