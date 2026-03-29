@@ -700,6 +700,7 @@ pub fn elementContains(
     const c = ctx orelse return quickjs.JS_NewBool(false);
     if (argc < 1) return quickjs.JS_NewBool(false);
     const args = argv orelse return quickjs.JS_NewBool(false);
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) return quickjs.JS_NewBool(false);
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NewBool(false);
     const other = api.getNode(c, args[0]) orelse return quickjs.JS_NewBool(false);
 
