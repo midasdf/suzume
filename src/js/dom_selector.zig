@@ -224,16 +224,30 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         // :nth-child(N) — basic support for simple numeric N
         if (sel.len > 11 and std.ascii.eqlIgnoreCase(sel[0..11], ":nth-child(") and sel[sel.len - 1] == ')') {
             const arg = std.mem.trim(u8, sel[11 .. sel.len - 1], " \t");
-            if (std.ascii.eqlIgnoreCase(arg, "odd")) return (getNthIndex(@ptrCast(elem)) % 2) == 1;
-            if (std.ascii.eqlIgnoreCase(arg, "even")) return (getNthIndex(@ptrCast(elem)) % 2) == 0;
-            if (std.fmt.parseInt(u32, arg, 10)) |n| return getNthIndex(@ptrCast(elem)) == n
-            else |_| {}
+            const idx_val = getNthIndex(@ptrCast(elem));
+            if (matchNthFormula(arg, idx_val)) return true;
+            return false;
         }
         // :nth-last-child(N)
         if (sel.len > 16 and std.ascii.eqlIgnoreCase(sel[0..16], ":nth-last-child(") and sel[sel.len - 1] == ')') {
             const arg = std.mem.trim(u8, sel[16 .. sel.len - 1], " \t");
-            if (std.fmt.parseInt(u32, arg, 10)) |n| return getNthLastIndex(@ptrCast(elem)) == n
-            else |_| {}
+            const idx_val = getNthLastIndex(@ptrCast(elem));
+            if (matchNthFormula(arg, idx_val)) return true;
+            return false;
+        }
+        // :nth-of-type(N)
+        if (sel.len > 14 and std.ascii.eqlIgnoreCase(sel[0..14], ":nth-of-type(") and sel[sel.len - 1] == ')') {
+            const arg = std.mem.trim(u8, sel[14 .. sel.len - 1], " \t");
+            const idx_val = getNthOfTypeIndex(@ptrCast(elem));
+            if (matchNthFormula(arg, idx_val)) return true;
+            return false;
+        }
+        // :nth-last-of-type(N)
+        if (sel.len > 19 and std.ascii.eqlIgnoreCase(sel[0..19], ":nth-last-of-type(") and sel[sel.len - 1] == ')') {
+            const arg = std.mem.trim(u8, sel[19 .. sel.len - 1], " \t");
+            const idx_val = getNthLastOfTypeIndex(@ptrCast(elem));
+            if (matchNthFormula(arg, idx_val)) return true;
+            return false;
         }
         // :dir(ltr) / :dir(rtl)
         if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":dir(") and sel[sel.len - 1] == ')') {
@@ -463,6 +477,84 @@ pub fn getNthLastIndex(node: *lxb.lxb_dom_node_t) u32 {
         child = lxb_dom_node_prev_noi(ch);
     }
     return 0;
+}
+
+pub fn getNthOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 0;
+    var name_len: usize = 0;
+    const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name == null) return 0;
+    var idx: u32 = 0;
+    var child: ?*lxb.lxb_dom_node_t = parent.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            var cn_len: usize = 0;
+            const cn = lxb_dom_element_local_name(@ptrCast(ch), &cn_len);
+            if (cn != null and cn_len == name_len and std.mem.eql(u8, cn.?[0..cn_len], name.?[0..name_len])) {
+                idx += 1;
+                if (@intFromPtr(ch) == @intFromPtr(node)) return idx;
+            }
+        }
+        child = ch.next;
+    }
+    return 0;
+}
+
+pub fn getNthLastOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 0;
+    var name_len: usize = 0;
+    const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name == null) return 0;
+    var idx: u32 = 0;
+    var child = lxb_dom_node_last_child_noi(parent);
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            var cn_len: usize = 0;
+            const cn = lxb_dom_element_local_name(@ptrCast(ch), &cn_len);
+            if (cn != null and cn_len == name_len and std.mem.eql(u8, cn.?[0..cn_len], name.?[0..name_len])) {
+                idx += 1;
+                if (@intFromPtr(ch) == @intFromPtr(node)) return idx;
+            }
+        }
+        child = lxb_dom_node_prev_noi(ch);
+    }
+    return 0;
+}
+
+/// Match An+B formula: "odd", "even", "3", "2n", "2n+1", "-n+3", etc.
+pub fn matchNthFormula(arg: []const u8, idx: u32) bool {
+    if (idx == 0) return false;
+    if (std.ascii.eqlIgnoreCase(arg, "odd")) return (idx % 2) == 1;
+    if (std.ascii.eqlIgnoreCase(arg, "even")) return (idx % 2) == 0;
+    if (std.ascii.eqlIgnoreCase(arg, "n")) return true; // matches all
+    // Try simple integer
+    if (std.fmt.parseInt(i32, arg, 10)) |n| return n > 0 and idx == @as(u32, @intCast(n))
+    else |_| {}
+    // Parse An+B: find 'n'
+    if (std.mem.indexOfScalar(u8, arg, 'n')) |n_pos| {
+        // Parse A (before n)
+        var a: i32 = 1;
+        if (n_pos > 0) {
+            const a_str = std.mem.trim(u8, arg[0..n_pos], " \t");
+            if (a_str.len == 1 and a_str[0] == '-') { a = -1; }
+            else if (a_str.len == 1 and a_str[0] == '+') { a = 1; }
+            else if (a_str.len > 0) { a = std.fmt.parseInt(i32, a_str, 10) catch return false; }
+        }
+        // Parse B (after n)
+        var b: i32 = 0;
+        if (n_pos + 1 < arg.len) {
+            const b_str = std.mem.trim(u8, arg[n_pos + 1 ..], " \t");
+            if (b_str.len > 0) { b = std.fmt.parseInt(i32, b_str, 10) catch return false; }
+        }
+        // Match: idx = An + B for some non-negative integer n
+        const idx_i: i32 = @intCast(idx);
+        if (a == 0) return idx_i == b;
+        const diff = idx_i - b;
+        if (a > 0) return diff >= 0 and @mod(diff, a) == 0;
+        // a < 0: n must be non-negative, so idx <= b
+        return diff <= 0 and @mod(-diff, -a) == 0;
+    }
+    return false;
 }
 
 pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bool {
