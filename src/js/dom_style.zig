@@ -765,7 +765,14 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
     if (eqlIgnoreCase(prop, "opacity")) {
         const trimmed_opacity = std.mem.trim(u8, val, " \t\r\n");
         var opacity_val: ?f64 = null;
-        if (trimmed_opacity.len > 0 and trimmed_opacity[trimmed_opacity.len - 1] == '%') {
+        // Try math functions first (calc, clamp, min, max)
+        if (isCssMathFunc(trimmed_opacity)) {
+            // For opacity, 100% = 1.0, so use pct_base = 0.01
+            const font_size = getElementFontSizeFromStyle(c, elem_val);
+            if (cascade_mod.resolveValueToPx(trimmed_opacity, font_size, api.g_viewport_width, api.g_viewport_height, 0.01)) |v| {
+                opacity_val = @floatCast(v);
+            }
+        } else if (trimmed_opacity.len > 0 and trimmed_opacity[trimmed_opacity.len - 1] == '%') {
             opacity_val = (std.fmt.parseFloat(f64, trimmed_opacity[0 .. trimmed_opacity.len - 1]) catch null);
             if (opacity_val) |*v| v.* /= 100.0;
         } else {
