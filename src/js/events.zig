@@ -532,6 +532,7 @@ fn callListenersOnNode(ctx: *qjs.JSContext, entry: *ListenerEntry, event_obj: qj
     var i: usize = 0;
     while (i < entry.callbacks.items.len) {
         if (current_event_flags.stop_immediate_propagation) break;
+        if (current_event_flags.stop_propagation) break;
 
         const rec = entry.callbacks.items[i];
         // At target: call all listeners; during capture/bubble: only matching phase
@@ -840,6 +841,13 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     // Get global and document objects for Window/Document phase dispatch
     const global = qjs.JS_GetGlobalObject(ctx);
     defer qjs.JS_FreeValue(ctx, global);
+
+    // Set window.event (legacy, but widely used — e.g. "event.stopPropagation()" without parameter)
+    const saved_event = qjs.JS_GetPropertyStr(ctx, global, "event");
+    _ = qjs.JS_SetPropertyStr(ctx, global, "event", qjs.JS_DupValue(ctx, event_obj));
+    defer {
+        _ = qjs.JS_SetPropertyStr(ctx, global, "event", saved_event);
+    }
     const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
     defer qjs.JS_FreeValue(ctx, doc_obj);
 
