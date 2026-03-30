@@ -767,9 +767,9 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         var opacity_val: ?f64 = null;
         // Try math functions first (calc, clamp, min, max)
         if (isCssMathFunc(trimmed_opacity)) {
-            // For opacity, 100% = 1.0, so use pct_base = 0.01
+            // For opacity, 100% = 1.0, so use pct_base = 1.0 (value * 1.0 / 100 = value/100)
             const font_size = getElementFontSizeFromStyle(c, elem_val);
-            if (cascade_mod.resolveValueToPx(trimmed_opacity, font_size, api.g_viewport_width, api.g_viewport_height, 0.01)) |v| {
+            if (cascade_mod.resolveValueToPx(trimmed_opacity, font_size, api.g_viewport_width, api.g_viewport_height, 1.0)) |v| {
                 opacity_val = @floatCast(v);
             }
         } else if (trimmed_opacity.len > 0 and trimmed_opacity[trimmed_opacity.len - 1] == '%') {
@@ -866,6 +866,30 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
                 var buf: [64]u8 = undefined;
                 const int_val: i32 = @intFromFloat(@round(v));
                 const result = std.fmt.bufPrint(&buf, "{d}", .{int_val}) catch return qjs.JS_NewStringLen(c, "0", 1);
+                return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            }
+        }
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Number/length dual properties: tab-size — can be a number or length
+    if (eqlIgnoreCase(prop, "tab-size")) {
+        if (isCssMathFunc(trimmed)) {
+            const font_size = getElementFontSizeFromStyle(c, elem_val);
+            if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, 0)) |v| {
+                var buf: [128]u8 = undefined;
+                // Check if result should be px or number by looking at the input
+                const has_unit = std.mem.indexOf(u8, trimmed, "px") != null or
+                    std.mem.indexOf(u8, trimmed, "em") != null;
+                if (has_unit) {
+                    return fmtPx(c, v, &buf);
+                }
+                // Format as number (integer if whole)
+                const iv: i32 = @intFromFloat(@round(v));
+                const result = if (@abs(v - @as(f32, @floatFromInt(iv))) < 0.0001)
+                    std.fmt.bufPrint(&buf, "{d}", .{iv}) catch return qjs.JS_NewStringLen(c, "0", 1)
+                else
+                    std.fmt.bufPrint(&buf, "{d}", .{v}) catch return qjs.JS_NewStringLen(c, "0", 1);
                 return qjs.JS_NewStringLen(c, result.ptr, result.len);
             }
         }
@@ -1668,6 +1692,7 @@ pub fn windowGetComputedStyle(
         .{ "order", "order" },
         .{ "transform", "transform" },
         .{ "transition-delay", "transitionDelay" },
+        .{ "tab-size", "tabSize" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
