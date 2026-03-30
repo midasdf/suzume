@@ -2345,6 +2345,21 @@ fn resolveValueToPxDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_ba
     if (startsWithIgnoreCase(s, "max(")) {
         return resolveMinMaxWithPct(s, font_size, vw, vh, pct_base, false, depth);
     }
+    if (startsWithIgnoreCase(s, "round(")) {
+        return resolveRoundWithPct(s, font_size, vw, vh, pct_base, depth);
+    }
+    if (startsWithIgnoreCase(s, "mod(")) {
+        return resolveModRemWithPct(s, font_size, vw, vh, pct_base, true, depth);
+    }
+    if (startsWithIgnoreCase(s, "rem(")) {
+        return resolveModRemWithPct(s, font_size, vw, vh, pct_base, false, depth);
+    }
+    if (startsWithIgnoreCase(s, "abs(")) {
+        return resolveAbsWithPct(s, font_size, vw, vh, pct_base, depth);
+    }
+    if (startsWithIgnoreCase(s, "sign(")) {
+        return resolveSignWithPct(s, font_size, vw, vh, pct_base, depth);
+    }
 
     if (properties.parseLength(s)) |len| {
         return resolveLengthToPxWithPct(len.value, len.unit, font_size, vw, vh, pct_base);
@@ -2506,6 +2521,130 @@ fn resolveMinMaxWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_bas
         (resolveValueToPxDepth(inner, font_size, vw, vh, pct_base, depth + 1) orelse return null);
     if (std.math.isNan(single)) return 0;
     return single;
+}
+
+/// Resolve round(strategy?, A, B) to a px value.
+/// CSS Values 4 §10.3: round(nearest|up|down|to-zero, A, B)
+fn resolveRoundWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    const prefix_len: usize = 6; // "round("
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[prefix_len..end], " \t");
+
+    // Split arguments on commas at depth 0
+    var parts: [3][]const u8 = .{ "", "", "" };
+    var part_count: usize = 0;
+    var paren_depth: usize = 0;
+    var part_start: usize = 0;
+    for (inner, 0..) |ch, idx| {
+        if (ch == '(') paren_depth += 1;
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ',' and paren_depth == 0 and part_count < 2) {
+            parts[part_count] = std.mem.trim(u8, inner[part_start..idx], " \t");
+            part_count += 1;
+            part_start = idx + 1;
+        }
+    }
+    parts[part_count] = std.mem.trim(u8, inner[part_start..], " \t");
+    part_count += 1;
+
+    // Determine strategy and operands
+    var strategy: enum { nearest, up, down, to_zero } = .nearest;
+    var a_str: []const u8 = undefined;
+    var b_str: []const u8 = undefined;
+
+    if (part_count == 3) {
+        // round(strategy, A, B)
+        const strat = parts[0];
+        if (std.ascii.eqlIgnoreCase(strat, "nearest")) strategy = .nearest
+        else if (std.ascii.eqlIgnoreCase(strat, "up")) strategy = .up
+        else if (std.ascii.eqlIgnoreCase(strat, "down")) strategy = .down
+        else if (std.ascii.eqlIgnoreCase(strat, "to-zero")) strategy = .to_zero
+        else return null;
+        a_str = parts[1];
+        b_str = parts[2];
+    } else if (part_count == 2) {
+        // round(A, B) or round(strategy, A) where B defaults to 1
+        // Check if first arg is a strategy keyword
+        const maybe_strat = parts[0];
+        if (std.ascii.eqlIgnoreCase(maybe_strat, "nearest") or std.ascii.eqlIgnoreCase(maybe_strat, "up") or
+            std.ascii.eqlIgnoreCase(maybe_strat, "down") or std.ascii.eqlIgnoreCase(maybe_strat, "to-zero"))
+        {
+            if (std.ascii.eqlIgnoreCase(maybe_strat, "up")) strategy = .up
+            else if (std.ascii.eqlIgnoreCase(maybe_strat, "down")) strategy = .down
+            else if (std.ascii.eqlIgnoreCase(maybe_strat, "to-zero")) strategy = .to_zero;
+            a_str = parts[1];
+            b_str = "1";
+        } else {
+            // round(A, B)
+            a_str = parts[0];
+            b_str = parts[1];
+        }
+    } else if (part_count == 1) {
+        // round(A) — round to nearest integer
+        a_str = parts[0];
+        b_str = "1";
+    } else return null;
+
+    const a = resolveValueToPxDepth(a_str, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    const b = resolveValueToPxDepth(b_str, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    if (b == 0) return if (std.math.isNan(a)) @as(f32, 0) else a;
+    if (std.math.isNan(a) or std.math.isNan(b)) return 0;
+
+    return switch (strategy) {
+        .nearest => @round(a / b) * b,
+        .up => std.math.ceil(a / b) * b,
+        .down => @floor(a / b) * b,
+        .to_zero => @trunc(a / b) * b,
+    };
+}
+
+/// Resolve mod(A, B) or rem(A, B) to a px value.
+fn resolveModRemWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, is_mod: bool, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    const prefix_len: usize = 4; // "mod(" or "rem("
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[prefix_len..end], " \t");
+
+    var split_pos: ?usize = null;
+    var paren_depth: usize = 0;
+    for (inner, 0..) |ch, idx| {
+        if (ch == '(') paren_depth += 1;
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ',' and paren_depth == 0) { split_pos = idx; break; }
+    }
+    const sp = split_pos orelse return null;
+    const a_str = std.mem.trim(u8, inner[0..sp], " \t");
+    const b_str = std.mem.trim(u8, inner[sp + 1 ..], " \t");
+    const a = resolveValueToPxDepth(a_str, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    const b = resolveValueToPxDepth(b_str, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    if (b == 0 or std.math.isNan(a) or std.math.isNan(b)) return 0;
+    return if (is_mod) a - b * @floor(a / b) else a - b * @trunc(a / b);
+}
+
+/// Resolve abs(A) to a px value.
+fn resolveAbsWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[4..end], " \t"); // "abs("
+    const v = resolveValueToPxDepth(inner, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    return @abs(v);
+}
+
+/// Resolve sign(A) to -1, 0, or 1.
+fn resolveSignWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[5..end], " \t"); // "sign("
+    const v = resolveValueToPxDepth(inner, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    if (std.math.isNan(v)) return 0;
+    if (v > 0) return 1;
+    if (v < 0) return -1;
+    return 0;
 }
 
 fn parseGridTemplate(s: []const u8, alloc: std.mem.Allocator) ?[]const ComputedStyle.GridTrackSize {

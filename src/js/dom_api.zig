@@ -1385,6 +1385,27 @@ fn elementGetStyle(
     return style_obj;
 }
 
+// ── element.style setter ([PutForwards=cssText]) ────────────────────
+// Per CSSOM spec, assigning to element.style forwards to element.style.cssText
+
+fn elementSetStyle(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const s = jsStringToSlice(c, qjs.JS_ToString(c, args[0])) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+    _ = lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
+    // Invalidate cached style proxy so next access reflects new cssText
+    _ = qjs.JS_SetPropertyStr(c, this_val, "__style", quickjs.JS_UNDEFINED());
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 // ── element.append(...nodes) / prepend(...nodes) ────────────────────
 
 fn elementAppend(
@@ -2396,7 +2417,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // HTMLElement getters
     {
         const styleAtom = qjs.JS_NewAtom(ctx, "style");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, styleAtom, qjs.JS_NewCFunction(ctx, &elementGetStyle, "get style", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, styleAtom, qjs.JS_NewCFunction(ctx, &elementGetStyle, "get style", 0), qjs.JS_NewCFunction(ctx, &elementSetStyle, "set style", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, styleAtom);
     }
     {

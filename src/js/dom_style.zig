@@ -851,14 +851,32 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
-    // Integer properties: reading-order, order, z-index — resolve calc() to integer
-    if (eqlIgnoreCase(prop, "reading-order") or eqlIgnoreCase(prop, "order")) {
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..5], "calc(")) {
+    // Integer properties: reading-order, order, z-index — resolve math functions to integer
+    if (eqlIgnoreCase(prop, "reading-order") or eqlIgnoreCase(prop, "order") or eqlIgnoreCase(prop, "z-index")) {
+        if (isCssMathFunc(trimmed)) {
             const font_size = getElementFontSizeFromStyle(c, elem_val);
             if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, 0)) |v| {
                 var buf: [64]u8 = undefined;
                 const int_val: i32 = @intFromFloat(@round(v));
                 const result = std.fmt.bufPrint(&buf, "{d}", .{int_val}) catch return qjs.JS_NewStringLen(c, "0", 1);
+                return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            }
+        }
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Number properties: scale, opacity etc. — resolve math functions to number
+    if (eqlIgnoreCase(prop, "scale")) {
+        if (isCssMathFunc(trimmed)) {
+            const font_size = getElementFontSizeFromStyle(c, elem_val);
+            if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, 0)) |v| {
+                var buf: [64]u8 = undefined;
+                // Format as integer if whole, otherwise as float
+                const iv: i32 = @intFromFloat(@round(v));
+                const result = if (@abs(v - @as(f32, @floatFromInt(iv))) < 0.0001)
+                    std.fmt.bufPrint(&buf, "{d}", .{iv}) catch return qjs.JS_NewStringLen(c, "0", 1)
+                else
+                    std.fmt.bufPrint(&buf, "{d}", .{v}) catch return qjs.JS_NewStringLen(c, "0", 1);
                 return qjs.JS_NewStringLen(c, result.ptr, result.len);
             }
         }
@@ -886,8 +904,6 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         getContainingBlockWidth(c, elem_val);
 
     if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, pct_base)) |px| {
-        if (eqlIgnoreCase(prop, "margin-left"))
-            std.debug.print("[DBG-inline] margin-left val={s} px={d} isInf={}\n", .{ trimmed, px, std.math.isInf(px) });
         var buf: [128]u8 = undefined;
         // CSS Values 4 §10.11: NaN → 0, ±Infinity → clamped to allowable range
         const clamped = if (std.math.isNan(px)) 0.0 else if (std.math.isInf(px)) @as(f32, 3.4028235e+38) else px;
@@ -971,26 +987,39 @@ pub fn extractCustomProps(style: []const u8, var_map: anytype) void {
 
 /// Extract the original alpha value from a CSS color string like "rgba(2, 3, 4, 0.5)"
 pub fn extractOriginalAlpha(color_str: []const u8) ?f64 {
-    // Find last comma in rgba()/hsla() — alpha is after it
+    // Find alpha separator: last comma (legacy) or '/' (modern) at depth 1
     var last_comma: ?usize = null;
+    var slash_pos: ?usize = null;
     var depth: usize = 0;
     for (color_str, 0..) |ch, i| {
         if (ch == '(') depth += 1
         else if (ch == ')') { if (depth > 0) depth -= 1; }
-        else if (ch == ',' and depth == 1) last_comma = i;
-    }
-    if (last_comma) |pos| {
-        var end = color_str.len;
-        while (end > 0 and (color_str[end - 1] == ')' or color_str[end - 1] == ' ')) end -= 1;
-        const alpha_str = std.mem.trim(u8, color_str[pos + 1 .. end], " ");
-        if (alpha_str.len > 0 and alpha_str[alpha_str.len - 1] == '%') {
-            // Percentage: 50% → 0.5
-            const pct = std.fmt.parseFloat(f64, alpha_str[0 .. alpha_str.len - 1]) catch return null;
-            return pct / 100.0;
+        else if (depth == 1) {
+            if (ch == ',') last_comma = i;
+            if (ch == '/') slash_pos = i;
         }
-        return std.fmt.parseFloat(f64, alpha_str) catch null;
     }
-    return null;
+    // Modern syntax: use '/' separator
+    const sep_pos = slash_pos orelse last_comma orelse return null;
+    // For comma syntax, we need at least 3 commas for rgba (4 args) — check if this is actually the alpha separator
+    if (slash_pos == null) {
+        // Count commas to ensure 4th arg exists (alpha)
+        var comma_count: usize = 0;
+        for (color_str) |ch| {
+            if (ch == ',') comma_count += 1;
+        }
+        if (comma_count < 3) return null; // Only 3 args, no alpha
+    }
+    var end = color_str.len;
+    while (end > 0 and (color_str[end - 1] == ')' or color_str[end - 1] == ' ')) end -= 1;
+    const alpha_str = std.mem.trim(u8, color_str[sep_pos + 1 .. end], " ");
+    if (alpha_str.len == 0) return null;
+    if (alpha_str[alpha_str.len - 1] == '%') {
+        // Percentage: 50% → 0.5
+        const pct = std.fmt.parseFloat(f64, alpha_str[0 .. alpha_str.len - 1]) catch return null;
+        return pct / 100.0;
+    }
+    return std.fmt.parseFloat(f64, alpha_str) catch null;
 }
 
 // ── Color Formatting ───────────────────────────────────────────────
@@ -1064,6 +1093,20 @@ pub fn isColorProperty(prop: []const u8) bool {
 }
 
 /// Check if a CSS value string contains NaN or infinity keywords.
+/// Check if value starts with a CSS math function that should be resolved.
+pub fn isCssMathFunc(s: []const u8) bool {
+    if (s.len < 5) return false;
+    return (eqlIgnoreCase(s[0..5], "calc(")) or
+        (s.len >= 4 and eqlIgnoreCase(s[0..4], "min(")) or
+        (s.len >= 4 and eqlIgnoreCase(s[0..4], "max(")) or
+        (s.len >= 6 and eqlIgnoreCase(s[0..6], "clamp(")) or
+        (s.len >= 6 and eqlIgnoreCase(s[0..6], "round(")) or
+        (s.len >= 4 and eqlIgnoreCase(s[0..4], "mod(")) or
+        (s.len >= 4 and eqlIgnoreCase(s[0..4], "rem(")) or
+        (s.len >= 4 and eqlIgnoreCase(s[0..4], "abs(")) or
+        (s.len >= 5 and eqlIgnoreCase(s[0..5], "sign("));
+}
+
 pub fn containsNanOrInfinity(s: []const u8) bool {
     var i: usize = 0;
     while (i + 3 <= s.len) : (i += 1) {
@@ -1705,7 +1748,7 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .display => isValidDisplayValue(trimmed),
         // Color properties
         .color, .background_color, .border_top_color, .border_right_color,
-        .border_bottom_color, .border_left_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed),
+        .border_bottom_color, .border_left_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed) or isColorFuncWithCalc(trimmed),
         // Numeric properties
         .opacity => blk: {
             if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '%') {
@@ -2042,26 +2085,72 @@ pub fn canonicalizeRoundModRem(val: []const u8, buf: *[512]u8) ?[]const u8 {
 
     const inner = std.mem.trim(u8, trimmed[prefix_len .. trimmed.len - 1], " ");
 
-    // Split on comma
-    var comma_pos: ?usize = null;
+    // Split on commas at depth 0
+    var commas: [3]usize = undefined;
+    var comma_count: usize = 0;
     var depth: usize = 0;
     for (inner, 0..) |ch, i| {
         if (ch == '(') depth += 1
         else if (ch == ')') { if (depth > 0) depth -= 1; }
-        else if (ch == ',' and depth == 0) { comma_pos = i; break; }
+        else if (ch == ',' and depth == 0 and comma_count < 3) {
+            commas[comma_count] = i;
+            comma_count += 1;
+        }
     }
-    if (comma_pos == null) return null;
-    const a_str = std.mem.trim(u8, inner[0..comma_pos.?], " ");
-    const b_str = std.mem.trim(u8, inner[comma_pos.? + 1 ..], " ");
+    if (comma_count == 0) return null;
 
-    // Try to parse both as numbers
-    const a = std.fmt.parseFloat(f64, a_str) catch return null;
-    const b = std.fmt.parseFloat(f64, b_str) catch return null;
+    var a: f64 = undefined;
+    var b: f64 = undefined;
+    var strategy: enum { nearest, up, down, to_zero } = .nearest;
+
+    if (std.mem.eql(u8, func_name, "round") and comma_count == 2) {
+        // round(strategy, A, B) — 3-arg form
+        const strat_str = std.mem.trim(u8, inner[0..commas[0]], " ");
+        const a_str = std.mem.trim(u8, inner[commas[0] + 1 .. commas[1]], " ");
+        const b_str = std.mem.trim(u8, inner[commas[1] + 1 ..], " ");
+        if (eqlIgnoreCase(strat_str, "up")) strategy = .up
+        else if (eqlIgnoreCase(strat_str, "down")) strategy = .down
+        else if (eqlIgnoreCase(strat_str, "to-zero")) strategy = .to_zero
+        else strategy = .nearest;
+        a = std.fmt.parseFloat(f64, a_str) catch return null;
+        b = std.fmt.parseFloat(f64, b_str) catch return null;
+    } else if (std.mem.eql(u8, func_name, "round") and comma_count == 1) {
+        // round(A, B) or round(strategy, A)
+        const first = std.mem.trim(u8, inner[0..commas[0]], " ");
+        const second = std.mem.trim(u8, inner[commas[0] + 1 ..], " ");
+        if (eqlIgnoreCase(first, "nearest") or eqlIgnoreCase(first, "up") or
+            eqlIgnoreCase(first, "down") or eqlIgnoreCase(first, "to-zero"))
+        {
+            if (eqlIgnoreCase(first, "up")) strategy = .up
+            else if (eqlIgnoreCase(first, "down")) strategy = .down
+            else if (eqlIgnoreCase(first, "to-zero")) strategy = .to_zero;
+            a = std.fmt.parseFloat(f64, second) catch return null;
+            b = 1;
+        } else {
+            a = std.fmt.parseFloat(f64, first) catch return null;
+            b = std.fmt.parseFloat(f64, second) catch return null;
+        }
+    } else if (std.mem.eql(u8, func_name, "round") and comma_count == 0) {
+        // round(A) — round to nearest integer
+        a = std.fmt.parseFloat(f64, std.mem.trim(u8, inner, " ")) catch return null;
+        b = 1;
+    } else if (comma_count >= 1) {
+        // 2-arg form: func(A, B)
+        const a_str = std.mem.trim(u8, inner[0..commas[0]], " ");
+        const b_str = std.mem.trim(u8, inner[commas[0] + 1 ..], " ");
+        a = std.fmt.parseFloat(f64, a_str) catch return null;
+        b = std.fmt.parseFloat(f64, b_str) catch return null;
+    } else return null;
 
     var result: f64 = undefined;
     if (std.mem.eql(u8, func_name, "round")) {
         if (b == 0) return null;
-        result = @round(a / b) * b;
+        result = switch (strategy) {
+            .nearest => @round(a / b) * b,
+            .up => std.math.ceil(a / b) * b,
+            .down => @floor(a / b) * b,
+            .to_zero => @trunc(a / b) * b,
+        };
     } else if (std.mem.eql(u8, func_name, "mod")) {
         if (b == 0) return null;
         result = a - b * @floor(a / b); // CSS mod (always matches sign of b)
@@ -2804,6 +2893,32 @@ pub fn isValidBorderWidth(val: []const u8) bool {
 pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
     // Named colors — use parseColor which handles them
+    return false;
+}
+
+/// Check if value is a color function containing calc() that parseColor can't handle yet
+/// but should still be accepted as valid (e.g., rgb(calc(50 + sign(1em)), 0, 0)).
+fn isColorFuncWithCalc(val: []const u8) bool {
+    if (val.len < 4) return false;
+    // Must be a known color function
+    const is_color_fn = (val.len >= 4 and eqlIgnoreCase(val[0..4], "rgb(")) or
+        (val.len >= 5 and eqlIgnoreCase(val[0..5], "rgba(")) or
+        (val.len >= 4 and eqlIgnoreCase(val[0..4], "hsl(")) or
+        (val.len >= 5 and eqlIgnoreCase(val[0..5], "hsla(")) or
+        (val.len >= 4 and eqlIgnoreCase(val[0..4], "hwb(")) or
+        (val.len >= 5 and eqlIgnoreCase(val[0..5], "lab(")) or
+        (val.len >= 5 and eqlIgnoreCase(val[0..5], "lch(")) or
+        (val.len >= 6 and eqlIgnoreCase(val[0..6], "oklab(")) or
+        (val.len >= 6 and eqlIgnoreCase(val[0..6], "oklch(")) or
+        (val.len >= 6 and eqlIgnoreCase(val[0..6], "color("));
+    if (!is_color_fn) return false;
+    // Must end with ')'
+    if (val[val.len - 1] != ')') return false;
+    // Must contain calc( inside
+    var i: usize = 0;
+    while (i + 5 <= val.len) : (i += 1) {
+        if (eqlIgnoreCase(val[i..][0..5], "calc(")) return true;
+    }
     return false;
 }
 

@@ -101,28 +101,132 @@ pub fn extractFuncArgs(text: []const u8) ?[]const u8 {
     return text[start + 1 .. end];
 }
 
-fn parseRgbFunc(text: []const u8) ?values.Color {
-    const inner = extractFuncArgs(text) orelse return null;
-    var nums: [4]f32 = .{ 0, 0, 0, 255 };
+/// Tokenize color function arguments, respecting parenthesis nesting.
+/// Splits on commas or '/' at depth 0. For modern syntax (no commas), splits on spaces.
+/// Returns up to max_args tokens.
+fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) usize {
     var count: usize = 0;
-    var alpha_is_pct = false;
-    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
-    while (iter.next()) |tok| {
-        if (count >= 4) break;
-        if (tok.len > 0 and tok[tok.len - 1] == '%') {
-            const pct = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return null;
-            if (count < 3) {
-                nums[count] = pct * 255.0 / 100.0;
-            } else {
-                nums[count] = pct / 100.0;
-                alpha_is_pct = true;
-            }
-        } else {
-            nums[count] = std.fmt.parseFloat(f32, tok) catch return null;
+    has_slash.* = false;
+
+    // First: check if this uses comma syntax (legacy) or space syntax (modern)
+    // by looking for commas at depth 0
+    var has_comma = false;
+    {
+        var depth: usize = 0;
+        for (inner) |ch| {
+            if (ch == '(') depth += 1
+            else if (ch == ')') { if (depth > 0) depth -= 1; }
+            else if (ch == ',' and depth == 0) { has_comma = true; break; }
         }
-        count += 1;
     }
+
+    var depth: usize = 0;
+    var start: usize = 0;
+    var in_token = false;
+
+    for (inner, 0..) |ch, i| {
+        if (ch == '(') { depth += 1; in_token = true; continue; }
+        if (ch == ')') { if (depth > 0) depth -= 1; in_token = true; continue; }
+
+        if (depth == 0) {
+            if (has_comma) {
+                // Legacy comma syntax: split on ',' at depth 0
+                if (ch == ',') {
+                    if (in_token) {
+                        const tok = std.mem.trim(u8, inner[start..i], " \t");
+                        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+                    }
+                    start = i + 1;
+                    in_token = false;
+                    continue;
+                }
+            } else {
+                // Modern space syntax: split on spaces, '/' means alpha follows
+                if (ch == '/') {
+                    if (in_token) {
+                        const tok = std.mem.trim(u8, inner[start..i], " \t");
+                        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+                    }
+                    has_slash.* = true;
+                    start = i + 1;
+                    in_token = false;
+                    continue;
+                }
+                if (ch == ' ' or ch == '\t') {
+                    if (in_token) {
+                        const tok = std.mem.trim(u8, inner[start..i], " \t");
+                        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+                    }
+                    start = i + 1;
+                    in_token = false;
+                    continue;
+                }
+            }
+        }
+        if (!in_token) { start = i; in_token = true; }
+    }
+    // Final token
+    if (in_token) {
+        const tok = std.mem.trim(u8, inner[start..], " \t");
+        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+    }
+    return count;
+}
+
+/// Resolve a color component token that may be a number, percentage, 'none', or calc().
+/// For is_alpha=true, percentages are /100, otherwise /100*255.
+fn resolveColorComponent(tok: []const u8, is_alpha: bool, is_pct: *bool) ?f32 {
+    if (eqlIgnoreCase(tok, "none")) return 0;
+
+    // Check for percentage
+    if (tok.len > 0 and tok[tok.len - 1] == '%') {
+        is_pct.* = true;
+        const pct = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return null;
+        return if (is_alpha) pct / 100.0 else pct * 255.0 / 100.0;
+    }
+
+    // Check for calc()
+    if (tok.len >= 5 and eqlIgnoreCase(tok[0..5], "calc(") and tok[tok.len - 1] == ')') {
+        const calc_inner = std.mem.trim(u8, tok[5 .. tok.len - 1], " \t");
+        // calc(infinity) → max
+        if (eqlIgnoreCase(calc_inner, "infinity")) return std.math.floatMax(f32);
+        // calc(-infinity) → min
+        if (eqlIgnoreCase(calc_inner, "-infinity")) return -std.math.floatMax(f32);
+        // calc(NaN) → 0
+        if (eqlIgnoreCase(calc_inner, "NaN")) return 0;
+        // calc(0 / 0) → NaN → 0
+        if (std.mem.eql(u8, std.mem.trim(u8, calc_inner, " "), "0 / 0") or
+            std.mem.eql(u8, std.mem.trim(u8, calc_inner, " "), "0/0"))
+            return 0;
+        // Simple numeric calc
+        return std.fmt.parseFloat(f32, calc_inner) catch return null;
+    }
+
+    // Strip 'deg' suffix for hue
+    const clean = if (std.mem.endsWith(u8, tok, "deg")) tok[0 .. tok.len - 3] else tok;
+    return std.fmt.parseFloat(f32, clean) catch null;
+}
+
+fn parseRgbFunc(text: []const u8) ?values.Color {
+    // CSS Color 4: rgb() accepts 3 or 4 args, 'none' keyword, mixed %/number, calc()
+    const inner = extractFuncArgs(text) orelse return null;
+    var tokens: [8][]const u8 = undefined;
+    var has_slash = false;
+    const count = tokenizeColorArgs(inner, &tokens, &has_slash);
     if (count < 3) return null;
+    var nums: [4]f32 = .{ 0, 0, 0, 1.0 };
+    var alpha_is_pct = false;
+    var i: usize = 0;
+    while (i < count and i < 4) : (i += 1) {
+        var is_pct = false;
+        nums[i] = resolveColorComponent(tokens[i], i >= 3, &is_pct) orelse return null;
+        if (i >= 3 and is_pct) alpha_is_pct = true;
+        if (i < 3 and !is_pct) {
+            // Raw number for R/G/B — already in 0-255 range
+        } else if (i < 3) {
+            // Percentage already converted to 0-255 by resolveColorComponent
+        }
+    }
     const alpha: u8 = if (count >= 4)
         @intFromFloat(@round(std.math.clamp(if (alpha_is_pct) nums[3] * 255 else nums[3] * 255, 0, 255)))
     else
@@ -136,33 +240,8 @@ fn parseRgbFunc(text: []const u8) ?values.Color {
 }
 
 fn parseRgbaFunc(text: []const u8) ?values.Color {
-    const inner = extractFuncArgs(text) orelse return null;
-    var nums: [4]f32 = undefined;
-    var count: usize = 0;
-    var has_pct: [4]bool = .{ false, false, false, false };
-    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
-    while (iter.next()) |tok| {
-        if (count >= 4) break;
-        if (tok.len > 0 and tok[tok.len - 1] == '%') {
-            has_pct[count] = true;
-            nums[count] = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return null;
-        } else {
-            nums[count] = std.fmt.parseFloat(f32, tok) catch return null;
-        }
-        count += 1;
-    }
-    if (count < 4) return null;
-    const r = if (has_pct[0]) nums[0] * 255.0 / 100.0 else nums[0];
-    const g = if (has_pct[1]) nums[1] * 255.0 / 100.0 else nums[1];
-    const b = if (has_pct[2]) nums[2] * 255.0 / 100.0 else nums[2];
-    // Alpha: percentage means /100, otherwise 0.0-1.0
-    const a = if (has_pct[3]) nums[3] * 255.0 / 100.0 else nums[3] * 255.0;
-    return .{
-        .r = clampToU8(r),
-        .g = clampToU8(g),
-        .b = clampToU8(b),
-        .a = clampToU8(a),
-    };
+    // CSS Color 4: rgba() is an alias for rgb()
+    return parseRgbFunc(text);
 }
 
 fn hslToRgb(h_deg: f32, s_pct: f32, l_pct: f32) struct { r: u8, g: u8, b: u8 } {
@@ -208,50 +287,37 @@ fn hslToRgb(h_deg: f32, s_pct: f32, l_pct: f32) struct { r: u8, g: u8, b: u8 } {
 }
 
 fn parseHslFunc(text: []const u8) ?values.Color {
+    // CSS Color 4: hsl() and hsla() are aliases, both accept 3 or 4 args
     const inner = extractFuncArgs(text) orelse return null;
-    var vals: [3]f32 = undefined;
-    var count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, inner, ", \t");
-    while (iter.next()) |tok| {
-        if (count >= 3) break;
-        const clean = if (tok.len > 0 and tok[tok.len - 1] == '%') tok[0 .. tok.len - 1] else tok;
-        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
-        if (eqlIgnoreCase(clean2, "none")) {
-            vals[count] = 0;
-        } else {
-            vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
-        }
-        count += 1;
-    }
+    var tokens: [8][]const u8 = undefined;
+    var has_slash = false;
+    const count = tokenizeColorArgs(inner, &tokens, &has_slash);
     if (count < 3) return null;
+    var vals: [4]f32 = .{ 0, 0, 0, 1.0 };
+    var alpha_is_pct = false;
+    var i: usize = 0;
+    while (i < count and i < 4) : (i += 1) {
+        var is_pct = false;
+        // For hsl, S and L can be bare numbers (treated as percentages per CSS Color 4)
+        vals[i] = resolveColorComponent(tokens[i], i >= 3, &is_pct) orelse return null;
+        if (i >= 3 and is_pct) alpha_is_pct = true;
+        // For S and L (indices 1,2), percentages are already resolved to 0-255 range by resolveColorComponent
+        // but for HSL we need 0-100 percentages. Undo the 255 scaling.
+        if (i >= 1 and i <= 2 and is_pct) {
+            vals[i] = vals[i] * 100.0 / 255.0;
+        }
+    }
     const rgb = hslToRgb(vals[0], vals[1], vals[2]);
-    return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b, .a = 255 };
+    const alpha: u8 = if (count >= 4)
+        @intFromFloat(std.math.clamp(if (alpha_is_pct) vals[3] * 255.0 else vals[3] * 255.0, 0.0, 255.0))
+    else
+        255;
+    return .{ .r = rgb.r, .g = rgb.g, .b = rgb.b, .a = alpha };
 }
 
 fn parseHslaFunc(text: []const u8) ?values.Color {
-    const inner = extractFuncArgs(text) orelse return null;
-    var vals: [4]f32 = undefined;
-    var count: usize = 0;
-    var alpha_is_percentage = false;
-    var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
-    while (iter.next()) |tok| {
-        if (count >= 4) break;
-        const is_pct = tok.len > 0 and tok[tok.len - 1] == '%';
-        if (count == 3 and is_pct) alpha_is_percentage = true;
-        const clean = if (is_pct) tok[0 .. tok.len - 1] else tok;
-        const clean2 = if (std.mem.endsWith(u8, clean, "deg")) clean[0 .. clean.len - 3] else clean;
-        vals[count] = std.fmt.parseFloat(f32, clean2) catch return null;
-        count += 1;
-    }
-    if (count < 4) return null;
-    const rgb = hslToRgb(vals[0], vals[1], vals[2]);
-    const alpha_f = if (alpha_is_percentage) vals[3] * 255.0 / 100.0 else vals[3] * 255.0;
-    return .{
-        .r = rgb.r,
-        .g = rgb.g,
-        .b = rgb.b,
-        .a = @intFromFloat(std.math.clamp(alpha_f, 0.0, 255.0)),
-    };
+    // CSS Color 4: hsla() is an alias for hsl()
+    return parseHslFunc(text);
 }
 
 fn parseHwbFunc(text: []const u8) ?values.Color {
