@@ -869,14 +869,45 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":not(") and selector[selector.len - 1] == ')') {
         return !elementMatchesSelector(node, selector[5 .. selector.len - 1]);
     }
-    // :has(inner) — matches if any descendant matches inner selector
+    // :has(inner) — matches if any descendant/child matches inner selector
     if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":has(") and selector[selector.len - 1] == ')') {
-        const inner = selector[5 .. selector.len - 1];
-        // Check descendants for a match
+        const inner = std.mem.trim(u8, selector[5 .. selector.len - 1], " \t");
+        // :has(> sel) — direct child combinator
+        if (inner.len > 2 and inner[0] == '>') {
+            const child_sel = std.mem.trim(u8, inner[1..], " \t");
+            var child: ?*lxb.lxb_dom_node_t = node.first_child;
+            while (child) |ch| {
+                if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(ch, child_sel)) return true;
+                child = ch.next;
+            }
+            return false;
+        }
+        // :has(~ sel) — general sibling combinator
+        if (inner.len > 2 and inner[0] == '~') {
+            const sib_sel = std.mem.trim(u8, inner[1..], " \t");
+            var sib: ?*lxb.lxb_dom_node_t = node.next;
+            while (sib) |s| {
+                if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(s, sib_sel)) return true;
+                sib = s.next;
+            }
+            return false;
+        }
+        // :has(+ sel) — adjacent sibling combinator
+        if (inner.len > 2 and inner[0] == '+') {
+            const adj_sel = std.mem.trim(u8, inner[1..], " \t");
+            var sib: ?*lxb.lxb_dom_node_t = node.next;
+            while (sib) |s| {
+                if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                    return elementMatchesSelector(s, adj_sel);
+                }
+                sib = s.next;
+            }
+            return false;
+        }
+        // Default: descendant match
         var child: ?*lxb.lxb_dom_node_t = node.first_child;
         while (child) |ch| {
             if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(ch, inner)) return true;
-            // Also check descendants recursively
             if (walkTreeBySelector(ch, inner) != null) return true;
             child = ch.next;
         }
