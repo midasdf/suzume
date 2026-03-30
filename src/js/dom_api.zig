@@ -3289,7 +3289,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var body = document.createElement('body');
             \\  if (title !== undefined) {
             \\    var t = document.createElement('title');
-            \\    t.textContent = String(title);
+            \\    t.appendChild(document.createTextNode(String(title)));
             \\    head.appendChild(t);
             \\  }
             \\  d.appendChild(head);
