@@ -141,10 +141,7 @@ pub fn jsAddEventListener(
     var passive_explicit: bool = false;
     var once: bool = false;
     if (argc >= 3) {
-        if (args[2].tag == qjs.JS_TAG_BOOL) {
-            // Legacy: addEventListener(type, cb, useCapture)
-            capture = qjs.JS_ToBool(c, args[2]) > 0;
-        } else if (args[2].tag == qjs.JS_TAG_OBJECT) {
+        if (args[2].tag == qjs.JS_TAG_OBJECT) {
             // Options object: {capture, passive, once}
             const cap_val = qjs.JS_GetPropertyStr(c, args[2], "capture");
             if (cap_val.tag != qjs.JS_TAG_UNDEFINED) capture = qjs.JS_ToBool(c, cap_val) > 0;
@@ -160,6 +157,9 @@ pub fn jsAddEventListener(
             const once_val = qjs.JS_GetPropertyStr(c, args[2], "once");
             if (once_val.tag != qjs.JS_TAG_UNDEFINED) once = qjs.JS_ToBool(c, once_val) > 0;
             qjs.JS_FreeValue(c, once_val);
+        } else {
+            // Legacy: addEventListener(type, cb, useCapture) — any truthy value = capture
+            capture = qjs.JS_ToBool(c, args[2]) > 0;
         }
     }
     // Passive-by-default: touchstart, touchmove, wheel on window/document/body
@@ -231,12 +231,12 @@ pub fn jsRemoveEventListener(
     // Parse capture flag from 3rd argument (per spec, removeEventListener matches on capture)
     var capture: bool = false;
     if (argc >= 3) {
-        if (args[2].tag == qjs.JS_TAG_BOOL) {
-            capture = qjs.JS_ToBool(c, args[2]) > 0;
-        } else if (args[2].tag == qjs.JS_TAG_OBJECT) {
+        if (args[2].tag == qjs.JS_TAG_OBJECT) {
             const cap_val = qjs.JS_GetPropertyStr(c, args[2], "capture");
             if (cap_val.tag != qjs.JS_TAG_UNDEFINED) capture = qjs.JS_ToBool(c, cap_val) > 0;
             qjs.JS_FreeValue(c, cap_val);
+        } else {
+            capture = qjs.JS_ToBool(c, args[2]) > 0;
         }
     }
 
