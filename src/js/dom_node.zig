@@ -997,7 +997,10 @@ pub fn nodeGetRootNode(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const node = api.getNode(c, this_val) orelse {
+        // Document object: return itself (document is its own root)
+        return qjs.JS_DupValue(c, this_val);
+    };
     // Walk up to root (document node)
     var current: *lxb.lxb_dom_node_t = node;
     while (current.parent) |p| {
