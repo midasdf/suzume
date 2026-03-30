@@ -2290,7 +2290,7 @@ fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32)
         const right = std.mem.trim(u8, expr[pos + 1 ..], " \t");
         const l = parseCalcExpr(left, font_size, vw, vh, depth + 1) orelse return null;
         const r = parseCalcExpr(right, font_size, vw, vh, depth + 1) orelse return null;
-        return if (expr[pos] == '*') l * r else if (r != 0) l / r else null;
+        return if (expr[pos] == '*') l * r else l / r; // CSS: x/0 = ±infinity (IEEE 754)
     }
 
     // No operator — single value (or nested function like clamp/min/max)
@@ -2398,7 +2398,7 @@ fn resolveValueToPxDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_ba
     if (std.ascii.eqlIgnoreCase(s, "e")) return std.math.e;
     if (std.ascii.eqlIgnoreCase(s, "infinity")) return std.math.inf(f32);
     if (std.ascii.eqlIgnoreCase(s, "-infinity")) return -std.math.inf(f32);
-    if (std.ascii.eqlIgnoreCase(s, "NaN")) return 0; // CSS spec: NaN → 0
+    if (std.ascii.eqlIgnoreCase(s, "NaN")) return 0; // CSS spec: NaN → 0 at computed time
     if (std.fmt.parseFloat(f32, s)) |v| return v else |_| {}
     return null;
 }
@@ -2480,7 +2480,7 @@ fn resolveCalcExprWithPct(expr: []const u8, font_size: f32, vw: f32, vh: f32, pc
         const right = std.mem.trim(u8, expr[pos + 1 ..], " \t");
         const l = resolveCalcExprWithPct(left, font_size, vw, vh, pct_base, depth + 1) orelse return null;
         const r = resolveCalcExprWithPct(right, font_size, vw, vh, pct_base, depth + 1) orelse return null;
-        return if (expr[pos] == '*') l * r else if (r != 0) l / r else null;
+        return if (expr[pos] == '*') l * r else l / r; // CSS: x/0 = ±infinity (IEEE 754)
     }
 
     return resolveValueToPxDepth(expr, font_size, vw, vh, pct_base, depth + 1);

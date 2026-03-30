@@ -2509,6 +2509,74 @@ pub fn findMatchingParen(s: []const u8, start: usize) ?usize {
     return null;
 }
 
+/// Evaluate a calc expression for serialization, preserving NaN/infinity.
+/// Only handles pure-number expressions (no units).
+fn evalCalcForSerialize(expr: []const u8) ?f64 {
+    return evalCalcExprSerialize(expr, 0);
+}
+
+fn evalCalcExprSerialize(expr: []const u8, depth: u32) ?f64 {
+    if (depth > 10) return null;
+    const s = std.mem.trim(u8, expr, " \t");
+    if (s.len == 0) return null;
+
+    // Strip outer parens
+    if (s[0] == '(' and s[s.len - 1] == ')') {
+        var pd: usize = 0;
+        var all_wrapped = true;
+        for (s, 0..) |ch, i| {
+            if (ch == '(') pd += 1 else if (ch == ')') pd -= 1;
+            if (pd == 0 and i < s.len - 1) { all_wrapped = false; break; }
+        }
+        if (all_wrapped) return evalCalcExprSerialize(s[1 .. s.len - 1], depth + 1);
+    }
+
+    // Find last + or - at depth 0 (lowest precedence)
+    var paren_depth: usize = 0;
+    var last_add_sub: ?usize = null;
+    var last_mul_div: ?usize = null;
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (s[i] == '(') { paren_depth += 1; continue; }
+        if (s[i] == ')') { if (paren_depth > 0) paren_depth -= 1; continue; }
+        if (paren_depth == 0 and i > 0 and i + 1 < s.len and s[i - 1] == ' ' and s[i + 1] == ' ') {
+            if (s[i] == '+' or s[i] == '-') last_add_sub = i;
+        }
+        if (paren_depth == 0 and (s[i] == '*' or s[i] == '/') and i > 0 and i + 1 < s.len) {
+            last_mul_div = i;
+        }
+    }
+
+    if (last_add_sub) |pos| {
+        const l = evalCalcExprSerialize(s[0 .. pos - 1], depth + 1) orelse return null;
+        const r = evalCalcExprSerialize(s[pos + 2 ..], depth + 1) orelse return null;
+        return if (s[pos] == '+') l + r else l - r;
+    }
+    if (last_mul_div) |pos| {
+        const l = evalCalcExprSerialize(s[0..pos], depth + 1) orelse return null;
+        const r = evalCalcExprSerialize(s[pos + 1 ..], depth + 1) orelse return null;
+        return if (s[pos] == '*') l * r else l / r; // IEEE 754: x/0 = ±inf
+    }
+
+    // Atom
+    if (std.ascii.eqlIgnoreCase(s, "infinity")) return std.math.inf(f64);
+    if (std.ascii.eqlIgnoreCase(s, "-infinity")) return -std.math.inf(f64);
+    if (std.ascii.eqlIgnoreCase(s, "NaN") or std.ascii.eqlIgnoreCase(s, "nan")) return std.math.nan(f64);
+    if (std.ascii.eqlIgnoreCase(s, "pi")) return std.math.pi;
+    if (std.ascii.eqlIgnoreCase(s, "e")) return std.math.e;
+    return std.fmt.parseFloat(f64, s) catch null;
+}
+
+fn containsInfNanKeyword(s: []const u8) bool {
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (i + 8 <= s.len and std.ascii.eqlIgnoreCase(s[i..][0..8], "infinity")) return true;
+        if (i + 3 <= s.len and std.ascii.eqlIgnoreCase(s[i..][0..3], "NaN")) return true;
+        if (i + 3 <= s.len and std.ascii.eqlIgnoreCase(s[i..][0..3], "nan")) return true;
+    }
+    return false;
+}
+
 pub fn containsFunction(s: []const u8) bool {
     return std.mem.indexOf(u8, s, "min(") != null or
         std.mem.indexOf(u8, s, "max(") != null or
@@ -2527,6 +2595,26 @@ pub fn canonicalizeCalcValue(val: []const u8, buf: *[512]u8) ?[]const u8 {
     if (trimmed[trimmed.len - 1] != ')') return null;
     const raw_inner = std.mem.trim(u8, trimmed[5 .. trimmed.len - 1], " ");
     if (raw_inner.len == 0) return null;
+
+    // Early simplification: if expression contains infinity/NaN keywords,
+    // try to evaluate and simplify to calc(NaN) or calc(infinity)
+    if (containsInfNanKeyword(raw_inner)) {
+        if (evalCalcForSerialize(raw_inner)) |v| {
+            if (std.math.isNan(v)) {
+                const r = std.fmt.bufPrint(buf, "calc(NaN)", .{}) catch return null;
+                return r;
+            }
+            if (std.math.isInf(v)) {
+                if (v > 0) {
+                    const r = std.fmt.bufPrint(buf, "calc(infinity)", .{}) catch return null;
+                    return r;
+                } else {
+                    const r = std.fmt.bufPrint(buf, "calc(-infinity)", .{}) catch return null;
+                    return r;
+                }
+            }
+        }
+    }
 
     // Flatten nested calc(): "9pt + calc(9rem + 10px)" → "9pt + 9rem + 10px"
     // Removes "calc(" and its matching ")" while preserving min()/max() parens.
