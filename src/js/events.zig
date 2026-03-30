@@ -488,17 +488,37 @@ fn callOnEventHandler(ctx: *qjs.JSContext, target_obj: qjs.JSValue, event_type: 
 /// object listeners with a handleEvent method (DOM spec §2.8).
 fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSValue, event_obj: qjs.JSValue) void {
     var argv = [_]qjs.JSValue{event_obj};
+    var ret: qjs.JSValue = undefined;
     if (qjs.JS_IsFunction(ctx, callback)) {
-        const ret = qjs.JS_Call(ctx, callback, this_val, 1, &argv);
-        qjs.JS_FreeValue(ctx, ret);
+        ret = qjs.JS_Call(ctx, callback, this_val, 1, &argv);
     } else {
         // Object listener: get handleEvent property and call it with the object as this
         const he = qjs.JS_GetPropertyStr(ctx, callback, "handleEvent");
         if (qjs.JS_IsFunction(ctx, he)) {
-            const ret = qjs.JS_Call(ctx, he, callback, 1, &argv);
-            qjs.JS_FreeValue(ctx, ret);
+            ret = qjs.JS_Call(ctx, he, callback, 1, &argv);
+        } else {
+            qjs.JS_FreeValue(ctx, he);
+            return;
         }
         qjs.JS_FreeValue(ctx, he);
+    }
+    // If listener threw, report error via window.onerror (per HTML spec "report the exception")
+    if (quickjs.JS_IsException(ret)) {
+        const exc = qjs.JS_GetException(ctx);
+        const global = qjs.JS_GetGlobalObject(ctx);
+        const onerror = qjs.JS_GetPropertyStr(ctx, global, "onerror");
+        if (qjs.JS_IsFunction(ctx, onerror)) {
+            const msg = qjs.JS_ToString(ctx, exc);
+            var onerror_args = [1]qjs.JSValue{msg};
+            const onerror_ret = qjs.JS_Call(ctx, onerror, global, 1, &onerror_args);
+            qjs.JS_FreeValue(ctx, onerror_ret);
+            qjs.JS_FreeValue(ctx, msg);
+        }
+        qjs.JS_FreeValue(ctx, onerror);
+        qjs.JS_FreeValue(ctx, global);
+        qjs.JS_FreeValue(ctx, exc);
+    } else {
+        qjs.JS_FreeValue(ctx, ret);
     }
 }
 
