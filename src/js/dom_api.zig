@@ -3156,6 +3156,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const pi_js =
             \\(function(target, data) {
             \\  if(!target||target.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
+            \\  var fc=target.charCodeAt(0);if(!(fc>=65&&fc<=90||fc>=97&&fc<=122||fc===95||fc>=0xC0))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
+            \\  for(var i=1;i<target.length;i++){var cc=target.charCodeAt(i);if(!(cc>=65&&cc<=90||cc>=97&&cc<=122||cc>=48&&cc<=57||cc===95||cc===45||cc===46||cc===0xB7||cc>=0xC0))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');}
+            \\  if(target.toLowerCase()==='xml')throw new DOMException('The target name "xml" is not allowed.','InvalidCharacterError');
             \\  if(data&&data.indexOf('?>')>=0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
             \\  var pi = {nodeType:7, nodeName:target, target:target, data:data||'',
             \\          textContent:data||'', nodeValue:data||'', childNodes:[],
