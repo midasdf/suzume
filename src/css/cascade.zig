@@ -2360,10 +2360,45 @@ fn resolveValueToPxDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_ba
     if (startsWithIgnoreCase(s, "sign(")) {
         return resolveSignWithPct(s, font_size, vw, vh, pct_base, depth);
     }
+    // CSS trig functions — resolve to number (radians→degrees for angle context, but as numbers here)
+    if (startsWithIgnoreCase(s, "sin(")) return resolveTrigFunc(s, "sin", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "cos(")) return resolveTrigFunc(s, "cos", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "tan(")) return resolveTrigFunc(s, "tan", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "asin(")) return resolveTrigFunc(s, "asin", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "acos(")) return resolveTrigFunc(s, "acos", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "atan(")) return resolveTrigFunc(s, "atan", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "atan2(")) return resolveTrigFunc(s, "atan2", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "sqrt(")) return resolveUnaryMathFunc(s, "sqrt", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "pow(")) return resolvePowFunc(s, font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "hypot(")) return resolveHypotFunc(s, font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "log(")) return resolveUnaryMathFunc(s, "log", font_size, vw, vh, pct_base, depth);
+    if (startsWithIgnoreCase(s, "exp(")) return resolveUnaryMathFunc(s, "exp", font_size, vw, vh, pct_base, depth);
 
     if (properties.parseLength(s)) |len| {
         return resolveLengthToPxWithPct(len.value, len.unit, font_size, vw, vh, pct_base);
     }
+    // Angle units: convert to degrees (for trig function context)
+    if (std.mem.endsWith(u8, s, "deg")) {
+        return std.fmt.parseFloat(f32, s[0 .. s.len - 3]) catch null;
+    }
+    if (std.mem.endsWith(u8, s, "rad")) {
+        const r = std.fmt.parseFloat(f32, s[0 .. s.len - 3]) catch return null;
+        return r * 180.0 / std.math.pi;
+    }
+    if (std.mem.endsWith(u8, s, "grad")) {
+        const g = std.fmt.parseFloat(f32, s[0 .. s.len - 4]) catch return null;
+        return g * 0.9;
+    }
+    if (std.mem.endsWith(u8, s, "turn")) {
+        const t = std.fmt.parseFloat(f32, s[0 .. s.len - 4]) catch return null;
+        return t * 360.0;
+    }
+    // CSS math constants
+    if (std.ascii.eqlIgnoreCase(s, "pi")) return std.math.pi;
+    if (std.ascii.eqlIgnoreCase(s, "e")) return std.math.e;
+    if (std.ascii.eqlIgnoreCase(s, "infinity")) return std.math.inf(f32);
+    if (std.ascii.eqlIgnoreCase(s, "-infinity")) return -std.math.inf(f32);
+    if (std.ascii.eqlIgnoreCase(s, "NaN")) return 0; // CSS spec: NaN → 0
     if (std.fmt.parseFloat(f32, s)) |v| return v else |_| {}
     return null;
 }
@@ -2645,6 +2680,137 @@ fn resolveSignWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base:
     if (v > 0) return 1;
     if (v < 0) return -1;
     return 0;
+}
+
+/// Resolve CSS trig functions: sin, cos, tan, asin, acos, atan, atan2
+fn resolveTrigFunc(s: []const u8, func: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    const prefix_len = func.len + 1; // e.g., "sin(" = 4
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[prefix_len..end], " \t");
+
+    if (std.mem.eql(u8, func, "atan2")) {
+        // atan2(Y, X) - two arguments
+        var paren_depth: usize = 0;
+        var comma_pos: ?usize = null;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') paren_depth += 1;
+            if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+            if (ch == ',' and paren_depth == 0) { comma_pos = i; break; }
+        }
+        const cp = comma_pos orelse return null;
+        const y_str = std.mem.trim(u8, inner[0..cp], " \t");
+        const x_str = std.mem.trim(u8, inner[cp + 1 ..], " \t");
+        const y = resolveValueToPxDepth(y_str, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+        const x = resolveValueToPxDepth(x_str, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+        return std.math.atan2(y, x) * (180.0 / std.math.pi); // result is in degrees
+    }
+
+    // Try resolving as expression first (handles pi/2, nested funcs, arithmetic)
+    const v = resolveCalcExprWithPct(inner, font_size, vw, vh, pct_base, depth + 1) orelse
+        (resolveValueToPxDepth(inner, font_size, vw, vh, pct_base, depth + 1) orelse return null);
+
+    // sin/cos/tan: input can be radians (bare number, or from nested trig) or degrees (with unit)
+    // resolveValueToPxDepth converts angle units to degrees-as-number, so we need to detect
+    if (std.mem.eql(u8, func, "sin")) {
+        const rad = resolveToRadians(inner, v);
+        return @sin(rad);
+    }
+    if (std.mem.eql(u8, func, "cos")) {
+        const rad = resolveToRadians(inner, v);
+        return @cos(rad);
+    }
+    if (std.mem.eql(u8, func, "tan")) {
+        const rad = resolveToRadians(inner, v);
+        return @tan(rad);
+    }
+    // asin/acos/atan take numbers, return degrees
+    if (std.mem.eql(u8, func, "asin")) return std.math.asin(std.math.clamp(v, -1.0, 1.0)) * (180.0 / std.math.pi);
+    if (std.mem.eql(u8, func, "acos")) return std.math.acos(std.math.clamp(v, -1.0, 1.0)) * (180.0 / std.math.pi);
+    if (std.mem.eql(u8, func, "atan")) return std.math.atan(v) * (180.0 / std.math.pi);
+    return null;
+}
+
+fn hasAngleUnit(s: []const u8) bool {
+    return std.mem.endsWith(u8, s, "deg") or std.mem.endsWith(u8, s, "rad") or
+        std.mem.endsWith(u8, s, "grad") or std.mem.endsWith(u8, s, "turn");
+}
+
+/// Convert a resolved value to radians based on the original input string.
+/// If input had angle units (deg/grad/turn), v is in those units → convert to radians.
+/// If input is a bare number or expression, v is treated as radians.
+fn resolveToRadians(input: []const u8, v: f32) f32 {
+    // Check if the input ends with an angle unit (simple case)
+    if (std.mem.endsWith(u8, input, "deg")) return v * std.math.pi / 180.0;
+    if (std.mem.endsWith(u8, input, "grad")) return v * std.math.pi / 200.0;
+    if (std.mem.endsWith(u8, input, "turn")) return v * std.math.pi * 2.0;
+    if (std.mem.endsWith(u8, input, "rad")) {
+        // v was parsed with parseLength which strips "rad" and returns the number
+        return v;
+    }
+    // If it contains angle arithmetic (like "30deg + 1.0471967rad"),
+    // the resolved value is already in the dominant unit's base (px/number)
+    // For trig input, treat as radians by default
+    return v;
+}
+
+/// Resolve unary math functions: sqrt, log, exp
+fn resolveUnaryMathFunc(s: []const u8, func: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    const prefix_len = func.len + 1;
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[prefix_len..end], " \t");
+    const v = resolveValueToPxDepth(inner, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    if (std.mem.eql(u8, func, "sqrt")) return @sqrt(@max(v, 0));
+    if (std.mem.eql(u8, func, "log")) return @log(@max(v, std.math.floatMin(f32)));
+    if (std.mem.eql(u8, func, "exp")) return @exp(v);
+    return null;
+}
+
+/// Resolve pow(base, exponent)
+fn resolvePowFunc(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[4..end], " \t"); // "pow("
+    var paren_depth: usize = 0;
+    var comma_pos: ?usize = null;
+    for (inner, 0..) |ch, i| {
+        if (ch == '(') paren_depth += 1;
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ',' and paren_depth == 0) { comma_pos = i; break; }
+    }
+    const cp = comma_pos orelse return null;
+    const base_v = resolveValueToPxDepth(std.mem.trim(u8, inner[0..cp], " \t"), font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    const exp_v = resolveValueToPxDepth(std.mem.trim(u8, inner[cp + 1 ..], " \t"), font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    return std.math.pow(f32, base_v, exp_v);
+}
+
+/// Resolve hypot(A, B, ...)
+fn resolveHypotFunc(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32, depth: u32) ?f32 {
+    if (depth > 10) return null;
+    var end = s.len;
+    if (end > 0 and s[end - 1] == ')') end -= 1;
+    const inner = std.mem.trim(u8, s[6..end], " \t"); // "hypot("
+    var sum: f32 = 0;
+    var paren_depth: usize = 0;
+    var start: usize = 0;
+    for (inner, 0..) |ch, i| {
+        if (ch == '(') paren_depth += 1;
+        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ',' and paren_depth == 0) {
+            const arg = std.mem.trim(u8, inner[start..i], " \t");
+            const v = resolveValueToPxDepth(arg, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+            sum += v * v;
+            start = i + 1;
+        }
+    }
+    const last = std.mem.trim(u8, inner[start..], " \t");
+    const v = resolveValueToPxDepth(last, font_size, vw, vh, pct_base, depth + 1) orelse return null;
+    sum += v * v;
+    return @sqrt(sum);
 }
 
 fn parseGridTemplate(s: []const u8, alloc: std.mem.Allocator) ?[]const ComputedStyle.GridTrackSize {

@@ -993,6 +993,12 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "order", .css = "order" },
         .{ .camel = "tableLayout", .css = "table-layout" },
         .{ .camel = "willChange", .css = "will-change" },
+        // CSS Transforms Level 2 individual properties
+        .{ .camel = "scale", .css = "scale" },
+        .{ .camel = "rotate", .css = "rotate" },
+        .{ .camel = "translate", .css = "translate" },
+        .{ .camel = "transitionDelay", .css = "transition-delay" },
+        .{ .camel = "aspectRatio", .css = "aspect-ratio" },
     };
 
     for (camel_css_pairs) |pair| {

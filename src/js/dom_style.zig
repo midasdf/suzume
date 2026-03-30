@@ -883,6 +883,37 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
+    // Angle properties: rotate, transition-delay (resolved to deg)
+    if (eqlIgnoreCase(prop, "rotate")) {
+        if (isCssMathFunc(trimmed)) {
+            const font_size = getElementFontSizeFromStyle(c, elem_val);
+            if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, 0)) |v| {
+                var buf: [64]u8 = undefined;
+                // Format as integer if whole, otherwise float, with deg suffix
+                const iv: i32 = @intFromFloat(@round(v));
+                const result = if (@abs(v - @as(f32, @floatFromInt(iv))) < 0.0001)
+                    std.fmt.bufPrint(&buf, "{d}deg", .{iv}) catch return qjs.JS_NewStringLen(c, "0deg", 4)
+                else
+                    std.fmt.bufPrint(&buf, "{d}deg", .{v}) catch return qjs.JS_NewStringLen(c, "0deg", 4);
+                return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            }
+        }
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
+    // Time properties: transition-delay
+    if (eqlIgnoreCase(prop, "transition-delay")) {
+        if (isCssMathFunc(trimmed)) {
+            const font_size = getElementFontSizeFromStyle(c, elem_val);
+            if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, 0)) |v| {
+                var buf: [64]u8 = undefined;
+                const result = std.fmt.bufPrint(&buf, "{d}s", .{v}) catch return qjs.JS_NewStringLen(c, "0s", 2);
+                return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            }
+        }
+        return qjs.JS_NewStringLen(c, val.ptr, val.len);
+    }
+
     // Shorthand margin/padding: resolve each value individually
     if (eqlIgnoreCase(prop, "margin") or eqlIgnoreCase(prop, "padding")) {
         return resolveBoxShorthandForComputed(c, trimmed, elem_val);
@@ -1095,16 +1126,28 @@ pub fn isColorProperty(prop: []const u8) bool {
 /// Check if a CSS value string contains NaN or infinity keywords.
 /// Check if value starts with a CSS math function that should be resolved.
 pub fn isCssMathFunc(s: []const u8) bool {
-    if (s.len < 5) return false;
-    return (eqlIgnoreCase(s[0..5], "calc(")) or
-        (s.len >= 4 and eqlIgnoreCase(s[0..4], "min(")) or
-        (s.len >= 4 and eqlIgnoreCase(s[0..4], "max(")) or
+    if (s.len < 4) return false;
+    return (s.len >= 5 and eqlIgnoreCase(s[0..5], "calc(")) or
+        (eqlIgnoreCase(s[0..4], "min(")) or
+        (eqlIgnoreCase(s[0..4], "max(")) or
         (s.len >= 6 and eqlIgnoreCase(s[0..6], "clamp(")) or
         (s.len >= 6 and eqlIgnoreCase(s[0..6], "round(")) or
-        (s.len >= 4 and eqlIgnoreCase(s[0..4], "mod(")) or
-        (s.len >= 4 and eqlIgnoreCase(s[0..4], "rem(")) or
-        (s.len >= 4 and eqlIgnoreCase(s[0..4], "abs(")) or
-        (s.len >= 5 and eqlIgnoreCase(s[0..5], "sign("));
+        (eqlIgnoreCase(s[0..4], "mod(")) or
+        (eqlIgnoreCase(s[0..4], "rem(")) or
+        (eqlIgnoreCase(s[0..4], "abs(")) or
+        (s.len >= 5 and eqlIgnoreCase(s[0..5], "sign(")) or
+        (eqlIgnoreCase(s[0..4], "sin(")) or
+        (eqlIgnoreCase(s[0..4], "cos(")) or
+        (eqlIgnoreCase(s[0..4], "tan(")) or
+        (s.len >= 5 and eqlIgnoreCase(s[0..5], "asin(")) or
+        (s.len >= 5 and eqlIgnoreCase(s[0..5], "acos(")) or
+        (s.len >= 5 and eqlIgnoreCase(s[0..5], "atan(")) or
+        (s.len >= 6 and eqlIgnoreCase(s[0..6], "atan2(")) or
+        (s.len >= 5 and eqlIgnoreCase(s[0..5], "sqrt(")) or
+        (eqlIgnoreCase(s[0..4], "pow(")) or
+        (s.len >= 6 and eqlIgnoreCase(s[0..6], "hypot(")) or
+        (eqlIgnoreCase(s[0..4], "log(")) or
+        (eqlIgnoreCase(s[0..4], "exp("));
 }
 
 pub fn containsNanOrInfinity(s: []const u8) bool {
@@ -1376,6 +1419,16 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "flex-grow")) return qjs.JS_NewStringLen(c, "0", 1);
     if (eqlIgnoreCase(prop, "flex-shrink")) return qjs.JS_NewStringLen(c, "1", 1);
     if (eqlIgnoreCase(prop, "flex-basis")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Transforms Level 2 individual properties
+    if (eqlIgnoreCase(prop, "scale")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "rotate")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "translate")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "transform")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "transition-delay")) return qjs.JS_NewStringLen(c, "0s", 2);
+    if (eqlIgnoreCase(prop, "order")) return qjs.JS_NewStringLen(c, "0", 1);
+    if (eqlIgnoreCase(prop, "aspect-ratio")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "reading-flow")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "reading-order")) return qjs.JS_NewStringLen(c, "0", 1);
     // Default fallback
     return qjs.JS_NewStringLen(c, "", 0);
 }
@@ -1599,6 +1652,15 @@ pub fn windowGetComputedStyle(
         .{ "aspect-ratio", "aspectRatio" },
         .{ "reading-flow", "readingFlow" },
         .{ "reading-order", "readingOrder" },
+        // CSS Transforms Level 2 individual properties
+        .{ "scale", "scale" },
+        .{ "rotate", "rotate" },
+        .{ "translate", "translate" },
+        // Additional properties for CSS math function tests
+        .{ "flex-basis", "flexBasis" },
+        .{ "order", "order" },
+        .{ "transform", "transform" },
+        .{ "transition-delay", "transitionDelay" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -1716,6 +1778,19 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "rem(")) return true;
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "abs(")) return true;
         if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sign(")) return true;
+        // Trig functions
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "sin(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "cos(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "tan(")) return true;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "asin(")) return true;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "acos(")) return true;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "atan(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "atan2(")) return true;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sqrt(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "pow(")) return true;
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "hypot(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "log(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "exp(")) return true;
         // Color functions
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) return true;
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "lab(")) return true;
@@ -1831,6 +1906,26 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
     if (eqlIgnoreCase(prop, "overflow")) {
         // overflow shorthand: 1-2 values from {visible, hidden, scroll, auto, clip}
         return isValidOverflowShorthand(val);
+    }
+    // CSS Transforms Level 2: individual transform properties
+    if (eqlIgnoreCase(prop, "rotate")) {
+        // none, angle, or math function returning angle
+        if (eqlIgnoreCase(val, "none")) return true;
+        if (val.len > 0 and val[val.len - 1] == ')') return true; // math function
+        // Angle values: Ndeg, Nrad, Ngrad, Nturn
+        if (std.mem.endsWith(u8, val, "deg") or std.mem.endsWith(u8, val, "rad") or
+            std.mem.endsWith(u8, val, "grad") or std.mem.endsWith(u8, val, "turn"))
+            return true;
+        return std.fmt.parseFloat(f32, val) != error.InvalidCharacter; // bare number = degrees
+    }
+    if (eqlIgnoreCase(prop, "scale")) {
+        if (eqlIgnoreCase(val, "none")) return true;
+        if (val.len > 0 and val[val.len - 1] == ')') return true;
+        return std.fmt.parseFloat(f32, val) != error.InvalidCharacter;
+    }
+    if (eqlIgnoreCase(prop, "translate")) {
+        if (eqlIgnoreCase(val, "none")) return true;
+        return true; // Accept any translate value
     }
     // Known shorthand properties that we don't deeply validate — accept
     const known_shorthands = [_][]const u8{
