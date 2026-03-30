@@ -2784,7 +2784,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof HTMLTrackElement!=='undefined'){var TK=HTMLTrackElement;ru(TK,'src');rs(TK,'srclang');rs(TK,'label');rs(TK,'kind');rb(TK,'default');}
             \\  if(typeof HTMLCanvasElement!=='undefined'){var CN=HTMLCanvasElement;ri(CN,'width',null,300);ri(CN,'height',null,150);}
             \\  if(typeof HTMLMapElement!=='undefined'){rs(HTMLMapElement,'name');}
-            \\  if(typeof HTMLAreaElement!=='undefined'){var AR=HTMLAreaElement;rs(AR,'alt');rs(AR,'coords');rs(AR,'shape');rs(AR,'target');rs(AR,'download');rs(AR,'rel');rrp(AR);rb(AR,'noHref','nohref');ru(AR,'href');rrl(AR,'rel');}
+            \\  if(typeof HTMLAreaElement!=='undefined'){var AR=HTMLAreaElement;rs(AR,'alt');rs(AR,'coords');rs(AR,'shape');rs(AR,'target');rs(AR,'download');rs(AR,'rel');rrp(AR);rb(AR,'noHref','nohref');ru(AR,'href');}
             \\  if(typeof HTMLFormElement!=='undefined'){var FM=HTMLFormElement;rs(FM,'name');rs(FM,'method');rs(FM,'target');rs(FM,'acceptCharset','accept-charset');ru(FM,'action');rs(FM,'enctype');rs(FM,'encoding');rs(FM,'autocomplete');rs(FM,'rel');rb(FM,'noValidate','novalidate');}
             \\  if(typeof HTMLFieldSetElement!=='undefined'){var FS=HTMLFieldSetElement;rs(FS,'name');rb(FS,'disabled');}
             \\  if(typeof HTMLLabelElement!=='undefined'){rs(HTMLLabelElement,'htmlFor','for');}
