@@ -177,7 +177,15 @@ pub fn elementGetParentElement(
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
     const p: *lxb.lxb_dom_node_t = node.parent orelse return quickjs.JS_NULL();
     if (p.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return quickjs.JS_NULL();
-    return api.wrapNode(c, p);
+    // Check if parent is a DocumentFragment (backed by div but nodeType overridden to 11)
+    const parent_js = api.wrapNode(c, p);
+    const nt_val = qjs.JS_GetPropertyStr(c, parent_js, "nodeType");
+    defer qjs.JS_FreeValue(c, nt_val);
+    if (nt_val.tag == qjs.JS_TAG_INT and qjs.JS_VALUE_GET_INT(nt_val) != 1) {
+        qjs.JS_FreeValue(c, parent_js);
+        return quickjs.JS_NULL(); // Not a real Element (DocumentFragment, Document, etc.)
+    }
+    return parent_js;
 }
 
 pub fn elementGetFirstChild(
