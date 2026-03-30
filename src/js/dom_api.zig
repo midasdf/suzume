@@ -2157,7 +2157,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\(function(){
             \\  var NP=globalThis.__np;
             \\  NP.lookupPrefix=function(ns){if(!ns)return null;var el=this.nodeType===1?this:this.parentElement;while(el){if(el.namespaceURI===ns&&el.prefix)return el.prefix;el=el.parentElement;}return null;};
-            \\  NP.lookupNamespaceURI=function(prefix){var el=this.nodeType===1?this:this.parentElement;while(el){if(prefix===null||prefix===undefined){if(el.namespaceURI&&!el.prefix)return el.namespaceURI;}else if(el.prefix===prefix)return el.namespaceURI;el=el.parentElement;}if(!prefix)return 'http://www.w3.org/1999/xhtml';return null;};
+            \\  NP.lookupNamespaceURI=function(prefix){if(this.nodeType===10||this.nodeType===11)return null;var el=this.nodeType===1?this:this.parentElement;while(el){if(prefix===null||prefix===undefined){if(el.namespaceURI&&!el.prefix)return el.namespaceURI;}else if(el.prefix===prefix)return el.namespaceURI;el=el.parentElement;}if(!prefix&&this.nodeType!==11)return 'http://www.w3.org/1999/xhtml';return null;};
             \\  NP.isDefaultNamespace=function(ns){return this.lookupNamespaceURI(null)===ns;};
             \\  NP.isSameNode=function(o){return this===o;};
             \\  NP.hasChildNodes=function(){return this.childNodes&&this.childNodes.length>0;};
