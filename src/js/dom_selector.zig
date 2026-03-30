@@ -326,7 +326,15 @@ pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
     const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
-        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return @intFromPtr(ch) == @intFromPtr(node);
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            // Skip doctype nodes masquerading as elements (null local name)
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and name_len > 0) {
+                return @intFromPtr(ch) == @intFromPtr(node);
+            }
+        }
         child = ch.next;
     }
     return false;
@@ -336,7 +344,14 @@ pub fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
     const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     var child = lxb_dom_node_last_child_noi(parent);
     while (child) |ch| {
-        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return @intFromPtr(ch) == @intFromPtr(node);
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and name_len > 0) {
+                return @intFromPtr(ch) == @intFromPtr(node);
+            }
+        }
         child = lxb_dom_node_prev_noi(ch);
     }
     return false;
@@ -745,6 +760,11 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     }
 
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    // Pseudo-class selectors (starting with :)
+    if (selector[0] == ':' and selector.len > 1 and selector[1] != ':') {
+        return matchSingleSimple(elem, selector);
+    }
 
     // #id selector
     if (selector[0] == '#') {
