@@ -159,6 +159,45 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":optional")) {
             return !lxb_dom_element_has_attribute(elem, "required", 8);
         }
+        // :valid / :invalid — form validation pseudo-classes
+        // Simplified: elements with required but no value are :invalid
+        if (std.ascii.eqlIgnoreCase(sel, ":valid")) {
+            if (!lxb_dom_element_has_attribute(elem, "required", 8)) return true;
+            var val_len: usize = 0;
+            const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
+            return val != null and val_len > 0;
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":invalid")) {
+            if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+            var val_len: usize = 0;
+            const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
+            return val == null or val_len == 0;
+        }
+        // :read-only / :read-write
+        if (std.ascii.eqlIgnoreCase(sel, ":read-write")) {
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr == null) return false;
+            const tag = name_ptr.?[0..name_len];
+            if ((std.ascii.eqlIgnoreCase(tag, "input") or std.ascii.eqlIgnoreCase(tag, "textarea")) and !lxb_dom_element_has_attribute(elem, "readonly", 8) and !lxb_dom_element_has_attribute(elem, "disabled", 8)) return true;
+            return lxb_dom_element_has_attribute(elem, "contenteditable", 15);
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":read-only")) {
+            var name_len2: usize = 0;
+            const name_ptr2 = lxb_dom_element_local_name(elem, &name_len2);
+            if (name_ptr2 == null) return true;
+            const tag2 = name_ptr2.?[0..name_len2];
+            if ((std.ascii.eqlIgnoreCase(tag2, "input") or std.ascii.eqlIgnoreCase(tag2, "textarea")) and (lxb_dom_element_has_attribute(elem, "readonly", 8) or lxb_dom_element_has_attribute(elem, "disabled", 8))) return true;
+            if (!std.ascii.eqlIgnoreCase(tag2, "input") and !std.ascii.eqlIgnoreCase(tag2, "textarea")) return !lxb_dom_element_has_attribute(elem, "contenteditable", 15);
+            return false;
+        }
+        // :placeholder-shown
+        if (std.ascii.eqlIgnoreCase(sel, ":placeholder-shown")) {
+            if (!lxb_dom_element_has_attribute(elem, "placeholder", 11)) return false;
+            var val_len2: usize = 0;
+            const val2 = lxb_dom_element_get_attribute(elem, "value", 5, &val_len2);
+            return val2 == null or val_len2 == 0;
+        }
         if (std.ascii.eqlIgnoreCase(sel, ":only-child")) {
             return isFirstChild(@ptrCast(elem)) and isLastChild(@ptrCast(elem));
         }
