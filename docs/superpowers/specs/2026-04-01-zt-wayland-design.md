@@ -36,6 +36,7 @@ Add a fourth backend (`-Dbackend=wayland`) to zt, implementing the Wayland displ
 | wl_data_device_manager | 3 | Clipboard (copy/paste) |
 | zwp_primary_selection_device_manager_v1 | 1 | Primary selection (middle-click paste) |
 | zxdg_decoration_manager_v1 | 1 | Server-side decoration |
+| wp_cursor_shape_manager_v1 | 1 | Cursor shape (avoids loading cursor theme manually) |
 
 ## File Structure
 
@@ -66,7 +67,11 @@ New `-Dbackend=wayland` option. Links only `xkbcommon` (no xcb, no libwayland). 
 
 ### main.zig
 
-Add `.wayland` branch to `switch (config.backend)`. Event loop uses Linux epoll (shared with fbdev/x11). Wayland socket fd registered in epoll alongside PTY fd and timer fds.
+Add `.wayland` branch to all `switch (config.backend)` and `if (config.backend == .x11 or config.backend == .macos)` conditionals in main.zig. Includes: `Backend` type import, `BackendEvent` union, `backend.init()` call (no allocator arg, matching x11/macos pattern), and event dispatch in the epoll loop.
+
+Event loop uses Linux epoll (shared with fbdev/x11). Wayland socket fd registered in epoll alongside PTY fd and timer fds.
+
+Build.zig adds `use_wayland` boolean flag (matching existing `use_x11`/`use_macos` pattern) to derive the backend enum in config.zig.
 
 ## Wire Protocol (wire.zig)
 
@@ -81,9 +86,11 @@ All messages share a common header:
 
 ```
 [object_id: u32][size_opcode: u32][payload...]
-                 upper 16 bits = total size in bytes (8-byte aligned)
+                 upper 16 bits = total size in bytes (4-byte aligned, includes 8-byte header)
                  lower 16 bits = opcode
 ```
+
+Individual arguments within messages are padded to 4-byte boundaries (not 8).
 
 ### Key Types
 
@@ -112,7 +119,11 @@ Uses `sendmsg`/`recvmsg` with `SCM_RIGHTS` ancillary data. Required for passing 
 
 ### Receive Buffer
 
-4KB ring buffer. On epoll IN: `recvmsg` -> parse headers -> dispatch to registered handlers via object_id lookup table. Multiple messages may arrive in a single `recvmsg`.
+4KB ring buffer. On epoll IN: `recvmsg` -> parse headers -> dispatch to registered handlers via object_id lookup table. Multiple messages may arrive in a single `recvmsg`. Must handle partial reads where a message spans two `recvmsg` calls (buffer remaining bytes, prepend to next read).
+
+### Error Handling
+
+`wl_display` (object ID 1) can send an `error` event at any time, indicating a protocol violation or compositor-side error. wire.zig must always dispatch `wl_display.error` and surface it as a fatal error with the error code and message. Without this, protocol violations result in silent hangs or crashes with no diagnostic information.
 
 ## Core Protocol (core.zig)
 
@@ -127,6 +138,7 @@ connect() -> wl_display (ID=1)
        wl_data_device_manager, zwp_text_input_manager_v3,
        zxdg_decoration_manager_v1, zwp_primary_selection_device_manager_v1
   -> wl_display.sync() (roundtrip: ensure all globals received)
+  -> wl_shm.format events (verify ARGB8888 supported; mandatory per protocol)
   -> wl_compositor.create_surface() -> wl_surface
   -> xdg_wm_base.get_xdg_surface(wl_surface) -> xdg_surface
   -> xdg_surface.get_toplevel() -> xdg_toplevel
@@ -157,7 +169,7 @@ pool.create_buffer(offset=page_size, ...)  -> buffer_b
 
 ### Pixel Format
 
-Wayland `WL_SHM_FORMAT_ARGB8888` on little-endian has the same memory layout as X11's BGRA32. No changes to render.zig needed.
+Wayland `WL_SHM_FORMAT_ARGB8888` on little-endian has the same memory layout as X11's BGRA32. No changes to render.zig needed. Call `wl_surface.set_buffer_scale(config.scale)` during surface setup to inform the compositor of the buffer's scale factor (prevents double-scaling on HiDPI displays).
 
 ### Resize
 
@@ -204,16 +216,29 @@ wl_keyboard.repeat_info(rate, delay)
   -> timerfd_create(CLOCK_MONOTONIC)
   -> on key press: timerfd_settime(delay_ms, then interval = 1000/rate ms)
   -> on key release / new key: reset timer
-  -> timerfd registered in epoll (same pattern as cursor blink timer)
+  -> timerfd registered in backend's internal epoll (see Internal Epoll section)
 ```
+
+### Internal Epoll
+
+The Wayland backend creates its own internal epoll fd that wraps:
+- The Wayland socket fd (protocol events)
+- The key repeat timerfd
+- Clipboard pipe read fds (temporary, removed after read completes)
+
+This internal epoll fd is what `getFd()` returns to main.zig. When main.zig's outer epoll signals the backend fd as readable, `pollEvents()` calls `epoll_wait` on the internal epoll to determine which internal fd fired. This keeps main.zig's dispatch logic unchanged (single backend fd, single `EpollTag.backend`).
 
 ### Pointer (minimal)
 
 ```
 wl_seat.get_pointer() -> wl_pointer
-  enter/leave: set default cursor (compositor handles cursor image)
+  enter: set cursor shape via wp_cursor_shape_device_v1.set_shape(default)
+         fallback if wp_cursor_shape_manager_v1 unavailable: create 1x1 wl_surface as cursor
+  leave: no action
   button: store serial for clipboard operations
 ```
+
+In Wayland, the compositor does NOT set a cursor for the client. The client must explicitly set its own cursor on `wl_pointer.enter`. Using `wp_cursor_shape_manager_v1` avoids loading cursor theme files manually.
 
 No mouse selection or scroll handling.
 
@@ -297,6 +322,12 @@ wl_data_device and primary_selection share the same offer/receive/send pattern. 
 
 Pipe read fds are registered in epoll for non-blocking reads to avoid blocking the UI.
 
+## XDG Shell Lifecycle (xdg_shell.zig)
+
+### ping/pong
+
+Compositors send `xdg_wm_base.ping(serial)` periodically to check client responsiveness. The client must respond with `xdg_wm_base.pong(serial)` immediately. Failure to respond causes compositors to grey out the window or show "not responding" dialogs. This is handled in `pollEvents()` as a simple event -> response, no state tracking needed.
+
 ## Decoration (decoration.zig)
 
 ```
@@ -364,6 +395,13 @@ pub const WaylandBackend = struct {
     pub fn queryGeometry(self: *WaylandBackend) struct { w: u32, h: u32 }
     pub fn getFd(self: *WaylandBackend) ?posix.fd_t
     pub fn pollEvents(self: *WaylandBackend, ...) ?Event
+
+    // No-op stubs (fbdev-only, called unconditionally by main.zig)
+    pub fn saveConsoleState(self: *WaylandBackend) !void
+    pub fn restoreConsoleState(self: *WaylandBackend) void
+    pub fn setupVtSwitching(self: *WaylandBackend) !void
+    pub fn releaseVt(self: *WaylandBackend) void
+    pub fn acquireVt(self: *WaylandBackend) void
 };
 ```
 
@@ -385,17 +423,17 @@ Only external dependency: `xkbcommon` (already used by X11 backend).
 
 | File | Estimated LoC |
 |------|--------------|
-| wayland.zig | ~300 |
-| wire.zig | ~250 |
-| core.zig | ~200 |
-| xdg_shell.zig | ~150 |
-| seat.zig | ~250 |
-| text_input.zig | ~100 |
-| clipboard.zig | ~200 |
-| decoration.zig | ~50 |
-| **Total** | **~1500** |
+| wayland.zig | ~350 |
+| wire.zig | ~450 |
+| core.zig | ~250 |
+| xdg_shell.zig | ~200 |
+| seat.zig | ~300 |
+| text_input.zig | ~120 |
+| clipboard.zig | ~250 |
+| decoration.zig | ~80 |
+| **Total** | **~2000** |
 
-Comparable to x11.zig (950 lines) + xcb-imdkit dependency handling. The wire protocol layer accounts for the extra size.
+Wire protocol is the largest module due to: socket connection, sendmsg/recvmsg with SCM_RIGHTS, message framing with partial-read handling, object ID allocation with free list, event dispatch table, and argument serialization for 8 Wayland types (int, uint, fixed, string, object, new_id, array, fd).
 
 ## Testing Strategy
 
@@ -413,3 +451,5 @@ Comparable to x11.zig (950 lines) + xcb-imdkit dependency handling. The wire pro
 | Key repeat timing drift | Use timerfd absolute mode, not relative |
 | SHM buffer race (write while compositor reads) | Double buffer with release event tracking |
 | preedit rendering artifacts | Clear preedit region before redraw |
+| Cursor invisible on hover | wp_cursor_shape_manager_v1, fallback to 1x1 surface |
+| Client marked unresponsive | Always handle xdg_wm_base ping with immediate pong |
