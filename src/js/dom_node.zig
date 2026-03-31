@@ -292,6 +292,40 @@ pub fn elementGetChildNodes(
 }
 
 /// Check if `node` is an ancestor of `target` (or the same node).
+/// Handle appendChild for JS-level nodes (like ProcessingInstruction) that aren't backed by lexbor.
+/// Sets parentNode on the child and appends to parent's childNodes via JS.
+fn appendJsNode(ctx: *qjs.JSContext, parent_js: qjs.JSValue, child_js: qjs.JSValue) qjs.JSValue {
+    // Remove from old parent if it has one
+    const old_parent = qjs.JS_GetPropertyStr(ctx, child_js, "parentNode");
+    if (!quickjs.JS_IsNull(old_parent) and !quickjs.JS_IsUndefined(old_parent)) {
+        const remove_fn = qjs.JS_GetPropertyStr(ctx, old_parent, "removeChild");
+        if (qjs.JS_IsFunction(ctx, remove_fn)) {
+            var rm_args = [1]qjs.JSValue{qjs.JS_DupValue(ctx, child_js)};
+            const rm_r = qjs.JS_Call(ctx, remove_fn, old_parent, 1, &rm_args);
+            qjs.JS_FreeValue(ctx, rm_r);
+            qjs.JS_FreeValue(ctx, rm_args[0]);
+        }
+        qjs.JS_FreeValue(ctx, remove_fn);
+    }
+    qjs.JS_FreeValue(ctx, old_parent);
+
+    // Set parentNode on child
+    _ = qjs.JS_SetPropertyStr(ctx, child_js, "parentNode", qjs.JS_DupValue(ctx, parent_js));
+
+    // The child is a JS object — we can't insert it into the lexbor tree.
+    // Set ownerDocument from parent
+    const parent_node = api.getNode(ctx, parent_js);
+    if (parent_node != null) {
+        const global = qjs.JS_GetGlobalObject(ctx);
+        const doc = qjs.JS_GetPropertyStr(ctx, global, "document");
+        _ = qjs.JS_SetPropertyStr(ctx, child_js, "ownerDocument", doc);
+        qjs.JS_FreeValue(ctx, global);
+    }
+
+    api.setDomDirty();
+    return qjs.JS_DupValue(ctx, child_js);
+}
+
 /// DOM spec: only Document (9), DocumentFragment (11), and Element (1) can have children.
 fn canHaveChildren(node: *lxb.lxb_dom_node_t) bool {
     return node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT or
@@ -330,8 +364,15 @@ pub fn elementAppendChild(
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
-    const child = api.getNode(c, args[0]) orelse
-        return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
+    const child = api.getNode(c, args[0]) orelse {
+        // Check if it's a JS-level Node (like PI) with nodeType property
+        const nt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, nt);
+        if (nt.tag == qjs.JS_TAG_UNDEFINED)
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
+        // JS-level node (PI, etc.) — delegate to JS parentNode/childNodes manipulation
+        return appendJsNode(c, this_val, args[0]);
+    };
     // DOM spec step 1: parent must be able to have children
     if (!canHaveChildren(parent))
         return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
