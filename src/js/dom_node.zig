@@ -910,8 +910,9 @@ pub fn nodeIsEqualNode(
     // Handle null argument: spec says return false
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return quickjs.JS_NewBool(false);
+
+    // For elements, also compare namespaceURI and prefix via JS properties
     const node_a = api.getNode(c, this_val) orelse blk: {
-        // Fallback for document object
         const doc = api.getDocument(c) orelse return quickjs.JS_NewBool(false);
         break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
     };
@@ -919,7 +920,36 @@ pub fn nodeIsEqualNode(
         const doc = api.getDocument(c) orelse return quickjs.JS_NewBool(false);
         break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
     };
-    return quickjs.JS_NewBool(nodesAreEqual(node_a, node_b));
+    if (!nodesAreEqual(node_a, node_b)) return quickjs.JS_NewBool(false);
+
+    // Additional JS-level checks for elements: namespaceURI and prefix
+    if (node_a.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        if (!jsPropsEqual(c, this_val, args[0], "namespaceURI")) return quickjs.JS_NewBool(false);
+        if (!jsPropsEqual(c, this_val, args[0], "prefix")) return quickjs.JS_NewBool(false);
+    }
+    return quickjs.JS_NewBool(true);
+}
+
+/// Compare a JS string property on two objects for equality (including both null/undefined).
+fn jsPropsEqual(c: *qjs.JSContext, a: qjs.JSValue, b: qjs.JSValue, prop: [*:0]const u8) bool {
+    const va = qjs.JS_GetPropertyStr(c, a, prop);
+    defer qjs.JS_FreeValue(c, va);
+    const vb = qjs.JS_GetPropertyStr(c, b, prop);
+    defer qjs.JS_FreeValue(c, vb);
+    // Both null/undefined = equal
+    if ((quickjs.JS_IsNull(va) or quickjs.JS_IsUndefined(va)) and
+        (quickjs.JS_IsNull(vb) or quickjs.JS_IsUndefined(vb)))
+        return true;
+    // One is null/undefined but not the other
+    if (quickjs.JS_IsNull(va) or quickjs.JS_IsUndefined(va) or
+        quickjs.JS_IsNull(vb) or quickjs.JS_IsUndefined(vb))
+        return false;
+    // Compare as strings
+    const sa = api.jsStringToSlice(c, va) orelse return false;
+    defer qjs.JS_FreeCString(c, sa.ptr);
+    const sb = api.jsStringToSlice(c, vb) orelse return false;
+    defer qjs.JS_FreeCString(c, sb.ptr);
+    return std.mem.eql(u8, sa.ptr[0..sa.len], sb.ptr[0..sb.len]);
 }
 
 /// DOM Standard §4.4: Structural equality check for isEqualNode
@@ -1016,6 +1046,9 @@ pub fn nodeCompareDocumentPosition(
     const CONTAINS: i32 = 8;
     const CONTAINED_BY: i32 = 16;
     const IMPL_SPECIFIC: i32 = 32;
+
+    // JS-level identity check first (handles JS-only nodes like new Document(), PI, etc.)
+    if (this_val.tag == args[0].tag and this_val.u.ptr == args[0].u.ptr) return qjs.JS_NewInt32(c, 0);
 
     const node_a = api.getNode(c, this_val) orelse return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | PRECEDING);
     const node_b = api.getNode(c, args[0]) orelse return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | PRECEDING);

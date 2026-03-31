@@ -9,12 +9,9 @@ const events = @import("events.zig");
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
 /// Validate an HTML element name per HTML spec §13.1.2.1
 /// HTML is very permissive — only empty and NUL are rejected
+/// Validate element name per DOM spec: must match XML Name production.
 fn isValidElementName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    for (name) |ch| {
-        if (ch == 0) return false; // NUL character
-    }
-    return true;
+    return isValidXmlName(name);
 }
 
 pub extern fn lxb_dom_document_create_text_node(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
@@ -251,8 +248,22 @@ pub fn implCreateDocumentType(
         _ = qjs.JS_SetPropertyStr(c, obj, "systemId", qjs.JS_NewString(c, ""));
     }
     _ = qjs.JS_SetPropertyStr(c, obj, "childNodes", qjs.JS_NewArray(c));
-    _ = qjs.JS_SetPropertyStr(c, obj, "nodeValue", quickjs.JS_NULL());
-    _ = qjs.JS_SetPropertyStr(c, obj, "textContent", quickjs.JS_NULL());
+    // DocumentType: nodeValue and textContent are null (getter), setter is no-op per DOM spec
+    {
+        const nv_js =
+            \\(function(o){
+            \\  Object.defineProperty(o,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\  Object.defineProperty(o,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\})
+        ;
+        const nv_fn = qjs.JS_Eval(c, nv_js, nv_js.len, "<dt-nv>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(nv_fn)) {
+            var nv_args = [1]qjs.JSValue{obj};
+            const nv_r = qjs.JS_Call(c, nv_fn, quickjs.JS_UNDEFINED(), 1, &nv_args);
+            qjs.JS_FreeValue(c, nv_r);
+            qjs.JS_FreeValue(c, nv_fn);
+        }
+    }
     _ = qjs.JS_SetPropertyStr(c, obj, "firstChild", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, obj, "lastChild", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, obj, "parentElement", quickjs.JS_NULL());
@@ -267,6 +278,18 @@ pub fn implCreateDocumentType(
     _ = qjs.JS_SetPropertyStr(c, obj, "parentNode", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, obj, "nextSibling", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, obj, "previousSibling", quickjs.JS_NULL());
+    // Set DocumentType.prototype so it inherits Node methods (compareDocumentPosition etc.)
+    {
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        const dt_ctor = qjs.JS_GetPropertyStr(c, global, "DocumentType");
+        defer qjs.JS_FreeValue(c, dt_ctor);
+        const dt_proto = qjs.JS_GetPropertyStr(c, dt_ctor, "prototype");
+        defer qjs.JS_FreeValue(c, dt_proto);
+        if (!quickjs.JS_IsUndefined(dt_proto)) {
+            _ = qjs.JS_SetPrototype(c, obj, dt_proto);
+        }
+    }
     // isEqualNode for DocumentType
     const ieq_js = "(function(o){if(!o||o.nodeType!==10)return false;return this.name===o.name&&this.publicId===o.publicId&&this.systemId===o.systemId;})";
     const ieq_fn = qjs.JS_Eval(c, ieq_js, ieq_js.len, "<dt-ieq>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -274,6 +297,48 @@ pub fn implCreateDocumentType(
     const isn_js = "(function(o){return this===o;})";
     const isn_fn = qjs.JS_Eval(c, isn_js, isn_js.len, "<dt-isn>", qjs.JS_EVAL_TYPE_GLOBAL);
     _ = qjs.JS_SetPropertyStr(c, obj, "isSameNode", isn_fn);
+    // compareDocumentPosition for JS-only DocumentType nodes
+    {
+        const cdp_js =
+            \\(function(other){
+            \\  if(this===other)return 0;
+            \\  var DISC=1,PREC=2,FOLL=4,CONT=8,CONTBY=16,IMPL=32;
+            \\  if(!other||typeof other!=='object'||!('nodeType' in other))return DISC|IMPL|PREC;
+            \\  var n=other.parentNode;while(n){if(n===this)return CONTBY|FOLL;n=n.parentNode;}
+            \\  n=this.parentNode;while(n){if(n===other)return CONT|PREC;n=n.parentNode;}
+            \\  var rA=this;while(rA.parentNode)rA=rA.parentNode;
+            \\  var rB=other;while(rB.parentNode)rB=rB.parentNode;
+            \\  if(rA!==rB)return DISC|IMPL|PREC;
+            \\  var cA=[],cB=[];n=this;while(n){cA.push(n);n=n.parentNode;}
+            \\  n=other;while(n){cB.push(n);n=n.parentNode;}
+            \\  var ia=cA.length-1,ib=cB.length-1;
+            \\  while(ia>0&&ib>0){ia--;ib--;if(cA[ia]!==cB[ib]){
+            \\    var p=cA[ia+1],cn=p&&p.childNodes;
+            \\    if(cn){for(var k=0;k<cn.length;k++){if(cn[k]===cA[ia])return FOLL;if(cn[k]===cB[ib])return PREC;}}
+            \\    return PREC;}}
+            \\  return FOLL;
+            \\})
+        ;
+        _ = qjs.JS_SetPropertyStr(c, obj, "compareDocumentPosition", qjs.JS_Eval(c, cdp_js, cdp_js.len, "<dt-cdp>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+    // Node methods needed for WPT
+    {
+        const rm_js = "(function(){if(this.parentNode)this.parentNode.removeChild(this);})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "remove", qjs.JS_Eval(c, rm_js, rm_js.len, "<dt-rm>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const cn_js = "(function(d){var o=document.implementation.createDocumentType(this.name,this.publicId,this.systemId);if(d&&this.childNodes)for(var i=0;i<this.childNodes.length;i++)o.childNodes.push(this.childNodes[i].cloneNode(true));return o;})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "cloneNode", qjs.JS_Eval(c, cn_js, cn_js.len, "<dt-cn>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const cont_js = "(function(o){return false;})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "contains", qjs.JS_Eval(c, cont_js, cont_js.len, "<dt-cont>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const hcn_js = "(function(){return false;})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "hasChildNodes", qjs.JS_Eval(c, hcn_js, hcn_js.len, "<dt-hcn>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const grn_js = "(function(){return this.parentNode?this.parentNode.getRootNode():this;})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "getRootNode", qjs.JS_Eval(c, grn_js, grn_js.len, "<dt-grn>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const lp_js = "(function(){return null;})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "lookupPrefix", qjs.JS_Eval(c, lp_js, lp_js.len, "<dt-lp>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(c, obj, "lookupNamespaceURI", qjs.JS_Eval(c, lp_js, lp_js.len, "<dt-lns>", qjs.JS_EVAL_TYPE_GLOBAL));
+        const idn_js = "(function(ns){return false;})";
+        _ = qjs.JS_SetPropertyStr(c, obj, "isDefaultNamespace", qjs.JS_Eval(c, idn_js, idn_js.len, "<dt-idn>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
     return obj;
 }
 
@@ -1200,6 +1265,9 @@ pub fn documentCreateDocumentFragment(
             \\  Object.defineProperty(f,'nodeType',{value:11,writable:false,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'nodeName',{value:'#document-fragment',writable:false,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'nodeValue',{value:null,writable:false,configurable:true,enumerable:true});
+            \\  Object.defineProperty(f,'ownerDocument',{value:document,writable:true,configurable:true,enumerable:true});
+            \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3||n.nodeType===8)t+=n.textContent||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);if(v!==null&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
+            \\  f.getElementById=function(id){if(!id||id==='')return null;return this.querySelector('#'+CSS.escape(id));};
             \\})
         ;
         const fix_fn = qjs.JS_Eval(c, fix_js, fix_js.len, "<frag-fix>", qjs.JS_EVAL_TYPE_GLOBAL);

@@ -455,6 +455,15 @@ fn initNodeCache() void {
     }
 }
 
+/// Register the main document JS object in the node cache so that
+/// wrapNode(document_lxb_node) returns the same JS object as `window.document`.
+pub fn cacheDocumentNode(ctx: *qjs.JSContext, doc_ptr: *anyopaque, doc_js: qjs.JSValue) void {
+    initNodeCache();
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(doc_ptr));
+    const key = @intFromPtr(doc_node);
+    node_cache.?.put(key, qjs.JS_DupValue(ctx, doc_js)) catch {};
+}
+
 /// Clear the node identity cache (called on page navigation).
 pub fn clearNodeCache(ctx: *qjs.JSContext) void {
     if (node_cache) |*cache| {
@@ -505,8 +514,8 @@ fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     return obj;
 }
 
-/// Get the lxb_dom_node_t* from a JS Element/Text value.
-/// Tries both element and text class IDs.
+/// Get the lxb_dom_node_t* from a JS Element/Text/Document value.
+/// Tries element class, text class, then main document fallback.
 pub fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
     // Try element class first
     const ptr1 = qjs.JS_GetOpaque2(ctx, val, element_class_id);
@@ -514,6 +523,22 @@ pub fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
     // Try text class
     const ptr2 = qjs.JS_GetOpaque2(ctx, val, text_class_id);
     if (ptr2) |p| return @ptrCast(@alignCast(p));
+    // Try main document: check nodeType === 9 property and match against main document
+    const nt_val = qjs.JS_GetPropertyStr(ctx, val, "nodeType");
+    defer qjs.JS_FreeValue(ctx, nt_val);
+    if (nt_val.tag == qjs.JS_TAG_INT and qjs.JS_VALUE_GET_INT(nt_val) == 9) {
+        // It's a document node — check if it's the main document
+        const global = qjs.JS_GetGlobalObject(ctx);
+        defer qjs.JS_FreeValue(ctx, global);
+        const doc_val = qjs.JS_GetPropertyStr(ctx, global, "document");
+        defer qjs.JS_FreeValue(ctx, doc_val);
+        // Compare object pointers (JS_TAG_OBJECT + same ptr means same object)
+        if (val.tag == doc_val.tag and val.u.ptr == doc_val.u.ptr) {
+            if (getDocument(ctx)) |doc_ptr| {
+                return @ptrCast(@alignCast(doc_ptr));
+            }
+        }
+    }
     return null;
 }
 
@@ -2652,7 +2677,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentType", doctype_ctor);
 
-    // DocumentFragment constructor
+    // DocumentFragment constructor — new DocumentFragment() creates a real fragment
+    // Note: must be set up after document is globally available, but we use JS_Eval deferred
     const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", docfrag_ctor);
 
@@ -3023,17 +3049,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // createAttribute(localName) + createAttributeNS(namespace, qualifiedName)
     {
         const attr_js =
-            \\(function(ns,qn){var a={nodeType:2,name:qn,value:'',namespaceURI:ns,prefix:null,localName:qn,specified:true,ownerElement:null,ownerDocument:document};
+            \\(function(ns,qn){var a={nodeType:2,name:qn,nodeName:qn,value:'',namespaceURI:ns||null,prefix:null,localName:qn,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};
             \\var ci=qn.indexOf(':');if(ci>=0){a.prefix=qn.substring(0,ci);a.localName=qn.substring(ci+1);}
             \\a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};
             \\a.isSameNode=function(o){return this===o;};
-            \\Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v;},configurable:true});
-            \\Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v;},configurable:true});
+            \\a.cloneNode=function(){var c=document.createAttributeNS(this.namespaceURI,this.name);c.value=this.value;return c;};
+            \\Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});
+            \\Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});
             \\return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
         const create_attr_js =
-            \\(function(name){if(!name||name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');return document.createAttributeNS(null,name.toLowerCase());})
+            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
@@ -3188,10 +3215,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  for(var i=1;i<target.length;i++){var cc=target.charCodeAt(i);if(!(cc>=65&&cc<=90||cc>=97&&cc<=122||cc>=48&&cc<=57||cc===95||cc===45||cc===46||cc===0xB7||cc>=0xC0))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');}
             \\  if(target.toLowerCase()==='xml')throw new DOMException('The target name "xml" is not allowed.','InvalidCharacterError');
             \\  if(data&&data.indexOf('?>')>=0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
-            \\  var pi = {nodeType:7, nodeName:target, target:target, data:data||'',
-            \\          textContent:data||'', nodeValue:data||'', childNodes:[],
-            \\          parentNode:null, parentElement:null, ownerDocument:document,
+            \\  var pi = {nodeType:7, nodeName:target, target:target, _data:data||'',
+            \\          childNodes:[], parentNode:null, parentElement:null, ownerDocument:document,
             \\          previousSibling:null, nextSibling:null, firstChild:null, lastChild:null};
+            \\  Object.defineProperty(pi,'data',{get:function(){return this._data;},set:function(v){this._data=v===null?'':''+v;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(pi,'textContent',{get:function(){return this._data;},set:function(v){this._data=v===null?'':''+v;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(pi,'nodeValue',{get:function(){return this._data;},set:function(v){this._data=v===null?'':''+v;},configurable:true,enumerable:true});
             \\  pi.isEqualNode = function(o) {
             \\    if (!o || o.nodeType !== 7) return false;
             \\    return this.target === o.target && this.data === o.data;
@@ -3205,9 +3234,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  pi.before = function() {};
             \\  pi.after = function() {};
             \\  pi.replaceWith = function() {};
-            \\  pi.contains = function() { return false; };
+            \\  pi.contains = function(o) { return false; };
             \\  pi.hasChildNodes = function() { return false; };
-            \\  pi.compareDocumentPosition = function() { return 0; };
+            \\  pi.compareDocumentPosition = function(other) {
+            \\    if(this===other)return 0;
+            \\    var DISC=1,PREC=2,FOLL=4,CONT=8,CONTBY=16,IMPL=32;
+            \\    if(!other||typeof other!=='object'||!('nodeType' in other))return DISC|IMPL|PREC;
+            \\    var n=other.parentNode;while(n){if(n===this)return CONTBY|FOLL;n=n.parentNode;}
+            \\    n=this.parentNode;while(n){if(n===other)return CONT|PREC;n=n.parentNode;}
+            \\    var rA=this;while(rA.parentNode)rA=rA.parentNode;
+            \\    var rB=other;while(rB.parentNode)rB=rB.parentNode;
+            \\    if(rA!==rB)return DISC|IMPL|PREC;
+            \\    var cA=[],cB=[];n=this;while(n){cA.push(n);n=n.parentNode;}
+            \\    n=other;while(n){cB.push(n);n=n.parentNode;}
+            \\    var ia=cA.length-1,ib=cB.length-1;
+            \\    while(ia>0&&ib>0){ia--;ib--;if(cA[ia]!==cB[ib]){
+            \\      var p=cA[ia+1],cn=p&&p.childNodes;
+            \\      if(cn){for(var k=0;k<cn.length;k++){if(cn[k]===cA[ia])return FOLL;if(cn[k]===cB[ib])return PREC;}}
+            \\      return PREC;}}
+            \\    return FOLL;
+            \\  };
             \\  pi.getRootNode = function() { return this.parentNode ? this.parentNode.getRootNode() : this; };
             \\  if(typeof ProcessingInstruction!=='undefined')Object.setPrototypeOf(pi,ProcessingInstruction.prototype);
             \\  return pi;
@@ -3425,6 +3471,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Set document global (reuses `global` from constructor registration above)
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
 
+    // Cache document node so wrapNode(doc_lxb_node) returns doc_obj (identity preservation)
+    cacheDocumentNode(ctx, document_ptr, doc_obj);
+
+    // DocumentFragment constructor: new DocumentFragment() creates a real fragment via document
+    {
+        const df_ctor_js =
+            \\(function(){
+            \\  var oldProto = DocumentFragment.prototype;
+            \\  DocumentFragment = function DocumentFragment() { return document.createDocumentFragment(); };
+            \\  DocumentFragment.prototype = oldProto;
+            \\  DocumentFragment.prototype.constructor = DocumentFragment;
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, df_ctor_js, df_ctor_js.len, "<df-ctor>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
     // Document constructor (new Document() creates a standalone XML document-like object)
     {
         const doc_ctor_js =
@@ -3520,7 +3583,29 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Document.prototype.replaceChildren = function(){while(this._childNodes.length>0)this.removeChild(this._childNodes[this._childNodes.length-1]);for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
             \\  Document.prototype.adoptNode = function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);var self=this;function setDoc(nd){nd.ownerDocument=self;if(nd.childNodes)for(var i=0;i<nd.childNodes.length;i++)setDoc(nd.childNodes[i]);}setDoc(n);n.parentNode=null;return n; };
-            \\  Document.prototype.createAttribute = function(n) { return document.createAttribute(n); };
+            \\  Document.prototype.createAttribute = function(n) { if(n===undefined)n='undefined';if(n===null)n='null';n=''+n;if(n.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ct=this.contentType||'';var isHTML=(ct==='text/html'||ct==='application/xhtml+xml');var ln=isHTML?n.toLowerCase():n;var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:this,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});return a; };
+            \\  Document.prototype.compareDocumentPosition = function(other) {
+            \\    if(this===other)return 0;
+            \\    var DISC=1,PREC=2,FOLL=4,CONT=8,CONTBY=16,IMPL=32;
+            \\    if(!other||typeof other!=='object'||!('nodeType' in other))return DISC|IMPL|PREC;
+            \\    var n=other.parentNode;while(n){if(n===this)return CONTBY|FOLL;n=n.parentNode;}
+            \\    n=this.parentNode;while(n){if(n===other)return CONT|PREC;n=n.parentNode;}
+            \\    var rA=this;while(rA.parentNode)rA=rA.parentNode;
+            \\    var rB=other;while(rB.parentNode)rB=rB.parentNode;
+            \\    if(rA!==rB)return DISC|IMPL|PREC;
+            \\    var cA=[],cB=[];n=this;while(n){cA.push(n);n=n.parentNode;}
+            \\    n=other;while(n){cB.push(n);n=n.parentNode;}
+            \\    var ia=cA.length-1,ib=cB.length-1;
+            \\    while(ia>0&&ib>0){ia--;ib--;if(cA[ia]!==cB[ib]){
+            \\      var p=cA[ia+1],cn=p&&p.childNodes;
+            \\      if(cn){for(var k=0;k<cn.length;k++){if(cn[k]===cA[ia])return FOLL;if(cn[k]===cB[ib])return PREC;}}
+            \\      return PREC;}}
+            \\    return FOLL;
+            \\  };
+            \\  Document.prototype.contains = function(o) {
+            \\    if(!o)return false;if(this===o)return true;
+            \\    var n=o.parentNode;while(n){if(n===this)return true;n=n.parentNode;}return false;
+            \\  };
             \\  Document.prototype.createAttributeNS = function(ns,qn) { return document.createAttributeNS(ns,qn); };
             \\  Document.prototype.createRange = function() { return document.createRange(); };
             \\  Document.prototype.createTreeWalker = function(r,w,f) { return document.createTreeWalker(r,w,f); };
