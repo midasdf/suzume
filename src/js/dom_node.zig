@@ -313,7 +313,8 @@ pub fn elementAppendChild(
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
-    const child = api.getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    const child = api.getNode(c, args[0]) orelse
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
     // DOM spec step 2: If node is a host-including inclusive ancestor of parent, throw
     if (isAncestorOrSelf(child, parent))
         return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
@@ -355,10 +356,14 @@ pub fn elementInsertBefore(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 2) return api.throwDOMException(c, "TypeError", "Failed to execute 'insertBefore': 2 arguments required.");
+    if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': 2 arguments required.");
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    const new_node = api.getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM spec: TypeError if node is not a Node
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
+    const new_node = api.getNode(c, args[0]) orelse
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
     // DOM spec step 2: If node is a host-including inclusive ancestor of parent, throw
     if (isAncestorOrSelf(new_node, parent))
         return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
@@ -368,8 +373,17 @@ pub fn elementInsertBefore(
         // If reference is null, act like appendChild
         lxb_dom_node_insert_child(parent, new_node);
     } else {
-        const ref_node = api.getNode(c, args[1]) orelse
+        const ref_node = api.getNode(c, args[1]) orelse {
+            // DOM spec: if second arg is not null/undefined but not a Node → TypeError
+            // if it's a Node but not a child → NotFoundError
+            // Check if it has nodeType (duck-type check for Node-like objects)
+            const nt = qjs.JS_GetPropertyStr(c, args[1], "nodeType");
+            defer qjs.JS_FreeValue(c, nt);
+            if (nt.tag == qjs.JS_TAG_UNDEFINED) {
+                return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 2 is not of type 'Node'.");
+            }
             return api.throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
+        };
         // Verify ref_node is a child of parent
         if (ref_node.parent != parent)
             return api.throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
