@@ -3493,13 +3493,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, r);
     }
 
-    // Patch document.doctype: set parentNode, ownerDocument, and no-op textContent/nodeValue
+    // Patch document.doctype: set ownerDocument and no-op textContent/nodeValue
+    // Note: parentNode is NOT set to document here because the JS doctype object is not
+    // in the lexbor tree, which would break compareDocumentPosition for native nodes.
     {
         const patch_js =
             \\(function(){
             \\  var dt=document.doctype;
             \\  if(dt){
-            \\    dt.parentNode=document;
             \\    dt.ownerDocument=document;
             \\    Object.defineProperty(dt,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
             \\    Object.defineProperty(dt,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});

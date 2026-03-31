@@ -46,16 +46,37 @@ pub fn elementGetTagName(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const elem = api.getElement(c, this_val) orelse return quickjs.JS_NULL();
-    var len: usize = 0;
-    const name_ptr = lxb_dom_element_local_name(elem, &len);
-    if (name_ptr == null or len == 0) return quickjs.JS_NULL();
+
+    // Use __origLocal if set (preserves original case from createElementNS, since lexbor lowercases)
+    var js_local_cstr: ?[*]const u8 = null;
+    var js_local_slice: ?[]const u8 = null;
+    {
+        const js_local_val = qjs.JS_GetPropertyStr(c, this_val, "__origLocal");
+        defer qjs.JS_FreeValue(c, js_local_val);
+        if (!quickjs.JS_IsUndefined(js_local_val) and !quickjs.JS_IsNull(js_local_val)) {
+            if (api.jsStringToSlice(c, js_local_val)) |s| {
+                js_local_cstr = s.ptr;
+                js_local_slice = s.ptr[0..s.len];
+            }
+        }
+    }
+
+    var lxb_len: usize = 0;
+    const lxb_name_ptr = lxb_dom_element_local_name(elem, &lxb_len);
+
+    const local = if (js_local_slice) |s| s else if (lxb_name_ptr) |p| p[0..lxb_len] else return quickjs.JS_NULL();
+    const name_ptr = local.ptr;
+    const len = local.len;
+    if (len == 0) {
+        if (js_local_cstr) |p| qjs.JS_FreeCString(c, p);
+        return quickjs.JS_NULL();
+    }
 
     // Check namespace: only uppercase for HTML namespace elements
-    // null namespace = NOT HTML; undefined = HTML (default for createElement in HTML doc)
     const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
     var is_html = true;
     if (quickjs.JS_IsNull(ns_val)) {
-        is_html = false; // null namespace = not HTML
+        is_html = false;
     } else if (!quickjs.JS_IsUndefined(ns_val)) {
         if (api.jsStringToSlice(c, ns_val)) |ns_s| {
             defer qjs.JS_FreeCString(c, ns_s.ptr);
@@ -64,21 +85,70 @@ pub fn elementGetTagName(
     }
     qjs.JS_FreeValue(c, ns_val);
 
-    if (!is_html) return qjs.JS_NewStringLen(c, name_ptr.?, len);
-
-    // HTML namespace: convert to uppercase per DOM spec
-    var stack_buf: [256]u8 = undefined;
-    const use_heap = len > stack_buf.len;
-    const buf = if (use_heap)
-        (std.heap.c_allocator.alloc(u8, len) catch return quickjs.JS_UNDEFINED())
-    else
-        stack_buf[0..len];
-    defer if (use_heap) std.heap.c_allocator.free(buf);
-    for (0..len) |i| {
-        const ch = name_ptr.?[i];
-        buf[i] = if (ch >= 'a' and ch <= 'z') ch - 32 else ch;
+    // Get prefix (if any) for qualifiedName
+    const prefix_val = qjs.JS_GetPropertyStr(c, this_val, "prefix");
+    defer qjs.JS_FreeValue(c, prefix_val);
+    var prefix_slice: ?[]const u8 = null;
+    var prefix_cstr: ?[*]const u8 = null;
+    if (!quickjs.JS_IsNull(prefix_val) and !quickjs.JS_IsUndefined(prefix_val)) {
+        if (api.jsStringToSlice(c, prefix_val)) |ps| {
+            if (ps.len > 0) {
+                prefix_slice = ps.ptr[0..ps.len];
+                prefix_cstr = ps.ptr;
+            }
+        }
     }
-    return qjs.JS_NewStringLen(c, buf.ptr, len);
+    defer if (prefix_cstr) |p| qjs.JS_FreeCString(c, p);
+
+    const prefix_len = if (prefix_slice) |ps| ps.len else 0;
+    const total_len = if (prefix_slice != null) prefix_len + 1 + len else len;
+
+    if (!is_html) {
+        // Non-HTML: return prefix:localName with original case
+        if (prefix_slice) |ps| {
+            var buf2: [512]u8 = undefined;
+            const use_heap2 = total_len > buf2.len;
+            const out = if (use_heap2)
+                (std.heap.c_allocator.alloc(u8, total_len) catch return quickjs.JS_UNDEFINED())
+            else
+                buf2[0..total_len];
+            defer if (use_heap2) std.heap.c_allocator.free(out);
+            @memcpy(out[0..ps.len], ps);
+            out[ps.len] = ':';
+            @memcpy(out[ps.len + 1 ..][0..len], local);
+            const result = qjs.JS_NewStringLen(c, out.ptr, total_len);
+            if (js_local_cstr) |p| qjs.JS_FreeCString(c, p);
+            return result;
+        }
+        const result = qjs.JS_NewStringLen(c, name_ptr, len);
+        if (js_local_cstr) |p| qjs.JS_FreeCString(c, p);
+        return result;
+    }
+
+    // HTML namespace: convert to uppercase and include prefix
+    var stack_buf: [512]u8 = undefined;
+    const use_heap = total_len > stack_buf.len;
+    const buf = if (use_heap)
+        (std.heap.c_allocator.alloc(u8, total_len) catch return quickjs.JS_UNDEFINED())
+    else
+        stack_buf[0..total_len];
+    defer if (use_heap) std.heap.c_allocator.free(buf);
+
+    var offset: usize = 0;
+    if (prefix_slice) |ps| {
+        for (0..ps.len) |i| {
+            const ch = ps[i];
+            buf[i] = if (ch >= 'a' and ch <= 'z') ch - 32 else ch;
+        }
+        buf[ps.len] = ':';
+        offset = ps.len + 1;
+    }
+    for (0..len) |i| {
+        const ch = name_ptr[i];
+        buf[offset + i] = if (ch >= 'a' and ch <= 'z') ch - 32 else ch;
+    }
+    if (js_local_cstr) |p| qjs.JS_FreeCString(c, p);
+    return qjs.JS_NewStringLen(c, buf.ptr, total_len);
 }
 
 pub fn elementGetLocalName(
@@ -88,11 +158,14 @@ pub fn elementGetLocalName(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Check __origLocal first (preserves case from createElementNS)
+    const orig = qjs.JS_GetPropertyStr(c, this_val, "__origLocal");
+    if (!quickjs.JS_IsUndefined(orig) and !quickjs.JS_IsNull(orig)) return orig;
+    qjs.JS_FreeValue(c, orig);
     const elem = api.getElement(c, this_val) orelse return quickjs.JS_NULL();
     var len: usize = 0;
     const name_ptr = lxb_dom_element_local_name(elem, &len);
     if (name_ptr == null or len == 0) return quickjs.JS_NULL();
-    // localName is lowercase (as stored by lexbor HTML parser)
     return qjs.JS_NewStringLen(c, name_ptr.?, len);
 }
 

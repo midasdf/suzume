@@ -1060,9 +1060,12 @@ pub fn documentCreateElementNS(
     _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", qjs.JS_DupValue(c, args[0]));
     if (colon_pos) |cp| {
         _ = qjs.JS_SetPropertyStr(c, obj, "prefix", qjs.JS_NewStringLen(c, tag.ptr, cp));
-        _ = qjs.JS_SetPropertyStr(c, obj, "localName", qjs.JS_NewStringLen(c, tag.ptr + cp + 1, tag.len - cp - 1));
+        // Store original-case localName (lexbor lowercases everything)
+        _ = qjs.JS_SetPropertyStr(c, obj, "__origLocal", qjs.JS_NewStringLen(c, tag.ptr + cp + 1, tag.len - cp - 1));
     } else {
         _ = qjs.JS_SetPropertyStr(c, obj, "prefix", quickjs.JS_NULL());
+        // Store original-case localName (lexbor lowercases everything)
+        _ = qjs.JS_SetPropertyStr(c, obj, "__origLocal", qjs.JS_NewStringLen(c, local_name.ptr, local_name.len));
     }
     return obj;
 }
