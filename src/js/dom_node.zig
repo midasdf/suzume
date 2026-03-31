@@ -467,7 +467,11 @@ pub fn elementReplaceChild(
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
+    events.recordMutation(parent, "childList", new_node, old_node, null);
     api.setDomDirty();
+    // Dynamic script execution and custom element upgrade
+    api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
+    upgradeSubtreeCustomElements(c, new_node);
     return qjs.JS_DupValue(c, args[1]); // returns the removed (old) node
 }
 
