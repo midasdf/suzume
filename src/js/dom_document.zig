@@ -80,7 +80,7 @@ pub fn documentCreateComment(
 
 pub fn documentAdoptNode(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
@@ -119,7 +119,57 @@ pub fn documentAdoptNode(
             }
         }
     }
+
+    // DOM spec: set ownerDocument on node and all descendants to the adopting document
+    // this_val is the document object calling adoptNode
+    // For the main document, use document; otherwise use the JS document object
+    const doc_val = blk: {
+        // Check if this_val has nodeType=9 (it's a document)
+        const this_nt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+        defer qjs.JS_FreeValue(c, this_nt);
+        var this_node_type: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &this_node_type, this_nt);
+        if (this_node_type == 9) {
+            break :blk qjs.JS_DupValue(c, this_val);
+        }
+        // Fallback to global document
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        break :blk qjs.JS_GetPropertyStr(c, global, "document");
+    };
+    defer qjs.JS_FreeValue(c, doc_val);
+
+    // Recursively set ownerDocument on node and all descendants
+    setOwnerDocumentRecursive(c, node_val, doc_val);
+
+    // Set parentNode to null (adoption removes from parent)
+    _ = qjs.JS_SetPropertyStr(c, node_val, "parentNode", quickjs.JS_NULL());
+
     return qjs.JS_DupValue(c, node_val);
+}
+
+/// Recursively set ownerDocument on a node and all its descendants.
+fn setOwnerDocumentRecursive(ctx: *qjs.JSContext, node: qjs.JSValue, doc: qjs.JSValue) void {
+    _ = qjs.JS_SetPropertyStr(ctx, node, "ownerDocument", qjs.JS_DupValue(ctx, doc));
+
+    // Recurse into childNodes
+    const children = qjs.JS_GetPropertyStr(ctx, node, "childNodes");
+    defer qjs.JS_FreeValue(ctx, children);
+    if (quickjs.JS_IsUndefined(children) or quickjs.JS_IsNull(children)) return;
+
+    const len_val = qjs.JS_GetPropertyStr(ctx, children, "length");
+    defer qjs.JS_FreeValue(ctx, len_val);
+    var len: i32 = 0;
+    _ = qjs.JS_ToInt32(ctx, &len, len_val);
+
+    var i: i32 = 0;
+    while (i < len) : (i += 1) {
+        const child = qjs.JS_GetPropertyUint32(ctx, children, @intCast(i));
+        defer qjs.JS_FreeValue(ctx, child);
+        if (!quickjs.JS_IsUndefined(child) and !quickjs.JS_IsNull(child)) {
+            setOwnerDocumentRecursive(ctx, child, doc);
+        }
+    }
 }
 
 /// Validate an XML qualified name per https://dom.spec.whatwg.org/#validate

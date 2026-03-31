@@ -2152,6 +2152,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const event_target_proto = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, event_target_proto, "addEventListener", qjs.JS_NewCFunction(ctx, &events.jsAddEventListener, "addEventListener", 2));
     _ = qjs.JS_SetPropertyStr(ctx, event_target_proto, "removeEventListener", qjs.JS_NewCFunction(ctx, &events.jsRemoveEventListener, "removeEventListener", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, event_target_proto, "dispatchEvent", qjs.JS_NewCFunction(ctx, &events.jsElementDispatchEventPub, "dispatchEvent", 1));
 
     // ── Node.prototype (inherits EventTarget.prototype) ────────────
     const node_proto = qjs.JS_NewObject(ctx);
@@ -3342,7 +3343,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    appendChild: function(n) { return d.appendChild(n); },
             \\    removeChild: function(n) { return d.removeChild(n); },
             \\    importNode: function(n, deep) { return n.cloneNode(deep); },
-            \\    adoptNode: function(n) { return n; },
+            \\    adoptNode: function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);function setDoc(nd,d){nd.ownerDocument=d;if(nd.childNodes)for(var i=0;i<nd.childNodes.length;i++)setDoc(nd.childNodes[i],d);}setDoc(n,doc);n.parentNode=null;return n; },
             \\    get title(){var t=head.querySelector('title');if(!t)return'';var s=t.textContent;return s.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');},set title(v){var t=head.querySelector('title');if(!t){t=document.createElement('title');head.appendChild(t);}t.textContent=String(v);},
             \\    implementation: document.implementation,
             \\    addEventListener: function(t,f,o) { d.addEventListener(t,f,o); },
@@ -3518,7 +3519,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Document.prototype.append = function(){for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
             \\  Document.prototype.replaceChildren = function(){while(this._childNodes.length>0)this.removeChild(this._childNodes[this._childNodes.length-1]);for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
-            \\  Document.prototype.adoptNode = function(n) { return n; };
+            \\  Document.prototype.adoptNode = function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);var self=this;function setDoc(nd){nd.ownerDocument=self;if(nd.childNodes)for(var i=0;i<nd.childNodes.length;i++)setDoc(nd.childNodes[i]);}setDoc(n);n.parentNode=null;return n; };
             \\  Document.prototype.createAttribute = function(n) { return document.createAttribute(n); };
             \\  Document.prototype.createAttributeNS = function(ns,qn) { return document.createAttributeNS(ns,qn); };
             \\  Document.prototype.createRange = function() { return document.createRange(); };
