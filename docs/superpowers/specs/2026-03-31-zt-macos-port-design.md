@@ -160,18 +160,13 @@ SIGUSR1/USR2 (VT switching) are not registered on macOS — fbdev-only feature.
 
 This way kqueue can block indefinitely (`timeout = -1`) when idle, just like epoll does on Linux. The pipe write adds negligible latency (~microseconds).
 
-The macOS backend stores the `write_fd` and exposes it:
-```zig
-pub fn getWakeupFd(self: *Self) ?posix.fd_t {
-    return self.wakeup_write_fd;  // macOS only
-}
-```
+macOS backend `getFd()` returns the `read_fd` of a self-pipe, making it work exactly like X11's `getFd()` returning the xcb connection fd. NSView callbacks (`keyDown:`, `drawRect:`, etc.) write a byte to `write_fd` to wake kqueue. main.zig polls backend events on backend fd activity — identical pattern to X11.
 
-Actually, the macOS backend's `getFd()` can return the `read_fd` of the self-pipe, making it work exactly like X11's `getFd()` returning the xcb connection fd. Then `EpollTag.backend` / kqueue ident for backend events works unchanged.
-
-**Revised approach**: macOS backend `getFd()` returns `self.wakeup_read_fd`. NSView callbacks (keyDown, drawRect, etc.) write to `self.wakeup_write_fd`. main.zig polls backend events on backend fd activity — identical pattern to X11.
-
-For initial event delivery (before any user interaction), the NSApplication run loop is not used. Instead, `NSApp nextEventMatchingMask:untilDate:inMode:dequeue:` is called with `untilDate:nil` (non-blocking) from `pollEvents()`, and the self-pipe wakeup is triggered by a `CFRunLoopObserver` or a one-shot `dispatch_async` to ensure the first frame is delivered.
+**Self-pipe details**:
+- Both `read_fd` and `write_fd` are set to `O_NONBLOCK`
+- `write_fd` non-blocking prevents deadlock if pipe buffer is full
+- Draining: single `read()` into a small buffer (e.g., 64 bytes); `WouldBlock` means drained
+- For initial event delivery (before user interaction), `pollEvents()` calls `NSApp nextEventMatchingMask:untilDate:inMode:dequeue:` with `untilDate:nil` (non-blocking). A one-shot `dispatch_async` on the main queue triggers the first wakeup
 
 ### Dynamic Timeout (shared logic)
 
@@ -222,17 +217,17 @@ Exact signatures matching existing backends (Zig comptime duck-typing requires a
 ```zig
 pub const MacosBackend = struct {
     // Fields
-    buffer: [*]u8,
+    buffer: []u8,                         // Slice over CGBitmapContext data
     width: u32,
     height: u32,
     stride: u32,
-    wakeup_read_fd: posix.fd_t,
-    wakeup_write_fd: posix.fd_t,
+    wakeup_read_fd: posix.fd_t,           // O_NONBLOCK
+    wakeup_write_fd: posix.fd_t,          // O_NONBLOCK
     // ... Cocoa object pointers (opaque ids)
 
     pub fn init() !MacosBackend          // No allocator (CG manages buffer)
     pub fn deinit(self: *MacosBackend) void
-    pub fn getBuffer(self: *MacosBackend) [*]u8
+    pub fn getBuffer(self: *MacosBackend) []u8   // Slice, matching X11/fbdev
     pub fn getStride(self: *MacosBackend) u32
     pub fn getWidth(self: *MacosBackend) u32
     pub fn getHeight(self: *MacosBackend) u32
@@ -287,7 +282,7 @@ For window lifecycle events not delivered through NSView:
 | `windowDidBecomeKey:` | Window gained focus | `Event.focus_in` |
 | `windowDidResignKey:` | Window lost focus | `Event.focus_out` |
 | `windowDidResize:` | Window resized (live) | `Event.resize` |
-| `windowDidExpose:` | Window first exposed / uncovered | `Event.expose` |
+| `windowDidChangeOcclusionState:` | Window uncovered (use `NSWindowOcclusionStateVisible` check) | `Event.expose` |
 
 The delegate is set on the NSWindow via `[window setDelegate:view]` (the NSView subclass also acts as delegate).
 
@@ -350,9 +345,9 @@ macOS 0x7E (kVK_UpArrow)    → KEY_UP (103)
 
 Existing `translateKey()` function unchanged — it receives evdev keycodes regardless of platform.
 
-## 7. main.zig Backend Selection Update
+## 7. main.zig Updates
 
-The current 2-way comptime selection becomes 3-way:
+### Backend Selection (2-way → 3-way)
 
 **Before:**
 ```zig
@@ -371,7 +366,36 @@ const Backend = switch (config.backend) {
 };
 ```
 
-Backend init also becomes a switch:
+### Event Type Import
+
+The macOS backend must export `pub const Event` with the same union variants as `backend/x11.zig`'s Event (key, text, paste, resize, expose, focus_in, focus_out, close). The import becomes:
+
+```zig
+const BackendEvent = if (config.backend == .x11)
+    @import("backend/x11.zig").Event
+else if (config.backend == .macos)
+    @import("backend/macos.zig").Event
+else
+    void;
+```
+
+The event dispatch block in the main loop changes from `if (config.backend == .x11)` to `if (config.backend == .x11 or config.backend == .macos)`.
+
+### Allocator Selection
+
+macOS links libc, so should use `c_allocator` like X11:
+
+```zig
+const allocator = if (builtin.mode == .Debug)
+    gpa.allocator()
+else if (config.backend == .x11 or config.backend == .macos)
+    std.heap.c_allocator
+else
+    std.heap.page_allocator;
+```
+
+### Backend Init
+
 ```zig
 var backend = switch (config.backend) {
     .fbdev => try Backend.init(allocator),
@@ -379,15 +403,13 @@ var backend = switch (config.backend) {
 };
 ```
 
-`postInit()`:
+### postInit / queryGeometry
+
 ```zig
 if (config.backend == .x11 or config.backend == .macos) {
     backend.postInit();
 }
-```
-
-`queryGeometry()` for initial window size sync:
-```zig
+// ...
 if (config.backend == .x11 or config.backend == .macos) {
     const actual = backend.queryGeometry();
     // ... same resize logic
