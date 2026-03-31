@@ -2214,6 +2214,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  NP.isDefaultNamespace=function(ns){return this.lookupNamespaceURI(null)===ns;};
             \\  NP.isSameNode=function(o){return this===o;};
             \\  NP.hasChildNodes=function(){return this.childNodes&&this.childNodes.length>0;};
+            \\  Object.defineProperty(NP,'baseURI',{get:function(){var d=this.ownerDocument||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});
             \\  delete globalThis.__np;
             \\  function _toNode(a){return(a&&typeof a==='object'&&a.nodeType)?a:document.createTextNode(String(a));}
             \\  NP.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
@@ -2364,6 +2365,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagNameNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementToggleAttribute, "toggleAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetAttributeNames, "getAttributeNames", 0));
+    // hasAttributes() — returns true if the element has any attributes
+    {
+        const ha_js = "(function(){var a=this.attributes;return a&&a.length>0;})";
+        _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "hasAttributes", qjs.JS_Eval(ctx, ha_js, ha_js.len, "<hasAttrs>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "scrollIntoView", qjs.JS_NewCFunction(ctx, &dom_elem.elementScrollIntoView, "scrollIntoView", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getContext", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetContext, "getContext", 1));
 

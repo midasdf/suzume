@@ -807,6 +807,8 @@ pub fn documentGetElementById(
     const args = argv orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    // DOM spec: getElementById with empty string returns null
+    if (s.len == 0) return quickjs.JS_NULL();
 
     const doc_node = getDocumentNode() orelse return quickjs.JS_NULL();
     const found = api.dom_sel.walkTreeById(doc_node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
