@@ -67,16 +67,23 @@ Piece = struct {
     source: enum { original, add },
     start: u32,
     len: u32,
-    newline_count: u16,       // Cached for fast line-to-offset lookup
+    newline_count: u32,       // Cached for fast line-to-offset lookup
 };
 ```
 
 **Properties**:
 - File open = mmap + 1 piece. Instant startup regardless of file size.
 - All edits append to add_buffer + split/insert pieces. Original text never modified.
-- Undo/redo = piece array snapshots. Buffers are append-only, no data copying needed.
 - Line number to byte offset: binary search over cumulative newline_count.
-- Practical file size limit: ~100MB.
+- u32 addressing supports files up to 4GB. No artificial limit imposed.
+- **Encoding**: UTF-8 only. Non-UTF-8 files opened as raw bytes with U+FFFD replacement rendering.
+
+**Undo/Redo**:
+- Transaction-based: each user action (keystroke, paste, delete) creates an `UndoEntry` containing a delta (pieces added/removed/split).
+- Consecutive character insertions at the same cursor are coalesced into a single transaction (broken by cursor movement, deletion, or 1-second pause).
+- Multi-cursor: all cursor edits within a single action = one transaction.
+- Undo stack is a `ArrayList(UndoEntry)`. Redo stack cleared on new edit (no branching).
+- Memory: each entry stores only the piece diff, not a full snapshot. Bounded by undo history limit (default 1000 transactions).
 
 **Multi-cursor**:
 - Cursors stored as `ArrayList(Selection)` where `Selection = { anchor: u32, head: u32 }`.
@@ -113,11 +120,11 @@ const GlyphCache = struct {
 
 - ASCII (0x20-0x7E) pre-rendered at startup — covers 95%+ of code.
 - CJK and other codepoints cached on demand.
-- Freetype/harfbuzz bindings reused from suzume.
+- Freetype bindings reused from suzume. No harfbuzz needed — monospace glyphs require no complex shaping.
 
 **Dirty tracking**:
 ```zig
-row_dirty: [MAX_ROWS]bool
+row_dirty: []bool   // Dynamically allocated, resized on window resize
 ```
 
 - Text edit → dirty affected rows
@@ -135,14 +142,22 @@ Integrated via `@cImport` (C library).
 - Only re-parses affected region. Fast even on large files.
 
 **Read callback bridge**:
-```zig
-fn tsRead(payload: ?*anyopaque, byte_offset: u32, ...) []const u8 {
-    const buffer: *PieceTable = @ptrCast(payload);
-    return buffer.sliceAt(byte_offset, ...);
-}
+
+Tree-sitter's `TSInput` read callback signature:
+```c
+const char *(*read)(void *payload, uint32_t byte_index, TSPoint position, uint32_t *bytes_read);
 ```
 
-Piece Table is non-contiguous, but Tree-sitter's chunked read callback handles this naturally.
+The callback returns a pointer to contiguous memory and sets `bytes_read`. Since Piece Table is non-contiguous, the implementation returns data only up to the current piece boundary (short read). Tree-sitter re-invokes the callback for the next chunk automatically.
+
+```zig
+fn tsRead(payload: ?*anyopaque, byte_index: u32, _: TSPoint, bytes_read: *u32) [*c]const u8 {
+    const buffer: *PieceTable = @ptrCast(payload);
+    const slice = buffer.contiguousSliceAt(byte_index); // Returns slice within single piece
+    bytes_read.* = @intCast(slice.len);
+    return slice.ptr;
+}
+```
 
 **Grammar management**:
 ```
@@ -195,6 +210,10 @@ command = "rust-analyzer"
 | Rename | `textDocument/rename` | F2 |
 
 **Document sync**: `didOpen`, `didChange` (incremental), `didSave`. Content changes generated from Piece Table edits.
+
+**LSP position encoding**: LSP uses line:character positions where character is UTF-16 code unit offset. Piece Table edits operate on byte offsets. The buffer maintains a line index (cumulative newline offsets) for byte-offset ↔ line:col conversion. UTF-8 byte offset → UTF-16 code unit offset requires scanning the line content — cached per line to avoid repeated conversion.
+
+**JSON-RPC framing**: LSP messages use `Content-Length` header framing. A read buffer accumulates data from epoll reads and parses complete messages.
 
 No auto-detection of servers — explicit configuration only. Transparent and predictable.
 
@@ -268,12 +287,23 @@ const default_keymap = comptime buildKeymap(.{
     .{ .ctrl, .tab,             "next_tab" },
     .{ .f12, .none,             "goto_definition" },
     .{ .f2, .none,              "rename_symbol" },
+    .{ .ctrl, .c,               "clipboard_copy" },
+    .{ .ctrl, .x,               "clipboard_cut" },
+    .{ .ctrl, .v,               "clipboard_paste" },
+    .{ .ctrl, .z,               "undo" },
+    .{ .ctrl_shift, .z,         "redo" },
     .{ .ctrl, .f,               "find" },
     .{ .ctrl, .h,               "find_replace" },
 });
 ```
 
 Context-dependent: different behavior during palette/completion/normal editing.
+
+**Clipboard** (X11 selections, zt pattern):
+- CLIPBOARD selection for Ctrl+C/X/V (explicit copy/paste)
+- PRIMARY selection for mouse select-to-copy, middle-click-to-paste
+- Target type: UTF8_STRING
+- No size limit on paste buffer (dynamically allocated)
 
 **XIM** (xcb-imdkit, zt pattern): fcitx5/mozc support. Preedit text rendered inline at cursor.
 
@@ -432,9 +462,12 @@ zz/
 - xcb window + SHM buffer + epoll event loop
 - Freetype font loading + glyph cache
 - Piece Table + basic editing (insert, delete, newline)
+- Undo/redo (transaction-based)
 - Cursor movement, scrolling, range selection
+- Clipboard (CLIPBOARD + PRIMARY, zt pattern)
+- XIM/fcitx5 input method (xcb-imdkit, zt pattern)
 - Dirty region rendering
-- File open/save (Ctrl+S)
+- File open/save (Ctrl+S, atomic write via temp+rename)
 - **Milestone**: Single-file editor that works
 
 ### Phase 2: Syntax Highlighting & Polish
@@ -467,6 +500,5 @@ zz/
 ### Phase 6: Extensions (nice-to-have)
 - File tree (sidebar)
 - Built-in terminal (zt core reuse)
-- Git integration (branch name, diff gutter)
-- XIM/fcitx5 Japanese input
+- Git integration (branch name via `.git/HEAD` read, diff gutter)
 - **Milestone**: Complete IDE experience
