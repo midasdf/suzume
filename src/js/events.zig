@@ -498,13 +498,17 @@ fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSVa
     } else {
         // Object listener: get handleEvent property and call it with the object as this
         const he = qjs.JS_GetPropertyStr(ctx, callback, "handleEvent");
-        if (qjs.JS_IsFunction(ctx, he)) {
+        if (quickjs.JS_IsException(he)) {
+            // Getting handleEvent threw — report the error
+            ret = he;
+        } else if (qjs.JS_IsFunction(ctx, he)) {
             ret = qjs.JS_Call(ctx, he, callback, 1, &argv);
-        } else {
             qjs.JS_FreeValue(ctx, he);
-            return;
+        } else {
+            // handleEvent is not callable — report TypeError per DOM spec
+            qjs.JS_FreeValue(ctx, he);
+            ret = qjs.JS_ThrowTypeError(ctx, "handleEvent is not a function");
         }
-        qjs.JS_FreeValue(ctx, he);
     }
     // If listener threw, report error via window.onerror (per HTML spec "report the exception")
     if (quickjs.JS_IsException(ret)) {
