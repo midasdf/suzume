@@ -3309,8 +3309,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "publicId", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "systemId", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "ownerDocument", quickjs.JS_NULL()); // will be patched after doc registered
-        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "nodeValue", quickjs.JS_NULL());
-        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "textContent", quickjs.JS_NULL());
+        _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "parentNode", quickjs.JS_NULL()); // will be patched
         // Set DocumentType.prototype for instanceof checks
         const dt_proto_js = "(function(dt){if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);})";
         const dt_proto_fn = qjs.JS_Eval(ctx, dt_proto_js, dt_proto_js.len, "<dt-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -3491,6 +3490,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, df_ctor_js, df_ctor_js.len, "<df-ctor>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
+    // Patch document.doctype: set parentNode, ownerDocument, and no-op textContent/nodeValue
+    {
+        const patch_js =
+            \\(function(){
+            \\  var dt=document.doctype;
+            \\  if(dt){
+            \\    dt.parentNode=document;
+            \\    dt.ownerDocument=document;
+            \\    Object.defineProperty(dt,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\  }
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, patch_js, patch_js.len, "<dt-patch>", qjs.JS_EVAL_TYPE_GLOBAL);
         qjs.JS_FreeValue(ctx, r);
     }
 
