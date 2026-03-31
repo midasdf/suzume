@@ -172,44 +172,50 @@ fn setOwnerDocumentRecursive(ctx: *qjs.JSContext, node: qjs.JSValue, doc: qjs.JS
     }
 }
 
-/// Validate an XML qualified name per https://dom.spec.whatwg.org/#validate
+/// Check if a byte is an ASCII character that is INVALID in XML Name start position.
+/// Per XML spec + browser implementations: digits, hyphen, dot, and special ASCII symbols
+/// at the start are invalid. Letters, underscore, colon, and non-ASCII are valid.
+fn isInvalidNameStartChar(ch: u8) bool {
+    if (ch >= 0x80) return false; // non-ASCII: valid (UTF-8 continuation or lead)
+    if (std.ascii.isAlphabetic(ch)) return false;
+    if (ch == '_' or ch == ':') return false;
+    return true; // digits, special chars like <, >, space, etc.
+}
+
+/// Check if a byte is an ASCII character that is INVALID in XML Name continuation position.
+/// Most ASCII special chars are allowed in names by browsers (lenient parsing),
+/// except for a specific set of clearly invalid characters.
+fn isInvalidNameChar(ch: u8) bool {
+    if (ch >= 0x80) return false; // non-ASCII: valid
+    if (std.ascii.isAlphanumeric(ch)) return false;
+    if (ch == '_' or ch == ':' or ch == '-' or ch == '.') return false;
+    // Characters that are definitely invalid per all browser implementations:
+    return switch (ch) {
+        ' ', '\t', '\n', '\r', '<', '>', '/', '=', '"', '\'',
+        '^', '!', '@', '#', '$', '%', '&', '*', '(', ')',
+        '+', '[', ']', '\\', ';', '`', ',', '~',
+        => true,
+        else => false, // other chars like {, }, |, ? — browsers allow these in names
+    };
+}
+
+/// Validate an XML Name production (lenient, matching browser behavior).
 fn isValidXmlName(name: []const u8) bool {
     if (name.len == 0) return false;
-    const first = name[0];
-    // First char: letter, underscore, colon, or non-ASCII (UTF-8 multibyte)
-    if (!std.ascii.isAlphabetic(first) and first != '_' and first != ':' and first < 0x80) return false;
+    if (isInvalidNameStartChar(name[0])) return false;
     for (name[1..]) |ch| {
-        // Subsequent: alphanumeric, _, :, -, ., or non-ASCII
-        if (!std.ascii.isAlphanumeric(ch) and ch != '_' and ch != ':' and ch != '-' and ch != '.' and ch < 0x80) return false;
+        if (isInvalidNameChar(ch)) return false;
     }
     return true;
 }
 
-/// Validate an XML QName: Name with at most one colon, valid prefix:localname structure
+/// Validate an XML QName: prefix:localName with proper NCName constraints.
+/// Used for createElementNS, createAttributeNS namespace validation.
 fn isValidXmlQName(name: []const u8) bool {
     if (name.len == 0) return true; // empty is handled separately
     if (!isValidXmlName(name)) return false;
-    // Check colon constraints: at most one colon, not at start/end
-    var colon_count: usize = 0;
-    var last_colon: usize = 0;
-    for (name, 0..) |ch, i| {
-        if (ch == ':') {
-            colon_count += 1;
-            last_colon = i;
-        }
-    }
-    if (colon_count > 1) return false;
-    if (colon_count == 1) {
-        if (last_colon == 0 or last_colon == name.len - 1) return false;
-        // Check prefix and localName are valid NCNames (no colon)
-        const prefix = name[0..last_colon];
-        const local = name[last_colon + 1 ..];
-        if (prefix.len == 0 or local.len == 0) return false;
-        // Prefix first char
-        if (!std.ascii.isAlphabetic(prefix[0]) and prefix[0] != '_' and prefix[0] < 0x80) return false;
-        // Local first char
-        if (!std.ascii.isAlphabetic(local[0]) and local[0] != '_' and local[0] < 0x80) return false;
-    }
+    // Colon handling: colon at start or end is invalid QName
+    if (name[0] == ':' or name[name.len - 1] == ':') return false;
     return true;
 }
 
@@ -861,6 +867,90 @@ pub fn documentCreateElement(
     return js_elem;
 }
 
+/// DOM spec "validate and extract" algorithm for createElementNS/createAttributeNS.
+/// Returns the validated namespace, prefix, and localName, or throws DOMException.
+fn validateAndExtract(c: *qjs.JSContext, ns_arg: qjs.JSValue, qn_arg: qjs.JSValue) ?qjs.JSValue {
+    const XML_NS = "http://www.w3.org/XML/1998/namespace";
+    const XMLNS_NS = "http://www.w3.org/2000/xmlns/";
+
+    // Get qualifiedName as string (null/undefined → "null"/"undefined" per WebIDL)
+    const qn_s = jsStringToSlice(c, qn_arg) orelse {
+        // null becomes "null" string
+        return null;
+    };
+    defer qjs.JS_FreeCString(c, qn_s.ptr);
+    const qn = qn_s.ptr[0..qn_s.len];
+
+    // Step 1: validate qualifiedName against XML Name production
+    if (qn.len > 0 and !isValidXmlName(qn)) {
+        _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+        return @as(qjs.JSValue, quickjs.JS_EXCEPTION());
+    }
+
+    // Get namespace (null, undefined, "" → null per spec; "" treated as null)
+    var ns: ?[]const u8 = null;
+    var ns_ptr: ?[*]const u8 = null;
+    if (!quickjs.JS_IsNull(ns_arg) and !quickjs.JS_IsUndefined(ns_arg)) {
+        if (jsStringToSlice(c, ns_arg)) |ns_s| {
+            const ns_str = ns_s.ptr[0..ns_s.len];
+            if (ns_str.len > 0) {
+                ns = ns_str;
+                ns_ptr = ns_s.ptr;
+            } else {
+                qjs.JS_FreeCString(c, ns_s.ptr);
+            }
+        }
+    }
+    defer if (ns_ptr) |p| qjs.JS_FreeCString(c, p);
+
+    // Step 2: validate QName — colon at start/end is INVALID_CHARACTER_ERR
+    if (qn.len > 0 and (qn[0] == ':' or qn[qn.len - 1] == ':')) {
+        _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Find first colon for prefix extraction
+    const colon_pos = std.mem.indexOf(u8, qn, ":");
+    const prefix: ?[]const u8 = if (colon_pos) |cp| qn[0..cp] else null;
+    const local_name: []const u8 = if (colon_pos) |cp| qn[cp + 1 ..] else qn;
+
+    // Step 3: If namespace is null and prefix is not null → NAMESPACE_ERR
+    if (ns == null and prefix != null) {
+        _ = throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Step 4: If prefix is "xml" and namespace is not XML namespace → NAMESPACE_ERR
+    if (prefix != null and std.mem.eql(u8, prefix.?, "xml") and (ns == null or !std.mem.eql(u8, ns.?, XML_NS))) {
+        _ = throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Step 5: If qualifiedName is "xmlns" or prefix is "xmlns", namespace must be XMLNS
+    if ((std.mem.eql(u8, qn, "xmlns") or (prefix != null and std.mem.eql(u8, prefix.?, "xmlns"))) and
+        (ns == null or !std.mem.eql(u8, ns.?, XMLNS_NS)))
+    {
+        _ = throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Step 6: If namespace is XMLNS and qualifiedName is not "xmlns" and prefix is not "xmlns" → NAMESPACE_ERR
+    if (ns != null and std.mem.eql(u8, ns.?, XMLNS_NS) and
+        !std.mem.eql(u8, qn, "xmlns") and (prefix == null or !std.mem.eql(u8, prefix.?, "xmlns")))
+    {
+        _ = throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Validate localName part (after colon) — must be a valid Name start
+    if (colon_pos != null and local_name.len > 0 and isInvalidNameStartChar(local_name[0])) {
+        _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    return null; // success — no error
+}
+
 pub fn documentCreateElementNS(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
@@ -870,49 +960,40 @@ pub fn documentCreateElementNS(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 2) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    const s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
+
+    // Validate and extract per DOM spec
+    if (validateAndExtract(c, args[0], args[1])) |err| {
+        _ = err;
+        return quickjs.JS_EXCEPTION();
+    }
+
+    const s = jsStringToSlice(c, args[1]) orelse {
+        // null/undefined → use "null"/"undefined" string
+        const tag = "null";
+        const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
+        const elem = lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return quickjs.JS_NULL();
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        const obj = wrapNode(c, node);
+        _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", qjs.JS_DupValue(c, args[0]));
+        _ = qjs.JS_SetPropertyStr(c, obj, "prefix", quickjs.JS_NULL());
+        return obj;
+    };
     defer qjs.JS_FreeCString(c, s.ptr);
-
-    // Validate qualifiedName per XML spec
     const tag = s.ptr[0..s.len];
-    if (tag.len > 0 and !isValidXmlQName(tag)) {
-        return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
-    }
-
-    // Validate namespace constraints per DOM spec §5
-    var ns: ?[]const u8 = null;
-    var ns_ptr: ?[*]const u8 = null;
-    if (argc >= 1 and !quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
-        if (jsStringToSlice(c, args[0])) |ns_s| {
-            ns = ns_s.ptr[0..ns_s.len];
-            ns_ptr = ns_s.ptr;
-        }
-    }
-    defer if (ns_ptr) |p| qjs.JS_FreeCString(c, p);
-
-    // Check namespace/prefix constraints
-    if (std.mem.indexOf(u8, tag, ":")) |colon_pos| {
-        if (ns == null) return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
-        const prefix = tag[0..colon_pos];
-        if (std.mem.eql(u8, prefix, "xml") and (ns == null or !std.mem.eql(u8, ns.?, "http://www.w3.org/XML/1998/namespace")))
-            return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
-        if (std.mem.eql(u8, prefix, "xmlns") and (ns == null or !std.mem.eql(u8, ns.?, "http://www.w3.org/2000/xmlns/")))
-            return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
-    } else {
-        if (std.mem.eql(u8, tag, "xmlns") and (ns == null or !std.mem.eql(u8, ns.?, "http://www.w3.org/2000/xmlns/")))
-            return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
-    }
 
     const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
-    const elem = lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return quickjs.JS_NULL();
+    // Use localName for element creation (strip prefix)
+    const colon_pos = std.mem.indexOf(u8, tag, ":");
+    const local_name = if (colon_pos) |cp| tag[cp + 1 ..] else tag;
+    const create_name = if (local_name.len > 0) local_name else tag;
+    const elem = lxb_dom_document_create_element(doc, create_name.ptr, create_name.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const obj = wrapNode(c, node);
     // Set namespace-related properties on the JS object
     _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", qjs.JS_DupValue(c, args[0]));
-    // Parse prefix from qualifiedName
-    if (std.mem.indexOf(u8, tag, ":")) |colon_pos| {
-        _ = qjs.JS_SetPropertyStr(c, obj, "prefix", qjs.JS_NewStringLen(c, tag.ptr, colon_pos));
-        _ = qjs.JS_SetPropertyStr(c, obj, "localName", qjs.JS_NewStringLen(c, tag.ptr + colon_pos + 1, tag.len - colon_pos - 1));
+    if (colon_pos) |cp| {
+        _ = qjs.JS_SetPropertyStr(c, obj, "prefix", qjs.JS_NewStringLen(c, tag.ptr, cp));
+        _ = qjs.JS_SetPropertyStr(c, obj, "localName", qjs.JS_NewStringLen(c, tag.ptr + cp + 1, tag.len - cp - 1));
     } else {
         _ = qjs.JS_SetPropertyStr(c, obj, "prefix", quickjs.JS_NULL());
     }
