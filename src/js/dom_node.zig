@@ -360,7 +360,11 @@ pub fn elementRemoveChild(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    const child = api.getNode(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM spec: TypeError if argument is not a Node
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
+    const child = api.getNode(c, args[0]) orelse
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
     if (child.parent != parent) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
     lxb_dom_node_remove(child);
