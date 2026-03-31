@@ -1186,7 +1186,7 @@ pub fn documentCreateEvent(
                 else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "compositionevent")) iface = "CompositionEvent"
+                else if (std.ascii.eqlIgnoreCase(name, "compositionevent") or std.ascii.eqlIgnoreCase(name, "textevent")) iface = "CompositionEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent"
                 else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent"
