@@ -1172,6 +1172,19 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "gridRowStart", .css = "grid-row-start" },
         .{ .camel = "gridRowEnd", .css = "grid-row-end" },
         .{ .camel = "gridArea", .css = "grid-area" },
+        // CSS Animations
+        .{ .camel = "animationDelay", .css = "animation-delay" },
+        .{ .camel = "animationDirection", .css = "animation-direction" },
+        .{ .camel = "animationDuration", .css = "animation-duration" },
+        .{ .camel = "animationFillMode", .css = "animation-fill-mode" },
+        .{ .camel = "animationIterationCount", .css = "animation-iteration-count" },
+        .{ .camel = "animationName", .css = "animation-name" },
+        .{ .camel = "animationPlayState", .css = "animation-play-state" },
+        .{ .camel = "animationTimingFunction", .css = "animation-timing-function" },
+        // CSS Transitions
+        .{ .camel = "transitionProperty", .css = "transition-property" },
+        .{ .camel = "transitionDuration", .css = "transition-duration" },
+        .{ .camel = "transitionTimingFunction", .css = "transition-timing-function" },
     };
 
     for (camel_css_pairs) |pair| {

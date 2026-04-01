@@ -1544,6 +1544,19 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "grid-column-start") or eqlIgnoreCase(prop, "grid-column-end") or
         eqlIgnoreCase(prop, "grid-row-start") or eqlIgnoreCase(prop, "grid-row-end"))
         return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Animations
+    if (eqlIgnoreCase(prop, "animation-delay")) return qjs.JS_NewStringLen(c, "0s", 2);
+    if (eqlIgnoreCase(prop, "animation-direction")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "animation-duration")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "animation-fill-mode")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "animation-iteration-count")) return qjs.JS_NewStringLen(c, "1", 1);
+    if (eqlIgnoreCase(prop, "animation-name")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "animation-play-state")) return qjs.JS_NewStringLen(c, "running", 7);
+    if (eqlIgnoreCase(prop, "animation-timing-function")) return qjs.JS_NewStringLen(c, "ease", 4);
+    // CSS Transitions
+    if (eqlIgnoreCase(prop, "transition-property")) return qjs.JS_NewStringLen(c, "all", 3);
+    if (eqlIgnoreCase(prop, "transition-duration")) return qjs.JS_NewStringLen(c, "0s", 2);
+    if (eqlIgnoreCase(prop, "transition-timing-function")) return qjs.JS_NewStringLen(c, "ease", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1955,6 +1968,19 @@ pub fn windowGetComputedStyle(
         .{ "grid-row-start", "gridRowStart" },
         .{ "grid-row-end", "gridRowEnd" },
         .{ "grid-area", "gridArea" },
+        // CSS Animations
+        .{ "animation-delay", "animationDelay" },
+        .{ "animation-direction", "animationDirection" },
+        .{ "animation-duration", "animationDuration" },
+        .{ "animation-fill-mode", "animationFillMode" },
+        .{ "animation-iteration-count", "animationIterationCount" },
+        .{ "animation-name", "animationName" },
+        .{ "animation-play-state", "animationPlayState" },
+        .{ "animation-timing-function", "animationTimingFunction" },
+        // CSS Transitions
+        .{ "transition-property", "transitionProperty" },
+        .{ "transition-duration", "transitionDuration" },
+        .{ "transition-timing-function", "transitionTimingFunction" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2181,6 +2207,12 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .grid_column_start, .grid_row_start => true, // Accept any grid line value
         // Grid template areas: none or string
         .grid_template_areas => true, // Accept any template areas value
+        // Animation/Transition properties: accept any valid value
+        .animation_delay, .animation_direction, .animation_duration,
+        .animation_fill_mode, .animation_iteration_count, .animation_name,
+        .animation_play_state, .animation_timing_function,
+        .transition_property, .transition_duration, .transition_timing_function,
+        .transition_delay => true,
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -2297,6 +2329,14 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "grid-auto-columns",   "grid-auto-rows",       "grid-auto-flow",
         "grid-template-areas", "grid-template",
         "grid-column-start",   "grid-column-end",      "grid-row-start",         "grid-row-end",
+        // CSS Animations
+        "animation-delay",     "animation-direction",  "animation-duration",     "animation-fill-mode",
+        "animation-iteration-count","animation-name",  "animation-play-state",   "animation-timing-function",
+        "animation-range-start","animation-range-end",  "animation-range",        "animation-timeline",
+        "animation-composition",
+        // CSS Transitions
+        "transition-property", "transition-duration",  "transition-timing-function",
+        "transition-behavior",
         "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
         "max-block-size",      "max-inline-size",
         // CSS Backgrounds
