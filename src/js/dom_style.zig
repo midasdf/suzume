@@ -744,7 +744,8 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         }
     }
     // Simplify calc() wrapping a single value: calc(X%) → X%, calc(Npx) → Npx
-    {
+    // But skip for computed length properties — let resolveValueToPx handle the full resolution
+    if (!isComputedLengthProperty(prop)) {
         const tv = std.mem.trim(u8, val, " \t");
         if (tv.len >= 6 and eqlIgnoreCase(tv[0..5], "calc(") and tv[tv.len - 1] == ')') {
             const inner = std.mem.trim(u8, tv[5 .. tv.len - 1], " \t");
