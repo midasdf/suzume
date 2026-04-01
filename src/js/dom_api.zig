@@ -1247,6 +1247,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "breakInside", .css = "break-inside" },
         .{ .camel = "orphans", .css = "orphans" },
         .{ .camel = "widows", .css = "widows" },
+        .{ .camel = "page", .css = "page" },
         // CSS View Transitions
         .{ .camel = "viewTransitionName", .css = "view-transition-name" },
         .{ .camel = "viewTransitionClass", .css = "view-transition-class" },

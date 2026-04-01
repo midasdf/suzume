@@ -1617,6 +1617,7 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "break-inside")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "orphans") or eqlIgnoreCase(prop, "widows"))
         return qjs.JS_NewStringLen(c, "2", 1);
+    if (eqlIgnoreCase(prop, "page")) return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS View Transitions
     if (eqlIgnoreCase(prop, "view-transition-name")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "view-transition-class")) return qjs.JS_NewStringLen(c, "none", 4);
@@ -2149,6 +2150,7 @@ pub fn windowGetComputedStyle(
         .{ "break-inside", "breakInside" },
         .{ "orphans", "orphans" },
         .{ "widows", "widows" },
+        .{ "page", "page" },
         // CSS View Transitions
         .{ "view-transition-name", "viewTransitionName" },
         .{ "view-transition-class", "viewTransitionClass" },
