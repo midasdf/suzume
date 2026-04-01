@@ -1201,6 +1201,31 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "fontSynthesisSmallCaps", .css = "font-synthesis-small-caps" },
         .{ .camel = "fontVariantAlternates", .css = "font-variant-alternates" },
         .{ .camel = "fontVariantEmoji", .css = "font-variant-emoji" },
+        // CSS Masking
+        .{ .camel = "clipPath", .css = "clip-path" },
+        .{ .camel = "clipRule", .css = "clip-rule" },
+        .{ .camel = "maskImage", .css = "mask-image" },
+        .{ .camel = "maskRepeat", .css = "mask-repeat" },
+        .{ .camel = "maskPosition", .css = "mask-position" },
+        .{ .camel = "maskSize", .css = "mask-size" },
+        .{ .camel = "maskComposite", .css = "mask-composite" },
+        .{ .camel = "maskType", .css = "mask-type" },
+        // CSS Shapes
+        .{ .camel = "shapeOutside", .css = "shape-outside" },
+        .{ .camel = "shapeMargin", .css = "shape-margin" },
+        .{ .camel = "shapeImageThreshold", .css = "shape-image-threshold" },
+        // CSS Multi-column
+        .{ .camel = "columnCount", .css = "column-count" },
+        .{ .camel = "columnWidth", .css = "column-width" },
+        .{ .camel = "columnFill", .css = "column-fill" },
+        .{ .camel = "columnSpan", .css = "column-span" },
+        .{ .camel = "columnRuleWidth", .css = "column-rule-width" },
+        .{ .camel = "columnRuleStyle", .css = "column-rule-style" },
+        .{ .camel = "columnRuleColor", .css = "column-rule-color" },
+        // CSS Lists
+        .{ .camel = "listStylePosition", .css = "list-style-position" },
+        .{ .camel = "listStyleImage", .css = "list-style-image" },
+        .{ .camel = "counterSet", .css = "counter-set" },
         // CSS Animations
         .{ .camel = "animationDelay", .css = "animation-delay" },
         .{ .camel = "animationDirection", .css = "animation-direction" },

@@ -1567,6 +1567,32 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "image-rendering")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "object-fit")) return qjs.JS_NewStringLen(c, "fill", 4);
     if (eqlIgnoreCase(prop, "object-position")) return qjs.JS_NewStringLen(c, "50% 50%", 7);
+    // CSS Masking
+    if (eqlIgnoreCase(prop, "clip-path")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "clip-rule")) return qjs.JS_NewStringLen(c, "nonzero", 7);
+    if (eqlIgnoreCase(prop, "mask-image")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "mask-repeat")) return qjs.JS_NewStringLen(c, "repeat", 6);
+    if (eqlIgnoreCase(prop, "mask-position")) return qjs.JS_NewStringLen(c, "0% 0%", 5);
+    if (eqlIgnoreCase(prop, "mask-size")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "mask-composite")) return qjs.JS_NewStringLen(c, "add", 3);
+    if (eqlIgnoreCase(prop, "mask-type")) return qjs.JS_NewStringLen(c, "luminance", 9);
+    // CSS Shapes
+    if (eqlIgnoreCase(prop, "shape-outside")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "shape-margin")) return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "shape-image-threshold")) return qjs.JS_NewStringLen(c, "0", 1);
+    // CSS Multi-column
+    if (eqlIgnoreCase(prop, "column-count")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "column-width")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "column-fill")) return qjs.JS_NewStringLen(c, "balance", 7);
+    if (eqlIgnoreCase(prop, "column-span")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "column-rule-width")) return qjs.JS_NewStringLen(c, "medium", 6);
+    if (eqlIgnoreCase(prop, "column-rule-style")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "column-rule-color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    // CSS Lists
+    if (eqlIgnoreCase(prop, "list-style-position")) return qjs.JS_NewStringLen(c, "outside", 7);
+    if (eqlIgnoreCase(prop, "list-style-image")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "list-style-type")) return qjs.JS_NewStringLen(c, "disc", 4);
+    if (eqlIgnoreCase(prop, "counter-set")) return qjs.JS_NewStringLen(c, "none", 4);
     // CSS Scroll Snap
     if (eqlIgnoreCase(prop, "scroll-snap-type")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "scroll-snap-align")) return qjs.JS_NewStringLen(c, "none", 4);
@@ -2024,6 +2050,32 @@ pub fn windowGetComputedStyle(
         .{ "font-synthesis-small-caps", "fontSynthesisSmallCaps" },
         .{ "font-variant-alternates", "fontVariantAlternates" },
         .{ "font-variant-emoji", "fontVariantEmoji" },
+        // CSS Masking
+        .{ "clip-path", "clipPath" },
+        .{ "clip-rule", "clipRule" },
+        .{ "mask-image", "maskImage" },
+        .{ "mask-repeat", "maskRepeat" },
+        .{ "mask-position", "maskPosition" },
+        .{ "mask-size", "maskSize" },
+        .{ "mask-composite", "maskComposite" },
+        .{ "mask-type", "maskType" },
+        // CSS Shapes
+        .{ "shape-outside", "shapeOutside" },
+        .{ "shape-margin", "shapeMargin" },
+        .{ "shape-image-threshold", "shapeImageThreshold" },
+        // CSS Multi-column
+        .{ "column-count", "columnCount" },
+        .{ "column-width", "columnWidth" },
+        .{ "column-fill", "columnFill" },
+        .{ "column-span", "columnSpan" },
+        .{ "column-rule-width", "columnRuleWidth" },
+        .{ "column-rule-style", "columnRuleStyle" },
+        .{ "column-rule-color", "columnRuleColor" },
+        // CSS Lists
+        .{ "list-style-position", "listStylePosition" },
+        .{ "list-style-image", "listStyleImage" },
+        .{ "list-style-type", "listStyleType" },
+        .{ "counter-set", "counterSet" },
         // CSS Animations
         .{ "animation-delay", "animationDelay" },
         .{ "animation-direction", "animationDirection" },
@@ -2421,6 +2473,21 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "line-clamp",          "max-lines",            "block-ellipsis",         "continue",
         // CSS Images
         "image-orientation",   "image-rendering",      "image-resolution",
+        // CSS Masking
+        "clip-path",           "clip-rule",            "mask-image",             "mask-mode",
+        "mask-repeat",         "mask-position",        "mask-clip",              "mask-origin",
+        "mask-size",           "mask-composite",       "mask-type",              "mask",
+        "mask-border",         "mask-border-source",   "mask-border-slice",      "mask-border-width",
+        "mask-border-outset",  "mask-border-repeat",   "mask-border-mode",
+        // CSS Shapes
+        "shape-outside",       "shape-margin",         "shape-image-threshold",
+        // CSS Multi-column
+        "column-count",        "column-width",         "column-fill",            "column-span",
+        "column-rule-width",   "column-rule-style",    "column-rule-color",
+        // CSS Ruby
+        "ruby-align",          "ruby-position",
+        // CSS Lists
+        "list-style-position", "list-style-image",     "marker-side",            "counter-set",
         // CSS Scroll Snap
         "scroll-snap-type",    "scroll-snap-align",    "scroll-snap-stop",
         "scroll-padding",      "scroll-padding-top",   "scroll-padding-right",
