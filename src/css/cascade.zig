@@ -2769,18 +2769,20 @@ fn hasAngleUnit(s: []const u8) bool {
 /// If input had angle units (deg/grad/turn), v is in those units → convert to radians.
 /// If input is a bare number or expression, v is treated as radians.
 fn resolveToRadians(input: []const u8, v: f32) f32 {
-    // Check if the input ends with an angle unit (simple case)
-    if (std.mem.endsWith(u8, input, "deg")) return v * std.math.pi / 180.0;
-    if (std.mem.endsWith(u8, input, "grad")) return v * std.math.pi / 200.0;
-    if (std.mem.endsWith(u8, input, "turn")) return v * std.math.pi * 2.0;
-    if (std.mem.endsWith(u8, input, "rad")) {
-        // v was parsed with parseLength which strips "rad" and returns the number
-        return v;
+    // resolveLengthToPxWithPct converts ALL angle units to degrees.
+    // So for any input with angle units, v is in degrees → convert to radians.
+    if (hasAngleUnit(input) or containsAngleUnit(input)) {
+        return v * std.math.pi / 180.0;
     }
-    // If it contains angle arithmetic (like "30deg + 1.0471967rad"),
-    // the resolved value is already in the dominant unit's base (px/number)
-    // For trig input, treat as radians by default
+    // Bare number (no unit) → treat as radians per spec
     return v;
+}
+
+fn containsAngleUnit(s: []const u8) bool {
+    return std.mem.indexOf(u8, s, "deg") != null or
+        std.mem.indexOf(u8, s, "rad") != null or
+        std.mem.indexOf(u8, s, "grad") != null or
+        std.mem.indexOf(u8, s, "turn") != null;
 }
 
 /// Resolve unary math functions: sqrt, log, exp
