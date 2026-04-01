@@ -699,14 +699,27 @@ pub fn elementReplaceChild(
     // DOM spec: TypeError if node is null
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
-    const new_node = api.getNode(c, args[0]) orelse
-        return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
+
+    // Get node — may be lexbor-backed or JS-level
+    const new_node_opt = api.getNode(c, args[0]);
+    const new_node_type: i32 = if (new_node_opt) |n| @as(i32, @intCast(n.type)) else blk: {
+        const nt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, nt);
+        if (nt.tag == qjs.JS_TAG_UNDEFINED)
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
+        var val: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &val, nt);
+        break :blk val;
+    };
+
     // DOM spec step 1: parent must be able to have children
     if (!canHaveChildren(parent))
         return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
-    // DOM spec step 2: node must not be an ancestor of parent
-    if (isAncestorOrSelf(new_node, parent))
-        return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
+    // DOM spec step 2: node must not be an ancestor of parent (only for lexbor nodes)
+    if (new_node_opt) |nn| {
+        if (isAncestorOrSelf(nn, parent))
+            return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
+    }
     // DOM spec: TypeError if child is null
     if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 2 is not of type 'Node'.");
@@ -714,6 +727,28 @@ pub fn elementReplaceChild(
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
     if (old_node.parent != parent)
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
+
+    // DOM spec step 4: node must be insertable type
+    if (new_node_opt) |nn| {
+        if (!isInsertableNodeType(nn))
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type cannot be inserted.");
+    } else {
+        if (new_node_type != 1 and new_node_type != 3 and new_node_type != 7 and
+            new_node_type != 8 and new_node_type != 10 and new_node_type != 11)
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type cannot be inserted.");
+    }
+
+    // DOM spec step 5: Text in Document / DocType in non-Document
+    if (parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node_type == 3)
+        return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
+    if (new_node_type == 10 and parent.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
+        return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+
+    // JS-level node — cannot insert into lexbor tree
+    if (new_node_opt == null)
+        return appendJsNode(c, this_val, args[0]);
+
+    const new_node = new_node_opt.?;
     // DOM spec: if new_node is the same as old_node, this is a no-op
     if (new_node == old_node) {
         return qjs.JS_DupValue(c, args[1]);

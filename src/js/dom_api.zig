@@ -3425,7 +3425,6 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    else if(nt===11){var fe=0,ft=false;var fc=node.firstChild;while(fc){if(_nt(fc)===1)fe++;if(_nt(fc)===3)ft=true;fc=fc.nextSibling;}if(fe>1||ft)throw new DOMException('Invalid DocumentFragment.','HierarchyRequestError');if(fe===1){if(_elemCh(child))throw new DOMException('Already has element.','HierarchyRequestError');if(_dtAfter(child))throw new DOMException('Doctype follows.','HierarchyRequestError');}}
             \\    else if(nt===1){if(_elemCh(child))throw new DOMException('Already has element.','HierarchyRequestError');if(_dtAfter(child))throw new DOMException('Doctype follows.','HierarchyRequestError');}
             \\  }
-            \\  _relink();
             \\  var doc = {
             \\    nodeType: 9, nodeName: '#document',
             \\    createElement: function(t) { return document.createElement(t); },
@@ -3525,6 +3524,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    hasFeature:function(){return true;}
             \\  };
             \\  dt.ownerDocument=doc;
+            \\  _relink();
             \\  return doc;
             \\})
         ;
