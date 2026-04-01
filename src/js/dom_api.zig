@@ -2887,7 +2887,6 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         "HTMLSlotElement",      "HTMLMenuElement",      "HTMLUnknownElement",
         "HTMLDirectoryElement", "HTMLDListElement",     "HTMLFontElement",
         "HTMLFrameElement",     "HTMLFrameSetElement",  "HTMLMarqueeElement",
-        "HTMLTableHeaderCellElement", "HTMLTableDataCellElement",
         "HTMLParamElement",
     };
     for (html_subclasses) |name| {
@@ -3640,6 +3639,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const empty_js = "(function(){return [];})";
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "embeds", qjs.JS_Eval(ctx, empty_js, empty_js.len, "<embeds>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "plugins", qjs.JS_Eval(ctx, empty_js, empty_js.len, "<plugins>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "applets", qjs.JS_NewArray(ctx)); // deprecated, always empty
     }
 
     // document.implementation
