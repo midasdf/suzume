@@ -2532,12 +2532,22 @@ fn resolveClampWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base
         parts[2] = std.mem.trim(u8, inner[part_start..], " \t");
     } else return null;
 
-    const min_val = resolveCalcExprWithPct(parts[0], font_size, vw, vh, pct_base, depth + 1) orelse
-        (resolveValueToPxDepth(parts[0], font_size, vw, vh, pct_base, depth + 1) orelse return null);
+    // CSS Values 4: clamp(none, val, max) = min(val, max); clamp(min, val, none) = max(min, val)
+    const min_is_none = std.ascii.eqlIgnoreCase(parts[0], "none");
+    const max_is_none = std.ascii.eqlIgnoreCase(parts[2], "none");
+
+    const min_val: f32 = if (min_is_none)
+        -std.math.inf(f32)
+    else
+        resolveCalcExprWithPct(parts[0], font_size, vw, vh, pct_base, depth + 1) orelse
+            (resolveValueToPxDepth(parts[0], font_size, vw, vh, pct_base, depth + 1) orelse return null);
     const pref_val = resolveCalcExprWithPct(parts[1], font_size, vw, vh, pct_base, depth + 1) orelse
         (resolveValueToPxDepth(parts[1], font_size, vw, vh, pct_base, depth + 1) orelse return null);
-    const max_val = resolveCalcExprWithPct(parts[2], font_size, vw, vh, pct_base, depth + 1) orelse
-        (resolveValueToPxDepth(parts[2], font_size, vw, vh, pct_base, depth + 1) orelse return null);
+    const max_val: f32 = if (max_is_none)
+        std.math.inf(f32)
+    else
+        resolveCalcExprWithPct(parts[2], font_size, vw, vh, pct_base, depth + 1) orelse
+            (resolveValueToPxDepth(parts[2], font_size, vw, vh, pct_base, depth + 1) orelse return null);
 
     const result = std.math.clamp(pref_val, min_val, max_val);
     // CSS Values 4: NaN in clamp → 0
