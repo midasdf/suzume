@@ -1557,6 +1557,21 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "transition-property")) return qjs.JS_NewStringLen(c, "all", 3);
     if (eqlIgnoreCase(prop, "transition-duration")) return qjs.JS_NewStringLen(c, "0s", 2);
     if (eqlIgnoreCase(prop, "transition-timing-function")) return qjs.JS_NewStringLen(c, "ease", 4);
+    // CSS Images
+    if (eqlIgnoreCase(prop, "image-orientation")) return qjs.JS_NewStringLen(c, "from-image", 10);
+    if (eqlIgnoreCase(prop, "image-rendering")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "object-fit")) return qjs.JS_NewStringLen(c, "fill", 4);
+    if (eqlIgnoreCase(prop, "object-position")) return qjs.JS_NewStringLen(c, "50% 50%", 7);
+    // CSS Scroll Snap
+    if (eqlIgnoreCase(prop, "scroll-snap-type")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "scroll-snap-align")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "scroll-snap-stop")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "scroll-padding-top") or eqlIgnoreCase(prop, "scroll-padding-right") or
+        eqlIgnoreCase(prop, "scroll-padding-bottom") or eqlIgnoreCase(prop, "scroll-padding-left"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "scroll-margin-top") or eqlIgnoreCase(prop, "scroll-margin-right") or
+        eqlIgnoreCase(prop, "scroll-margin-bottom") or eqlIgnoreCase(prop, "scroll-margin-left"))
+        return qjs.JS_NewStringLen(c, "0px", 3);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1968,6 +1983,23 @@ pub fn windowGetComputedStyle(
         .{ "grid-row-start", "gridRowStart" },
         .{ "grid-row-end", "gridRowEnd" },
         .{ "grid-area", "gridArea" },
+        // CSS Images
+        .{ "image-orientation", "imageOrientation" },
+        .{ "image-rendering", "imageRendering" },
+        .{ "object-fit", "objectFit" },
+        .{ "object-position", "objectPosition" },
+        // CSS Scroll Snap
+        .{ "scroll-snap-type", "scrollSnapType" },
+        .{ "scroll-snap-align", "scrollSnapAlign" },
+        .{ "scroll-snap-stop", "scrollSnapStop" },
+        .{ "scroll-padding-top", "scrollPaddingTop" },
+        .{ "scroll-padding-right", "scrollPaddingRight" },
+        .{ "scroll-padding-bottom", "scrollPaddingBottom" },
+        .{ "scroll-padding-left", "scrollPaddingLeft" },
+        .{ "scroll-margin-top", "scrollMarginTop" },
+        .{ "scroll-margin-right", "scrollMarginRight" },
+        .{ "scroll-margin-bottom", "scrollMarginBottom" },
+        .{ "scroll-margin-left", "scrollMarginLeft" },
         // CSS Animations
         .{ "animation-delay", "animationDelay" },
         .{ "animation-direction", "animationDirection" },
@@ -2221,7 +2253,9 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .border_radius_top_left, .border_radius_top_right,
         .border_radius_bottom_left, .border_radius_bottom_right,
         .border_spacing, .grid_area, .transform,
-        .letter_spacing, .word_spacing, .text_indent => true,
+        .letter_spacing, .word_spacing, .text_indent,
+        .aspect_ratio, .justify_items, .justify_self,
+        .object_fit => true,
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -2358,6 +2392,15 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
         "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
         "line-clamp",          "max-lines",            "block-ellipsis",         "continue",
+        // CSS Images
+        "image-orientation",   "image-rendering",      "image-resolution",
+        // CSS Scroll Snap
+        "scroll-snap-type",    "scroll-snap-align",    "scroll-snap-stop",
+        "scroll-padding",      "scroll-padding-top",   "scroll-padding-right",
+        "scroll-padding-bottom","scroll-padding-left",  "scroll-padding-block",
+        "scroll-padding-inline","scroll-margin",        "scroll-margin-top",
+        "scroll-margin-right", "scroll-margin-bottom", "scroll-margin-left",
+        "scroll-margin-block", "scroll-margin-inline",
         "touch-action",         "user-select",          "pointer-events",         "resize",
         "appearance",           "accent-color",         "caret-color",            "color-scheme",
         "forced-color-adjust",  "print-color-adjust",

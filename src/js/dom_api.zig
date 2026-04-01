@@ -1172,6 +1172,21 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "gridRowStart", .css = "grid-row-start" },
         .{ .camel = "gridRowEnd", .css = "grid-row-end" },
         .{ .camel = "gridArea", .css = "grid-area" },
+        // CSS Images
+        .{ .camel = "imageOrientation", .css = "image-orientation" },
+        .{ .camel = "imageRendering", .css = "image-rendering" },
+        // CSS Scroll Snap
+        .{ .camel = "scrollSnapType", .css = "scroll-snap-type" },
+        .{ .camel = "scrollSnapAlign", .css = "scroll-snap-align" },
+        .{ .camel = "scrollSnapStop", .css = "scroll-snap-stop" },
+        .{ .camel = "scrollPaddingTop", .css = "scroll-padding-top" },
+        .{ .camel = "scrollPaddingRight", .css = "scroll-padding-right" },
+        .{ .camel = "scrollPaddingBottom", .css = "scroll-padding-bottom" },
+        .{ .camel = "scrollPaddingLeft", .css = "scroll-padding-left" },
+        .{ .camel = "scrollMarginTop", .css = "scroll-margin-top" },
+        .{ .camel = "scrollMarginRight", .css = "scroll-margin-right" },
+        .{ .camel = "scrollMarginBottom", .css = "scroll-margin-bottom" },
+        .{ .camel = "scrollMarginLeft", .css = "scroll-margin-left" },
         // CSS Animations
         .{ .camel = "animationDelay", .css = "animation-delay" },
         .{ .camel = "animationDirection", .css = "animation-direction" },
