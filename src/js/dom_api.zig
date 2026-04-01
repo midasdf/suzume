@@ -1412,6 +1412,8 @@ fn styleSetProperty(
         dom_style.canonicalizeRoundModRem(val, &calc_buf) orelse val
     else if (val.len >= 4 and dom_style.eqlIgnoreCase(val[0..4], "rem("))
         dom_style.canonicalizeRoundModRem(val, &calc_buf) orelse val
+    else if (dom_style.isColorProperty(prop) and dom_style.canonicalizeColorKeyword(trimmed_val2, &calc_buf) != null)
+        dom_style.canonicalizeColorKeyword(trimmed_val2, &calc_buf).?
     else
         val;
 

@@ -3744,6 +3744,32 @@ pub fn isValidBorderWidth(val: []const u8) bool {
     return isValidNonNegLength(val);
 }
 
+/// Canonicalize a color keyword to lowercase for system colors / currentcolor.
+pub fn canonicalizeColorKeyword(val: []const u8, buf: []u8) ?[]const u8 {
+    // System colors: canonicalize to lowercase
+    const system_colors = [_][]const u8{
+        "activetext", "buttonborder", "buttonface", "buttontext", "canvas",
+        "canvastext", "field", "fieldtext", "graytext", "highlight",
+        "highlighttext", "linktext", "mark", "marktext", "selecteditem",
+        "selecteditemtext", "accentcolor", "accentcolortext", "visitedtext",
+    };
+    for (system_colors) |sc| {
+        if (eqlIgnoreCase(val, sc)) {
+            if (sc.len <= buf.len) {
+                @memcpy(buf[0..sc.len], sc);
+                return buf[0..sc.len];
+            }
+        }
+    }
+    // currentcolor → currentcolor
+    if (eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) {
+        const s = "currentcolor";
+        @memcpy(buf[0..s.len], s);
+        return buf[0..s.len];
+    }
+    return null;
+}
+
 pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
     // CSS system colors
