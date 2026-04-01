@@ -1498,6 +1498,12 @@ fn jsDocumentDispatchEvent(
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'dispatchEvent': parameter 1 is not of type 'Event'.");
     }
     const event_obj = args[0];
+    // DOM spec: InvalidStateError if event's dispatch flag is set
+    const dispatch_flag_doc = qjs.JS_GetPropertyStr(c, event_obj, "_dispatching");
+    defer qjs.JS_FreeValue(c, dispatch_flag_doc);
+    if (qjs.JS_ToBool(c, dispatch_flag_doc) > 0) {
+        return dom_api.throwDOMException(c, "InvalidStateError", "The event is already being dispatched.");
+    }
     // Check _initialized flag (createEvent events start uninitialized)
     const init_flag = qjs.JS_GetPropertyStr(c, event_obj, "_initialized");
     defer qjs.JS_FreeValue(c, init_flag);
