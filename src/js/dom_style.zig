@@ -1988,7 +1988,7 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             }
             break :blk std.fmt.parseFloat(f32, trimmed) != error.InvalidCharacter;
         },
-        .z_index => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter or eqlIgnoreCase(trimmed, "auto"),
+        .z_index, .order => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter or eqlIgnoreCase(trimmed, "auto"),
         .flex_grow, .flex_shrink => isNonNegNumber(trimmed),
         // Font size: non-negative length or keyword
         .font_size => isValidFontSize(trimmed),
@@ -2030,6 +2030,8 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             eqlIgnoreCase(trimmed, "inset") or eqlIgnoreCase(trimmed, "outset"),
         // Outline width: like border-width
         .outline_width => isValidBorderWidth(trimmed),
+        // Flex wrap: nowrap, wrap, wrap-reverse
+        .flex_wrap => eqlIgnoreCase(trimmed, "nowrap") or eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "wrap-reverse"),
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
