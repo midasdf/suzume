@@ -1480,6 +1480,14 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "scrollbar-gutter")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "overflow-clip-margin")) return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "flex-wrap")) return qjs.JS_NewStringLen(c, "nowrap", 6);
+    if (eqlIgnoreCase(prop, "flex-flow")) return qjs.JS_NewStringLen(c, "row nowrap", 10);
+    if (eqlIgnoreCase(prop, "justify-content") or eqlIgnoreCase(prop, "align-content"))
+        return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "align-items")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "align-self")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "row-gap") or eqlIgnoreCase(prop, "column-gap") or eqlIgnoreCase(prop, "gap"))
+        return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1816,6 +1824,20 @@ pub fn windowGetComputedStyle(
         .{ "scrollbar-gutter", "scrollbarGutter" },
         .{ "overflow-clip-margin", "overflowClipMargin" },
         .{ "text-overflow", "textOverflow" },
+        // CSS Flexbox (ensure all are in computed style)
+        .{ "flex-wrap", "flexWrap" },
+        .{ "flex-flow", "flexFlow" },
+        .{ "flex-basis", "flexBasis" },
+        .{ "order", "order" },
+        .{ "justify-content", "justifyContent" },
+        .{ "align-items", "alignItems" },
+        .{ "align-self", "alignSelf" },
+        .{ "align-content", "alignContent" },
+        .{ "flex-grow", "flexGrow" },
+        .{ "flex-shrink", "flexShrink" },
+        .{ "gap", "gap" },
+        .{ "row-gap", "rowGap" },
+        .{ "column-gap", "columnGap" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
