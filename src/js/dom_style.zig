@@ -1667,6 +1667,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     // CSS Tables
     if (eqlIgnoreCase(prop, "caption-side")) return qjs.JS_NewStringLen(c, "top", 3);
     if (eqlIgnoreCase(prop, "empty-cells")) return qjs.JS_NewStringLen(c, "show", 4);
+    if (eqlIgnoreCase(prop, "table-layout")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "border-spacing")) return qjs.JS_NewStringLen(c, "0px 0px", 7);
     // CSS Inline
     if (eqlIgnoreCase(prop, "alignment-baseline")) return qjs.JS_NewStringLen(c, "baseline", 8);
     if (eqlIgnoreCase(prop, "dominant-baseline")) return qjs.JS_NewStringLen(c, "auto", 4);
@@ -2215,6 +2217,8 @@ pub fn windowGetComputedStyle(
         .{ "caption-side", "captionSide" },
         .{ "empty-cells", "emptyCells" },
         .{ "border-spacing", "borderSpacing" },
+        .{ "table-layout", "tableLayout" },
+        .{ "border-collapse", "borderCollapse" },
         // CSS Inline
         .{ "alignment-baseline", "alignmentBaseline" },
         .{ "dominant-baseline", "dominantBaseline" },
