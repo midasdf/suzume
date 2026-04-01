@@ -729,6 +729,20 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // Simplify calc() wrapping a single value: calc(X%) → X%, calc(Npx) → Npx
+    {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (tv.len >= 6 and eqlIgnoreCase(tv[0..5], "calc(") and tv[tv.len - 1] == ')') {
+            const inner = std.mem.trim(u8, tv[5 .. tv.len - 1], " \t");
+            // Single value with no operators (no spaces, +, -)
+            var has_op = false;
+            for (inner) |ch| {
+                if (ch == '+' or ch == '-' or ch == '*' or ch == '/') { has_op = true; break; }
+            }
+            if (!has_op and inner.len > 0)
+                return qjs.JS_NewStringLen(c, inner.ptr, inner.len);
+        }
+    }
     // text-wrap: 'auto' computes to 'wrap'
     if (eqlIgnoreCase(prop, "text-wrap")) {
         const tv = std.mem.trim(u8, val, " \t");
