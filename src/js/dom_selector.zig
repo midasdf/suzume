@@ -134,6 +134,11 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel.len > 7 and std.ascii.eqlIgnoreCase(sel[0..7], ":where(") and sel[sel.len - 1] == ')') {
         return elementMatchesSelector(@ptrCast(elem), sel[7 .. sel.len - 1]);
     }
+    // :has(inner) — matches if descendant/child/sibling matches inner relative selector
+    if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":has(") and sel[sel.len - 1] == ')') {
+        const inner = std.mem.trim(u8, sel[5 .. sel.len - 1], " \t");
+        return hasRelativeMatch(@ptrCast(elem), inner);
+    }
     // Other pseudo-classes
     if (sel[0] == ':') {
         // :first-child, :last-child, :only-child, :empty, :root, :enabled, :disabled, :checked
