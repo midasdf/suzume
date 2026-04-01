@@ -729,6 +729,28 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // contain: canonicalize longhand combinations to shorthand keywords
+    if (eqlIgnoreCase(prop, "contain")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        // Check for 'content' = style layout paint
+        if (eqlIgnoreCase(tv, "style layout paint") or eqlIgnoreCase(tv, "layout paint style") or
+            eqlIgnoreCase(tv, "paint layout style") or eqlIgnoreCase(tv, "paint style layout") or
+            eqlIgnoreCase(tv, "layout style paint") or eqlIgnoreCase(tv, "style paint layout"))
+            return qjs.JS_NewStringLen(c, "content", 7);
+        // Check for 'strict' = size style layout paint (but NOT inline-size)
+        if (std.mem.indexOf(u8, tv, "size") != null and std.mem.indexOf(u8, tv, "inline-size") == null and
+            std.mem.indexOf(u8, tv, "style") != null and
+            std.mem.indexOf(u8, tv, "layout") != null and std.mem.indexOf(u8, tv, "paint") != null)
+            return qjs.JS_NewStringLen(c, "strict", 6);
+    }
+    // scroll-snap-type: strip default 'proximity' strictness
+    if (eqlIgnoreCase(prop, "scroll-snap-type")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (std.mem.endsWith(u8, tv, " proximity")) {
+            const trimmed_len = tv.len - 10; // " proximity" = 10 chars
+            return qjs.JS_NewStringLen(c, tv.ptr, trimmed_len);
+        }
+    }
     // background-repeat: 'X X' → 'X' when both values are the same
     if (eqlIgnoreCase(prop, "background-repeat")) {
         const tv = std.mem.trim(u8, val, " \t");
