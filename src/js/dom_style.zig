@@ -1514,6 +1514,12 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "transform-box")) return qjs.JS_NewStringLen(c, "view-box", 8);
     if (eqlIgnoreCase(prop, "transform-origin")) return qjs.JS_NewStringLen(c, "50% 50% 0px", 11);
     if (eqlIgnoreCase(prop, "transform-style")) return qjs.JS_NewStringLen(c, "flat", 4);
+    // CSS Writing Modes
+    if (eqlIgnoreCase(prop, "writing-mode")) return qjs.JS_NewStringLen(c, "horizontal-tb", 13);
+    if (eqlIgnoreCase(prop, "text-orientation")) return qjs.JS_NewStringLen(c, "mixed", 5);
+    if (eqlIgnoreCase(prop, "text-combine-upright")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "direction")) return qjs.JS_NewStringLen(c, "ltr", 3);
+    if (eqlIgnoreCase(prop, "unicode-bidi")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1892,6 +1898,12 @@ pub fn windowGetComputedStyle(
         .{ "transform-box", "transformBox" },
         .{ "transform-origin", "transformOrigin" },
         .{ "transform-style", "transformStyle" },
+        // CSS Writing Modes
+        .{ "writing-mode", "writingMode" },
+        .{ "text-orientation", "textOrientation" },
+        .{ "text-combine-upright", "textCombineUpright" },
+        .{ "direction", "direction" },
+        .{ "unicode-bidi", "unicodeBidi" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2212,6 +2224,9 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         // CSS Transforms
         "backface-visibility", "perspective",          "perspective-origin",     "transform-box",
         "transform-origin",    "transform-style",
+        // CSS Writing Modes
+        "writing-mode",        "text-orientation",     "text-combine-upright",   "direction",
+        "unicode-bidi",
         "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
         "max-block-size",      "max-inline-size",
         // CSS Backgrounds

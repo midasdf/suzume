@@ -1139,6 +1139,12 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "transformBox", .css = "transform-box" },
         .{ .camel = "transformOrigin", .css = "transform-origin" },
         .{ .camel = "transformStyle", .css = "transform-style" },
+        // CSS Writing Modes
+        .{ .camel = "writingMode", .css = "writing-mode" },
+        .{ .camel = "textOrientation", .css = "text-orientation" },
+        .{ .camel = "textCombineUpright", .css = "text-combine-upright" },
+        .{ .camel = "direction", .css = "direction" },
+        .{ .camel = "unicodeBidi", .css = "unicode-bidi" },
     };
 
     for (camel_css_pairs) |pair| {
