@@ -823,8 +823,10 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         }
         if (opacity_val) |v| {
             const clamped = @max(0.0, @min(1.0, v));
+            // Round to 6 significant digits to avoid f32 precision artifacts
+            const rounded = @round(clamped * 1000000.0) / 1000000.0;
             var obuf: [32]u8 = undefined;
-            const os = std.fmt.bufPrint(&obuf, "{d}", .{clamped}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+            const os = std.fmt.bufPrint(&obuf, "{d}", .{rounded}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
             return qjs.JS_NewStringLen(c, os.ptr, os.len);
         }
     }
