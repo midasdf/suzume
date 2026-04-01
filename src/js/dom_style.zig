@@ -729,6 +729,30 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // overflow-clip-margin: normalize order and defaults
+    if (eqlIgnoreCase(prop, "overflow-clip-margin")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        // padding-box is default, so 'padding-box' alone → '0px', 'padding-box 0px' → '0px'
+        if (eqlIgnoreCase(tv, "padding-box") or eqlIgnoreCase(tv, "padding-box 0px"))
+            return qjs.JS_NewStringLen(c, "0px", 3);
+        // content-box 0px → content-box
+        if (eqlIgnoreCase(tv, "content-box 0px"))
+            return qjs.JS_NewStringLen(c, "content-box", 11);
+        // Reorder: length first → box first (e.g. '10px content-box' → 'content-box 10px')
+        if (std.mem.indexOf(u8, tv, " ")) |sp| {
+            const first = tv[0..sp];
+            const second = std.mem.trim(u8, tv[sp + 1 ..], " ");
+            if (eqlIgnoreCase(second, "content-box") or eqlIgnoreCase(second, "padding-box") or eqlIgnoreCase(second, "border-box")) {
+                var rbuf: [64]u8 = undefined;
+                if (eqlIgnoreCase(second, "padding-box")) {
+                    // padding-box is default, just return the length
+                    return qjs.JS_NewStringLen(c, first.ptr, first.len);
+                }
+                const s = std.fmt.bufPrint(&rbuf, "{s} {s}", .{ second, first }) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            }
+        }
+    }
     // Border/outline width: round to integer px
     if (eqlIgnoreCase(prop, "outline-width") or eqlIgnoreCase(prop, "border-top-width") or
         eqlIgnoreCase(prop, "border-right-width") or eqlIgnoreCase(prop, "border-bottom-width") or
