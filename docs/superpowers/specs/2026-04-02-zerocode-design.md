@@ -19,7 +19,7 @@ Rewrite claw-code (a standalone Claude Code reimplementation) in Zig for persona
 | Plugin system | Full (hooks + plugin management) | Heavy hook/skill usage in current workflow |
 | Syntax highlight | Tree-sitter (C link) | Lighter than syntect, Zig cimport natural fit |
 | Regex (Grep) | Native fixed-string + rg/grep fallback | No std regex in Zig, avoids heavy PCRE2 dep |
-| HTTP/TLS | std.http.Client | Zero external dependency |
+| HTTP/TLS | std.http.Client + std.http.Server | Zero external dependency |
 | Terminal | std.posix.termios + ANSI | Zero external dependency |
 | Reference impl | claw-code Rust source | Follow its patterns when design decisions are ambiguous |
 
@@ -28,9 +28,10 @@ Rewrite claw-code (a standalone Claude Code reimplementation) in Zig for persona
 The core design advantage over Node.js. Three-tier arena allocator strategy:
 
 ```
-Persistent Allocator (smp_allocator)
+Persistent Allocator (GeneralPurposeAllocator)
   - Process lifetime: CLI config, history file paths, signal state
-  - Tiny footprint, never reset
+  - Tiny footprint, supports individual free() for config updates
+  - Backed by page allocator (mmap/munmap)
 
   └── Session Allocator (ArenaAllocator)
         - Lifetime: one session (reset on /clear, session switch)
@@ -41,13 +42,15 @@ Persistent Allocator (smp_allocator)
               - Lifetime: one user message → response complete
               - Holds: API response parsing, tool execution intermediates,
                        JSON serialization, SSE frame buffers
-              - Reset on turn completion → RSS drops immediately
+              - Reset via .free_all on turn completion
               - This is where Node.js leaks — we reclaim deterministically
 ```
 
 Why this fixes the RSS bloat:
 - Node.js V8 GC is conservative; old-gen objects survive major GC cycles and RSS never returns to baseline
-- Zig ArenaAllocator.reset() with retain_capacity keeps the virtual mapping but marks pages MADV_DONTNEED, allowing the kernel to reclaim physical memory immediately
+- Turn allocator uses `.free_all` (not `.retain_capacity`) so the backing page allocator calls `munmap`, returning physical pages to the kernel immediately. RSS drops after each turn
+- `.retain_capacity` would keep pages committed (no `MADV_DONTNEED` call in ArenaAllocator). We explicitly choose `.free_all` to guarantee RSS reclamation at the cost of re-allocation on the next turn — acceptable since turn allocation patterns are predictable and the allocator warms up within 1-2 API calls
+- Session allocator uses `.retain_capacity` (session lifetime is long, re-alloc cost not worth it; RSS is bounded by session high-water mark)
 - LCC's recycle hack (kill and restart claude process every N turns) becomes unnecessary
 
 ## Module Structure
@@ -125,7 +128,17 @@ zerocode/
 - `std.http.Client` based, zero external HTTP dependency
 - Messages API (`POST /v1/messages`) with `stream: true`
 - Headers: `anthropic-version`, `x-api-key`, `anthropic-beta`
-- `Provider` interface (function pointer table) for future multi-provider support
+- `Provider` interface for future multi-provider support:
+  ```zig
+  const Provider = struct {
+      sendMessageFn: *const fn (self: *Provider, request: MessageRequest, alloc: Allocator) Error!StreamReader,
+      cancelFn: *const fn (self: *Provider) void,
+      modelListFn: *const fn (self: *Provider) []const ModelInfo,
+      ctx: *anyopaque,
+  };
+  ```
+- `StreamReader`: iterator that yields `StreamEvent` (text_delta, tool_use_start, tool_input_delta, tool_use_stop, message_stop, error)
+- Retry logic lives in `retry.zig`, wraps Provider — Provider itself does not retry
 - Only Anthropic implementation initially; OpenAI-compat addable as another Provider
 
 **streaming.zig**:
@@ -135,7 +148,7 @@ zerocode/
 
 **auth.zig**:
 - Priority: `ANTHROPIC_API_KEY` env var → OAuth PKCE
-- OAuth flow: `/oauth/authorize` → local HTTP callback server → `/oauth/token`
+- OAuth flow: `/oauth/authorize` → local HTTP callback server (`std.http.Server` on localhost ephemeral port) → `/oauth/token`
 - Token storage: `~/.zerocode/auth.json`, auto-refresh on expiry
 
 **retry.zig**:
@@ -157,29 +170,47 @@ Reference: claw-code `runtime/src/conversation.rs` (~26KB)
 
 **config.zig**:
 - Merge order: `~/.zerocode/settings.json` → `.zerocode/settings.json` → `.zerocode/settings.local.json`
-- Same JSON merge strategy as claw-code
-- Discovers both `CLAUDE.md` and `ZEROCODE.md`
+- JSON merge semantics (following claw-code):
+  - Objects: deep merge (later values override earlier for same key)
+  - Arrays: replace (later array replaces earlier, no concatenation)
+  - Explicit `null` value: deletes the key from merged result
+  - Scalars: later value wins
+- Discovers both `CLAUDE.md` and `ZEROCODE.md` (walks up directory tree)
 
 Reference: claw-code `runtime/src/config.rs` (~40KB)
 
 **session.zig**:
 - Storage: `~/.zerocode/sessions/{session_id}.json`
 - `--continue` resumes latest, `--resume {id}` resumes specific
-- Lightweight index file for session listing (avoids scanning all JSON files)
+- Index file `~/.zerocode/sessions/index.json`: maps session_id → {name, model, updated_at, cwd}
+  - Updated atomically (write tmp + rename) on session save
+  - Rebuilt from session files on startup if missing or corrupt
+  - Avoids O(n) JSON file scanning for session listing
 
 **permissions.zig**:
 - Three levels: `ReadOnly` < `WorkspaceWrite` < `DangerFullAccess`
-- Per-tool allow/deny rules with glob support (`Bash(git:*)`)
+- Default tool → permission mapping:
+  - `ReadOnly`: Read, Glob, Grep, WebFetch, WebSearch, LSP (read-only ops)
+  - `WorkspaceWrite`: Write, Edit, NotebookEdit (file modifications within cwd)
+  - `DangerFullAccess`: Bash, Agent (arbitrary command execution, subprocess spawn)
+- Per-tool allow/deny rules with glob support (`Bash(git:*)`) override defaults
 - Prompter callback for user Y/N confirmation when permission insufficient
 
 **compact.zig**:
-- Triggers when context token count exceeds threshold
-- Preserves recent N messages verbatim, summarizes older ones
-- Builds new history on session allocator, old data freed
+- Triggers when estimated context tokens exceed 80% of model's context window (default 200K for Claude)
+- Token estimation: character count / 3.5 heuristic (no tokenizer dependency; good enough for threshold)
+- Preserves most recent 10 messages verbatim (configurable via `compactKeepMessages` in settings)
+- Older messages summarized via single API call with compact system prompt
+- Builds new history on session allocator, old session allocator freed via `.free_all` then re-initialized
 
 **sandbox.zig**:
-- Linux namespaces (`clone` + `CLONE_NEWNS|NEWPID|NEWNET`)
-- cwd restriction, network isolation per namespace
+- Approach: `std.process.Child` spawns a wrapper that calls `unshare(CLONE_NEWNS|CLONE_NEWNET)` then `exec`s the actual command
+  - `CLONE_NEWPID` not used (cannot unshare PID namespace for self; only affects children of clone, and we want to keep std.process.Child for simplicity)
+  - `CLONE_NEWNS`: mount namespace isolation (prevent access outside cwd)
+  - `CLONE_NEWNET`: network isolation (no outbound connections from sandboxed bash)
+- Requires `CAP_SYS_ADMIN` or user namespaces enabled (`/proc/sys/kernel/unprivileged_userns_clone`)
+- Fallback: if namespace creation fails, run unsandboxed with warning (same behavior as claw-code)
+- cwd restriction via `pivot_root` or bind mount within the new mount namespace
 
 Reference: claw-code `runtime/src/sandbox.rs`
 
@@ -201,7 +232,7 @@ Reference: claw-code `runtime/src/sandbox.rs`
 - Read: file reading with line numbers, offset/limit
 - Write: file writing (overwrite existing)
 - Edit: exact `old_string` → `new_string` replacement, `replace_all` support
-- Glob: `std.fs.Dir` walk-based, glob pattern matching
+- Glob: `std.fs.Dir` walk-based, hand-rolled glob matcher supporting `*`, `**`, `?`, `{a,b}` brace expansion, `[abc]` character classes
 - Grep: native fixed-string fast search, regex falls back to `rg` subprocess (then `grep` if rg unavailable)
 
 **web.zig**:
@@ -229,8 +260,12 @@ Reference: claw-code `tools/src/lib.rs` (~157KB)
 **stdio.zig**:
 - Spawn MCP server process via `std.process.Child`
 - JSON-RPC over stdin/stdout
-- Process lifecycle: startup, health check, restart, graceful shutdown
-- Concurrent management of multiple MCP servers
+- Process lifecycle:
+  - Startup: spawn process, send `initialize`, wait for response (timeout 30s)
+  - Health check: periodic `ping` request (every 60s), expect response within 5s
+  - Restart: exponential backoff (1s, 2s, 4s, 8s, max 60s), max 5 attempts before marking server as dead
+  - Graceful shutdown: send `shutdown` notification, SIGTERM after 5s, SIGKILL after 10s
+- Concurrent management of multiple MCP servers (each server is an independent process)
 
 Reference: claw-code `runtime/src/mcp_stdio.rs` (~62KB)
 
@@ -243,8 +278,11 @@ Reference: claw-code `runtime/src/mcp_stdio.rs` (~62KB)
 - Single endpoint request/response with session ID
 
 **websocket.zig**:
-- `std.http.Client` WebSocket upgrade
-- Bidirectional JSON-RPC
+- From-scratch WebSocket client implementation (Zig std has no WebSocket support)
+- HTTP/1.1 upgrade handshake via `std.http.Client`
+- RFC 6455 frame parser: text/binary frames, masking, ping/pong, close handshake, fragmentation reassembly
+- Estimated ~600-800 LOC
+- Bidirectional JSON-RPC over the WebSocket connection
 
 **discovery.zig**:
 - Parse `tools/list` response, register into ToolRegistry
@@ -311,7 +349,8 @@ Reference: claw-code `lsp/` crate
 **syntax.zig**:
 - Tree-sitter C-linked via Zig cimport
 - Languages: zig, rust, python, javascript/typescript, go, solidity, bash, json, toml, yaml, sql, markdown
-- Each language parser is an independent shared object, link only what's needed
+- Build strategy: grammar C sources vendored under `deps/tree-sitter-grammars/`, each compiled as a static C library step in `build.zig` and linked into the binary. No shared objects, no runtime downloads
+- Tree-sitter core library also vendored under `deps/tree-sitter/`
 
 **terminal.zig**:
 - Based on existing LCC `terminal.zig`, extended
@@ -323,7 +362,8 @@ Reference: claw-code `lsp/` crate
 
 - Argument parsing: manual (no external dep), same approach as LCC
 - REPL loop: `terminal.readMultilineInput` → slash command check → `conversation.runTurn`
-- Signal handling: SIGINT (Ctrl+C) interrupts current turn
+- Non-interactive mode: piped stdin (`echo "question" | zerocode`) and `--print` flag for single-shot usage. Detects `!isatty(stdin)` and reads full input before sending
+- Signal handling: SIGINT sets atomic `interrupted` flag. Streaming reader checks this flag between chunks and aborts the HTTP connection cleanly. Turn allocator `.free_all` runs even on interrupted turns to prevent leaks
 - Three-tier allocator setup at startup
 
 ## External Dependencies
@@ -332,7 +372,7 @@ Reference: claw-code `lsp/` crate
 - Tree-sitter + language parser grammars (syntax highlighting)
 
 **Zero external dependency (std only)**:
-- HTTP/TLS: `std.http.Client`, `std.crypto.tls`
+- HTTP/TLS: `std.http.Client`, `std.http.Server` (OAuth callback), `std.crypto.tls`
 - JSON: `std.json`
 - File I/O: `std.fs`
 - Process management: `std.process.Child`
