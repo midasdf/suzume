@@ -1570,8 +1570,13 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         eqlIgnoreCase(prop, "scroll-padding-bottom") or eqlIgnoreCase(prop, "scroll-padding-left"))
         return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "scroll-margin-top") or eqlIgnoreCase(prop, "scroll-margin-right") or
-        eqlIgnoreCase(prop, "scroll-margin-bottom") or eqlIgnoreCase(prop, "scroll-margin-left"))
+        eqlIgnoreCase(prop, "scroll-margin-bottom") or eqlIgnoreCase(prop, "scroll-margin-left") or
+        eqlIgnoreCase(prop, "scroll-margin-block-start") or eqlIgnoreCase(prop, "scroll-margin-block-end") or
+        eqlIgnoreCase(prop, "scroll-margin-inline-start") or eqlIgnoreCase(prop, "scroll-margin-inline-end"))
         return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "scroll-padding-block-start") or eqlIgnoreCase(prop, "scroll-padding-block-end") or
+        eqlIgnoreCase(prop, "scroll-padding-inline-start") or eqlIgnoreCase(prop, "scroll-padding-inline-end"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -2000,6 +2005,14 @@ pub fn windowGetComputedStyle(
         .{ "scroll-margin-right", "scrollMarginRight" },
         .{ "scroll-margin-bottom", "scrollMarginBottom" },
         .{ "scroll-margin-left", "scrollMarginLeft" },
+        .{ "scroll-padding-block-start", "scrollPaddingBlockStart" },
+        .{ "scroll-padding-block-end", "scrollPaddingBlockEnd" },
+        .{ "scroll-padding-inline-start", "scrollPaddingInlineStart" },
+        .{ "scroll-padding-inline-end", "scrollPaddingInlineEnd" },
+        .{ "scroll-margin-block-start", "scrollMarginBlockStart" },
+        .{ "scroll-margin-block-end", "scrollMarginBlockEnd" },
+        .{ "scroll-margin-inline-start", "scrollMarginInlineStart" },
+        .{ "scroll-margin-inline-end", "scrollMarginInlineEnd" },
         // CSS Animations
         .{ "animation-delay", "animationDelay" },
         .{ "animation-direction", "animationDirection" },
@@ -2255,7 +2268,7 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .border_spacing, .grid_area, .transform,
         .letter_spacing, .word_spacing, .text_indent,
         .aspect_ratio, .justify_items, .justify_self,
-        .object_fit => true,
+        .object_fit, .contain => true,
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -2401,6 +2414,10 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "scroll-padding-inline","scroll-margin",        "scroll-margin-top",
         "scroll-margin-right", "scroll-margin-bottom", "scroll-margin-left",
         "scroll-margin-block", "scroll-margin-inline",
+        "scroll-padding-block-start","scroll-padding-block-end",
+        "scroll-padding-inline-start","scroll-padding-inline-end",
+        "scroll-margin-block-start","scroll-margin-block-end",
+        "scroll-margin-inline-start","scroll-margin-inline-end",
         "touch-action",         "user-select",          "pointer-events",         "resize",
         "appearance",           "accent-color",         "caret-color",            "color-scheme",
         "forced-color-adjust",  "print-color-adjust",
