@@ -1255,6 +1255,16 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "viewTransitionClass", .css = "view-transition-class" },
         .{ .camel = "cornerShape", .css = "corner-shape" },
         .{ .camel = "textSizeAdjust", .css = "text-size-adjust" },
+        // CSS Anchor Position
+        .{ .camel = "anchorScope", .css = "anchor-scope" },
+        .{ .camel = "anchorName", .css = "anchor-name" },
+        .{ .camel = "positionAnchor", .css = "position-anchor" },
+        .{ .camel = "positionArea", .css = "position-area" },
+        .{ .camel = "positionVisibility", .css = "position-visibility" },
+        // CSS Color Adjust
+        .{ .camel = "colorAdjust", .css = "color-adjust" },
+        .{ .camel = "printColorAdjust", .css = "print-color-adjust" },
+        .{ .camel = "forcedColorAdjust", .css = "forced-color-adjust" },
         .{ .camel = "offsetAnchor", .css = "offset-anchor" },
         .{ .camel = "offsetPosition", .css = "offset-position" },
         // CSS Logical borders

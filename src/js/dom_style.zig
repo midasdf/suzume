@@ -1629,6 +1629,16 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "offset-position")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "corner-shape")) return qjs.JS_NewStringLen(c, "round", 5);
     if (eqlIgnoreCase(prop, "text-size-adjust")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Anchor Position
+    if (eqlIgnoreCase(prop, "anchor-scope") or eqlIgnoreCase(prop, "anchor-name"))
+        return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "position-anchor")) return qjs.JS_NewStringLen(c, "implicit", 8);
+    if (eqlIgnoreCase(prop, "position-area")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "position-visibility")) return qjs.JS_NewStringLen(c, "always", 6);
+    // CSS Color Adjust
+    if (eqlIgnoreCase(prop, "color-adjust") or eqlIgnoreCase(prop, "print-color-adjust"))
+        return qjs.JS_NewStringLen(c, "economy", 7);
+    if (eqlIgnoreCase(prop, "forced-color-adjust")) return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS Logical borders
     if (eqlIgnoreCase(prop, "border-block-start-color") or eqlIgnoreCase(prop, "border-block-end-color") or
         eqlIgnoreCase(prop, "border-inline-start-color") or eqlIgnoreCase(prop, "border-inline-end-color"))
@@ -2165,6 +2175,16 @@ pub fn windowGetComputedStyle(
         .{ "offset-position", "offsetPosition" },
         .{ "corner-shape", "cornerShape" },
         .{ "text-size-adjust", "textSizeAdjust" },
+        // CSS Anchor Position
+        .{ "anchor-scope", "anchorScope" },
+        .{ "anchor-name", "anchorName" },
+        .{ "position-anchor", "positionAnchor" },
+        .{ "position-area", "positionArea" },
+        .{ "position-visibility", "positionVisibility" },
+        // CSS Color Adjust
+        .{ "color-adjust", "colorAdjust" },
+        .{ "print-color-adjust", "printColorAdjust" },
+        .{ "forced-color-adjust", "forcedColorAdjust" },
         // CSS Logical borders
         .{ "border-block-start-color", "borderBlockStartColor" },
         .{ "border-block-end-color", "borderBlockEndColor" },
@@ -2601,6 +2621,16 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "corner-shape",        "corners",
         // CSS Size Adjust
         "text-size-adjust",
+        // CSS Anchor Position
+        "anchor-scope",        "anchor-name",          "position-anchor",
+        "position-area",       "position-try-fallbacks","position-try-order",
+        "position-visibility", "inset-area",
+        // CSS Color Adjust
+        "color-adjust",        "print-color-adjust",   "forced-color-adjust",
+        "color-scheme",
+        // CSS Rhythm
+        "block-step-size",     "block-step-insert",    "block-step-align",
+        "block-step-round",    "block-step",           "line-height-step",
         // CSS Overflow
         "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
         "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
