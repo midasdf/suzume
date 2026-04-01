@@ -729,6 +729,25 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // Border/outline width: round to integer px
+    if (eqlIgnoreCase(prop, "outline-width") or eqlIgnoreCase(prop, "border-top-width") or
+        eqlIgnoreCase(prop, "border-right-width") or eqlIgnoreCase(prop, "border-bottom-width") or
+        eqlIgnoreCase(prop, "border-left-width"))
+    {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (tv.len > 2 and std.mem.endsWith(u8, tv, "px")) {
+            if (std.fmt.parseFloat(f32, tv[0 .. tv.len - 2])) |f| {
+                const rounded = @as(i32, @intFromFloat(@round(f)));
+                var ibuf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&ibuf, "{d}px", .{rounded}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            } else |_| {}
+        }
+        // keyword → px
+        if (eqlIgnoreCase(tv, "thin")) return qjs.JS_NewStringLen(c, "1px", 3);
+        if (eqlIgnoreCase(tv, "medium")) return qjs.JS_NewStringLen(c, "3px", 3);
+        if (eqlIgnoreCase(tv, "thick")) return qjs.JS_NewStringLen(c, "5px", 3);
+    }
     // contain: canonicalize longhand combinations to shorthand keywords
     if (eqlIgnoreCase(prop, "contain")) {
         const tv = std.mem.trim(u8, val, " \t");
