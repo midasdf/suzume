@@ -729,6 +729,11 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // text-wrap: 'auto' computes to 'wrap'
+    if (eqlIgnoreCase(prop, "text-wrap")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "auto")) return qjs.JS_NewStringLen(c, "wrap", 4);
+    }
     // overflow: normalize two-value syntax
     if (eqlIgnoreCase(prop, "overflow") or eqlIgnoreCase(prop, "overflow-x") or eqlIgnoreCase(prop, "overflow-y")) {
         const tv = std.mem.trim(u8, val, " \t");
