@@ -1608,6 +1608,11 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "counter-set") or eqlIgnoreCase(prop, "counter-reset") or
         eqlIgnoreCase(prop, "counter-increment"))
         return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "content")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "quotes")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "overscroll-behavior") or eqlIgnoreCase(prop, "overscroll-behavior-x") or
+        eqlIgnoreCase(prop, "overscroll-behavior-y"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS Tables
     if (eqlIgnoreCase(prop, "caption-side")) return qjs.JS_NewStringLen(c, "top", 3);
     if (eqlIgnoreCase(prop, "empty-cells")) return qjs.JS_NewStringLen(c, "show", 4);
@@ -2153,6 +2158,7 @@ pub fn windowGetComputedStyle(
         .{ "counter-set", "counterSet" },
         .{ "counter-reset", "counterReset" },
         .{ "counter-increment", "counterIncrement" },
+        .{ "content", "content" },
         // CSS Tables
         .{ "caption-side", "captionSide" },
         .{ "empty-cells", "emptyCells" },
@@ -2174,6 +2180,11 @@ pub fn windowGetComputedStyle(
         .{ "offset-anchor", "offsetAnchor" },
         .{ "offset-position", "offsetPosition" },
         .{ "corner-shape", "cornerShape" },
+        .{ "overscroll-behavior", "overscrollBehavior" },
+        .{ "overscroll-behavior-x", "overscrollBehaviorX" },
+        .{ "overscroll-behavior-y", "overscrollBehaviorY" },
+        .{ "quotes", "quotes" },
+        .{ "content", "content" },
         .{ "text-size-adjust", "textSizeAdjust" },
         // CSS Anchor Position
         .{ "anchor-scope", "anchorScope" },
@@ -2619,6 +2630,16 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "border-top-radius","border-bottom-radius","border-left-radius","border-right-radius",
         "border-block-start-radius","border-block-end-radius","border-inline-start-radius","border-inline-end-radius",
         "corner-shape",        "corners",
+        // CSS Overscroll Behavior
+        "overscroll-behavior", "overscroll-behavior-x","overscroll-behavior-y",
+        "overscroll-behavior-block","overscroll-behavior-inline",
+        // CSS Gaps (rule)
+        "rule-break",          "rule-inset-start",     "rule-inset-end",
+        "rule-inset",          "rule-fill",            "rule-align",
+        "rule-color",          "rule-width",           "rule-style",
+        "rule-size",           "rule-length",          "rule",
+        // CSS Content
+        "quotes",
         // CSS Size Adjust
         "text-size-adjust",
         // CSS Anchor Position

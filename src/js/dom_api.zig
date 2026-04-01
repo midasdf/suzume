@@ -1254,6 +1254,11 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "viewTransitionName", .css = "view-transition-name" },
         .{ .camel = "viewTransitionClass", .css = "view-transition-class" },
         .{ .camel = "cornerShape", .css = "corner-shape" },
+        // CSS Overscroll Behavior
+        .{ .camel = "overscrollBehavior", .css = "overscroll-behavior" },
+        .{ .camel = "overscrollBehaviorX", .css = "overscroll-behavior-x" },
+        .{ .camel = "overscrollBehaviorY", .css = "overscroll-behavior-y" },
+        .{ .camel = "quotes", .css = "quotes" },
         .{ .camel = "textSizeAdjust", .css = "text-size-adjust" },
         // CSS Anchor Position
         .{ .camel = "anchorScope", .css = "anchor-scope" },
