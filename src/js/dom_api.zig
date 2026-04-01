@@ -1255,6 +1255,12 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "borderBlockEndStyle", .css = "border-block-end-style" },
         .{ .camel = "borderInlineStartStyle", .css = "border-inline-start-style" },
         .{ .camel = "borderInlineEndStyle", .css = "border-inline-end-style" },
+        .{ .camel = "borderBlockWidth", .css = "border-block-width" },
+        .{ .camel = "borderInlineWidth", .css = "border-inline-width" },
+        .{ .camel = "borderBlockStyle", .css = "border-block-style" },
+        .{ .camel = "borderInlineStyle", .css = "border-inline-style" },
+        .{ .camel = "borderBlockColor", .css = "border-block-color" },
+        .{ .camel = "borderInlineColor", .css = "border-inline-color" },
         // CSS Align
         .{ .camel = "alignContent", .css = "align-content" },
         .{ .camel = "justifyItems", .css = "justify-items" },
