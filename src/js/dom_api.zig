@@ -1065,6 +1065,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "scrollBehavior", .css = "scroll-behavior" },
         .{ .camel = "touchAction", .css = "touch-action" },
         .{ .camel = "outlineOffset", .css = "outline-offset" },
+        .{ .camel = "textAlignLast", .css = "text-align-last" },
         .{ .camel = "borderTopColor", .css = "border-top-color" },
         .{ .camel = "borderRightColor", .css = "border-right-color" },
         .{ .camel = "borderBottomColor", .css = "border-bottom-color" },

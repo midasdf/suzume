@@ -1451,6 +1451,7 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "text-wrap") or eqlIgnoreCase(prop, "text-wrap-mode"))
         return qjs.JS_NewStringLen(c, "wrap", 4);
     if (eqlIgnoreCase(prop, "text-wrap-style")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "text-align-last")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1720,6 +1721,7 @@ pub fn windowGetComputedStyle(
         .{ "text-emphasis-style", "textEmphasisStyle" },
         .{ "text-emphasis-color", "textEmphasisColor" },
         .{ "text-shadow", "textShadow" },
+        .{ "text-align-last", "textAlignLast" },
         .{ "white-space-collapse", "whiteSpaceCollapse" },
         .{ "text-wrap", "textWrap" },
         .{ "text-wrap-mode", "textWrapMode" },
@@ -2032,7 +2034,7 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "text-decoration-line", "text-decoration-style","text-decoration-color",
         "text-underline-position","text-underline-offset","text-emphasis-style",  "text-emphasis-color",
         "text-shadow",          "white-space-collapse",  "text-wrap",             "text-wrap-mode",      "text-wrap-style",
-        "text-indent",          "tab-size",
+        "text-indent",          "tab-size",             "text-align-last",
         // CSS positioning/layout properties
         "contain",              "content-visibility",   "container-type",         "container-name",
         "aspect-ratio",         "object-fit",           "object-position",
