@@ -1226,6 +1226,22 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "listStylePosition", .css = "list-style-position" },
         .{ .camel = "listStyleImage", .css = "list-style-image" },
         .{ .camel = "counterSet", .css = "counter-set" },
+        // CSS Tables
+        .{ .camel = "captionSide", .css = "caption-side" },
+        .{ .camel = "emptyCells", .css = "empty-cells" },
+        .{ .camel = "borderSpacing", .css = "border-spacing" },
+        // CSS Inline
+        .{ .camel = "alignmentBaseline", .css = "alignment-baseline" },
+        .{ .camel = "dominantBaseline", .css = "dominant-baseline" },
+        .{ .camel = "baselineShift", .css = "baseline-shift" },
+        // CSS Page
+        .{ .camel = "breakBefore", .css = "break-before" },
+        .{ .camel = "breakAfter", .css = "break-after" },
+        .{ .camel = "breakInside", .css = "break-inside" },
+        .{ .camel = "orphans", .css = "orphans" },
+        .{ .camel = "widows", .css = "widows" },
+        // CSS View Transitions
+        .{ .camel = "viewTransitionName", .css = "view-transition-name" },
         // CSS Animations
         .{ .camel = "animationDelay", .css = "animation-delay" },
         .{ .camel = "animationDirection", .css = "animation-direction" },

@@ -1593,6 +1593,21 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "list-style-image")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "list-style-type")) return qjs.JS_NewStringLen(c, "disc", 4);
     if (eqlIgnoreCase(prop, "counter-set")) return qjs.JS_NewStringLen(c, "none", 4);
+    // CSS Tables
+    if (eqlIgnoreCase(prop, "caption-side")) return qjs.JS_NewStringLen(c, "top", 3);
+    if (eqlIgnoreCase(prop, "empty-cells")) return qjs.JS_NewStringLen(c, "show", 4);
+    // CSS Inline
+    if (eqlIgnoreCase(prop, "alignment-baseline")) return qjs.JS_NewStringLen(c, "baseline", 8);
+    if (eqlIgnoreCase(prop, "dominant-baseline")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "baseline-shift")) return qjs.JS_NewStringLen(c, "0px", 3);
+    // CSS Page
+    if (eqlIgnoreCase(prop, "break-before") or eqlIgnoreCase(prop, "break-after"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "break-inside")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "orphans") or eqlIgnoreCase(prop, "widows"))
+        return qjs.JS_NewStringLen(c, "2", 1);
+    // CSS View Transitions
+    if (eqlIgnoreCase(prop, "view-transition-name")) return qjs.JS_NewStringLen(c, "none", 4);
     // CSS Scroll Snap
     if (eqlIgnoreCase(prop, "scroll-snap-type")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "scroll-snap-align")) return qjs.JS_NewStringLen(c, "none", 4);
@@ -2076,6 +2091,22 @@ pub fn windowGetComputedStyle(
         .{ "list-style-image", "listStyleImage" },
         .{ "list-style-type", "listStyleType" },
         .{ "counter-set", "counterSet" },
+        // CSS Tables
+        .{ "caption-side", "captionSide" },
+        .{ "empty-cells", "emptyCells" },
+        .{ "border-spacing", "borderSpacing" },
+        // CSS Inline
+        .{ "alignment-baseline", "alignmentBaseline" },
+        .{ "dominant-baseline", "dominantBaseline" },
+        .{ "baseline-shift", "baselineShift" },
+        // CSS Page
+        .{ "break-before", "breakBefore" },
+        .{ "break-after", "breakAfter" },
+        .{ "break-inside", "breakInside" },
+        .{ "orphans", "orphans" },
+        .{ "widows", "widows" },
+        // CSS View Transitions
+        .{ "view-transition-name", "viewTransitionName" },
         // CSS Animations
         .{ "animation-delay", "animationDelay" },
         .{ "animation-direction", "animationDirection" },
@@ -2488,6 +2519,16 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "ruby-align",          "ruby-position",
         // CSS Lists
         "list-style-position", "list-style-image",     "marker-side",            "counter-set",
+        // CSS Tables
+        "caption-side",        "empty-cells",          "border-spacing",
+        // CSS Inline
+        "alignment-baseline",  "dominant-baseline",    "baseline-shift",         "initial-letter",
+        "line-height-step",    "vertical-align",
+        // CSS Page
+        "break-before",        "break-after",          "break-inside",           "orphans",
+        "widows",              "page",
+        // CSS View Transitions
+        "view-transition-name","view-transition-class",
         // CSS Scroll Snap
         "scroll-snap-type",    "scroll-snap-align",    "scroll-snap-stop",
         "scroll-padding",      "scroll-padding-top",   "scroll-padding-right",
