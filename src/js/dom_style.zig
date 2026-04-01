@@ -719,6 +719,19 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // font-width/font-stretch: keywords to %
+    if (eqlIgnoreCase(prop, "font-width") or eqlIgnoreCase(prop, "font-stretch")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "ultra-condensed")) return qjs.JS_NewStringLen(c, "50%", 3);
+        if (eqlIgnoreCase(tv, "extra-condensed")) return qjs.JS_NewStringLen(c, "62.5%", 5);
+        if (eqlIgnoreCase(tv, "condensed")) return qjs.JS_NewStringLen(c, "75%", 3);
+        if (eqlIgnoreCase(tv, "semi-condensed")) return qjs.JS_NewStringLen(c, "87.5%", 5);
+        if (eqlIgnoreCase(tv, "normal")) return qjs.JS_NewStringLen(c, "100%", 4);
+        if (eqlIgnoreCase(tv, "semi-expanded")) return qjs.JS_NewStringLen(c, "112.5%", 6);
+        if (eqlIgnoreCase(tv, "expanded")) return qjs.JS_NewStringLen(c, "125%", 4);
+        if (eqlIgnoreCase(tv, "extra-expanded")) return qjs.JS_NewStringLen(c, "150%", 4);
+        if (eqlIgnoreCase(tv, "ultra-expanded")) return qjs.JS_NewStringLen(c, "200%", 4);
+    }
     // font-size: absolute keywords to px (based on medium = 16px)
     if (eqlIgnoreCase(prop, "font-size")) {
         const tv = std.mem.trim(u8, val, " \t");
