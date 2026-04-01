@@ -1558,6 +1558,10 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "animation-name")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "animation-play-state")) return qjs.JS_NewStringLen(c, "running", 7);
     if (eqlIgnoreCase(prop, "animation-timing-function")) return qjs.JS_NewStringLen(c, "ease", 4);
+    if (eqlIgnoreCase(prop, "animation-range-start")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "animation-range-end")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "animation-timeline")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "animation-composition")) return qjs.JS_NewStringLen(c, "replace", 7);
     // CSS Transitions
     if (eqlIgnoreCase(prop, "transition-property")) return qjs.JS_NewStringLen(c, "all", 3);
     if (eqlIgnoreCase(prop, "transition-duration")) return qjs.JS_NewStringLen(c, "0s", 2);
@@ -2182,6 +2186,10 @@ pub fn windowGetComputedStyle(
         .{ "animation-name", "animationName" },
         .{ "animation-play-state", "animationPlayState" },
         .{ "animation-timing-function", "animationTimingFunction" },
+        .{ "animation-range-start", "animationRangeStart" },
+        .{ "animation-range-end", "animationRangeEnd" },
+        .{ "animation-timeline", "animationTimeline" },
+        .{ "animation-composition", "animationComposition" },
         // CSS Transitions
         .{ "transition-property", "transitionProperty" },
         .{ "transition-duration", "transitionDuration" },

@@ -1295,6 +1295,10 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "animationName", .css = "animation-name" },
         .{ .camel = "animationPlayState", .css = "animation-play-state" },
         .{ .camel = "animationTimingFunction", .css = "animation-timing-function" },
+        .{ .camel = "animationRangeStart", .css = "animation-range-start" },
+        .{ .camel = "animationRangeEnd", .css = "animation-range-end" },
+        .{ .camel = "animationTimeline", .css = "animation-timeline" },
+        .{ .camel = "animationComposition", .css = "animation-composition" },
         // CSS Transitions
         .{ .camel = "transitionProperty", .css = "transition-property" },
         .{ .camel = "transitionDuration", .css = "transition-duration" },
