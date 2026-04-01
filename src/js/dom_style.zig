@@ -707,6 +707,10 @@ pub fn fmtMarginTrim(c: *qjs.JSContext, mt: computed_mod.MarginTrim) qjs.JSValue
 /// For margin-trim, canonicalizes to spec order (block before inline).
 pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []const u8, elem_val: qjs.JSValue) qjs.JSValue {
     if (eqlIgnoreCase(prop, "margin-trim")) return canonicalizeMarginTrimForComputed(c, val);
+    // word-spacing/letter-spacing: 'normal' computes to '0px'
+    if ((eqlIgnoreCase(prop, "word-spacing") or eqlIgnoreCase(prop, "letter-spacing")) and
+        eqlIgnoreCase(std.mem.trim(u8, val, " \t"), "normal"))
+        return qjs.JS_NewStringLen(c, "0px", 3);
 
     // CSS 2.1 §9.7: Blockification — when position or float is set, inline display → block equiv
     if (eqlIgnoreCase(prop, "display")) {
