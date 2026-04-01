@@ -1250,6 +1250,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         // CSS View Transitions
         .{ .camel = "viewTransitionName", .css = "view-transition-name" },
         .{ .camel = "viewTransitionClass", .css = "view-transition-class" },
+        .{ .camel = "cornerShape", .css = "corner-shape" },
         .{ .camel = "offsetAnchor", .css = "offset-anchor" },
         .{ .camel = "offsetPosition", .css = "offset-position" },
         // CSS Logical borders

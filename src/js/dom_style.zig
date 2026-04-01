@@ -1622,6 +1622,7 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "view-transition-class")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "offset-anchor")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "offset-position")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "corner-shape")) return qjs.JS_NewStringLen(c, "round", 5);
     // CSS Logical borders
     if (eqlIgnoreCase(prop, "border-block-start-color") or eqlIgnoreCase(prop, "border-block-end-color") or
         eqlIgnoreCase(prop, "border-inline-start-color") or eqlIgnoreCase(prop, "border-inline-end-color"))
@@ -2153,6 +2154,7 @@ pub fn windowGetComputedStyle(
         .{ "view-transition-class", "viewTransitionClass" },
         .{ "offset-anchor", "offsetAnchor" },
         .{ "offset-position", "offsetPosition" },
+        .{ "corner-shape", "cornerShape" },
         // CSS Logical borders
         .{ "border-block-start-color", "borderBlockStartColor" },
         .{ "border-block-end-color", "borderBlockEndColor" },
@@ -2582,6 +2584,9 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "background-size",     "border-image",         "border-image-source",    "border-image-slice",
         "border-image-width",  "border-image-outset",  "border-image-repeat",
         "border-top-left-radius","border-top-right-radius","border-bottom-left-radius","border-bottom-right-radius",
+        "border-top-radius","border-bottom-radius","border-left-radius","border-right-radius",
+        "border-block-start-radius","border-block-end-radius","border-inline-start-radius","border-inline-end-radius",
+        "corner-shape",        "corners",
         // CSS Overflow
         "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
         "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
