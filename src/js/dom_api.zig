@@ -1203,6 +1203,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "fontVariantEmoji", .css = "font-variant-emoji" },
         // CSS Masking
         // CSS Filter Effects
+        .{ .camel = "clip", .css = "clip" },
         .{ .camel = "floodColor", .css = "flood-color" },
         .{ .camel = "floodOpacity", .css = "flood-opacity" },
         .{ .camel = "lightingColor", .css = "lighting-color" },
