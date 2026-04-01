@@ -1520,6 +1520,22 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "text-combine-upright")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "direction")) return qjs.JS_NewStringLen(c, "ltr", 3);
     if (eqlIgnoreCase(prop, "unicode-bidi")) return qjs.JS_NewStringLen(c, "normal", 6);
+    // CSS Fonts
+    if (eqlIgnoreCase(prop, "font-kerning")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "font-feature-settings")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-language-override")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-optical-sizing")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "font-palette")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-size-adjust")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "font-stretch")) return qjs.JS_NewStringLen(c, "100%", 4);
+    if (eqlIgnoreCase(prop, "font-synthesis")) return qjs.JS_NewStringLen(c, "weight style small-caps", 23);
+    if (eqlIgnoreCase(prop, "font-variant")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variant-caps")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variant-east-asian")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variant-ligatures")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variant-numeric")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variant-position")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variation-settings")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1904,6 +1920,22 @@ pub fn windowGetComputedStyle(
         .{ "text-combine-upright", "textCombineUpright" },
         .{ "direction", "direction" },
         .{ "unicode-bidi", "unicodeBidi" },
+        // CSS Fonts
+        .{ "font-kerning", "fontKerning" },
+        .{ "font-feature-settings", "fontFeatureSettings" },
+        .{ "font-language-override", "fontLanguageOverride" },
+        .{ "font-optical-sizing", "fontOpticalSizing" },
+        .{ "font-palette", "fontPalette" },
+        .{ "font-size-adjust", "fontSizeAdjust" },
+        .{ "font-stretch", "fontStretch" },
+        .{ "font-synthesis", "fontSynthesis" },
+        .{ "font-variant", "fontVariant" },
+        .{ "font-variant-caps", "fontVariantCaps" },
+        .{ "font-variant-east-asian", "fontVariantEastAsian" },
+        .{ "font-variant-ligatures", "fontVariantLigatures" },
+        .{ "font-variant-numeric", "fontVariantNumeric" },
+        .{ "font-variant-position", "fontVariantPosition" },
+        .{ "font-variation-settings", "fontVariationSettings" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2227,6 +2259,11 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         // CSS Writing Modes
         "writing-mode",        "text-orientation",     "text-combine-upright",   "direction",
         "unicode-bidi",
+        // CSS Fonts
+        "font-kerning",        "font-feature-settings","font-language-override", "font-optical-sizing",
+        "font-palette",        "font-size-adjust",     "font-stretch",           "font-synthesis",
+        "font-variant",        "font-variant-caps",    "font-variant-east-asian","font-variant-ligatures",
+        "font-variant-numeric","font-variant-position","font-variation-settings",
         "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
         "max-block-size",      "max-inline-size",
         // CSS Backgrounds

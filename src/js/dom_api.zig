@@ -1145,6 +1145,22 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "textCombineUpright", .css = "text-combine-upright" },
         .{ .camel = "direction", .css = "direction" },
         .{ .camel = "unicodeBidi", .css = "unicode-bidi" },
+        // CSS Fonts
+        .{ .camel = "fontKerning", .css = "font-kerning" },
+        .{ .camel = "fontFeatureSettings", .css = "font-feature-settings" },
+        .{ .camel = "fontLanguageOverride", .css = "font-language-override" },
+        .{ .camel = "fontOpticalSizing", .css = "font-optical-sizing" },
+        .{ .camel = "fontPalette", .css = "font-palette" },
+        .{ .camel = "fontSizeAdjust", .css = "font-size-adjust" },
+        .{ .camel = "fontStretch", .css = "font-stretch" },
+        .{ .camel = "fontSynthesis", .css = "font-synthesis" },
+        .{ .camel = "fontVariant", .css = "font-variant" },
+        .{ .camel = "fontVariantCaps", .css = "font-variant-caps" },
+        .{ .camel = "fontVariantEastAsian", .css = "font-variant-east-asian" },
+        .{ .camel = "fontVariantLigatures", .css = "font-variant-ligatures" },
+        .{ .camel = "fontVariantNumeric", .css = "font-variant-numeric" },
+        .{ .camel = "fontVariantPosition", .css = "font-variant-position" },
+        .{ .camel = "fontVariationSettings", .css = "font-variation-settings" },
     };
 
     for (camel_css_pairs) |pair| {
