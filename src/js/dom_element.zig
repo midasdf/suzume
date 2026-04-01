@@ -6,6 +6,26 @@ const api = @import("dom_api.zig");
 const events = @import("events.zig");
 const Box = @import("../layout/box.zig").Box;
 
+// ── Helpers ──────────────────────────────────────────────────────────
+
+/// Lowercase an attribute name for HTML elements (DOM spec requirement).
+/// Returns a slice into lower_buf if any uppercase chars found, or the original slice.
+fn lowercaseAttrName(name: []const u8, lower_buf: *[256]u8) []const u8 {
+    var has_upper = false;
+    for (name) |ch| {
+        if (ch >= 'A' and ch <= 'Z') {
+            has_upper = true;
+            break;
+        }
+    }
+    if (!has_upper) return name;
+    const len = @min(name.len, 256);
+    for (0..len) |i| {
+        lower_buf[i] = if (name[i] >= 'A' and name[i] <= 'Z') name[i] + 32 else name[i];
+    }
+    return lower_buf[0..len];
+}
+
 // ── External Lexbor functions ────────────────────────────────────────
 extern fn lxb_dom_element_set_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value: [*]const u8, value_len: usize) ?*anyopaque;
 extern fn lxb_dom_element_get_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value_len: *usize) ?[*]const u8;
@@ -141,8 +161,10 @@ pub fn elementGetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    var lower_buf: [256]u8 = undefined;
+    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     var val_len: usize = 0;
-    const val = lxb_dom_element_get_attribute(elem, s.ptr, s.len, &val_len);
+    const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
     if (val == null) return quickjs.JS_NULL();
     return qjs.JS_NewStringLen(c, val.?, val_len); // empty string when val_len == 0
 }
@@ -159,11 +181,12 @@ pub fn elementSetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, name.ptr);
-    // HTML setAttribute does NOT throw InvalidCharacterError (only XML does)
-    // Per HTML spec, attribute names are very permissive
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
-    _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, val.ptr, val.len);
+    // DOM spec: HTML elements lowercase attribute names
+    var lower_buf: [256]u8 = undefined;
+    const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
+    _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     if (api.isElementConnected(elem)) {
         events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
@@ -265,11 +288,13 @@ pub fn elementRemoveAttribute(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
-    const name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
-    defer qjs.JS_FreeCString(c, name.ptr);
+    const name_raw = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, name_raw.ptr);
+    var lower_buf: [256]u8 = undefined;
+    const name = lowercaseAttrName(name_raw.ptr[0..name_raw.len], &lower_buf);
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
+    events.recordMutation(node, "attributes", null, null, name);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -286,7 +311,9 @@ pub fn elementHasAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
-    return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, s.ptr, s.len));
+    var lower_buf: [256]u8 = undefined;
+    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+    return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
 
 pub fn elementToggleAttribute(
@@ -304,17 +331,21 @@ pub fn elementToggleAttribute(
     // Validate name per DOM spec
     if (s.len == 0) return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
-    const has = lxb_dom_element_has_attribute(elem, s.ptr, s.len);
+    // DOM spec: HTML elements lowercase attribute names
+    var lower_buf: [256]u8 = undefined;
+    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+
+    const has = lxb_dom_element_has_attribute(elem, name.ptr, name.len);
 
     // If force argument provided
     if (argc >= 2) {
         const force = qjs.JS_ToBool(c, args[1]) > 0;
         if (force and !has) {
-            _ = lxb_dom_element_set_attribute(elem, s.ptr, s.len, "", 0);
+            _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
             setDomDirty();
             return quickjs.JS_NewBool(true);
         } else if (!force and has) {
-            _ = lxb_dom_element_remove_attribute(elem, s.ptr, s.len);
+            _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
             setDomDirty();
             return quickjs.JS_NewBool(false);
         }
@@ -322,11 +353,11 @@ pub fn elementToggleAttribute(
     }
 
     if (has) {
-        _ = lxb_dom_element_remove_attribute(elem, s.ptr, s.len);
+        _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
         setDomDirty();
         return quickjs.JS_NewBool(false);
     } else {
-        _ = lxb_dom_element_set_attribute(elem, s.ptr, s.len, "", 0);
+        _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
         setDomDirty();
         return quickjs.JS_NewBool(true);
     }

@@ -1911,12 +1911,41 @@ fn jsMutationObserverObserve(
 
     var child_list = false;
     var attributes_opt = false;
+    var character_data = false;
     var subtree = false;
 
     if (argc >= 2 and !quickjs.JS_IsUndefined(args[1])) {
         child_list = jsBoolProp(c, args[1], "childList");
         attributes_opt = jsBoolProp(c, args[1], "attributes");
+        character_data = jsBoolProp(c, args[1], "characterData");
         subtree = jsBoolProp(c, args[1], "subtree");
+
+        // DOM spec: at least one of childList/attributes/characterData must be true
+        if (!child_list and !attributes_opt and !character_data) {
+            // Check if attributeOldValue or attributeFilter or characterDataOldValue imply attributes/characterData
+            const attr_old = jsBoolProp(c, args[1], "attributeOldValue");
+            const char_old = jsBoolProp(c, args[1], "characterDataOldValue");
+            const attr_filter = qjs.JS_GetPropertyStr(c, args[1], "attributeFilter");
+            defer qjs.JS_FreeValue(c, attr_filter);
+            const has_filter = !quickjs.JS_IsUndefined(attr_filter);
+            if (attr_old) attributes_opt = true;
+            if (has_filter) attributes_opt = true;
+            if (char_old) character_data = true;
+            if (!child_list and !attributes_opt and !character_data)
+                return qjs.JS_ThrowTypeError(c, "Failed to execute 'observe': The options object must set at least one of 'attributes', 'characterData', or 'childList' to true.");
+        } else {
+            // Validate: attributeOldValue=true requires attributes!=false
+            const attr_old = jsBoolProp(c, args[1], "attributeOldValue");
+            if (attr_old and !attributes_opt)
+                return qjs.JS_ThrowTypeError(c, "Failed to execute 'observe': The options object may not set 'attributeOldValue' to true when 'attributes' is false.");
+            const attr_filter = qjs.JS_GetPropertyStr(c, args[1], "attributeFilter");
+            defer qjs.JS_FreeValue(c, attr_filter);
+            if (!quickjs.JS_IsUndefined(attr_filter) and !attributes_opt)
+                return qjs.JS_ThrowTypeError(c, "Failed to execute 'observe': The options object may not set 'attributeFilter' when 'attributes' is false.");
+            const char_old = jsBoolProp(c, args[1], "characterDataOldValue");
+            if (char_old and !character_data)
+                return qjs.JS_ThrowTypeError(c, "Failed to execute 'observe': The options object may not set 'characterDataOldValue' to true when 'characterData' is false.");
+        }
     }
 
     mutation_observers.items[idx].targets.append(allocator, .{
