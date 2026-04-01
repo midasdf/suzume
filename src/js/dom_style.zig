@@ -1462,6 +1462,24 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "hyphenate-character")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "hyphenate-limit-chars")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "hanging-punctuation")) return qjs.JS_NewStringLen(c, "none", 4);
+    // CSS Logical Properties (default to auto for position, 0px for size)
+    if (eqlIgnoreCase(prop, "inset-block-start") or eqlIgnoreCase(prop, "inset-block-end") or
+        eqlIgnoreCase(prop, "inset-inline-start") or eqlIgnoreCase(prop, "inset-inline-end"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "margin-block-start") or eqlIgnoreCase(prop, "margin-block-end") or
+        eqlIgnoreCase(prop, "margin-inline-start") or eqlIgnoreCase(prop, "margin-inline-end"))
+        return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "padding-block-start") or eqlIgnoreCase(prop, "padding-block-end") or
+        eqlIgnoreCase(prop, "padding-inline-start") or eqlIgnoreCase(prop, "padding-inline-end"))
+        return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "block-size") or eqlIgnoreCase(prop, "inline-size"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "min-block-size") or eqlIgnoreCase(prop, "min-inline-size"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "max-block-size") or eqlIgnoreCase(prop, "max-inline-size"))
+        return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "scrollbar-gutter")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "overflow-clip-margin")) return qjs.JS_NewStringLen(c, "0px", 3);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1774,6 +1792,30 @@ pub fn windowGetComputedStyle(
         .{ "accent-color", "accentColor" },
         .{ "caret-color", "caretColor" },
         .{ "color-scheme", "colorScheme" },
+        // CSS Logical Properties
+        .{ "inset-block-start", "insetBlockStart" },
+        .{ "inset-block-end", "insetBlockEnd" },
+        .{ "inset-inline-start", "insetInlineStart" },
+        .{ "inset-inline-end", "insetInlineEnd" },
+        .{ "inset-block", "insetBlock" },
+        .{ "inset-inline", "insetInline" },
+        .{ "margin-block-start", "marginBlockStart" },
+        .{ "margin-block-end", "marginBlockEnd" },
+        .{ "margin-inline-start", "marginInlineStart" },
+        .{ "margin-inline-end", "marginInlineEnd" },
+        .{ "padding-block-start", "paddingBlockStart" },
+        .{ "padding-block-end", "paddingBlockEnd" },
+        .{ "padding-inline-start", "paddingInlineStart" },
+        .{ "padding-inline-end", "paddingInlineEnd" },
+        .{ "block-size", "blockSize" },
+        .{ "inline-size", "inlineSize" },
+        .{ "min-block-size", "minBlockSize" },
+        .{ "min-inline-size", "minInlineSize" },
+        .{ "max-block-size", "maxBlockSize" },
+        .{ "max-inline-size", "maxInlineSize" },
+        .{ "scrollbar-gutter", "scrollbarGutter" },
+        .{ "overflow-clip-margin", "overflowClipMargin" },
+        .{ "text-overflow", "textOverflow" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2077,6 +2119,24 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "isolation",            "mix-blend-mode",       "filter",                 "backdrop-filter",
         "clip-path",            "mask",                 "mask-image",
         "scroll-behavior",     "overscroll-behavior",   "scroll-snap-type",       "scroll-snap-align",
+        // CSS Logical Properties
+        "inset-block-start",   "inset-block-end",      "inset-inline-start",     "inset-inline-end",
+        "inset-block",         "inset-inline",
+        "margin-block-start",  "margin-block-end",     "margin-inline-start",    "margin-inline-end",
+        "padding-block-start", "padding-block-end",    "padding-inline-start",   "padding-inline-end",
+        "border-block-start-width","border-block-end-width","border-inline-start-width","border-inline-end-width",
+        "border-block-start-style","border-block-end-style","border-inline-start-style","border-inline-end-style",
+        "border-block-start-color","border-block-end-color","border-inline-start-color","border-inline-end-color",
+        "border-block-width",  "border-block-style",   "border-block-color",
+        "border-inline-width", "border-inline-style",  "border-inline-color",
+        "border-block-start",  "border-block-end",     "border-inline-start",    "border-inline-end",
+        "border-block",        "border-inline",
+        "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
+        "max-block-size",      "max-inline-size",
+        // CSS Overflow
+        "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
+        "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
+        "line-clamp",          "max-lines",            "block-ellipsis",         "continue",
         "touch-action",         "user-select",          "pointer-events",         "resize",
         "appearance",           "accent-color",         "caret-color",            "color-scheme",
         "forced-color-adjust",  "print-color-adjust",
