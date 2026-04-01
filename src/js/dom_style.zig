@@ -711,6 +711,20 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
     if ((eqlIgnoreCase(prop, "word-spacing") or eqlIgnoreCase(prop, "letter-spacing")) and
         eqlIgnoreCase(std.mem.trim(u8, val, " \t"), "normal"))
         return qjs.JS_NewStringLen(c, "0px", 3);
+    // font-size: absolute keywords to px (based on medium = 16px)
+    if (eqlIgnoreCase(prop, "font-size")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "xx-small")) return qjs.JS_NewStringLen(c, "9px", 3);
+        if (eqlIgnoreCase(tv, "x-small")) return qjs.JS_NewStringLen(c, "10px", 4);
+        if (eqlIgnoreCase(tv, "small")) return qjs.JS_NewStringLen(c, "13px", 4);
+        if (eqlIgnoreCase(tv, "medium")) return qjs.JS_NewStringLen(c, "16px", 4);
+        if (eqlIgnoreCase(tv, "large")) return qjs.JS_NewStringLen(c, "18px", 4);
+        if (eqlIgnoreCase(tv, "x-large")) return qjs.JS_NewStringLen(c, "24px", 4);
+        if (eqlIgnoreCase(tv, "xx-large")) return qjs.JS_NewStringLen(c, "32px", 4);
+        if (eqlIgnoreCase(tv, "xxx-large")) return qjs.JS_NewStringLen(c, "48px", 4);
+        if (eqlIgnoreCase(tv, "smaller")) return qjs.JS_NewStringLen(c, "13px", 4);
+        if (eqlIgnoreCase(tv, "larger")) return qjs.JS_NewStringLen(c, "19px", 4);
+    }
     // font-weight: keywords to numbers
     if (eqlIgnoreCase(prop, "font-weight")) {
         const tv = std.mem.trim(u8, val, " \t");
