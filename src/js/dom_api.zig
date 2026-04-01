@@ -1256,11 +1256,17 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "borderInlineStartStyle", .css = "border-inline-start-style" },
         .{ .camel = "borderInlineEndStyle", .css = "border-inline-end-style" },
         // CSS Align
+        .{ .camel = "alignContent", .css = "align-content" },
+        .{ .camel = "justifyItems", .css = "justify-items" },
+        .{ .camel = "justifySelf", .css = "justify-self" },
         .{ .camel = "placeContent", .css = "place-content" },
         .{ .camel = "placeItems", .css = "place-items" },
         .{ .camel = "placeSelf", .css = "place-self" },
         .{ .camel = "rowGap", .css = "row-gap" },
         .{ .camel = "columnGap", .css = "column-gap" },
+        .{ .camel = "gridRowGap", .css = "grid-row-gap" },
+        .{ .camel = "gridColumnGap", .css = "grid-column-gap" },
+        .{ .camel = "gridGap", .css = "grid-gap" },
         // CSS Will Change
         .{ .camel = "willChange", .css = "will-change" },
         // CSS Motion

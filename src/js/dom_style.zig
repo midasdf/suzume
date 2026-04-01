@@ -1622,6 +1622,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "place-content") or eqlIgnoreCase(prop, "place-items"))
         return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "place-self")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "justify-items")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "justify-self")) return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS Will Change
     if (eqlIgnoreCase(prop, "will-change")) return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS Motion
@@ -2146,6 +2148,11 @@ pub fn windowGetComputedStyle(
         .{ "place-self", "placeSelf" },
         .{ "row-gap", "rowGap" },
         .{ "column-gap", "columnGap" },
+        .{ "grid-row-gap", "gridRowGap" },
+        .{ "grid-column-gap", "gridColumnGap" },
+        .{ "grid-gap", "gridGap" },
+        .{ "justify-items", "justifyItems" },
+        .{ "justify-self", "justifySelf" },
         // CSS Will Change
         .{ "will-change", "willChange" },
         // CSS Motion
@@ -2406,10 +2413,13 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .border_radius_bottom_left, .border_radius_bottom_right,
         .border_spacing, .grid_area, .transform,
         .letter_spacing, .word_spacing, .text_indent,
-        .aspect_ratio, .justify_items, .justify_self,
+        .row_gap, .column_gap,
+        .aspect_ratio,
         .object_fit, .contain,
         .font_family, .font_style,
-        .vertical_align => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
+        .vertical_align,
+        .align_content, .align_items, .align_self,
+        .justify_content, .justify_items, .justify_self => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -2586,6 +2596,7 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         // CSS Align
         "place-content",       "place-items",          "place-self",
         "row-gap",             "column-gap",
+        "grid-row-gap",        "grid-column-gap",      "grid-gap",
         // CSS Will Change
         "will-change",
         // CSS Motion
