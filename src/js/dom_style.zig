@@ -1536,6 +1536,11 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "font-variant-numeric")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "font-variant-position")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "font-variation-settings")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-synthesis-weight")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "font-synthesis-style")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "font-synthesis-small-caps")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "font-variant-alternates")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "font-variant-emoji")) return qjs.JS_NewStringLen(c, "normal", 6);
     // CSS Grid
     if (eqlIgnoreCase(prop, "grid-auto-columns") or eqlIgnoreCase(prop, "grid-auto-rows"))
         return qjs.JS_NewStringLen(c, "auto", 4);
@@ -2013,6 +2018,12 @@ pub fn windowGetComputedStyle(
         .{ "scroll-margin-block-end", "scrollMarginBlockEnd" },
         .{ "scroll-margin-inline-start", "scrollMarginInlineStart" },
         .{ "scroll-margin-inline-end", "scrollMarginInlineEnd" },
+        // CSS Fonts extra
+        .{ "font-synthesis-weight", "fontSynthesisWeight" },
+        .{ "font-synthesis-style", "fontSynthesisStyle" },
+        .{ "font-synthesis-small-caps", "fontSynthesisSmallCaps" },
+        .{ "font-variant-alternates", "fontVariantAlternates" },
+        .{ "font-variant-emoji", "fontVariantEmoji" },
         // CSS Animations
         .{ "animation-delay", "animationDelay" },
         .{ "animation-direction", "animationDirection" },
@@ -2268,7 +2279,8 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .border_spacing, .grid_area, .transform,
         .letter_spacing, .word_spacing, .text_indent,
         .aspect_ratio, .justify_items, .justify_self,
-        .object_fit, .contain => true,
+        .object_fit, .contain,
+        .font_family, .font_style => true,
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -2381,6 +2393,8 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "font-palette",        "font-size-adjust",     "font-stretch",           "font-synthesis",
         "font-variant",        "font-variant-caps",    "font-variant-east-asian","font-variant-ligatures",
         "font-variant-numeric","font-variant-position","font-variation-settings",
+        "font-synthesis-weight","font-synthesis-style", "font-synthesis-small-caps","font-synthesis-position",
+        "font-variant-alternates","font-variant-emoji",
         // CSS Grid
         "grid-auto-columns",   "grid-auto-rows",       "grid-auto-flow",
         "grid-template-areas", "grid-template",

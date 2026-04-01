@@ -1195,6 +1195,12 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "scrollMarginBlockEnd", .css = "scroll-margin-block-end" },
         .{ .camel = "scrollMarginInlineStart", .css = "scroll-margin-inline-start" },
         .{ .camel = "scrollMarginInlineEnd", .css = "scroll-margin-inline-end" },
+        // CSS Fonts extra
+        .{ .camel = "fontSynthesisWeight", .css = "font-synthesis-weight" },
+        .{ .camel = "fontSynthesisStyle", .css = "font-synthesis-style" },
+        .{ .camel = "fontSynthesisSmallCaps", .css = "font-synthesis-small-caps" },
+        .{ .camel = "fontVariantAlternates", .css = "font-variant-alternates" },
+        .{ .camel = "fontVariantEmoji", .css = "font-variant-emoji" },
         // CSS Animations
         .{ .camel = "animationDelay", .css = "animation-delay" },
         .{ .camel = "animationDirection", .css = "animation-direction" },
