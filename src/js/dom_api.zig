@@ -1201,6 +1201,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "fontSynthesisSmallCaps", .css = "font-synthesis-small-caps" },
         .{ .camel = "fontVariantAlternates", .css = "font-variant-alternates" },
         .{ .camel = "fontVariantEmoji", .css = "font-variant-emoji" },
+        .{ .camel = "fontWidth", .css = "font-width" },
         // CSS Masking
         // CSS Filter Effects
         .{ .camel = "clip", .css = "clip" },

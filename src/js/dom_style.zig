@@ -1559,7 +1559,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "font-optical-sizing")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "font-palette")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "font-size-adjust")) return qjs.JS_NewStringLen(c, "none", 4);
-    if (eqlIgnoreCase(prop, "font-stretch")) return qjs.JS_NewStringLen(c, "100%", 4);
+    if (eqlIgnoreCase(prop, "font-stretch") or eqlIgnoreCase(prop, "font-width"))
+        return qjs.JS_NewStringLen(c, "100%", 4);
     if (eqlIgnoreCase(prop, "font-synthesis")) return qjs.JS_NewStringLen(c, "weight style small-caps", 23);
     if (eqlIgnoreCase(prop, "font-variant")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "font-variant-caps")) return qjs.JS_NewStringLen(c, "normal", 6);
@@ -2158,6 +2159,7 @@ pub fn windowGetComputedStyle(
         .{ "font-synthesis-small-caps", "fontSynthesisSmallCaps" },
         .{ "font-variant-alternates", "fontVariantAlternates" },
         .{ "font-variant-emoji", "fontVariantEmoji" },
+        .{ "font-width", "fontWidth" },
         // CSS Masking
         // CSS Filter Effects
         .{ "clip", "clip" },
@@ -2654,7 +2656,7 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "font-variant",        "font-variant-caps",    "font-variant-east-asian","font-variant-ligatures",
         "font-variant-numeric","font-variant-position","font-variation-settings",
         "font-synthesis-weight","font-synthesis-style", "font-synthesis-small-caps","font-synthesis-position",
-        "font-variant-alternates","font-variant-emoji",
+        "font-variant-alternates","font-variant-emoji",  "font-width",
         // CSS Grid
         "grid-auto-columns",   "grid-auto-rows",       "grid-auto-flow",
         "grid-template-areas", "grid-template",
