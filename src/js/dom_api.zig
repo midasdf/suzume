@@ -1204,6 +1204,8 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "fontWidth", .css = "font-width" },
         // CSS Masking
         // CSS Filter Effects
+        .{ .camel = "fieldSizing", .css = "field-sizing" },
+        .{ .camel = "interactivity", .css = "interactivity" },
         .{ .camel = "clip", .css = "clip" },
         .{ .camel = "floodColor", .css = "flood-color" },
         .{ .camel = "floodOpacity", .css = "flood-opacity" },

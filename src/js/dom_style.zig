@@ -1629,6 +1629,9 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "color-interpolation-filters")) return qjs.JS_NewStringLen(c, "linearRGB", 9);
     if (eqlIgnoreCase(prop, "filter") or eqlIgnoreCase(prop, "backdrop-filter"))
         return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "outline-offset")) return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "field-sizing")) return qjs.JS_NewStringLen(c, "fixed", 5);
+    if (eqlIgnoreCase(prop, "interactivity")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "clip")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "clip-path")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "clip-rule")) return qjs.JS_NewStringLen(c, "nonzero", 7);
@@ -2179,6 +2182,8 @@ pub fn windowGetComputedStyle(
         .{ "font-width", "fontWidth" },
         // CSS Masking
         // CSS Filter Effects
+        .{ "field-sizing", "fieldSizing" },
+        .{ "interactivity", "interactivity" },
         .{ "clip", "clip" },
         .{ "flood-color", "floodColor" },
         .{ "flood-opacity", "floodOpacity" },
@@ -2727,6 +2732,8 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "line-clamp",          "max-lines",            "block-ellipsis",         "continue",
         // CSS Images
         "image-orientation",   "image-rendering",      "image-resolution",
+        // CSS UI (not in PropertyId)
+        "outline-offset",      "field-sizing",         "interactivity",
         // CSS Filter Effects
         "flood-color",         "flood-opacity",        "lighting-color",         "clip",
         "color-interpolation-filters",
