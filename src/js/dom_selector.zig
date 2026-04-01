@@ -377,7 +377,7 @@ pub fn findPseudoStart(sel: []const u8) ?usize {
 }
 
 pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially first
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -395,7 +395,7 @@ pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially last
     var child = lxb_dom_node_last_child_noi(parent);
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
