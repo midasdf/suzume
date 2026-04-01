@@ -1936,7 +1936,9 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .display => isValidDisplayValue(trimmed),
         // Color properties
         .color, .background_color, .border_top_color, .border_right_color,
-        .border_bottom_color, .border_left_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed) or isColorFuncWithCalc(trimmed),
+        .border_bottom_color, .border_left_color,
+        .caret_color, .accent_color, .outline_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed) or isColorFuncWithCalc(trimmed) or
+            eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "currentcolor") or eqlIgnoreCase(trimmed, "currentColor"),
         // Numeric properties
         .opacity => blk: {
             if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '%') {
@@ -1976,6 +1978,17 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             eqlIgnoreCase(trimmed, "collapse"),
         // Overflow: visible, hidden, scroll, auto, clip (NOT none)
         .overflow_x, .overflow_y => isValidOverflowValue(trimmed),
+        // Cursor: keyword list (auto, default, pointer, text, wait, help, crosshair, etc.)
+        .cursor => true, // Accept any cursor value (complex: url(), keyword, etc.)
+        // Outline style: same as border-style
+        .outline_style => eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "none") or
+            eqlIgnoreCase(trimmed, "dotted") or eqlIgnoreCase(trimmed, "dashed") or
+            eqlIgnoreCase(trimmed, "solid") or eqlIgnoreCase(trimmed, "double") or
+            eqlIgnoreCase(trimmed, "groove") or eqlIgnoreCase(trimmed, "ridge") or
+            eqlIgnoreCase(trimmed, "inset") or eqlIgnoreCase(trimmed, "outset"),
+        // Outline width: like border-width
+        .outline_width => isValidBorderWidth(trimmed),
+        // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
             eqlIgnoreCase(trimmed, "balance") or eqlIgnoreCase(trimmed, "pretty") or
