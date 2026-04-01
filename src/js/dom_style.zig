@@ -729,6 +729,16 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // background-repeat: 'X X' → 'X' when both values are the same
+    if (eqlIgnoreCase(prop, "background-repeat")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (std.mem.indexOf(u8, tv, " ")) |sp| {
+            const first = tv[0..sp];
+            const second = std.mem.trim(u8, tv[sp + 1 ..], " ");
+            if (eqlIgnoreCase(first, second))
+                return qjs.JS_NewStringLen(c, first.ptr, first.len);
+        }
+    }
     // background-size: normalize 'auto auto' → 'auto', '1px' → '1px auto'
     if (eqlIgnoreCase(prop, "background-size")) {
         const tv = std.mem.trim(u8, val, " \t");
