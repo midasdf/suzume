@@ -729,6 +729,32 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // transition/animation-timing-function: normalize step keywords
+    if (eqlIgnoreCase(prop, "transition-timing-function") or eqlIgnoreCase(prop, "animation-timing-function")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "step-start")) return qjs.JS_NewStringLen(c, "steps(1, start)", 15);
+        if (eqlIgnoreCase(tv, "step-end")) return qjs.JS_NewStringLen(c, "steps(1)", 8);
+        // steps(N, end) → steps(N), steps(N, jump-end) → steps(N)
+        if (tv.len >= 6 and eqlIgnoreCase(tv[0..6], "steps(")) {
+            if (std.mem.endsWith(u8, tv, ", end)") or std.mem.endsWith(u8, tv, ",end)")) {
+                // Extract N
+                const num_start: usize = 6;
+                const comma = std.mem.indexOf(u8, tv[num_start..], ",") orelse return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                const num = std.mem.trim(u8, tv[num_start .. num_start + comma], " ");
+                var sbuf: [64]u8 = undefined;
+                const s = std.fmt.bufPrint(&sbuf, "steps({s})", .{num}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            }
+            if (std.mem.endsWith(u8, tv, ", jump-end)") or std.mem.endsWith(u8, tv, ",jump-end)")) {
+                const num_start: usize = 6;
+                const comma = std.mem.indexOf(u8, tv[num_start..], ",") orelse return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                const num = std.mem.trim(u8, tv[num_start .. num_start + comma], " ");
+                var sbuf: [64]u8 = undefined;
+                const s = std.fmt.bufPrint(&sbuf, "steps({s})", .{num}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            }
+        }
+    }
     // overflow-clip-margin: normalize order and defaults
     if (eqlIgnoreCase(prop, "overflow-clip-margin")) {
         const tv = std.mem.trim(u8, val, " \t");
