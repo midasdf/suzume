@@ -1111,6 +1111,27 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "maxInlineSize", .css = "max-inline-size" },
         .{ .camel = "scrollbarGutter", .css = "scrollbar-gutter" },
         .{ .camel = "overflowClipMargin", .css = "overflow-clip-margin" },
+        // CSS Backgrounds
+        .{ .camel = "backgroundAttachment", .css = "background-attachment" },
+        .{ .camel = "backgroundClip", .css = "background-clip" },
+        .{ .camel = "backgroundImage", .css = "background-image" },
+        .{ .camel = "backgroundOrigin", .css = "background-origin" },
+        .{ .camel = "backgroundPosition", .css = "background-position" },
+        .{ .camel = "backgroundPositionX", .css = "background-position-x" },
+        .{ .camel = "backgroundPositionY", .css = "background-position-y" },
+        .{ .camel = "backgroundRepeat", .css = "background-repeat" },
+        .{ .camel = "backgroundSize", .css = "background-size" },
+        .{ .camel = "borderImage", .css = "border-image" },
+        .{ .camel = "borderImageSource", .css = "border-image-source" },
+        .{ .camel = "borderImageSlice", .css = "border-image-slice" },
+        .{ .camel = "borderImageWidth", .css = "border-image-width" },
+        .{ .camel = "borderImageOutset", .css = "border-image-outset" },
+        .{ .camel = "borderImageRepeat", .css = "border-image-repeat" },
+        .{ .camel = "borderTopLeftRadius", .css = "border-top-left-radius" },
+        .{ .camel = "borderTopRightRadius", .css = "border-top-right-radius" },
+        .{ .camel = "borderBottomLeftRadius", .css = "border-bottom-left-radius" },
+        .{ .camel = "borderBottomRightRadius", .css = "border-bottom-right-radius" },
+        .{ .camel = "boxShadow", .css = "box-shadow" },
     };
 
     for (camel_css_pairs) |pair| {

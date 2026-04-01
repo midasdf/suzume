@@ -1488,6 +1488,25 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "align-self")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "row-gap") or eqlIgnoreCase(prop, "column-gap") or eqlIgnoreCase(prop, "gap"))
         return qjs.JS_NewStringLen(c, "normal", 6);
+    // CSS Backgrounds defaults
+    if (eqlIgnoreCase(prop, "background-attachment")) return qjs.JS_NewStringLen(c, "scroll", 6);
+    if (eqlIgnoreCase(prop, "background-clip")) return qjs.JS_NewStringLen(c, "border-box", 10);
+    if (eqlIgnoreCase(prop, "background-image")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "background-origin")) return qjs.JS_NewStringLen(c, "padding-box", 11);
+    if (eqlIgnoreCase(prop, "background-position")) return qjs.JS_NewStringLen(c, "0% 0%", 5);
+    if (eqlIgnoreCase(prop, "background-position-x") or eqlIgnoreCase(prop, "background-position-y"))
+        return qjs.JS_NewStringLen(c, "0%", 2);
+    if (eqlIgnoreCase(prop, "background-repeat")) return qjs.JS_NewStringLen(c, "repeat", 6);
+    if (eqlIgnoreCase(prop, "background-size")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "border-image-source")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "border-image-slice")) return qjs.JS_NewStringLen(c, "100%", 4);
+    if (eqlIgnoreCase(prop, "border-image-width")) return qjs.JS_NewStringLen(c, "1", 1);
+    if (eqlIgnoreCase(prop, "border-image-outset")) return qjs.JS_NewStringLen(c, "0", 1);
+    if (eqlIgnoreCase(prop, "border-image-repeat")) return qjs.JS_NewStringLen(c, "stretch", 7);
+    if (eqlIgnoreCase(prop, "border-top-left-radius") or eqlIgnoreCase(prop, "border-top-right-radius") or
+        eqlIgnoreCase(prop, "border-bottom-left-radius") or eqlIgnoreCase(prop, "border-bottom-right-radius"))
+        return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "box-shadow")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1838,6 +1857,27 @@ pub fn windowGetComputedStyle(
         .{ "gap", "gap" },
         .{ "row-gap", "rowGap" },
         .{ "column-gap", "columnGap" },
+        // CSS Backgrounds
+        .{ "background-attachment", "backgroundAttachment" },
+        .{ "background-clip", "backgroundClip" },
+        .{ "background-image", "backgroundImage" },
+        .{ "background-origin", "backgroundOrigin" },
+        .{ "background-position", "backgroundPosition" },
+        .{ "background-position-x", "backgroundPositionX" },
+        .{ "background-position-y", "backgroundPositionY" },
+        .{ "background-repeat", "backgroundRepeat" },
+        .{ "background-size", "backgroundSize" },
+        .{ "border-image", "borderImage" },
+        .{ "border-image-source", "borderImageSource" },
+        .{ "border-image-slice", "borderImageSlice" },
+        .{ "border-image-width", "borderImageWidth" },
+        .{ "border-image-outset", "borderImageOutset" },
+        .{ "border-image-repeat", "borderImageRepeat" },
+        .{ "border-top-left-radius", "borderTopLeftRadius" },
+        .{ "border-top-right-radius", "borderTopRightRadius" },
+        .{ "border-bottom-left-radius", "borderBottomLeftRadius" },
+        .{ "border-bottom-right-radius", "borderBottomRightRadius" },
+        .{ "box-shadow", "boxShadow" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2157,6 +2197,12 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "border-block",        "border-inline",
         "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
         "max-block-size",      "max-inline-size",
+        // CSS Backgrounds
+        "background-attachment","background-clip",      "background-image",       "background-origin",
+        "background-position", "background-position-x","background-position-y",  "background-repeat",
+        "background-size",     "border-image",         "border-image-source",    "border-image-slice",
+        "border-image-width",  "border-image-outset",  "border-image-repeat",
+        "border-top-left-radius","border-top-right-radius","border-bottom-left-radius","border-bottom-right-radius",
         // CSS Overflow
         "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
         "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
