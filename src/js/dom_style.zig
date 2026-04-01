@@ -729,6 +729,19 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // background-size: normalize 'auto auto' → 'auto', '1px' → '1px auto'
+    if (eqlIgnoreCase(prop, "background-size")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "auto auto")) return qjs.JS_NewStringLen(c, "auto", 4);
+        // Single value (not keyword) → add 'auto' second value
+        if (!eqlIgnoreCase(tv, "auto") and !eqlIgnoreCase(tv, "cover") and !eqlIgnoreCase(tv, "contain") and
+            std.mem.indexOf(u8, tv, " ") == null and tv.len > 0)
+        {
+            var sbuf: [128]u8 = undefined;
+            const s = std.fmt.bufPrint(&sbuf, "{s} auto", .{tv}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+            return qjs.JS_NewStringLen(c, s.ptr, s.len);
+        }
+    }
     // background-position-x/y: keywords to %
     if (eqlIgnoreCase(prop, "background-position-x") or eqlIgnoreCase(prop, "background-position-y") or
         eqlIgnoreCase(prop, "background-position"))
