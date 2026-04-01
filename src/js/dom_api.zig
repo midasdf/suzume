@@ -1465,6 +1465,10 @@ fn styleSetProperty(
         dom_style.canonicalizeColorKeyword(trimmed_val2, &calc_buf).?
     else if (dom_style.eqlIgnoreCase(prop, "color-scheme") and std.mem.indexOf(u8, trimmed_val2, "only") != null)
         dom_style.canonicalizeColorScheme(trimmed_val2, &calc_buf) orelse val
+    else if (dom_style.eqlIgnoreCase(prop, "font-style") and dom_style.eqlIgnoreCase(trimmed_val2, "oblique 0deg"))
+        "normal"
+    else if (dom_style.eqlIgnoreCase(prop, "font-style") and dom_style.eqlIgnoreCase(trimmed_val2, "oblique 14deg"))
+        "oblique"
     else
         val;
 
