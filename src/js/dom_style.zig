@@ -2213,6 +2213,15 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .animation_play_state, .animation_timing_function,
         .transition_property, .transition_duration, .transition_timing_function,
         .transition_delay => true,
+        // Other properties that accept complex values
+        .filter, .backdrop_filter, .box_shadow, .text_shadow,
+        .content, .counter_reset, .counter_increment,
+        .background_image, .background_repeat, .background_position,
+        .background_size,
+        .border_radius_top_left, .border_radius_top_right,
+        .border_radius_bottom_left, .border_radius_bottom_right,
+        .border_spacing, .grid_area, .transform,
+        .letter_spacing, .word_spacing, .text_indent => true,
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
