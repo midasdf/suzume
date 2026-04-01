@@ -2363,7 +2363,8 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .letter_spacing, .word_spacing, .text_indent,
         .aspect_ratio, .justify_items, .justify_self,
         .object_fit, .contain,
-        .font_family, .font_style => true,
+        .font_family, .font_style,
+        .vertical_align => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
