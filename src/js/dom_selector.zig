@@ -118,7 +118,8 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (pseudo_start > 0) {
             // Has a prefix before the pseudo: e.g. "div" in "div:not(.x)"
             if (!matchSingleSimple(elem, sel[0..pseudo_start])) return false;
-            return matchSingleSimple(elem, sel[pseudo_start..]);
+            // Use elementMatchesSelector for pseudo part so :has() etc. work
+            return elementMatchesSelector(@ptrCast(elem), sel[pseudo_start..]);
         }
     }
 
@@ -864,6 +865,15 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
 
     // * (universal selector)
     if (selector.len == 1 and selector[0] == '*') return true;
+
+    // Compound selector with pseudo-classes: ".x:has(.a)", "div:not(.x)"
+    // Split at first ':' not inside brackets/parens and match each part
+    if (findPseudoStart(selector)) |pseudo_start| {
+        if (pseudo_start > 0) {
+            if (!nodeMatchesSimple(node, selector[0..pseudo_start])) return false;
+            return nodeMatchesSimple(node, selector[pseudo_start..]);
+        }
+    }
 
     // :not(inner) — negate inner match
     if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":not(") and selector[selector.len - 1] == ')') {
