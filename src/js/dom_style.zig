@@ -729,6 +729,27 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // Duration properties: ms → s conversion
+    if (eqlIgnoreCase(prop, "animation-duration") or eqlIgnoreCase(prop, "animation-delay") or
+        eqlIgnoreCase(prop, "transition-duration") or eqlIgnoreCase(prop, "transition-delay"))
+    {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (tv.len > 2 and std.mem.endsWith(u8, tv, "ms")) {
+            if (std.fmt.parseFloat(f64, tv[0 .. tv.len - 2])) |ms| {
+                const secs = ms / 1000.0;
+                const rounded = @round(secs * 1000000.0) / 1000000.0;
+                var tbuf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&tbuf, "{d}s", .{rounded}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            } else |_| {}
+        }
+    }
+    // animation-name: lowercase 'none'
+    if (eqlIgnoreCase(prop, "animation-name")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "none") and !std.mem.eql(u8, tv, "none"))
+            return qjs.JS_NewStringLen(c, "none", 4);
+    }
     // transition/animation-timing-function: normalize step keywords
     if (eqlIgnoreCase(prop, "transition-timing-function") or eqlIgnoreCase(prop, "animation-timing-function")) {
         const tv = std.mem.trim(u8, val, " \t");
