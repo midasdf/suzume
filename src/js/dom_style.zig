@@ -633,9 +633,7 @@ pub fn argbToCssColor(c: *qjs.JSContext, argb: u32, buf: *[128]u8) qjs.JSValue {
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else {
         // Round alpha to common fractions to match browser serialization
-        // e.g. 128/255 ≈ 0.502 but CSS expects clean values like 0.5
         const alpha_raw: f32 = @as(f32, @floatFromInt(a)) / 255.0;
-        // Round to nearest 1/1000 to produce cleaner output
         const alpha = @round(alpha_raw * 1000.0) / 1000.0;
         // Use minimal decimal places
         if (alpha == @round(alpha * 10.0) / 10.0) {
@@ -1436,7 +1434,23 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "letter-spacing") or eqlIgnoreCase(prop, "word-spacing"))
         return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "word-break")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "line-break")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "overflow-wrap") or eqlIgnoreCase(prop, "word-wrap"))
+        return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "hyphens")) return qjs.JS_NewStringLen(c, "manual", 6);
+    if (eqlIgnoreCase(prop, "text-decoration-line")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "text-decoration-style")) return qjs.JS_NewStringLen(c, "solid", 5);
+    if (eqlIgnoreCase(prop, "text-decoration-color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "text-underline-position")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "text-underline-offset")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "text-emphasis-style")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "text-emphasis-color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "text-shadow")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "white-space")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "white-space-collapse")) return qjs.JS_NewStringLen(c, "collapse", 8);
+    if (eqlIgnoreCase(prop, "text-wrap") or eqlIgnoreCase(prop, "text-wrap-mode"))
+        return qjs.JS_NewStringLen(c, "wrap", 4);
+    if (eqlIgnoreCase(prop, "text-wrap-style")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1961,13 +1975,28 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
     }
     // Known shorthand properties that we don't deeply validate — accept
     const known_shorthands = [_][]const u8{
-        "border", "border-top", "border-right", "border-bottom", "border-left",
-        "border-radius", "border-color", "border-width", "border-style",
-        "background", "font", "flex", "flex-flow", "transition", "animation",
-        "text-decoration", "list-style", "outline", "grid", "grid-template",
-        "grid-template-columns", "grid-template-rows", "grid-area", "grid-column",
-        "grid-row", "gap", "place-content", "place-items", "place-self",
-        "columns", "column-rule", "inset",
+        "border",               "border-top",           "border-right",           "border-bottom",       "border-left",
+        "border-radius",        "border-color",         "border-width",           "border-style",
+        "background",           "font",                 "flex",                   "flex-flow",           "transition",           "animation",
+        "text-decoration",      "list-style",           "outline",                "grid",                "grid-template",
+        "grid-template-columns","grid-template-rows",   "grid-area",              "grid-column",
+        "grid-row",             "gap",                  "place-content",          "place-items",         "place-self",
+        "columns",              "column-rule",          "inset",
+        // CSS Text properties (keyword values)
+        "line-break",           "overflow-wrap",        "word-wrap",              "hyphens",
+        "text-decoration-line", "text-decoration-style","text-decoration-color",
+        "text-underline-position","text-underline-offset","text-emphasis-style",  "text-emphasis-color",
+        "text-shadow",          "white-space-collapse",  "text-wrap",             "text-wrap-mode",      "text-wrap-style",
+        "text-indent",          "tab-size",
+        // CSS positioning/layout properties
+        "contain",              "content-visibility",   "container-type",         "container-name",
+        "aspect-ratio",         "object-fit",           "object-position",
+        "isolation",            "mix-blend-mode",       "filter",                 "backdrop-filter",
+        "clip-path",            "mask",                 "mask-image",
+        "scroll-behavior",     "overscroll-behavior",   "scroll-snap-type",       "scroll-snap-align",
+        "touch-action",         "user-select",          "pointer-events",         "resize",
+        "appearance",           "accent-color",         "caret-color",            "color-scheme",
+        "forced-color-adjust",  "print-color-adjust",
     };
     for (known_shorthands) |kw| {
         if (eqlIgnoreCase(prop, kw)) return true;
