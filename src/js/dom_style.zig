@@ -729,6 +729,20 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // line-height: resolve % to px (number * font-size)
+    if (eqlIgnoreCase(prop, "line-height")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (tv.len > 0 and tv[tv.len - 1] == '%') {
+            if (std.fmt.parseFloat(f32, tv[0 .. tv.len - 1])) |pct| {
+                const font_size = getElementFontSizeFromStyle(c, elem_val);
+                const px = pct / 100.0 * font_size;
+                const rounded = @round(px);
+                var lbuf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&lbuf, "{d}px", .{@as(i32, @intFromFloat(rounded))}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            } else |_| {}
+        }
+    }
     // Simplify calc() wrapping a single value: calc(X%) → X%, calc(Npx) → Npx
     {
         const tv = std.mem.trim(u8, val, " \t");
