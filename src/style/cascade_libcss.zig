@@ -90,12 +90,16 @@ fn lengthToPxVp(length: css.css_fixed, unit: css.css_unit, default_font_size: f3
         css.CSS_UNIT_EM => val * default_font_size,
         css.CSS_UNIT_REM => val * default_font_size,
         css.CSS_UNIT_PT => val * (96.0 / 72.0),
+        css.CSS_UNIT_PC => val * 16.0, // 1pc = 12pt = 16px
         css.CSS_UNIT_PCT => val * default_font_size / 100.0,
         css.CSS_UNIT_CM => val * (96.0 / 2.54),
         css.CSS_UNIT_MM => val * (96.0 / 25.4),
+        css.CSS_UNIT_Q => val * (96.0 / 101.6), // 1Q = 1/4 mm
         css.CSS_UNIT_IN => val * 96.0,
         css.CSS_UNIT_VW => val * vw / 100.0,
         css.CSS_UNIT_VH => val * vh / 100.0,
+        css.CSS_UNIT_VMIN => val * @min(vw, vh) / 100.0,
+        css.CSS_UNIT_VMAX => val * @max(vw, vh) / 100.0,
         else => val,
     };
 }

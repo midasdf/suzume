@@ -1848,8 +1848,10 @@ fn elementGetAttributes(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
     const elem = getElement(c, this_val) orelse return qjs.JS_NewObject(c);
-    const obj = qjs.JS_NewObject(c);
-    if (quickjs.JS_IsException(obj)) return obj;
+
+    // Build target object with indexed (enumerable) + named (non-enumerable) props
+    const target = qjs.JS_NewObject(c);
+    if (quickjs.JS_IsException(target)) return target;
 
     var count: u32 = 0;
     var attr: ?*anyopaque = lxb_dom_element_first_attribute_noi(elem);
@@ -1863,55 +1865,101 @@ fn elementGetAttributes(
             const name_str = np[0..name_len];
             const val_str = if (val_ptr) |vp| vp[0..val_len] else "";
 
-            // Create Attr-like object per DOM spec
-            const attr_obj = qjs.JS_NewObject(c);
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeType", qjs.JS_NewInt32(c, 2));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "name", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "value", qjs.JS_NewStringLen(c, val_str.ptr, val_str.len));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeName", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeValue", qjs.JS_NewStringLen(c, val_str.ptr, val_str.len));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "localName", qjs.JS_NewStringLen(c, name_str.ptr, name_str.len));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "namespaceURI", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "prefix", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "ownerElement", qjs.JS_DupValue(c, this_val));
-            _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
+            // Create Attr object per DOM spec
+            const attr_obj = createAttrObject(c, name_str, val_str, this_val);
 
-            // Indexed access
-            _ = qjs.JS_SetPropertyUint32(c, obj, count, qjs.JS_DupValue(c, attr_obj));
-            // Named access
-            _ = qjs.JS_SetPropertyStr(c, obj, name_str.ptr, attr_obj);
+            // Indexed access (enumerable)
+            _ = qjs.JS_SetPropertyUint32(c, target, count, qjs.JS_DupValue(c, attr_obj));
+            // Named access (non-enumerable) — use defineProperty
+            defineNonEnumerable(c, target, name_str, attr_obj);
             count += 1;
         }
         attr = lxb_dom_element_next_attribute_noi(a);
     }
 
-    _ = qjs.JS_SetPropertyStr(c, obj, "length", qjs.JS_NewInt32(c, @intCast(count)));
-
-    // getNamedItem method
-    const gni_js =
-        \\(function(){var m=this;return function(n){for(var i=0;i<m.length;i++)if(m[i]&&m[i].name===n)return m[i];return null;};})()
+    // Use Proxy to handle length/getNamedItem/item without them being own properties
+    const proxy_js =
+        \\(function(t,len){
+        \\  return new Proxy(t, {
+        \\    get: function(o,p,r) {
+        \\      if (p==='length') return len;
+        \\      if (p==='getNamedItem') return function(n){for(var i=0;i<len;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
+        \\      if (p==='getNamedItemNS') return function(ns,n){for(var i=0;i<len;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
+        \\      if (p==='item') return function(i){return o[i]||null;};
+        \\      if (p==='setNamedItem') return function(a){};
+        \\      if (p==='setNamedItemNS') return function(a){};
+        \\      if (p==='removeNamedItem') return function(n){};
+        \\      if (p==='removeNamedItemNS') return function(ns,n){};
+        \\      if (p===Symbol.iterator) return function*(){for(var i=0;i<len;i++)yield o[i];};
+        \\      if (p===Symbol.toStringTag) return 'NamedNodeMap';
+        \\      return o[p];
+        \\    },
+        \\    has: function(o,p) {
+        \\      if (p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS') return true;
+        \\      return p in o;
+        \\    },
+        \\    getOwnPropertyDescriptor: function(o,p) {
+        \\      return Object.getOwnPropertyDescriptor(o,p);
+        \\    },
+        \\    ownKeys: function(o) {
+        \\      return Object.getOwnPropertyNames(o);
+        \\    }
+        \\  });
+        \\})
     ;
-    const gni_fn = qjs.JS_Eval(c, gni_js, gni_js.len, "<attributes>", qjs.JS_EVAL_TYPE_GLOBAL);
-    if (!quickjs.JS_IsException(gni_fn)) {
-        var this_arg = [_]qjs.JSValue{obj};
-        const bound = qjs.JS_Call(c, gni_fn, obj, 0, &this_arg);
-        _ = qjs.JS_SetPropertyStr(c, obj, "getNamedItem", bound);
-        qjs.JS_FreeValue(c, gni_fn);
+    const proxy_fn = qjs.JS_Eval(c, proxy_js, proxy_js.len, "<namedNodeMap>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(proxy_fn)) {
+        var proxy_args = [2]qjs.JSValue{ target, qjs.JS_NewInt32(c, @intCast(count)) };
+        const result = qjs.JS_Call(c, proxy_fn, quickjs.JS_UNDEFINED(), 2, &proxy_args);
+        qjs.JS_FreeValue(c, proxy_fn);
+        qjs.JS_FreeValue(c, target);
+        return result;
     }
+    return target;
+}
 
-    // item method
-    const item_js =
-        \\(function(){var m=this;return function(i){return m[i]||null;};})()
+/// Create an Attr-like object per DOM spec
+fn createAttrObject(c: *qjs.JSContext, name: []const u8, value: []const u8, owner: qjs.JSValue) qjs.JSValue {
+    const attr_obj = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeType", qjs.JS_NewInt32(c, 2));
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "name", qjs.JS_NewStringLen(c, name.ptr, name.len));
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "value", qjs.JS_NewStringLen(c, value.ptr, value.len));
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeName", qjs.JS_NewStringLen(c, name.ptr, name.len));
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "nodeValue", qjs.JS_NewStringLen(c, value.ptr, value.len));
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "textContent", qjs.JS_NewStringLen(c, value.ptr, value.len));
+    // Extract local name and prefix from qualified name
+    if (std.mem.indexOfScalar(u8, name, ':')) |colon| {
+        const prefix_s = name[0..colon];
+        const local_s = name[colon + 1 ..];
+        _ = qjs.JS_SetPropertyStr(c, attr_obj, "localName", qjs.JS_NewStringLen(c, local_s.ptr, local_s.len));
+        _ = qjs.JS_SetPropertyStr(c, attr_obj, "prefix", qjs.JS_NewStringLen(c, prefix_s.ptr, prefix_s.len));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, attr_obj, "localName", qjs.JS_NewStringLen(c, name.ptr, name.len));
+        _ = qjs.JS_SetPropertyStr(c, attr_obj, "prefix", quickjs.JS_NULL());
+    }
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "namespaceURI", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "ownerElement", qjs.JS_DupValue(c, owner));
+    _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
+    return attr_obj;
+}
+
+/// Define a non-enumerable property on an object
+fn defineNonEnumerable(c: *qjs.JSContext, obj: qjs.JSValue, name: []const u8, val: qjs.JSValue) void {
+    const define_js =
+        \\(function(o,n,v){Object.defineProperty(o,n,{value:v,writable:true,enumerable:false,configurable:true});})
     ;
-    const item_fn = qjs.JS_Eval(c, item_js, item_js.len, "<attributes>", qjs.JS_EVAL_TYPE_GLOBAL);
-    if (!quickjs.JS_IsException(item_fn)) {
-        var item_arg = [_]qjs.JSValue{obj};
-        const bound_item = qjs.JS_Call(c, item_fn, obj, 0, &item_arg);
-        _ = qjs.JS_SetPropertyStr(c, obj, "item", bound_item);
-        qjs.JS_FreeValue(c, item_fn);
+    const define_fn = qjs.JS_Eval(c, define_js, define_js.len, "<defprop>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(define_fn)) {
+        var define_args = [3]qjs.JSValue{
+            obj,
+            qjs.JS_NewStringLen(c, name.ptr, name.len),
+            val,
+        };
+        const r = qjs.JS_Call(c, define_fn, quickjs.JS_UNDEFINED(), 3, &define_args);
+        qjs.JS_FreeValue(c, r);
+        qjs.JS_FreeValue(c, define_fn);
+        qjs.JS_FreeValue(c, define_args[1]);
     }
-
-    return obj;
 }
 
 

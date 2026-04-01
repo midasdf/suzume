@@ -2311,8 +2311,10 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .vmin => value * @min(vw, vh) / 100.0,
         .vmax => value * @max(vw, vh) / 100.0,
         .pt => value * 4.0 / 3.0,
+        .pc => value * 16.0,
         .cm => value * 96.0 / 2.54,
         .mm => value * 96.0 / 25.4,
+        .q => value * 96.0 / 101.6,
         .in_ => value * 96.0,
         else => value,
     };
@@ -2417,8 +2419,10 @@ fn resolveLengthToPxWithPct(value: f32, unit: values.Unit, font_size: f32, vw: f
         .vmin => value * @min(vw, vh) / 100.0,
         .vmax => value * @max(vw, vh) / 100.0,
         .pt => value * 4.0 / 3.0,
+        .pc => value * 16.0,
         .cm => value * 96.0 / 2.54,
         .mm => value * 96.0 / 25.4,
+        .q => value * 96.0 / 101.6,
         .in_ => value * 96.0,
         else => value,
     };

@@ -1061,14 +1061,41 @@ pub fn elementContains(
     if (argc < 1) return quickjs.JS_NewBool(false);
     const args = argv orelse return quickjs.JS_NewBool(false);
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) return quickjs.JS_NewBool(false);
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_NewBool(false);
-    const other = api.getNode(c, args[0]) orelse return quickjs.JS_NewBool(false);
 
-    // Walk up from other to see if we find node
-    var cur: ?*lxb.lxb_dom_node_t = other;
-    while (cur) |n| {
-        if (n == node) return quickjs.JS_NewBool(true);
-        cur = n.parent;
+    // DOM spec: "contains" returns true if other is an inclusive descendant
+    // Self-containment check (works for any JS object)
+    if (this_val.tag == args[0].tag and this_val.u.ptr == args[0].u.ptr) {
+        return quickjs.JS_NewBool(true);
+    }
+
+    // Try lexbor node path
+    const node = api.getNode(c, this_val);
+    const other = api.getNode(c, args[0]);
+
+    if (node != null and other != null) {
+        var cur: ?*lxb.lxb_dom_node_t = other;
+        while (cur) |n| {
+            if (n == node.?) return quickjs.JS_NewBool(true);
+            cur = n.parent;
+        }
+        return quickjs.JS_NewBool(false);
+    }
+
+    // Fallback: JS-level parentNode traversal (for doctype, processing instructions, etc.)
+    var cur_val = qjs.JS_DupValue(c, args[0]);
+    defer qjs.JS_FreeValue(c, cur_val);
+    var depth: u32 = 0;
+    while (depth < 1000) : (depth += 1) {
+        if (cur_val.tag == this_val.tag and cur_val.u.ptr == this_val.u.ptr) {
+            return quickjs.JS_NewBool(true);
+        }
+        const parent = qjs.JS_GetPropertyStr(c, cur_val, "parentNode");
+        if (quickjs.JS_IsNull(parent) or quickjs.JS_IsUndefined(parent)) {
+            qjs.JS_FreeValue(c, parent);
+            break;
+        }
+        qjs.JS_FreeValue(c, cur_val);
+        cur_val = parent;
     }
     return quickjs.JS_NewBool(false);
 }
@@ -1093,9 +1120,9 @@ pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
             var text_len: usize = 0;
-            const text_ptr = lxb_dom_node_text_content(ch, &text_len);
+            _ = lxb_dom_node_text_content(ch, &text_len);
 
-            if (text_len == 0 or text_ptr == null) {
+            if (text_len == 0) {
                 const next_sib: ?*lxb.lxb_dom_node_t = ch.next;
                 lxb_dom_node_remove(ch);
                 _ = lxb_dom_node_destroy(ch);
@@ -1115,17 +1142,19 @@ pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
                     next_node = after;
                     continue;
                 }
+                // Re-read the current text content each iteration (may have changed)
+                var cur_len: usize = 0;
+                const cur_ptr = lxb_dom_node_text_content(ch, &cur_len);
                 var merge_buf: [16384]u8 = undefined;
-                const total = text_len + next_len;
-                if (total <= merge_buf.len) {
-                    @memcpy(merge_buf[0..text_len], text_ptr.?[0..text_len]);
-                    @memcpy(merge_buf[text_len..][0..next_len], next_ptr.?[0..next_len]);
+                const total = cur_len + next_len;
+                if (total <= merge_buf.len and cur_ptr != null) {
+                    @memcpy(merge_buf[0..cur_len], cur_ptr.?[0..cur_len]);
+                    @memcpy(merge_buf[cur_len..][0..next_len], next_ptr.?[0..next_len]);
                     _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
                     text_len = total;
                     lxb_dom_node_remove(next);
                     _ = lxb_dom_node_destroy(next);
                 } else {
-                    // Buffer too small — stop merging this run to avoid data loss
                     break;
                 }
                 next_node = after;
@@ -1211,7 +1240,7 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
         if (la != null and lb != null) {
             if (!std.mem.eql(u8, la.?[0..la_len], lb.?[0..lb_len])) return false;
         }
-        // Compare attributes: count and values
+        // Compare attributes: count and values (case-sensitive, namespace-aware)
         {
             var count_a: usize = 0;
             var count_b: usize = 0;
@@ -1226,21 +1255,36 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
                 ab = lxb_dom_element_next_attribute_noi(b_attr);
             }
             if (count_a != count_b) return false;
-            // Verify each attribute of a exists with same value in b
+            // Verify each attribute of a exists with same qualified name and value in b
             aa = lxb_dom_element_first_attribute_noi(ea);
             while (aa) |a_attr| {
                 var an_len: usize = 0;
                 const an = lxb_dom_attr_qualified_name(a_attr, &an_len);
                 var av_len: usize = 0;
                 const av = lxb_dom_attr_value_noi(a_attr, &av_len);
-                if (an) |name| {
-                    var bv_len: usize = 0;
-                    const bv = lxb_dom_element_get_attribute(eb, name, an_len, &bv_len);
-                    if (bv == null) return false;
-                    if (av_len != bv_len) return false;
-                    if (av != null and bv != null) {
-                        if (!std.mem.eql(u8, av.?[0..av_len], bv.?[0..bv_len])) return false;
+                if (an) |a_name| {
+                    const a_qname = a_name[0..an_len];
+                    // Find matching attribute in b by exact (case-sensitive) qualified name
+                    var found = false;
+                    var bb: ?*anyopaque = lxb_dom_element_first_attribute_noi(eb);
+                    while (bb) |b_attr| {
+                        var bn_len: usize = 0;
+                        if (lxb_dom_attr_qualified_name(b_attr, &bn_len)) |b_name| {
+                            if (std.mem.eql(u8, a_qname, b_name[0..bn_len])) {
+                                // Name matches, compare values
+                                var bv_len: usize = 0;
+                                const bv = lxb_dom_attr_value_noi(b_attr, &bv_len);
+                                if (av_len != bv_len) return false;
+                                if (av != null and bv != null) {
+                                    if (!std.mem.eql(u8, av.?[0..av_len], bv.?[0..bv_len])) return false;
+                                }
+                                found = true;
+                                break;
+                            }
+                        }
+                        bb = lxb_dom_element_next_attribute_noi(b_attr);
                     }
+                    if (!found) return false;
                 }
                 aa = lxb_dom_element_next_attribute_noi(a_attr);
             }

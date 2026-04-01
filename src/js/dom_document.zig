@@ -172,7 +172,7 @@ fn setOwnerDocumentRecursive(ctx: *qjs.JSContext, node: qjs.JSValue, doc: qjs.JS
 /// Check if a byte is an ASCII character that is INVALID in XML Name start position.
 /// Per XML spec + browser implementations: digits, hyphen, dot, and special ASCII symbols
 /// at the start are invalid. Letters, underscore, colon, and non-ASCII are valid.
-fn isInvalidNameStartChar(ch: u8) bool {
+pub fn isInvalidNameStartChar(ch: u8) bool {
     if (ch >= 0x80) return false; // non-ASCII: valid (UTF-8 continuation or lead)
     if (std.ascii.isAlphabetic(ch)) return false;
     if (ch == '_' or ch == ':') return false;
@@ -182,7 +182,7 @@ fn isInvalidNameStartChar(ch: u8) bool {
 /// Check if a byte is an ASCII character that is INVALID in XML Name continuation position.
 /// Most ASCII special chars are allowed in names by browsers (lenient parsing),
 /// except for a specific set of clearly invalid characters.
-fn isInvalidNameChar(ch: u8) bool {
+pub fn isInvalidNameChar(ch: u8) bool {
     if (ch >= 0x80) return false; // non-ASCII: valid
     if (std.ascii.isAlphanumeric(ch)) return false;
     if (ch == '_' or ch == ':' or ch == '-' or ch == '.') return false;
@@ -197,7 +197,7 @@ fn isInvalidNameChar(ch: u8) bool {
 }
 
 /// Validate an XML Name production (lenient, matching browser behavior).
-fn isValidXmlName(name: []const u8) bool {
+pub fn isValidXmlName(name: []const u8) bool {
     if (name.len == 0) return false;
     if (isInvalidNameStartChar(name[0])) return false;
     for (name[1..]) |ch| {
@@ -208,7 +208,7 @@ fn isValidXmlName(name: []const u8) bool {
 
 /// Validate an XML QName: prefix:localName with proper NCName constraints.
 /// Used for createElementNS, createAttributeNS namespace validation.
-fn isValidXmlQName(name: []const u8) bool {
+pub fn isValidXmlQName(name: []const u8) bool {
     if (name.len == 0) return true; // empty is handled separately
     if (!isValidXmlName(name)) return false;
     // Colon handling: colon at start or end is invalid QName
