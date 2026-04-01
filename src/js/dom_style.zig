@@ -1452,6 +1452,16 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         return qjs.JS_NewStringLen(c, "wrap", 4);
     if (eqlIgnoreCase(prop, "text-wrap-style")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "text-align-last")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "text-align-all")) return qjs.JS_NewStringLen(c, "start", 5);
+    if (eqlIgnoreCase(prop, "text-justify")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "text-autospace")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "text-spacing-trim")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "text-spacing")) return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "text-group-align")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "word-space-transform")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "hyphenate-character")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "hyphenate-limit-chars")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "hanging-punctuation")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1722,6 +1732,16 @@ pub fn windowGetComputedStyle(
         .{ "text-emphasis-color", "textEmphasisColor" },
         .{ "text-shadow", "textShadow" },
         .{ "text-align-last", "textAlignLast" },
+        .{ "text-align-all", "textAlignAll" },
+        .{ "text-justify", "textJustify" },
+        .{ "text-autospace", "textAutospace" },
+        .{ "text-spacing-trim", "textSpacingTrim" },
+        .{ "text-spacing", "textSpacing" },
+        .{ "text-group-align", "textGroupAlign" },
+        .{ "word-space-transform", "wordSpaceTransform" },
+        .{ "hyphenate-character", "hyphenateCharacter" },
+        .{ "hyphenate-limit-chars", "hyphenateLimitChars" },
+        .{ "hanging-punctuation", "hangingPunctuation" },
         .{ "white-space-collapse", "whiteSpaceCollapse" },
         .{ "text-wrap", "textWrap" },
         .{ "text-wrap-mode", "textWrapMode" },
@@ -2034,7 +2054,10 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "text-decoration-line", "text-decoration-style","text-decoration-color",
         "text-underline-position","text-underline-offset","text-emphasis-style",  "text-emphasis-color",
         "text-shadow",          "white-space-collapse",  "text-wrap",             "text-wrap-mode",      "text-wrap-style",
-        "text-indent",          "tab-size",             "text-align-last",
+        "text-indent",          "tab-size",             "text-align-last",      "text-align-all",
+        "text-justify",         "text-autospace",       "text-spacing-trim",    "text-spacing",
+        "text-group-align",     "word-space-transform",
+        "hyphenate-character",  "hyphenate-limit-chars","hanging-punctuation",
         // CSS positioning/layout properties
         "contain",              "content-visibility",   "container-type",         "container-name",
         "aspect-ratio",         "object-fit",           "object-position",
