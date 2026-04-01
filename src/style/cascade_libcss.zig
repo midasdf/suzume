@@ -940,7 +940,7 @@ fn parseRgbFunc(text: []const u8) ?u32 {
     while (iter.next()) |tok| {
         if (count >= 3) break;
         const val = std.fmt.parseFloat(f32, tok) catch return null;
-        nums[count] = @intFromFloat(std.math.clamp(val, 0, 255));
+        nums[count] = @intFromFloat(@round(std.math.clamp(val, 0, 255)));
         count += 1;
     }
     if (count < 3) return null;
@@ -962,11 +962,11 @@ fn parseRgbaFunc(text: []const u8) ?u32 {
         count += 1;
     }
     if (count < 4) return null;
-    const r: u8 = @intFromFloat(std.math.clamp(nums[0], 0, 255));
-    const g: u8 = @intFromFloat(std.math.clamp(nums[1], 0, 255));
-    const b: u8 = @intFromFloat(std.math.clamp(nums[2], 0, 255));
+    const r: u8 = @intFromFloat(@round(std.math.clamp(nums[0], 0, 255)));
+    const g: u8 = @intFromFloat(@round(std.math.clamp(nums[1], 0, 255)));
+    const b: u8 = @intFromFloat(@round(std.math.clamp(nums[2], 0, 255)));
     // Alpha: 0.0-1.0 range
-    const a: u8 = @intFromFloat(std.math.clamp(nums[3] * 255.0, 0, 255));
+    const a: u8 = @intFromFloat(@round(std.math.clamp(nums[3] * 255.0, 0, 255)));
     return (@as(u32, a) << 24) | (@as(u32, r) << 16) | (@as(u32, g) << 8) | @as(u32, b);
 }
 
@@ -1056,7 +1056,7 @@ fn parseHslaFunc(text: []const u8) ?u32 {
     const rgb = hslToRgb(vals[0], vals[1], vals[2]);
     // Alpha: if > 1.0 treat as 0-255, otherwise 0.0-1.0
     const alpha_f = if (vals[3] <= 1.0) vals[3] * 255.0 else vals[3];
-    const a: u8 = @intFromFloat(std.math.clamp(alpha_f, 0.0, 255.0));
+    const a: u8 = @intFromFloat(@round(std.math.clamp(alpha_f, 0.0, 255.0)));
     return (@as(u32, a) << 24) | (@as(u32, rgb.r) << 16) | (@as(u32, rgb.g) << 8) | @as(u32, rgb.b);
 }
 

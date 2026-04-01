@@ -110,9 +110,13 @@ pub fn getViewportForCtx(ctx: *qjs.JSContext) struct { w: f32, h: f32 } {
     return .{ .w = g_viewport_width, .h = g_viewport_height };
 }
 
+/// DOM version counter for live collection cache invalidation.
+pub var dom_version: u32 = 0;
+
 pub fn setDomDirty() void {
     dom_dirty = true;
     mutation_observers_pending = true;
+    dom_version +%= 1;
 }
 
 /// Check if an element is connected to the document (has an ancestor chain reaching the document node).
@@ -554,6 +558,17 @@ pub fn getElement(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_element_t
     const node = getNode(ctx, val) orelse return null;
     if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
     return @ptrCast(node);
+}
+
+/// Native getter for DOM version counter (used by live HTMLCollection caching)
+fn nativeGetDomVersion(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    _ = ctx;
+    return qjs.JS_NewInt32(null, @intCast(dom_version));
 }
 
 pub fn jsStringToSlice(ctx: *qjs.JSContext, val: qjs.JSValue) ?struct { ptr: [*]const u8, len: usize } {
@@ -2218,8 +2233,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  delete globalThis.__np;
             \\  function _toNode(a){return(a&&typeof a==='object'&&a.nodeType)?a:document.createTextNode(String(a));}
             \\  NP.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
-            \\  NP.prepend=NP.prepend||function(){var f=this.firstChild;for(var i=0;i<arguments.length;i++){var a=_toNode(arguments[i]);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
-            \\  NP.append=NP.append||function(){for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
+            \\  NP.prepend=function(){var f=this.firstChild;for(var i=0;i<arguments.length;i++){var a=_toNode(arguments[i]);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
+            \\  NP.append=function(){for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, ns_js, ns_js.len, "<ns>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -2660,7 +2675,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\(function(){
             \\  var p={};
             \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
-            \\  p.namedItem=function(n){for(var i=0;i<this.length;i++){if(this[i].id===n||this[i].name===n)return this[i];}return null;};
+            \\  p.namedItem=function(n){for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
             \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
             \\  return p;
             \\})()
@@ -3005,10 +3020,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\P.replaceData=function(o,c,d){if(arguments.length<3)throw new TypeError("Failed to execute 'replaceData': 3 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');this.data=s.slice(0,o)+d+s.slice(o+c);};
             \\P.substringData=function(o,c){if(arguments.length<2)throw new TypeError("Failed to execute 'substringData': 2 arguments required");var s=this.data;o=o>>>0;c=c>>>0;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');return s.slice(o,o+c);};
             \\delete P.__nativeGetData;delete P.__nativeSetData;
-            \\function noChild(m){return function(){throw new DOMException("Failed to execute '"+m+"' on 'Node': This node type does not support this method.",'HierarchyRequestError');};}
+            \\function noChild(m){return function(n){if(n===null||n===void 0||(typeof n!=='object'&&typeof n!=='function')||n.nodeType===void 0)throw new TypeError("Failed to execute '"+m+"': parameter 1 is not of type 'Node'.");throw new DOMException("Failed to execute '"+m+"' on 'Node': This node type does not support this method.",'HierarchyRequestError');};}
             \\P.splitText=function(o){if(this.nodeType!==3)throw new DOMException("Not a Text node",'InvalidNodeTypeError');o=o>>>0;var s=this.data;if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');var newData=s.slice(o);this.data=s.slice(0,o);var n=document.createTextNode(newData);if(this.parentNode)this.parentNode.insertBefore(n,this.nextSibling);return n;};
-            \\P.appendChild=noChild('appendChild');P.insertBefore=noChild('insertBefore');
-            \\P.removeChild=noChild('removeChild');P.replaceChild=noChild('replaceChild');
+            \\P.appendChild=noChild('appendChild');P.insertBefore=function(n){if(arguments.length<2)throw new TypeError("Failed to execute 'insertBefore': 2 arguments required.");noChild('insertBefore')(n);};
+            \\P.removeChild=function(n){if(n===null||n===void 0||(typeof n!=='object'&&typeof n!=='function')||n.nodeType===void 0)throw new TypeError("Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");throw new DOMException("The node to be removed is not a child of this node.",'NotFoundError');};P.replaceChild=noChild('replaceChild');
             \\P.replaceChildren=noChild('replaceChildren');P.prepend=noChild('prepend');P.append=noChild('append');
             \\})(__tp);delete __tp;
         ;
@@ -3360,7 +3375,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // document.implementation
     {
         const impl = qjs.JS_NewObject(ctx);
-        // createHTMLDocument: returns a minimal standalone document-like object
+        // createHTMLDocument: returns a standalone document with proper DOM operations
         const create_html_doc_js =
             \\(function(title) {
             \\  var d = document.createElement('html');
@@ -3373,33 +3388,92 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  d.appendChild(head);
             \\  d.appendChild(body);
-            \\  var dt={nodeType:10,name:'html',nodeName:'html',publicId:'',systemId:'',ownerDocument:null,parentNode:null,nextSibling:d,previousSibling:null,firstChild:null,lastChild:null,childNodes:[],nodeValue:null,textContent:null,parentElement:null,internalSubset:null};
+            \\  var dt={nodeType:10,name:'html',nodeName:'html',publicId:'',systemId:'',ownerDocument:null,parentNode:null,previousSibling:null,nextSibling:null,firstChild:null,lastChild:null,childNodes:[],nodeValue:null,textContent:null,parentElement:null,internalSubset:null,
+            \\    cloneNode:function(){return document.implementation.createDocumentType(this.name,this.publicId,this.systemId);},
+            \\    remove:function(){if(this.parentNode)this.parentNode.removeChild(this);},
+            \\    isEqualNode:function(o){if(!o||o.nodeType!==10)return false;return this.name===o.name&&this.publicId===o.publicId&&this.systemId===o.systemId;},
+            \\    isSameNode:function(o){return this===o;},
+            \\    hasChildNodes:function(){return false;},
+            \\    contains:function(){return false;},
+            \\  };
             \\  if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);
+            \\  var _ch=[dt,d];
+            \\  function _nt(n){return n?(n.nodeType||0):0;}
+            \\  function _elemCh(ex){for(var i=0;i<_ch.length;i++)if(_ch[i]!==ex&&_nt(_ch[i])===1)return _ch[i];return null;}
+            \\  function _dtCh(ex){for(var i=0;i<_ch.length;i++)if(_ch[i]!==ex&&_nt(_ch[i])===10)return _ch[i];return null;}
+            \\  function _dtAfter(ref){var x=_ch.indexOf(ref);for(var i=x+1;i<_ch.length;i++)if(_nt(_ch[i])===10)return true;return false;}
+            \\  function _elBefore(ref){var x=_ch.indexOf(ref);for(var i=0;i<x;i++)if(_nt(_ch[i])===1)return true;return false;}
+            \\  function _isAnc(n,t){var c=t;while(c){if(c===n)return true;c=c.parentNode;}return false;}
+            \\  function _relink(){for(var i=0;i<_ch.length;i++){_ch[i].parentNode=doc;_ch[i].previousSibling=i>0?_ch[i-1]:null;_ch[i].nextSibling=i<_ch.length-1?_ch[i+1]:null;}}
+            \\  function _preBase(node,child){
+            \\    if(_isAnc(node,doc))throw new DOMException('The new child element contains the parent.','HierarchyRequestError');
+            \\    if(child!==null&&child!==undefined&&_ch.indexOf(child)===-1)throw new DOMException('The node before which the new node is to be inserted is not a child of this node.','NotFoundError');
+            \\    var nt=_nt(node);
+            \\    if(nt!==11&&nt!==10&&nt!==1&&nt!==3&&nt!==7&&nt!==8)throw new DOMException('This node type cannot be inserted.','HierarchyRequestError');
+            \\    if(nt===3)throw new DOMException('Cannot insert Text into Document.','HierarchyRequestError');
+            \\    return nt;
+            \\  }
+            \\  function _validateIns(node,child){
+            \\    var nt=_preBase(node,child);
+            \\    if(nt===10){if(_dtCh(null))throw new DOMException('Already has doctype.','HierarchyRequestError');if(child!==null&&child!==undefined){if(_elBefore(child))throw new DOMException('Element precedes.','HierarchyRequestError');}else{if(_elemCh(null))throw new DOMException('Has element.','HierarchyRequestError');}}
+            \\    else if(nt===11){var fe=0,ft=false;var fc=node.firstChild;while(fc){if(_nt(fc)===1)fe++;if(_nt(fc)===3)ft=true;fc=fc.nextSibling;}if(fe>1||ft)throw new DOMException('Invalid DocumentFragment.','HierarchyRequestError');if(fe===1){if(_elemCh(null))throw new DOMException('Already has element.','HierarchyRequestError');if(_nt(child)===10)throw new DOMException('Child is doctype.','HierarchyRequestError');if(child!==null&&child!==undefined&&_dtAfter(child))throw new DOMException('Doctype follows.','HierarchyRequestError');}}
+            \\    else if(nt===1){if(_elemCh(null))throw new DOMException('Already has element.','HierarchyRequestError');if(_nt(child)===10)throw new DOMException('Child is doctype.','HierarchyRequestError');if(child!==null&&child!==undefined&&_dtAfter(child))throw new DOMException('Doctype follows.','HierarchyRequestError');}
+            \\  }
+            \\  function _validateRep(node,child){
+            \\    var nt=_preBase(node,child);
+            \\    if(nt===10){if(_dtCh(child))throw new DOMException('Already has doctype.','HierarchyRequestError');if(_elBefore(child))throw new DOMException('Element precedes.','HierarchyRequestError');}
+            \\    else if(nt===11){var fe=0,ft=false;var fc=node.firstChild;while(fc){if(_nt(fc)===1)fe++;if(_nt(fc)===3)ft=true;fc=fc.nextSibling;}if(fe>1||ft)throw new DOMException('Invalid DocumentFragment.','HierarchyRequestError');if(fe===1){if(_elemCh(child))throw new DOMException('Already has element.','HierarchyRequestError');if(_dtAfter(child))throw new DOMException('Doctype follows.','HierarchyRequestError');}}
+            \\    else if(nt===1){if(_elemCh(child))throw new DOMException('Already has element.','HierarchyRequestError');if(_dtAfter(child))throw new DOMException('Doctype follows.','HierarchyRequestError');}
+            \\  }
+            \\  _relink();
             \\  var doc = {
             \\    nodeType: 9, nodeName: '#document',
-            \\    documentElement: d, head: head, body: body,
-            \\    doctype: dt,
-            \\    childNodes: [dt,d], children: [d], firstChild: dt, lastChild: d,
             \\    createElement: function(t) { return document.createElement(t); },
             \\    createElementNS: function(ns, t) { return document.createElementNS ? document.createElementNS(ns, t) : document.createElement(t); },
             \\    createTextNode: function(t) { return document.createTextNode(t); },
-            \\    createComment: function(t) { var c = document.createComment ? document.createComment(t) : {nodeType:8,nodeName:'#comment',data:t,textContent:t}; return c; },
+            \\    createComment: function(t) { return document.createComment ? document.createComment(t) : {nodeType:8,nodeName:'#comment',data:t,textContent:t}; },
             \\    createDocumentFragment: function() { return document.createDocumentFragment(); },
             \\    createEvent: function(t) { return document.createEvent(t); },
-            \\    getElementById: function(id) { return d.querySelector('#'+CSS.escape(id)); },
-            \\    getElementsByTagName: function(t) { return d.getElementsByTagName(t); },
-            \\    getElementsByClassName: function(c) { return d.getElementsByClassName(c); },
-            \\    querySelector: function(s) { return d.querySelector(s); },
-            \\    querySelectorAll: function(s) { return d.querySelectorAll(s); },
-            \\    appendChild: function(n) { return d.appendChild(n); },
-            \\    removeChild: function(n) { return d.removeChild(n); },
+            \\    createProcessingInstruction: function(t,d) { return document.createProcessingInstruction(t,d); },
+            \\    getElementById: function(id) { var de=_elemCh(null); return de?de.querySelector('#'+CSS.escape(id)):null; },
+            \\    getElementsByTagName: function(t) { var de=_elemCh(null); return de?de.getElementsByTagName(t):[]; },
+            \\    getElementsByClassName: function(c) { var de=_elemCh(null); return de?de.getElementsByClassName(c):[]; },
+            \\    querySelector: function(s) { var de=_elemCh(null); return de?de.querySelector(s):null; },
+            \\    querySelectorAll: function(s) { var de=_elemCh(null); return de?de.querySelectorAll(s):[]; },
+            \\    insertBefore: function(node,child){
+            \\      if(arguments.length<2)throw new TypeError("Failed to execute 'insertBefore': 2 arguments required.");
+            \\      if(!node||(typeof node!=='object'&&typeof node!=='function')||node.nodeType===undefined)throw new TypeError("Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
+            \\      if(child!==null&&child!==undefined&&(!child||(typeof child!=='object'&&typeof child!=='function')||child.nodeType===undefined))throw new TypeError("Failed to execute 'insertBefore': parameter 2 is not of type 'Node'.");
+            \\      _validateIns(node,child);
+            \\      if(node===child)return node;
+            \\      var nodes;if(_nt(node)===11){nodes=[];var fc=node.firstChild;while(fc){nodes.push(fc);fc=fc.nextSibling;}for(var i=0;i<nodes.length;i++)node.removeChild(nodes[i]);}else{nodes=[node];if(node.parentNode){try{node.parentNode.removeChild(node);}catch(e){var xi=_ch.indexOf(node);if(xi!==-1){_ch.splice(xi,1);node.parentNode=null;}}}}
+            \\      if(child===null||child===undefined){for(var i=0;i<nodes.length;i++)_ch.push(nodes[i]);}
+            \\      else{var idx=_ch.indexOf(child);if(idx===-1)throw new DOMException('Not a child.','NotFoundError');for(var i=nodes.length-1;i>=0;i--)_ch.splice(idx,0,nodes[i]);}
+            \\      _relink();return node;
+            \\    },
+            \\    appendChild: function(node){return doc.insertBefore(node,null);},
+            \\    removeChild: function(node){
+            \\      if(!node||(typeof node!=='object'&&typeof node!=='function')||node.nodeType===undefined)throw new TypeError("Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
+            \\      var idx=_ch.indexOf(node);if(idx===-1)throw new DOMException('The node to be removed is not a child of this node.','NotFoundError');
+            \\      _ch.splice(idx,1);node.parentNode=null;node.previousSibling=null;node.nextSibling=null;_relink();return node;
+            \\    },
+            \\    replaceChild: function(node,child){
+            \\      if(!node||(typeof node!=='object'&&typeof node!=='function')||node.nodeType===undefined)throw new TypeError("parameter 1 is not of type 'Node'.");
+            \\      if(!child||(typeof child!=='object'&&typeof child!=='function')||child.nodeType===undefined)throw new TypeError("parameter 2 is not of type 'Node'.");
+            \\      var ci=_ch.indexOf(child);if(ci===-1)throw new DOMException('Not a child.','NotFoundError');
+            \\      _validateRep(node,child);
+            \\      if(node===child)return child;
+            \\      var nodes;if(_nt(node)===11){nodes=[];var fc=node.firstChild;while(fc){nodes.push(fc);fc=fc.nextSibling;}for(var i=0;i<nodes.length;i++)node.removeChild(nodes[i]);}else{nodes=[node];if(node.parentNode){try{node.parentNode.removeChild(node);}catch(e){var ni=_ch.indexOf(node);if(ni!==-1){_ch.splice(ni,1);node.parentNode=null;}}}}
+            \\      ci=_ch.indexOf(child);_ch.splice(ci,1);for(var i=0;i<nodes.length;i++)_ch.splice(ci+i,0,nodes[i]);child.parentNode=null;child.previousSibling=null;child.nextSibling=null;_relink();return child;
+            \\    },
             \\    importNode: function(n, deep) { return n.cloneNode(deep); },
             \\    adoptNode: function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);function setDoc(nd,d){nd.ownerDocument=d;if(nd.childNodes)for(var i=0;i<nd.childNodes.length;i++)setDoc(nd.childNodes[i],d);}setDoc(n,doc);n.parentNode=null;return n; },
-            \\    get title(){var t=head.querySelector('title');if(!t)return'';var s=t.textContent;return s.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');},set title(v){var t=head.querySelector('title');if(!t){t=document.createElement('title');head.appendChild(t);}t.textContent=String(v);},
+            \\    get title(){var de=_elemCh(null);if(!de)return'';var h=de.querySelector('head');if(!h)return'';var t=h.querySelector('title');if(!t)return'';var s=t.textContent;return s.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');},
+            \\    set title(v){var de=_elemCh(null);if(!de)return;var h=de.querySelector('head');if(!h)return;var t=h.querySelector('title');if(!t){t=document.createElement('title');h.appendChild(t);}t.textContent=String(v);},
             \\    implementation: document.implementation,
-            \\    addEventListener: function(t,f,o) { d.addEventListener(t,f,o); },
-            \\    removeEventListener: function(t,f,o) { d.removeEventListener(t,f,o); },
-            \\    dispatchEvent: function(e) { return d.dispatchEvent(e); },
+            \\    addEventListener: function(t,f,o) { var de=_elemCh(null);if(de)de.addEventListener(t,f,o); },
+            \\    removeEventListener: function(t,f,o) { var de=_elemCh(null);if(de)de.removeEventListener(t,f,o); },
+            \\    dispatchEvent: function(e) { var de=_elemCh(null);return de?de.dispatchEvent(e):false; },
             \\    createAttribute: function(n) { return document.createAttribute(n); },
             \\    createAttributeNS: function(ns,qn) { return document.createAttributeNS(ns,qn); },
             \\    createTreeWalker: function(r,w,f) { return document.createTreeWalker(r,w,f); },
@@ -3419,12 +3493,30 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    visibilityState: 'hidden',
             \\    readyState: 'complete',
             \\    hasFocus: function() { return false; },
+            \\    hasChildNodes: function() { return _ch.length>0; },
+            \\    contains: function(n) { if(n===doc)return true;for(var i=0;i<_ch.length;i++){if(_ch[i]===n)return true;if(_ch[i].contains&&_ch[i].contains(n))return true;}return false; },
             \\    cloneNode: function(deep) {
             \\      var nd = document.implementation.createHTMLDocument(title);
-            \\      if(deep && d.innerHTML) nd.documentElement.innerHTML = d.innerHTML;
+            \\      if(deep){var de=_elemCh(null);if(de&&de.innerHTML)nd.documentElement.innerHTML=de.innerHTML;}
             \\      return nd;
             \\    },
+            \\    compareDocumentPosition: function(other){if(other===doc)return 0;for(var i=0;i<_ch.length;i++){if(_ch[i]===other)return 10;if(_ch[i].contains&&_ch[i].contains(other))return 20;}return 35;},
+            \\    isEqualNode: function(other){if(!other||other.nodeType!==9)return false;if(_ch.length!==(other.childNodes?other.childNodes.length:0))return false;return true;},
+            \\    normalize: function(){for(var i=0;i<_ch.length;i++)if(_ch[i].normalize)_ch[i].normalize();},
+            \\    prepend: function(){var f=_ch[0]||null;for(var i=arguments.length-1;i>=0;i--){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.insertBefore(n,f);f=n;}},
+            \\    append: function(){for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
+            \\    replaceChildren: function(){while(_ch.length>0)doc.removeChild(_ch[0]);for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
+            \\    textContent: null,
             \\  };
+            \\  Object.defineProperty(doc,'childNodes',{get:function(){return Array.prototype.slice.call(_ch);},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'firstChild',{get:function(){return _ch.length>0?_ch[0]:null;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'lastChild',{get:function(){return _ch.length>0?_ch[_ch.length-1]:null;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'documentElement',{get:function(){return _elemCh(null);},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'doctype',{get:function(){return _dtCh(null);},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'children',{get:function(){return _ch.filter(function(n){return _nt(n)===1;});},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'childElementCount',{get:function(){var c=0;for(var i=0;i<_ch.length;i++)if(_nt(_ch[i])===1)c++;return c;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'head',{get:function(){var de=_elemCh(null);return de?de.querySelector('head'):null;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'body',{get:function(){var de=_elemCh(null);return de?de.querySelector('body'):null;},configurable:true,enumerable:true});
             \\  if(typeof Document!=='undefined')Object.setPrototypeOf(doc,Document.prototype);
             \\  doc.implementation={
             \\    createDocumentType:function(n,p,s){var dt=document.implementation.createDocumentType(n,p,s);dt.ownerDocument=doc;return dt;},
@@ -3432,6 +3524,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    createDocument:function(ns,qn,dt){return document.implementation.createDocument(ns,qn,dt);},
             \\    hasFeature:function(){return true;}
             \\  };
+            \\  dt.ownerDocument=doc;
             \\  return doc;
             \\})
         ;
@@ -3479,6 +3572,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Cache document node so wrapNode(doc_lxb_node) returns doc_obj (identity preservation)
     cacheDocumentNode(ctx, document_ptr, doc_obj);
 
+    // Cache doctype lexbor node → document.doctype JS object for identity preservation
+    // This ensures document.doctype === document.childNodes[N]
+    {
+        const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(document_ptr));
+        var dt_child: ?*lxb.lxb_dom_node_t = doc_node.first_child;
+        while (dt_child) |ch| {
+            if (ch.type == @as(u32, 10)) { // LXB_DOM_NODE_TYPE_DOCUMENT_TYPE
+                const dt_obj = qjs.JS_GetPropertyStr(ctx, doc_obj, "doctype");
+                if (!quickjs.JS_IsNull(dt_obj) and !quickjs.JS_IsUndefined(dt_obj)) {
+                    initNodeCache();
+                    node_cache.?.put(@intFromPtr(ch), qjs.JS_DupValue(ctx, dt_obj)) catch {};
+                    _ = qjs.JS_SetPropertyStr(ctx, dt_obj, "parentNode", qjs.JS_DupValue(ctx, doc_obj));
+                }
+                qjs.JS_FreeValue(ctx, dt_obj);
+                break;
+            }
+            dt_child = ch.next;
+        }
+    }
+
     // DocumentFragment constructor: new DocumentFragment() creates a real fragment via document
     {
         const df_ctor_js =
@@ -3494,8 +3607,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
 
     // Patch document.doctype: set ownerDocument and no-op textContent/nodeValue
-    // Note: parentNode is NOT set to document here because the JS doctype object is not
-    // in the lexbor tree, which would break compareDocumentPosition for native nodes.
+    // parentNode is set above during doctype node caching.
     {
         const patch_js =
             \\(function(){
@@ -3779,6 +3891,86 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         const fix_r = qjs.JS_Eval(ctx, fix_dt_js, fix_dt_js.len, "<fix-dt>", qjs.JS_EVAL_TYPE_GLOBAL);
         qjs.JS_FreeValue(ctx, fix_r);
+    }
+
+    // __domVer() — native getter for DOM version counter (for live collection caching)
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__domVer", qjs.JS_NewCFunction(ctx, &nativeGetDomVersion, "__domVer", 0));
+
+    // _rawByTag — native getElementsByTagName that returns a plain array (for live collection query)
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__rawDocByTag", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "__rawDocByTag", 1));
+
+    // Live HTMLCollection Proxy factory + getElementsByTagName override
+    {
+        const live_coll_js =
+            \\(function(){
+            \\  var nativeElemByTag=Element.prototype.getElementsByTagName;
+            \\  function createLiveHTMLColl(queryFn){
+            \\    var expandos=Object.create(null),cache=null,cacheVer=-1;
+            \\    function q(){var v=__domVer();if(cacheVer!==v){var r=queryFn();cache=[];for(var i=0;i<r.length;i++)cache.push(r[i]);cacheVer=v;}return cache;}
+            \\    function ni(name){var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
+            \\    var t=Object.create(HTMLCollection.prototype);
+            \\    return new Proxy(t,{
+            \\      get:function(t,p){
+            \\        if(p in expandos)return expandos[p];
+            \\        if(p==='length')return q().length;
+            \\        if(typeof p==='string'&&/^\d+$/.test(p)){var items=q(),idx=+p;return idx<items.length?items[idx]:void 0;}
+            \\        if(p===Symbol.iterator){var items=q();return function(){var i=0,a=items;return{next:function(){return i<a.length?{value:a[i++],done:false}:{done:true};}};}}
+            \\        if(p===Symbol.toStringTag)return'HTMLCollection';
+            \\        if(typeof p==='string'&&p!=='item'&&p!=='namedItem'&&p!=='constructor'&&p!=='toString'&&p!=='toLocaleString'&&p!=='valueOf'&&p!=='hasOwnProperty'&&p!=='isPrototypeOf'&&p!=='propertyIsEnumerable'){var f=ni(p);if(f)return f;}
+            \\        return t[p];
+            \\      },
+            \\      set:function(t,p,v){if(typeof p==='string'&&/^\d+$/.test(p))return false;expandos[p]=v;return true;},
+            \\      has:function(t,p){if(p in expandos)return true;if(p==='length'||p==='item'||p==='namedItem')return true;if(typeof p==='string'){if(/^\d+$/.test(p))return+p<q().length;if(ni(p))return true;}return p in t;},
+            \\      ownKeys:function(){var items=q(),keys=[],seen={};for(var i=0;i<items.length;i++)keys.push(String(i));for(var i=0;i<items.length;i++){var el=items[i];var id=el.getAttribute?el.getAttribute('id'):null;if(id&&!seen[id]){keys.push(id);seen[id]=1;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=el.getAttribute?el.getAttribute('name'):null;if(nm&&!seen[nm]){keys.push(nm);seen[nm]=1;}}}return keys;},
+            \\      getOwnPropertyDescriptor:function(t,p){if(typeof p==='string'){if(/^\d+$/.test(p)){var items=q(),idx=+p;if(idx<items.length)return{value:items[idx],writable:false,enumerable:true,configurable:true};return void 0;}var f=ni(p);if(f)return{value:f,writable:false,enumerable:false,configurable:true};}return void 0;}
+            \\    });
+            \\  }
+            \\  function asciiLower(s){return s.replace(/[A-Z]/g,function(c){return String.fromCharCode(c.charCodeAt(0)+32);});}
+            \\  function matchQName(el,tag,lcTag){var qn;var ol=el.__origLocal||el.localName;var pfx=el.prefix;if(pfx&&pfx!==null){qn=pfx+':'+ol;}else{qn=ol;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){return qn===lcTag;}else{return qn===tag;}}
+            \\  function filteredQuery(rawFn,tag,root){if(tag==='*')return rawFn();var lcTag=asciiLower(tag);var hasColon=tag.indexOf(':')>=0;if(hasColon){var all=root.querySelectorAll?root.querySelectorAll('*'):[];var out=[];for(var i=0;i<all.length;i++){if(matchQName(all[i],tag,lcTag))out.push(all[i]);}return out;}var raw=rawFn();var out=[];for(var i=0;i<raw.length;i++){if(matchQName(raw[i],tag,lcTag))out.push(raw[i]);}return out;}
+            \\  document.getElementsByTagName=function(tag){return createLiveHTMLColl(function(){return filteredQuery(function(){return __rawDocByTag(tag==='*'?'*':asciiLower(tag));},tag,document.documentElement||document);});};
+            \\  Element.prototype.getElementsByTagName=function(tag){var self=this;return createLiveHTMLColl(function(){return filteredQuery(function(){return nativeElemByTag.call(self,tag==='*'?'*':asciiLower(tag));},tag,self);});};
+            \\})()
+        ;
+        const live_r = qjs.JS_Eval(ctx, live_coll_js, live_coll_js.len, "<live-coll>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, live_r);
+    }
+
+    // Live NodeList for childNodes — cached per-node, refreshes on DOM mutation
+    {
+        const live_cn_js =
+            \\(function(){
+            \\  var _cnCache=new WeakMap();
+            \\  var _cnDesc=Object.getOwnPropertyDescriptor(Node.prototype,'childNodes');
+            \\  if(!_cnDesc||!_cnDesc.get)return;
+            \\  var _nativeCN=_cnDesc.get;
+            \\  function _createLiveNL(queryFn){
+            \\    var arr=[],cacheVer=-1;
+            \\    function refresh(){var v=__domVer();if(cacheVer!==v){var r=queryFn();arr.length=0;for(var i=0;i<r.length;i++)arr[i]=r[i];arr.length=r.length;cacheVer=v;}}
+            \\    var t=Object.create(NodeList.prototype);
+            \\    return new Proxy(t,{
+            \\      get:function(t,p){
+            \\        if(p==='length'){refresh();return arr.length;}
+            \\        if(typeof p==='string'&&/^\d+$/.test(p)){refresh();var i=+p;return i<arr.length?arr[i]:void 0;}
+            \\        if(p==='item')return function(i){refresh();return i>=0&&i<arr.length?arr[i]:null;};
+            \\        if(p===Symbol.iterator)return Array.prototype[Symbol.iterator];
+            \\        if(p==='keys')return Array.prototype.keys;
+            \\        if(p==='values')return Array.prototype.values||Array.prototype[Symbol.iterator];
+            \\        if(p==='entries')return Array.prototype.entries;
+            \\        if(p==='forEach')return Array.prototype.forEach;
+            \\        return t[p];
+            \\      },
+            \\      set:function(){return false;},
+            \\      has:function(t,p){if(p==='length'||p==='item')return true;if(typeof p==='string'&&/^\d+$/.test(p)){refresh();return+p<arr.length;}return p in t;},
+            \\      ownKeys:function(){refresh();var keys=[];for(var i=0;i<arr.length;i++)keys.push(String(i));keys.push('length');return keys;},
+            \\      getOwnPropertyDescriptor:function(t,p){if(p==='length'){refresh();return{value:arr.length,writable:false,enumerable:false,configurable:true};}if(typeof p==='string'&&/^\d+$/.test(p)){refresh();var i=+p;if(i<arr.length)return{value:arr[i],writable:false,enumerable:true,configurable:true};}return Object.getOwnPropertyDescriptor(t,p);}
+            \\    });
+            \\  }
+            \\  Object.defineProperty(Node.prototype,'childNodes',{get:function(){var c=_cnCache.get(this);if(c)return c;var self=this;c=_createLiveNL(function(){return _nativeCN.call(self);});_cnCache.set(this,c);return c;},configurable:true,enumerable:true});
+            \\})()
+        ;
+        const cn_r = qjs.JS_Eval(ctx, live_cn_js, live_cn_js.len, "<live-cn>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, cn_r);
     }
 
     qjs.JS_FreeValue(ctx, global);

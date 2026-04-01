@@ -208,20 +208,23 @@ pub fn elementSetTextContent(
         return quickjs.JS_UNDEFINED();
     }
     const s = api.jsStringToSlice(c, args[0]) orelse {
-        _ = lxb_dom_node_text_content_set(node, "", 0);
+        while (node.first_child) |child| {
+            lxb_dom_node_remove(child);
+        }
         events.recordMutation(node, "childList", null, null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
-    // DOM spec: empty string → remove all children (no text node)
-    if (s.len == 0) {
-        while (node.first_child) |child| {
-            lxb_dom_node_remove(child);
-        }
-    } else {
-        // Use Lexbor for non-empty strings (handles internal cleanup)
-        _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    // DOM spec: 1. Remove all children (detach, not destroy — preserves subtree)
+    while (node.first_child) |child| {
+        lxb_dom_node_remove(child);
+    }
+    // DOM spec: 2. If value is not empty, insert a new Text node
+    if (s.len > 0) {
+        const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
+        const text_node = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
+        lxb_dom_node_insert_child(node, text_node);
     }
     events.recordMutation(node, "childList", null, null, null);
     api.setDomDirty();
@@ -434,7 +437,35 @@ pub fn elementAppendChild(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
-    const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    // Get parent — may be lexbor-backed or JS-level (e.g. DocumentType)
+    const parent = api.getNode(c, this_val);
+    if (parent == null) {
+        // JS-level parent — check if it's a Node at all
+        const pnt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+        defer qjs.JS_FreeValue(c, pnt);
+        if (pnt.tag == qjs.JS_TAG_UNDEFINED) return quickjs.JS_UNDEFINED();
+        var pt: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &pt, pnt);
+
+        // WebIDL: TypeError for null/non-Node argument (before DOM validation)
+        if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
+        const cnt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, cnt);
+        if (cnt.tag == qjs.JS_TAG_UNDEFINED)
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
+
+        // DOM spec step 1: parent must be Document(9), DocumentFragment(11), or Element(1)
+        if (pt != 1 and pt != 9 and pt != 11)
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+
+        // JS-level container parent — delegate to JS manipulation
+        return appendJsNode(c, this_val, args[0]);
+    }
+
+    // Lexbor-backed parent
+    // WebIDL: TypeError for null/non-Node argument
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
     const child = api.getNode(c, args[0]) orelse {
@@ -443,19 +474,30 @@ pub fn elementAppendChild(
         defer qjs.JS_FreeValue(c, nt);
         if (nt.tag == qjs.JS_TAG_UNDEFINED)
             return qjs.JS_ThrowTypeError(c, "Failed to execute 'appendChild': parameter 1 is not of type 'Node'.");
+        // DOM spec step 1: parent must be able to have children
+        if (!canHaveChildren(parent.?))
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
         // JS-level node (PI, etc.) — delegate to JS parentNode/childNodes manipulation
         return appendJsNode(c, this_val, args[0]);
     };
     // DOM spec step 1: parent must be able to have children
-    if (!canHaveChildren(parent))
+    if (!canHaveChildren(parent.?))
         return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
     // DOM spec step 2: If node is a host-including inclusive ancestor of parent, throw
-    if (isAncestorOrSelf(child, parent))
+    if (isAncestorOrSelf(child, parent.?))
         return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
+    // DOM spec step 4: node must be insertable type
+    if (!isInsertableNodeType(child))
+        return api.throwDOMException(c, "HierarchyRequestError", "This node type cannot be inserted.");
+    // DOM spec step 5: Text node in Document parent, or DocType in non-Document parent
+    if (parent.?.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and child.type == lxb.LXB_DOM_NODE_TYPE_TEXT)
+        return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
+    if (child.type == @as(u32, 10) and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
+        return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
     // DOM spec: remove from old parent first
     if (child.parent != null) lxb_dom_node_remove(child);
-    lxb_dom_node_insert_child(parent, child);
-    events.recordMutation(parent, "childList", child, null, null);
+    lxb_dom_node_insert_child(parent.?, child);
+    events.recordMutation(parent.?, "childList", child, null, null);
     api.setDomDirty();
     // Dynamic script execution: if a <script> is appended, fetch and execute it
     api.maybeExecuteDynamicScriptPublic(c, child, args[0]);
@@ -505,20 +547,67 @@ pub fn elementInsertBefore(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': 2 arguments required.");
     const args = argv orelse return quickjs.JS_UNDEFINED();
-    const parent = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    // Get parent — may be lexbor-backed or JS-level
+    const parent = api.getNode(c, this_val);
+    if (parent == null) {
+        // JS-level parent (DocumentType, PI, etc.) — check nodeType
+        const pnt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+        defer qjs.JS_FreeValue(c, pnt);
+        if (pnt.tag == qjs.JS_TAG_UNDEFINED) return quickjs.JS_UNDEFINED();
+        var pt: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &pt, pnt);
+
+        // WebIDL: TypeError if first arg is not a Node
+        if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
+        const cnt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, cnt);
+        if (cnt.tag == qjs.JS_TAG_UNDEFINED)
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
+
+        // DOM spec step 1: parent must be Document(9), DocumentFragment(11), or Element(1)
+        if (pt != 1 and pt != 9 and pt != 11)
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+
+        // Step 3: if child is given, verify it's a child of this JS-level parent
+        if (!quickjs.JS_IsNull(args[1]) and !quickjs.JS_IsUndefined(args[1])) {
+            const ref_parent = qjs.JS_GetPropertyStr(c, args[1], "parentNode");
+            defer qjs.JS_FreeValue(c, ref_parent);
+            if (ref_parent.tag != this_val.tag or ref_parent.u.ptr != this_val.u.ptr)
+                return api.throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
+        }
+
+        // JS-level container parent — delegate
+        return appendJsNode(c, this_val, args[0]);
+    }
+
+    // Lexbor-backed parent
     // DOM spec: TypeError if first arg is not a Node
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
-    const new_node = api.getNode(c, args[0]) orelse
-        return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
+
+    // Get node — may be lexbor-backed or JS-level
+    const new_node_opt = api.getNode(c, args[0]);
+    const new_node_type: i32 = if (new_node_opt) |n| @as(i32, @intCast(n.type)) else blk: {
+        const nt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, nt);
+        if (nt.tag == qjs.JS_TAG_UNDEFINED)
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'insertBefore': parameter 1 is not of type 'Node'.");
+        var val: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &val, nt);
+        break :blk val;
+    };
 
     // DOM spec pre-insertion validation step 1: parent must be Document, DocumentFragment, or Element
-    if (!canHaveChildren(parent))
+    if (!canHaveChildren(parent.?))
         return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
 
-    // DOM spec step 2: node must not be an ancestor of parent
-    if (isAncestorOrSelf(new_node, parent))
-        return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
+    // DOM spec step 2: node must not be an ancestor of parent (only for lexbor nodes)
+    if (new_node_opt) |nn| {
+        if (isAncestorOrSelf(nn, parent.?))
+            return api.throwDOMException(c, "HierarchyRequestError", "The new child element contains the parent.");
+    }
 
     // DOM spec step 3: if child is given, verify it's a child of parent
     if (!quickjs.JS_IsNull(args[1]) and !quickjs.JS_IsUndefined(args[1])) {
@@ -531,24 +620,53 @@ pub fn elementInsertBefore(
             }
             return api.throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
         }
-        if (ref_check.?.parent != parent)
+        if (ref_check.?.parent != parent.?)
             return api.throwDOMException(c, "NotFoundError", "The node before which the new node is to be inserted is not a child of this node.");
     }
 
     // DOM spec step 4: node must be DocumentFragment, DocumentType, Element, Text, ProcessingInstruction, or Comment
-    if (!isInsertableNodeType(new_node))
-        return api.throwDOMException(c, "HierarchyRequestError", "This node type cannot be inserted.");
+    if (new_node_opt) |nn| {
+        if (!isInsertableNodeType(nn))
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type cannot be inserted.");
+    } else {
+        // JS-level node type check
+        if (new_node_type != 1 and new_node_type != 3 and new_node_type != 7 and
+            new_node_type != 8 and new_node_type != 10 and new_node_type != 11)
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type cannot be inserted.");
+    }
 
+    // DOM spec step 5: Text in Document / DocType in non-Document
+    if (parent.?.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node_type == 3)
+        return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
+    if (new_node_type == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
+        return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+
+    // JS-level node — delegate to appendJsNode
+    if (new_node_opt == null)
+        return appendJsNode(c, this_val, args[0]);
+
+    const new_node = new_node_opt.?;
+    // DOM spec step 7: if node is child (ref), set ref to node's next sibling
+    var effective_ref: ?*lxb.lxb_dom_node_t = null;
+    var ref_is_null = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
+    if (!ref_is_null) {
+        const ref_node = api.getNode(c, args[1]).?;
+        if (ref_node == new_node) {
+            // Inserting before itself — use next sibling as reference
+            effective_ref = ref_node.next;
+            ref_is_null = (effective_ref == null);
+        } else {
+            effective_ref = ref_node;
+        }
+    }
     // Remove from old parent if needed
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
-    if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1])) {
-        lxb_dom_node_insert_child(parent, new_node);
+    if (ref_is_null) {
+        lxb_dom_node_insert_child(parent.?, new_node);
     } else {
-        const ref_node = api.getNode(c, args[1]).?;
-        lxb_dom_node_insert_before(ref_node, new_node);
+        lxb_dom_node_insert_before(effective_ref.?, new_node);
     }
-    const parent_node = api.getNode(c, this_val) orelse new_node;
-    events.recordMutation(parent_node, "childList", new_node, null, null);
+    events.recordMutation(parent.?, "childList", new_node, null, null);
     api.setDomDirty();
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
     upgradeSubtreeCustomElements(c, new_node);
@@ -564,7 +682,20 @@ pub fn elementReplaceChild(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 2) return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': 2 arguments required");
     const args = argv orelse return quickjs.JS_NULL();
-    const parent = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
+    const parent = api.getNode(c, this_val) orelse {
+        // JS-level parent — check nodeType for step 1 validation
+        if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
+        if (quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]))
+            return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 2 is not of type 'Node'.");
+        const pnt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+        defer qjs.JS_FreeValue(c, pnt);
+        var pt: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &pt, pnt);
+        if (pt != 1 and pt != 9 and pt != 11)
+            return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+        return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
+    };
     // DOM spec: TypeError if node is null
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");

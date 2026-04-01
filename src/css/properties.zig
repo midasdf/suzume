@@ -665,7 +665,7 @@ fn inverseGamma(c: f32) f32 {
 }
 
 fn clampToU8(v: f32) u8 {
-    return @intFromFloat(std.math.clamp(v, 0.0, 255.0));
+    return @intFromFloat(@round(std.math.clamp(v, 0.0, 255.0)));
 }
 
 // ── color-mix() ────────────────────────────────────────────────────
