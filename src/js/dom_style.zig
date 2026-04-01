@@ -1546,6 +1546,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "grid-auto-flow")) return qjs.JS_NewStringLen(c, "row", 3);
     if (eqlIgnoreCase(prop, "grid-template-areas")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "grid-template-columns") or eqlIgnoreCase(prop, "grid-template-rows"))
+        return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "grid-column-start") or eqlIgnoreCase(prop, "grid-column-end") or
         eqlIgnoreCase(prop, "grid-row-start") or eqlIgnoreCase(prop, "grid-row-end"))
         return qjs.JS_NewStringLen(c, "auto", 4);
@@ -1626,6 +1628,7 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "offset-anchor")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "offset-position")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "corner-shape")) return qjs.JS_NewStringLen(c, "round", 5);
+    if (eqlIgnoreCase(prop, "text-size-adjust")) return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS Logical borders
     if (eqlIgnoreCase(prop, "border-block-start-color") or eqlIgnoreCase(prop, "border-block-end-color") or
         eqlIgnoreCase(prop, "border-inline-start-color") or eqlIgnoreCase(prop, "border-inline-end-color"))
@@ -2161,6 +2164,7 @@ pub fn windowGetComputedStyle(
         .{ "offset-anchor", "offsetAnchor" },
         .{ "offset-position", "offsetPosition" },
         .{ "corner-shape", "cornerShape" },
+        .{ "text-size-adjust", "textSizeAdjust" },
         // CSS Logical borders
         .{ "border-block-start-color", "borderBlockStartColor" },
         .{ "border-block-end-color", "borderBlockEndColor" },
@@ -2183,6 +2187,8 @@ pub fn windowGetComputedStyle(
         .{ "grid-row-gap", "gridRowGap" },
         .{ "grid-column-gap", "gridColumnGap" },
         .{ "grid-gap", "gridGap" },
+        .{ "grid-template-columns", "gridTemplateColumns" },
+        .{ "grid-template-rows", "gridTemplateRows" },
         .{ "justify-items", "justifyItems" },
         .{ "justify-self", "justifySelf" },
         // CSS Will Change
@@ -2433,7 +2439,7 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         // Grid line values: auto, number, span, name
         .grid_column_start, .grid_row_start => true, // Accept any grid line value
         // Grid template areas: none or string
-        .grid_template_areas => true, // Accept any template areas value
+        .grid_template_areas, .grid_template_columns, .grid_template_rows => true,
         // Animation/Transition properties: accept any valid value
         .animation_delay, .animation_direction, .animation_duration,
         .animation_fill_mode, .animation_iteration_count, .animation_name,
@@ -2593,6 +2599,8 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "border-top-radius","border-bottom-radius","border-left-radius","border-right-radius",
         "border-block-start-radius","border-block-end-radius","border-inline-start-radius","border-inline-end-radius",
         "corner-shape",        "corners",
+        // CSS Size Adjust
+        "text-size-adjust",
         // CSS Overflow
         "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
         "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
