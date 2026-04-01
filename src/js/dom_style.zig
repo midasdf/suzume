@@ -729,6 +729,28 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // overflow: normalize two-value syntax
+    if (eqlIgnoreCase(prop, "overflow") or eqlIgnoreCase(prop, "overflow-x") or eqlIgnoreCase(prop, "overflow-y")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (std.mem.indexOf(u8, tv, " ")) |sp| {
+            const first = std.mem.trim(u8, tv[0..sp], " ");
+            const second = std.mem.trim(u8, tv[sp + 1 ..], " ");
+            // Same value → single value
+            if (eqlIgnoreCase(first, second)) return qjs.JS_NewStringLen(c, first.ptr, first.len);
+            // visible paired with clip: keep both as-is
+            // visible paired with other: visible → auto
+            if (eqlIgnoreCase(second, "visible") and !eqlIgnoreCase(first, "clip")) {
+                var obuf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&obuf, "{s} auto", .{first}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            }
+            if (eqlIgnoreCase(first, "visible") and !eqlIgnoreCase(second, "clip")) {
+                var obuf: [32]u8 = undefined;
+                const s = std.fmt.bufPrint(&obuf, "auto {s}", .{second}) catch return qjs.JS_NewStringLen(c, val.ptr, val.len);
+                return qjs.JS_NewStringLen(c, s.ptr, s.len);
+            }
+        }
+    }
     // Duration properties: ms → s conversion
     if (eqlIgnoreCase(prop, "animation-duration") or eqlIgnoreCase(prop, "animation-delay") or
         eqlIgnoreCase(prop, "transition-duration") or eqlIgnoreCase(prop, "transition-delay"))
