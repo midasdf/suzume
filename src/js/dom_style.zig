@@ -3975,7 +3975,7 @@ pub fn isValidFontSize(val: []const u8) bool {
 pub fn isValidFontWeight(val: []const u8) bool {
     if (eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "bold") or
         eqlIgnoreCase(val, "bolder") or eqlIgnoreCase(val, "lighter")) return true;
-    const n = std.fmt.parseInt(i32, val, 10) catch return false;
+    const n = std.fmt.parseFloat(f32, val) catch return false;
     return n >= 1 and n <= 1000;
 }
 
