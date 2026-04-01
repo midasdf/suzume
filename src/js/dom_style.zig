@@ -3746,7 +3746,16 @@ pub fn isValidBorderWidth(val: []const u8) bool {
 
 pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
-    // Named colors — use parseColor which handles them
+    // CSS system colors
+    const system_colors = [_][]const u8{
+        "ActiveText", "ButtonBorder", "ButtonFace", "ButtonText", "Canvas",
+        "CanvasText", "Field", "FieldText", "GrayText", "Highlight",
+        "HighlightText", "LinkText", "Mark", "MarkText", "SelectedItem",
+        "SelectedItemText", "AccentColor", "AccentColorText", "VisitedText",
+    };
+    for (system_colors) |sc| {
+        if (eqlIgnoreCase(val, sc)) return true;
+    }
     return false;
 }
 
