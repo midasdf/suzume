@@ -711,6 +711,14 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
     if ((eqlIgnoreCase(prop, "word-spacing") or eqlIgnoreCase(prop, "letter-spacing")) and
         eqlIgnoreCase(std.mem.trim(u8, val, " \t"), "normal"))
         return qjs.JS_NewStringLen(c, "0px", 3);
+    // text-indent: percentages should be preserved in computed value
+    if (eqlIgnoreCase(prop, "text-indent")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (tv.len > 0 and tv[tv.len - 1] == '%') return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
+        // calc() with % should be preserved
+        if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
+            return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
+    }
     // font-size: absolute keywords to px (based on medium = 16px)
     if (eqlIgnoreCase(prop, "font-size")) {
         const tv = std.mem.trim(u8, val, " \t");
