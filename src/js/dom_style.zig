@@ -1507,6 +1507,13 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         eqlIgnoreCase(prop, "border-bottom-left-radius") or eqlIgnoreCase(prop, "border-bottom-right-radius"))
         return qjs.JS_NewStringLen(c, "0px", 3);
     if (eqlIgnoreCase(prop, "box-shadow")) return qjs.JS_NewStringLen(c, "none", 4);
+    // CSS Transforms
+    if (eqlIgnoreCase(prop, "backface-visibility")) return qjs.JS_NewStringLen(c, "visible", 7);
+    if (eqlIgnoreCase(prop, "perspective")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "perspective-origin")) return qjs.JS_NewStringLen(c, "50% 50%", 7);
+    if (eqlIgnoreCase(prop, "transform-box")) return qjs.JS_NewStringLen(c, "view-box", 8);
+    if (eqlIgnoreCase(prop, "transform-origin")) return qjs.JS_NewStringLen(c, "50% 50% 0px", 11);
+    if (eqlIgnoreCase(prop, "transform-style")) return qjs.JS_NewStringLen(c, "flat", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1878,6 +1885,13 @@ pub fn windowGetComputedStyle(
         .{ "border-bottom-left-radius", "borderBottomLeftRadius" },
         .{ "border-bottom-right-radius", "borderBottomRightRadius" },
         .{ "box-shadow", "boxShadow" },
+        // CSS Transforms
+        .{ "backface-visibility", "backfaceVisibility" },
+        .{ "perspective", "perspective" },
+        .{ "perspective-origin", "perspectiveOrigin" },
+        .{ "transform-box", "transformBox" },
+        .{ "transform-origin", "transformOrigin" },
+        .{ "transform-style", "transformStyle" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2195,6 +2209,9 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "border-inline-width", "border-inline-style",  "border-inline-color",
         "border-block-start",  "border-block-end",     "border-inline-start",    "border-inline-end",
         "border-block",        "border-inline",
+        // CSS Transforms
+        "backface-visibility", "perspective",          "perspective-origin",     "transform-box",
+        "transform-origin",    "transform-style",
         "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
         "max-block-size",      "max-inline-size",
         // CSS Backgrounds

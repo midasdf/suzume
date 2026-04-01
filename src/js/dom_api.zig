@@ -1132,6 +1132,13 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "borderBottomLeftRadius", .css = "border-bottom-left-radius" },
         .{ .camel = "borderBottomRightRadius", .css = "border-bottom-right-radius" },
         .{ .camel = "boxShadow", .css = "box-shadow" },
+        // CSS Transforms
+        .{ .camel = "backfaceVisibility", .css = "backface-visibility" },
+        .{ .camel = "perspective", .css = "perspective" },
+        .{ .camel = "perspectiveOrigin", .css = "perspective-origin" },
+        .{ .camel = "transformBox", .css = "transform-box" },
+        .{ .camel = "transformOrigin", .css = "transform-origin" },
+        .{ .camel = "transformStyle", .css = "transform-style" },
     };
 
     for (camel_css_pairs) |pair| {
