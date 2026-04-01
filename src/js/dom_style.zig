@@ -1613,6 +1613,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "overscroll-behavior") or eqlIgnoreCase(prop, "overscroll-behavior-x") or
         eqlIgnoreCase(prop, "overscroll-behavior-y"))
         return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "scroll-markers")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "scroll-target-group")) return qjs.JS_NewStringLen(c, "none", 4);
     // CSS Tables
     if (eqlIgnoreCase(prop, "caption-side")) return qjs.JS_NewStringLen(c, "top", 3);
     if (eqlIgnoreCase(prop, "empty-cells")) return qjs.JS_NewStringLen(c, "show", 4);
@@ -2158,7 +2160,6 @@ pub fn windowGetComputedStyle(
         .{ "counter-set", "counterSet" },
         .{ "counter-reset", "counterReset" },
         .{ "counter-increment", "counterIncrement" },
-        .{ "content", "content" },
         // CSS Tables
         .{ "caption-side", "captionSide" },
         .{ "empty-cells", "emptyCells" },
@@ -2185,6 +2186,8 @@ pub fn windowGetComputedStyle(
         .{ "overscroll-behavior-y", "overscrollBehaviorY" },
         .{ "quotes", "quotes" },
         .{ "content", "content" },
+        .{ "scroll-markers", "scrollMarkers" },
+        .{ "scroll-target-group", "scrollTargetGroup" },
         .{ "text-size-adjust", "textSizeAdjust" },
         // CSS Anchor Position
         .{ "anchor-scope", "anchorScope" },

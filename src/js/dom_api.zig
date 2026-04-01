@@ -1258,6 +1258,8 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "overscrollBehavior", .css = "overscroll-behavior" },
         .{ .camel = "overscrollBehaviorX", .css = "overscroll-behavior-x" },
         .{ .camel = "overscrollBehaviorY", .css = "overscroll-behavior-y" },
+        .{ .camel = "scrollMarkers", .css = "scroll-markers" },
+        .{ .camel = "scrollTargetGroup", .css = "scroll-target-group" },
         .{ .camel = "quotes", .css = "quotes" },
         .{ .camel = "textSizeAdjust", .css = "text-size-adjust" },
         // CSS Anchor Position
