@@ -882,46 +882,7 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     // :has(inner) — matches if any descendant/child matches inner selector
     if (selector.len > 5 and std.ascii.eqlIgnoreCase(selector[0..5], ":has(") and selector[selector.len - 1] == ')') {
         const inner = std.mem.trim(u8, selector[5 .. selector.len - 1], " \t");
-        // :has(> sel) — direct child combinator
-        if (inner.len > 2 and inner[0] == '>') {
-            const child_sel = std.mem.trim(u8, inner[1..], " \t");
-            var child: ?*lxb.lxb_dom_node_t = node.first_child;
-            while (child) |ch| {
-                if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(ch, child_sel)) return true;
-                child = ch.next;
-            }
-            return false;
-        }
-        // :has(~ sel) — general sibling combinator
-        if (inner.len > 2 and inner[0] == '~') {
-            const sib_sel = std.mem.trim(u8, inner[1..], " \t");
-            var sib: ?*lxb.lxb_dom_node_t = node.next;
-            while (sib) |s| {
-                if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(s, sib_sel)) return true;
-                sib = s.next;
-            }
-            return false;
-        }
-        // :has(+ sel) — adjacent sibling combinator
-        if (inner.len > 2 and inner[0] == '+') {
-            const adj_sel = std.mem.trim(u8, inner[1..], " \t");
-            var sib: ?*lxb.lxb_dom_node_t = node.next;
-            while (sib) |s| {
-                if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-                    return elementMatchesSelector(s, adj_sel);
-                }
-                sib = s.next;
-            }
-            return false;
-        }
-        // Default: descendant match
-        var child: ?*lxb.lxb_dom_node_t = node.first_child;
-        while (child) |ch| {
-            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and elementMatchesSelector(ch, inner)) return true;
-            if (walkTreeBySelector(ch, inner) != null) return true;
-            child = ch.next;
-        }
-        return false;
+        return hasRelativeMatch(node, inner);
     }
     // :is(inner) / :where(inner) — OR match
     if (selector.len > 4 and std.ascii.eqlIgnoreCase(selector[0..4], ":is(") and selector[selector.len - 1] == ')') {
@@ -1136,6 +1097,101 @@ pub fn prevElementSibling(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
         cur = c.prev;
     }
     return null;
+}
+
+/// Match a relative selector inside :has(). Handles multi-combinator selectors recursively.
+/// inner is the relative selector, e.g. "> .a > .b" or ".a + .b" or just ".a"
+fn hasRelativeMatch(node: *lxb.lxb_dom_node_t, inner: []const u8) bool {
+    if (inner.len == 0) return false;
+    // Determine first combinator
+    var combinator: u8 = ' '; // default: descendant
+    var rest = inner;
+    if (inner[0] == '>') {
+        combinator = '>';
+        rest = std.mem.trim(u8, inner[1..], " \t");
+    } else if (inner[0] == '~') {
+        combinator = '~';
+        rest = std.mem.trim(u8, inner[1..], " \t");
+    } else if (inner[0] == '+') {
+        combinator = '+';
+        rest = std.mem.trim(u8, inner[1..], " \t");
+    }
+    if (rest.len == 0) return false;
+
+    // Split rest into first simple selector and remaining combinators
+    // Find next combinator boundary (space, >, +, ~ not inside parens/brackets)
+    var simple_end: usize = 0;
+    var paren_depth: i32 = 0;
+    var bracket_depth: i32 = 0;
+    while (simple_end < rest.len) : (simple_end += 1) {
+        const ch = rest[simple_end];
+        if (ch == '(' or ch == '[') { paren_depth += 1; bracket_depth += 1; }
+        if (ch == ')' or ch == ']') { paren_depth -= 1; bracket_depth -= 1; }
+        if (paren_depth <= 0 and bracket_depth <= 0) {
+            if (ch == '>' or ch == '+' or ch == '~') break;
+            if (ch == ' ' and simple_end + 1 < rest.len) {
+                // Check if next non-space char is a combinator or start of selector
+                var peek = simple_end + 1;
+                while (peek < rest.len and rest[peek] == ' ') peek += 1;
+                if (peek < rest.len and (rest[peek] != '>' and rest[peek] != '+' and rest[peek] != '~')) {
+                    break; // space combinator
+                } else if (peek < rest.len) {
+                    // Skip spaces before explicit combinator
+                    continue;
+                }
+            }
+        }
+    }
+    const simple_sel = std.mem.trim(u8, rest[0..simple_end], " \t");
+    const remaining = std.mem.trim(u8, rest[simple_end..], " \t");
+
+    // Match simple_sel against nodes in scope determined by combinator
+    if (combinator == '>') {
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and nodeMatchesSimple(ch, simple_sel)) {
+                if (remaining.len == 0) return true;
+                if (hasRelativeMatch(ch, remaining)) return true;
+            }
+            child = ch.next;
+        }
+    } else if (combinator == '+') {
+        var sib: ?*lxb.lxb_dom_node_t = node.next;
+        while (sib) |s| {
+            if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                if (nodeMatchesSimple(s, simple_sel)) {
+                    if (remaining.len == 0) return true;
+                    if (hasRelativeMatch(s, remaining)) return true;
+                }
+                break; // adjacent = only first element sibling
+            }
+            sib = s.next;
+        }
+    } else if (combinator == '~') {
+        var sib: ?*lxb.lxb_dom_node_t = node.next;
+        while (sib) |s| {
+            if (s.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and nodeMatchesSimple(s, simple_sel)) {
+                if (remaining.len == 0) return true;
+                if (hasRelativeMatch(s, remaining)) return true;
+            }
+            sib = s.next;
+        }
+    } else {
+        // Descendant combinator: check all descendants
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                if (nodeMatchesSimple(ch, simple_sel)) {
+                    if (remaining.len == 0) return true;
+                    if (hasRelativeMatch(ch, remaining)) return true;
+                }
+                // Also check ch's descendants
+                if (hasRelativeMatch(ch, inner)) return true;
+            }
+            child = ch.next;
+        }
+    }
+    return false;
 }
 
 /// Iterative querySelectorAll collector — supports compound selectors with combinators
