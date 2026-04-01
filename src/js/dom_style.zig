@@ -1619,6 +1619,9 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         return qjs.JS_NewStringLen(c, "2", 1);
     // CSS View Transitions
     if (eqlIgnoreCase(prop, "view-transition-name")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "view-transition-class")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "offset-anchor")) return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "offset-position")) return qjs.JS_NewStringLen(c, "normal", 6);
     // CSS Logical borders
     if (eqlIgnoreCase(prop, "border-block-start-color") or eqlIgnoreCase(prop, "border-block-end-color") or
         eqlIgnoreCase(prop, "border-inline-start-color") or eqlIgnoreCase(prop, "border-inline-end-color"))
@@ -2147,6 +2150,9 @@ pub fn windowGetComputedStyle(
         .{ "widows", "widows" },
         // CSS View Transitions
         .{ "view-transition-name", "viewTransitionName" },
+        .{ "view-transition-class", "viewTransitionClass" },
+        .{ "offset-anchor", "offsetAnchor" },
+        .{ "offset-position", "offsetPosition" },
         // CSS Logical borders
         .{ "border-block-start-color", "borderBlockStartColor" },
         .{ "border-block-end-color", "borderBlockEndColor" },
