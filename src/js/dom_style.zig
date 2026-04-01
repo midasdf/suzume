@@ -1568,6 +1568,13 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "object-fit")) return qjs.JS_NewStringLen(c, "fill", 4);
     if (eqlIgnoreCase(prop, "object-position")) return qjs.JS_NewStringLen(c, "50% 50%", 7);
     // CSS Masking
+    // CSS Filter Effects
+    if (eqlIgnoreCase(prop, "flood-color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "flood-opacity")) return qjs.JS_NewStringLen(c, "1", 1);
+    if (eqlIgnoreCase(prop, "lighting-color")) return qjs.JS_NewStringLen(c, "rgb(255, 255, 255)", 18);
+    if (eqlIgnoreCase(prop, "color-interpolation-filters")) return qjs.JS_NewStringLen(c, "linearRGB", 9);
+    if (eqlIgnoreCase(prop, "filter") or eqlIgnoreCase(prop, "backdrop-filter"))
+        return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "clip-path")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "clip-rule")) return qjs.JS_NewStringLen(c, "nonzero", 7);
     if (eqlIgnoreCase(prop, "mask-image")) return qjs.JS_NewStringLen(c, "none", 4);
@@ -2088,6 +2095,13 @@ pub fn windowGetComputedStyle(
         .{ "font-variant-alternates", "fontVariantAlternates" },
         .{ "font-variant-emoji", "fontVariantEmoji" },
         // CSS Masking
+        // CSS Filter Effects
+        .{ "flood-color", "floodColor" },
+        .{ "flood-opacity", "floodOpacity" },
+        .{ "lighting-color", "lightingColor" },
+        .{ "color-interpolation-filters", "colorInterpolationFilters" },
+        .{ "filter", "filter" },
+        .{ "backdrop-filter", "backdropFilter" },
         .{ "clip-path", "clipPath" },
         .{ "clip-rule", "clipRule" },
         .{ "mask-image", "maskImage" },
@@ -2560,6 +2574,9 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "line-clamp",          "max-lines",            "block-ellipsis",         "continue",
         // CSS Images
         "image-orientation",   "image-rendering",      "image-resolution",
+        // CSS Filter Effects
+        "flood-color",         "flood-opacity",        "lighting-color",
+        "color-interpolation-filters",
         // CSS Masking
         "clip-path",           "clip-rule",            "mask-image",             "mask-mode",
         "mask-repeat",         "mask-position",        "mask-clip",              "mask-origin",

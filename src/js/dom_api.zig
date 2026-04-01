@@ -1202,6 +1202,13 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "fontVariantAlternates", .css = "font-variant-alternates" },
         .{ .camel = "fontVariantEmoji", .css = "font-variant-emoji" },
         // CSS Masking
+        // CSS Filter Effects
+        .{ .camel = "floodColor", .css = "flood-color" },
+        .{ .camel = "floodOpacity", .css = "flood-opacity" },
+        .{ .camel = "lightingColor", .css = "lighting-color" },
+        .{ .camel = "colorInterpolationFilters", .css = "color-interpolation-filters" },
+        .{ .camel = "filter", .css = "filter" },
+        .{ .camel = "backdropFilter", .css = "backdrop-filter" },
         .{ .camel = "clipPath", .css = "clip-path" },
         .{ .camel = "clipRule", .css = "clip-rule" },
         .{ .camel = "maskImage", .css = "mask-image" },
