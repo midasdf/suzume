@@ -1472,6 +1472,14 @@ fn styleSetProperty(
         "normal"
     else if (dom_style.eqlIgnoreCase(prop, "font-style") and dom_style.eqlIgnoreCase(trimmed_val2, "oblique 14deg"))
         "oblique"
+    else if (dom_style.eqlIgnoreCase(prop, "opacity") and trimmed_val2.len > 1 and trimmed_val2[trimmed_val2.len - 1] == '%')
+        blk: {
+            if (std.fmt.parseFloat(f64, trimmed_val2[0 .. trimmed_val2.len - 1])) |pct| {
+                const v = pct / 100.0;
+                const s = std.fmt.bufPrint(&calc_buf, "{d}", .{v}) catch break :blk val;
+                break :blk s;
+            } else |_| break :blk val;
+        }
     else
         val;
 
