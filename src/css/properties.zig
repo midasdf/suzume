@@ -1128,13 +1128,31 @@ pub fn parseLength(raw: []const u8) ?values.Length {
         return .{ .value = 0, .unit = .px };
     }
 
-    // Find where the number ends and unit begins
+    // Find where the number ends and unit begins (supports scientific notation like 5e+9)
     var num_end: usize = 0;
     for (trimmed, 0..) |c, i| {
         if ((c == '-' or c == '+') and i == 0) {
             num_end = i + 1;
         } else if (c == '.' or (c >= '0' and c <= '9')) {
             num_end = i + 1;
+        } else if ((c == 'e' or c == 'E') and num_end > 0) {
+            // Potential scientific notation: only if next char is digit or +/-digit
+            const remaining = trimmed[i + 1 ..];
+            if (remaining.len > 0 and (remaining[0] >= '0' and remaining[0] <= '9')) {
+                num_end = i + 1; // 5e9
+            } else if (remaining.len > 1 and (remaining[0] == '+' or remaining[0] == '-') and
+                (remaining[1] >= '0' and remaining[1] <= '9'))
+            {
+                num_end = i + 3; // skip e, sign, and at least one digit
+                // Continue scanning remaining digits
+                var j: usize = i + 3;
+                while (j < trimmed.len and trimmed[j] >= '0' and trimmed[j] <= '9') : (j += 1) {
+                    num_end = j + 1;
+                }
+                break; // done with number
+            } else {
+                break; // e followed by non-digit = unit (e.g., "em")
+            }
         } else {
             break;
         }
