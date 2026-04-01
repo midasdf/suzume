@@ -1608,6 +1608,26 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         return qjs.JS_NewStringLen(c, "2", 1);
     // CSS View Transitions
     if (eqlIgnoreCase(prop, "view-transition-name")) return qjs.JS_NewStringLen(c, "none", 4);
+    // CSS Logical borders
+    if (eqlIgnoreCase(prop, "border-block-start-color") or eqlIgnoreCase(prop, "border-block-end-color") or
+        eqlIgnoreCase(prop, "border-inline-start-color") or eqlIgnoreCase(prop, "border-inline-end-color"))
+        return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "border-block-start-width") or eqlIgnoreCase(prop, "border-block-end-width") or
+        eqlIgnoreCase(prop, "border-inline-start-width") or eqlIgnoreCase(prop, "border-inline-end-width"))
+        return qjs.JS_NewStringLen(c, "medium", 6);
+    if (eqlIgnoreCase(prop, "border-block-start-style") or eqlIgnoreCase(prop, "border-block-end-style") or
+        eqlIgnoreCase(prop, "border-inline-start-style") or eqlIgnoreCase(prop, "border-inline-end-style"))
+        return qjs.JS_NewStringLen(c, "none", 4);
+    // CSS Align
+    if (eqlIgnoreCase(prop, "place-content") or eqlIgnoreCase(prop, "place-items"))
+        return qjs.JS_NewStringLen(c, "normal", 6);
+    if (eqlIgnoreCase(prop, "place-self")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Will Change
+    if (eqlIgnoreCase(prop, "will-change")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Motion
+    if (eqlIgnoreCase(prop, "offset-path")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "offset-distance")) return qjs.JS_NewStringLen(c, "0px", 3);
+    if (eqlIgnoreCase(prop, "offset-rotate")) return qjs.JS_NewStringLen(c, "auto", 4);
     // CSS Scroll Snap
     if (eqlIgnoreCase(prop, "scroll-snap-type")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "scroll-snap-align")) return qjs.JS_NewStringLen(c, "none", 4);
@@ -2107,6 +2127,31 @@ pub fn windowGetComputedStyle(
         .{ "widows", "widows" },
         // CSS View Transitions
         .{ "view-transition-name", "viewTransitionName" },
+        // CSS Logical borders
+        .{ "border-block-start-color", "borderBlockStartColor" },
+        .{ "border-block-end-color", "borderBlockEndColor" },
+        .{ "border-inline-start-color", "borderInlineStartColor" },
+        .{ "border-inline-end-color", "borderInlineEndColor" },
+        .{ "border-block-start-width", "borderBlockStartWidth" },
+        .{ "border-block-end-width", "borderBlockEndWidth" },
+        .{ "border-inline-start-width", "borderInlineStartWidth" },
+        .{ "border-inline-end-width", "borderInlineEndWidth" },
+        .{ "border-block-start-style", "borderBlockStartStyle" },
+        .{ "border-block-end-style", "borderBlockEndStyle" },
+        .{ "border-inline-start-style", "borderInlineStartStyle" },
+        .{ "border-inline-end-style", "borderInlineEndStyle" },
+        // CSS Align
+        .{ "place-content", "placeContent" },
+        .{ "place-items", "placeItems" },
+        .{ "place-self", "placeSelf" },
+        .{ "row-gap", "rowGap" },
+        .{ "column-gap", "columnGap" },
+        // CSS Will Change
+        .{ "will-change", "willChange" },
+        // CSS Motion
+        .{ "offset-path", "offsetPath" },
+        .{ "offset-distance", "offsetDistance" },
+        .{ "offset-rotate", "offsetRotate" },
         // CSS Animations
         .{ "animation-delay", "animationDelay" },
         .{ "animation-direction", "animationDirection" },
@@ -2354,7 +2399,7 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .transition_delay => true,
         // Other properties that accept complex values
         .filter, .backdrop_filter, .box_shadow, .text_shadow,
-        .content, .counter_reset, .counter_increment,
+        .content, .counter_reset, .counter_increment, .will_change,
         .background_image, .background_repeat, .background_position,
         .background_size,
         .border_radius_top_left, .border_radius_top_right,
@@ -2530,6 +2575,24 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "widows",              "page",
         // CSS View Transitions
         "view-transition-name","view-transition-class",
+        // CSS Logical (borders)
+        "border-block-start-color","border-block-end-color",
+        "border-inline-start-color","border-inline-end-color",
+        "border-block-color",  "border-inline-color",
+        "border-block-start-width","border-block-end-width",
+        "border-inline-start-width","border-inline-end-width",
+        "border-block-start-style","border-block-end-style",
+        "border-inline-start-style","border-inline-end-style",
+        // CSS Align
+        "place-content",       "place-items",          "place-self",
+        "row-gap",             "column-gap",
+        // CSS Will Change
+        "will-change",
+        // CSS Motion
+        "offset-path",         "offset-distance",      "offset-rotate",
+        "offset-anchor",       "offset-position",      "offset",
+        // CSS Text Box Trim
+        "text-box-trim",       "text-box-edge",        "text-box",
         // CSS Scroll Snap
         "scroll-snap-type",    "scroll-snap-align",    "scroll-snap-stop",
         "scroll-padding",      "scroll-padding-top",   "scroll-padding-right",

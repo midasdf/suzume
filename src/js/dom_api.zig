@@ -1242,6 +1242,31 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "widows", .css = "widows" },
         // CSS View Transitions
         .{ .camel = "viewTransitionName", .css = "view-transition-name" },
+        // CSS Logical borders
+        .{ .camel = "borderBlockStartColor", .css = "border-block-start-color" },
+        .{ .camel = "borderBlockEndColor", .css = "border-block-end-color" },
+        .{ .camel = "borderInlineStartColor", .css = "border-inline-start-color" },
+        .{ .camel = "borderInlineEndColor", .css = "border-inline-end-color" },
+        .{ .camel = "borderBlockStartWidth", .css = "border-block-start-width" },
+        .{ .camel = "borderBlockEndWidth", .css = "border-block-end-width" },
+        .{ .camel = "borderInlineStartWidth", .css = "border-inline-start-width" },
+        .{ .camel = "borderInlineEndWidth", .css = "border-inline-end-width" },
+        .{ .camel = "borderBlockStartStyle", .css = "border-block-start-style" },
+        .{ .camel = "borderBlockEndStyle", .css = "border-block-end-style" },
+        .{ .camel = "borderInlineStartStyle", .css = "border-inline-start-style" },
+        .{ .camel = "borderInlineEndStyle", .css = "border-inline-end-style" },
+        // CSS Align
+        .{ .camel = "placeContent", .css = "place-content" },
+        .{ .camel = "placeItems", .css = "place-items" },
+        .{ .camel = "placeSelf", .css = "place-self" },
+        .{ .camel = "rowGap", .css = "row-gap" },
+        .{ .camel = "columnGap", .css = "column-gap" },
+        // CSS Will Change
+        .{ .camel = "willChange", .css = "will-change" },
+        // CSS Motion
+        .{ .camel = "offsetPath", .css = "offset-path" },
+        .{ .camel = "offsetDistance", .css = "offset-distance" },
+        .{ .camel = "offsetRotate", .css = "offset-rotate" },
         // CSS Animations
         .{ .camel = "animationDelay", .css = "animation-delay" },
         .{ .camel = "animationDirection", .css = "animation-direction" },
