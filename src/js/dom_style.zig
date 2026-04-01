@@ -2493,7 +2493,17 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .vertical_align,
         .align_content, .align_items, .align_self,
         .justify_content, .justify_items, .justify_self,
-        .color_scheme => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
+        .color_scheme,
+        // All remaining PropertyId variants that take complex/keyword values
+        .position, .box_sizing,
+        .border_top_style, .border_right_style, .border_bottom_style, .border_left_style,
+        .text_align, .text_decoration, .text_transform, .white_space, .word_break,
+        .overflow_wrap, .text_overflow, .list_style_type,
+        .flex_direction, .flex_basis, .gap, .grid_column_end, .grid_row_end,
+        .border_collapse, .table_layout,
+        .text_decoration_color, .text_decoration_style, .text_decoration_thickness,
+        .text_underline_offset, .appearance, .user_select, .pointer_events,
+        .touch_action => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
