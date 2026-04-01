@@ -1233,6 +1233,8 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "listStylePosition", .css = "list-style-position" },
         .{ .camel = "listStyleImage", .css = "list-style-image" },
         .{ .camel = "counterSet", .css = "counter-set" },
+        .{ .camel = "counterReset", .css = "counter-reset" },
+        .{ .camel = "counterIncrement", .css = "counter-increment" },
         // CSS Tables
         .{ .camel = "captionSide", .css = "caption-side" },
         .{ .camel = "emptyCells", .css = "empty-cells" },

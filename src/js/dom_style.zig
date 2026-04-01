@@ -1603,7 +1603,9 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "list-style-position")) return qjs.JS_NewStringLen(c, "outside", 7);
     if (eqlIgnoreCase(prop, "list-style-image")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "list-style-type")) return qjs.JS_NewStringLen(c, "disc", 4);
-    if (eqlIgnoreCase(prop, "counter-set")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "counter-set") or eqlIgnoreCase(prop, "counter-reset") or
+        eqlIgnoreCase(prop, "counter-increment"))
+        return qjs.JS_NewStringLen(c, "none", 4);
     // CSS Tables
     if (eqlIgnoreCase(prop, "caption-side")) return qjs.JS_NewStringLen(c, "top", 3);
     if (eqlIgnoreCase(prop, "empty-cells")) return qjs.JS_NewStringLen(c, "show", 4);
@@ -2136,6 +2138,8 @@ pub fn windowGetComputedStyle(
         .{ "list-style-image", "listStyleImage" },
         .{ "list-style-type", "listStyleType" },
         .{ "counter-set", "counterSet" },
+        .{ "counter-reset", "counterReset" },
+        .{ "counter-increment", "counterIncrement" },
         // CSS Tables
         .{ "caption-side", "captionSide" },
         .{ "empty-cells", "emptyCells" },
