@@ -1161,6 +1161,17 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "fontVariantNumeric", .css = "font-variant-numeric" },
         .{ .camel = "fontVariantPosition", .css = "font-variant-position" },
         .{ .camel = "fontVariationSettings", .css = "font-variation-settings" },
+        // CSS Grid
+        .{ .camel = "gridAutoColumns", .css = "grid-auto-columns" },
+        .{ .camel = "gridAutoRows", .css = "grid-auto-rows" },
+        .{ .camel = "gridAutoFlow", .css = "grid-auto-flow" },
+        .{ .camel = "gridTemplateAreas", .css = "grid-template-areas" },
+        .{ .camel = "gridTemplate", .css = "grid-template" },
+        .{ .camel = "gridColumnStart", .css = "grid-column-start" },
+        .{ .camel = "gridColumnEnd", .css = "grid-column-end" },
+        .{ .camel = "gridRowStart", .css = "grid-row-start" },
+        .{ .camel = "gridRowEnd", .css = "grid-row-end" },
+        .{ .camel = "gridArea", .css = "grid-area" },
     };
 
     for (camel_css_pairs) |pair| {

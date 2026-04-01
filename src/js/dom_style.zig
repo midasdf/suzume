@@ -1536,6 +1536,14 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "font-variant-numeric")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "font-variant-position")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "font-variation-settings")) return qjs.JS_NewStringLen(c, "normal", 6);
+    // CSS Grid
+    if (eqlIgnoreCase(prop, "grid-auto-columns") or eqlIgnoreCase(prop, "grid-auto-rows"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
+    if (eqlIgnoreCase(prop, "grid-auto-flow")) return qjs.JS_NewStringLen(c, "row", 3);
+    if (eqlIgnoreCase(prop, "grid-template-areas")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "grid-column-start") or eqlIgnoreCase(prop, "grid-column-end") or
+        eqlIgnoreCase(prop, "grid-row-start") or eqlIgnoreCase(prop, "grid-row-end"))
+        return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
     if (eqlIgnoreCase(prop, "background-color"))
         return qjs.JS_NewStringLen(c, "rgba(0, 0, 0, 0)", 17);
@@ -1936,6 +1944,17 @@ pub fn windowGetComputedStyle(
         .{ "font-variant-numeric", "fontVariantNumeric" },
         .{ "font-variant-position", "fontVariantPosition" },
         .{ "font-variation-settings", "fontVariationSettings" },
+        // CSS Grid
+        .{ "grid-auto-columns", "gridAutoColumns" },
+        .{ "grid-auto-rows", "gridAutoRows" },
+        .{ "grid-auto-flow", "gridAutoFlow" },
+        .{ "grid-template-areas", "gridTemplateAreas" },
+        .{ "grid-template", "gridTemplate" },
+        .{ "grid-column-start", "gridColumnStart" },
+        .{ "grid-column-end", "gridColumnEnd" },
+        .{ "grid-row-start", "gridRowStart" },
+        .{ "grid-row-end", "gridRowEnd" },
+        .{ "grid-area", "gridArea" },
     };
 
     // Check inline style attribute first (highest specificity — reflects JS modifications)
@@ -2152,6 +2171,16 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .outline_width => isValidBorderWidth(trimmed),
         // Flex wrap: nowrap, wrap, wrap-reverse
         .flex_wrap => eqlIgnoreCase(trimmed, "nowrap") or eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "wrap-reverse"),
+        // Grid auto flow
+        .grid_auto_flow => eqlIgnoreCase(trimmed, "row") or eqlIgnoreCase(trimmed, "column") or
+            eqlIgnoreCase(trimmed, "dense") or eqlIgnoreCase(trimmed, "row dense") or
+            eqlIgnoreCase(trimmed, "column dense"),
+        // Grid auto columns/rows: accept track sizes
+        .grid_auto_columns, .grid_auto_rows => true, // Accept any track size value
+        // Grid line values: auto, number, span, name
+        .grid_column_start, .grid_row_start => true, // Accept any grid line value
+        // Grid template areas: none or string
+        .grid_template_areas => true, // Accept any template areas value
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -2264,6 +2293,10 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         "font-palette",        "font-size-adjust",     "font-stretch",           "font-synthesis",
         "font-variant",        "font-variant-caps",    "font-variant-east-asian","font-variant-ligatures",
         "font-variant-numeric","font-variant-position","font-variation-settings",
+        // CSS Grid
+        "grid-auto-columns",   "grid-auto-rows",       "grid-auto-flow",
+        "grid-template-areas", "grid-template",
+        "grid-column-start",   "grid-column-end",      "grid-row-start",         "grid-row-end",
         "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
         "max-block-size",      "max-inline-size",
         // CSS Backgrounds
