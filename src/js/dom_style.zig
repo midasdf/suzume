@@ -711,6 +711,12 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
     if ((eqlIgnoreCase(prop, "word-spacing") or eqlIgnoreCase(prop, "letter-spacing")) and
         eqlIgnoreCase(std.mem.trim(u8, val, " \t"), "normal"))
         return qjs.JS_NewStringLen(c, "0px", 3);
+    // font-weight: keywords to numbers
+    if (eqlIgnoreCase(prop, "font-weight")) {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "normal")) return qjs.JS_NewStringLen(c, "400", 3);
+        if (eqlIgnoreCase(tv, "bold")) return qjs.JS_NewStringLen(c, "700", 3);
+    }
 
     // CSS 2.1 §9.7: Blockification — when position or float is set, inline display → block equiv
     if (eqlIgnoreCase(prop, "display")) {
