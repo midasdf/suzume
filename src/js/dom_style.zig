@@ -3898,6 +3898,25 @@ pub fn canonicalizeColorKeyword(val: []const u8, buf: []u8) ?[]const u8 {
     return null;
 }
 
+/// Canonicalize color-scheme: move "only" to the end.
+pub fn canonicalizeColorScheme(val: []const u8, buf: []u8) ?[]const u8 {
+    // "only light dark" → "light dark only"
+    const trimmed = std.mem.trim(u8, val, " \t");
+    if (trimmed.len < 5) return null;
+    // Check if starts with "only "
+    if (eqlIgnoreCase(trimmed[0..5], "only ")) {
+        const rest = std.mem.trim(u8, trimmed[5..], " \t");
+        if (rest.len == 0) return null;
+        const needed = rest.len + 5; // "rest only"
+        if (needed > buf.len) return null;
+        @memcpy(buf[0..rest.len], rest);
+        buf[rest.len] = ' ';
+        @memcpy(buf[rest.len + 1 ..][0..4], "only");
+        return buf[0..needed];
+    }
+    return null;
+}
+
 pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
     // CSS system colors

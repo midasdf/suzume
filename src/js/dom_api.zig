@@ -1463,6 +1463,8 @@ fn styleSetProperty(
         dom_style.canonicalizeRoundModRem(val, &calc_buf) orelse val
     else if (dom_style.isColorProperty(prop) and dom_style.canonicalizeColorKeyword(trimmed_val2, &calc_buf) != null)
         dom_style.canonicalizeColorKeyword(trimmed_val2, &calc_buf).?
+    else if (dom_style.eqlIgnoreCase(prop, "color-scheme") and std.mem.indexOf(u8, trimmed_val2, "only") != null)
+        dom_style.canonicalizeColorScheme(trimmed_val2, &calc_buf) orelse val
     else
         val;
 
