@@ -2302,10 +2302,10 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .px => value,
         .em => value * font_size,
         .rem => value * 16.0,
-        .ch => value * font_size * 0.5, // approximate: 0 width ≈ 50% of font-size
-        .ex => value * font_size * 0.5, // approximate: x-height ≈ 50% of font-size
-        .lh => value * font_size * 1.2, // approximate: line-height ≈ 120% of font-size
-        .percent => value, // percentage stored as-is, resolved at layout
+        .ch => value * font_size * 0.5,
+        .ex => value * font_size * 0.5,
+        .lh => value * font_size * 1.2,
+        .percent => value,
         .vh, .svh, .dvh, .lvh => value * vh / 100.0,
         .vw, .svw, .dvw, .lvw => value * vw / 100.0,
         .vmin => value * @min(vw, vh) / 100.0,
@@ -2316,6 +2316,12 @@ fn resolveLengthToPx(value: f32, unit: values.Unit, font_size: f32, vw: f32, vh:
         .mm => value * 96.0 / 25.4,
         .q => value * 96.0 / 101.6,
         .in_ => value * 96.0,
+        .s => value,
+        .ms => value / 1000.0,
+        .deg => value,
+        .rad => value * 180.0 / std.math.pi,
+        .grad => value * 0.9,
+        .turn => value * 360.0,
         else => value,
     };
 }
@@ -2424,6 +2430,14 @@ fn resolveLengthToPxWithPct(value: f32, unit: values.Unit, font_size: f32, vw: f
         .mm => value * 96.0 / 25.4,
         .q => value * 96.0 / 101.6,
         .in_ => value * 96.0,
+        // Time units: resolve to seconds (base unit for time)
+        .s => value,
+        .ms => value / 1000.0,
+        // Angle units: resolve to degrees (base unit for angles)
+        .deg => value,
+        .rad => value * 180.0 / std.math.pi,
+        .grad => value * 0.9,
+        .turn => value * 360.0,
         else => value,
     };
 }

@@ -1173,6 +1173,8 @@ fn parseUnit(unit_str: []const u8) ?values.Unit {
         .{ "fr", .fr },
         .{ "deg", .deg },
         .{ "rad", .rad },
+        .{ "grad", .grad },
+        .{ "turn", .turn },
         .{ "s", .s },
         .{ "ms", .ms },
         .{ "svh", .svh },
