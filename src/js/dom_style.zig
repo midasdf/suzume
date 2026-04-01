@@ -729,6 +729,15 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
     }
+    // background-position-x/y: keywords to %
+    if (eqlIgnoreCase(prop, "background-position-x") or eqlIgnoreCase(prop, "background-position-y") or
+        eqlIgnoreCase(prop, "background-position"))
+    {
+        const tv = std.mem.trim(u8, val, " \t");
+        if (eqlIgnoreCase(tv, "left") or eqlIgnoreCase(tv, "top")) return qjs.JS_NewStringLen(c, "0%", 2);
+        if (eqlIgnoreCase(tv, "center")) return qjs.JS_NewStringLen(c, "50%", 3);
+        if (eqlIgnoreCase(tv, "right") or eqlIgnoreCase(tv, "bottom")) return qjs.JS_NewStringLen(c, "100%", 4);
+    }
     // font-width/font-stretch: keywords to %
     if (eqlIgnoreCase(prop, "font-width") or eqlIgnoreCase(prop, "font-stretch")) {
         const tv = std.mem.trim(u8, val, " \t");
