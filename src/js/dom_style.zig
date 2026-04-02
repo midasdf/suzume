@@ -744,8 +744,9 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         }
     }
     // Simplify calc() wrapping a single value: calc(X%) → X%, calc(Npx) → Npx
-    // But skip for computed length properties — let resolveValueToPx handle the full resolution
-    if (!isComputedLengthProperty(prop)) {
+    // Skip for computed length properties and integer properties — they need full resolution
+    const is_integer_prop = eqlIgnoreCase(prop, "z-index") or eqlIgnoreCase(prop, "order") or eqlIgnoreCase(prop, "reading-order");
+    if (!isComputedLengthProperty(prop) and !is_integer_prop) {
         const tv = std.mem.trim(u8, val, " \t");
         if (tv.len >= 6 and eqlIgnoreCase(tv[0..5], "calc(") and tv[tv.len - 1] == ')') {
             const inner = std.mem.trim(u8, tv[5 .. tv.len - 1], " \t");
@@ -1113,7 +1114,7 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
-    // Integer properties: reading-order, order, z-index — resolve math functions to integer
+    // Integer properties: reading-order, order, z-index — resolve to integer (round non-integers)
     if (eqlIgnoreCase(prop, "reading-order") or eqlIgnoreCase(prop, "order") or eqlIgnoreCase(prop, "z-index")) {
         if (isCssMathFunc(trimmed)) {
             const font_size = getElementFontSizeFromStyle(c, elem_val);
@@ -1124,6 +1125,16 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
                 return qjs.JS_NewStringLen(c, result.ptr, result.len);
             }
         }
+        // Bare non-integer number (e.g., from calc() unwrap): round to integer
+        if (std.fmt.parseFloat(f32, trimmed)) |v| {
+            const iv: i32 = @intFromFloat(@round(v));
+            const fv: f32 = @floatFromInt(iv);
+            if (@abs(v - fv) > 0.0001) {
+                var buf: [64]u8 = undefined;
+                const result = std.fmt.bufPrint(&buf, "{d}", .{iv}) catch return qjs.JS_NewStringLen(c, "0", 1);
+                return qjs.JS_NewStringLen(c, result.ptr, result.len);
+            }
+        } else |_| {}
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
