@@ -1701,6 +1701,11 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
                 if (vals[count] > l_max) vals[count] = l_max;
             }
             if (is_hue_func and count == 1 and vals[count] < 0) vals[count] = 0;
+            // Normalize hue to [0, 360) for lch/oklch
+            if (count == 2 and is_hue_func) {
+                vals[count] = @mod(vals[count], 360.0);
+                if (vals[count] < 0) vals[count] += 360.0;
+            }
         } else if (count == 0) {
             // Lightness
             if (tok.len > 0 and tok[tok.len - 1] == '%') {
@@ -1714,8 +1719,10 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
             if (vals[count] < 0) vals[count] = 0;
             if (vals[count] > l_max) vals[count] = l_max;
         } else if (count == 2 and is_hue_func) {
-            // Hue: angle → degrees (bare number)
+            // Hue: angle → degrees, then normalize to [0, 360)
             vals[count] = @floatCast(color_mod.parseAngleComponent(tok) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len));
+            vals[count] = @mod(vals[count], 360.0);
+            if (vals[count] < 0) vals[count] += 360.0;
         } else {
             // a/b or chroma
             if (tok.len > 0 and tok[tok.len - 1] == '%') {
@@ -1765,8 +1772,8 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
         }
     }
 
-    // Serialize with `none` preservation
-    var buf: [128]u8 = undefined;
+    // Serialize with `none` preservation and controlled precision
+    var buf: [192]u8 = undefined;
     var pos: usize = 0;
     // Function name + "("
     @memcpy(buf[pos..][0..func_name.len], func_name);
@@ -1784,8 +1791,7 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
             @memcpy(buf[pos..][0..4], "none");
             pos += 4;
         } else {
-            const s = std.fmt.bufPrint(buf[pos..], "{d}", .{vals[i]}) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
-            pos += s.len;
+            pos += fmtColorNumber(buf[pos..], vals[i]);
         }
     }
 
@@ -1797,8 +1803,7 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
             @memcpy(buf[pos..][0..4], "none");
             pos += 4;
         } else {
-            const s = std.fmt.bufPrint(buf[pos..], "{d}", .{alpha}) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
-            pos += s.len;
+            pos += fmtColorNumber(buf[pos..], alpha);
         }
     }
 
@@ -1806,6 +1811,28 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
     pos += 1;
 
     return qjs.JS_NewStringLen(c, &buf, pos);
+}
+
+/// Format a color component number with up to 4 decimal places, trimming trailing zeros.
+/// Returns the number of bytes written.
+fn fmtColorNumber(out: []u8, val: f64) usize {
+    // Round to 4 decimal places to avoid f64 artifacts
+    const rounded = @round(val * 10000.0) / 10000.0;
+    // Check if it's an integer
+    const int_val: i32 = @intFromFloat(@round(rounded));
+    if (@abs(rounded - @as(f64, @floatFromInt(int_val))) < 0.00005) {
+        const s = std.fmt.bufPrint(out, "{d}", .{int_val}) catch return 0;
+        return s.len;
+    }
+    // Format with 4 decimal places then trim trailing zeros
+    const s = std.fmt.bufPrint(out, "{d:.4}", .{rounded}) catch return 0;
+    var len = s.len;
+    // Trim trailing zeros after decimal point
+    if (std.mem.indexOfScalar(u8, s, '.') != null) {
+        while (len > 0 and out[len - 1] == '0') len -= 1;
+        if (len > 0 and out[len - 1] == '.') len -= 1;
+    }
+    return len;
 }
 
 // ── CSS Helper Functions ───────────────────────────────────────────
