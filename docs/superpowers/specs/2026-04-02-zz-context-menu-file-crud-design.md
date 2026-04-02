@@ -113,7 +113,7 @@ const ContextMenuState = struct {
 2. Enter `tree_input` mode
 3. Show inline input field at the insertion position (below target directory, indented)
 4. User types filename → Enter to confirm
-5. Call `std.fs.cwd().createFile(relative_path, .{})` or `std.fs.cwd().makeDir(relative_path)`
+5. For files: `const file = try std.fs.cwd().createFile(relative_path, .{}); file.close();` (close immediately — we only need the file to exist, it will be opened separately in a tab). For folders: `try std.fs.cwd().makeDir(relative_path)`
 6. On success: targeted refresh of parent directory in file tree (preserve expand/collapse state of other directories), if file → open in new tab
 7. On error (exists, permission denied): show error in status bar message area, keep input open for retry or Esc
 8. Escape cancels, removes input field
