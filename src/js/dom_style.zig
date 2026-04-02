@@ -2981,7 +2981,16 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "log(")) return true;
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "exp(")) return true;
         // Color functions — validate structure
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) {
+            // hwb only supports modern (space) syntax, reject commas
+            const color_mod2 = @import("../css/properties.zig");
+            if (color_mod2.extractFuncArgs(trimmed)) |inner2| {
+                for (inner2) |ch| {
+                    if (ch == ',') return false;
+                }
+            }
+            return true;
+        }
         if (trimmed.len >= 5 and (eqlIgnoreCase(trimmed[0..4], "lab(") or
             eqlIgnoreCase(trimmed[0..4], "lch(")))
             return isValidModernColorFunc(trimmed);
@@ -3016,8 +3025,8 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         // Color properties
         .color, .background_color, .border_top_color, .border_right_color,
         .border_bottom_color, .border_left_color,
-        .caret_color, .accent_color, .outline_color => css_properties.parseColor(trimmed) != null or isValidColorKeyword(trimmed) or isColorFuncWithCalc(trimmed) or
-            eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "currentcolor") or eqlIgnoreCase(trimmed, "currentColor"),
+        .outline_color => isValidColorValue(trimmed, false),
+        .caret_color, .accent_color => isValidColorValue(trimmed, true),
         // Numeric properties
         .opacity => blk: {
             if (trimmed.len > 0 and trimmed[trimmed.len - 1] == '%') {
@@ -4520,6 +4529,96 @@ pub fn canonicalizeColorScheme(val: []const u8, buf: []u8) ?[]const u8 {
         return buf[0..needed];
     }
     return null;
+}
+
+/// Validate a CSS color value. auto_allowed is true for caret-color/accent-color.
+fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
+    const color_mod = @import("../css/properties.zig");
+    if (eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
+    if (auto_allowed and eqlIgnoreCase(val, "auto")) return true;
+    if (isValidColorKeyword(val)) return true;
+    if (isColorFuncWithCalc(val)) return true;
+
+    // Reject `none` in legacy comma syntax for rgb/rgba/hsl/hsla
+    if (val.len >= 4 and (eqlIgnoreCase(val[0..4], "rgb(") or
+        (val.len >= 5 and eqlIgnoreCase(val[0..5], "rgba(")) or
+        eqlIgnoreCase(val[0..4], "hsl(") or
+        (val.len >= 5 and eqlIgnoreCase(val[0..5], "hsla("))))
+    {
+        if (color_mod.extractFuncArgs(val)) |inner| {
+            // Check if it uses comma syntax
+            var has_comma = false;
+            for (inner) |ch| {
+                if (ch == ',') { has_comma = true; break; }
+            }
+            if (has_comma) {
+                // `none` is invalid in legacy comma syntax
+                var iter = std.mem.tokenizeAny(u8, inner, ", /\t");
+                while (iter.next()) |tok| {
+                    if (eqlIgnoreCase(tok, "none")) return false;
+                }
+            }
+            // Check arg count: rgb/rgba max 4, reject 5+
+            var arg_count: usize = 0;
+            if (has_comma) {
+                arg_count = 1;
+                for (inner) |ch| {
+                    if (ch == ',') arg_count += 1;
+                }
+                if (arg_count > 4) return false;
+
+                // Legacy comma syntax: R/G/B must be all % or all non-% (no mixing)
+                var tokens2: [8][]const u8 = undefined;
+                var tc: usize = 0;
+                var tstart: usize = 0;
+                for (inner, 0..) |ch, ci| {
+                    if (ch == ',' or ch == '/') {
+                        if (tc < 8) {
+                            tokens2[tc] = std.mem.trim(u8, inner[tstart..ci], " \t");
+                            tc += 1;
+                        }
+                        tstart = ci + 1;
+                    }
+                }
+                if (tc < 8) {
+                    tokens2[tc] = std.mem.trim(u8, inner[tstart..], " \t");
+                    tc += 1;
+                }
+                // Check first 3 args (R,G,B or H,S,L) for % consistency
+                if (tc >= 3) {
+                    const is_rgb = eqlIgnoreCase(val[0..3], "rgb");
+                    if (is_rgb) {
+                        // RGB: all 3 must be % or all non-%
+                        var pct_count: usize = 0;
+                        for (tokens2[0..3]) |tok| {
+                            if (tok.len > 0 and tok[tok.len - 1] == '%') pct_count += 1;
+                        }
+                        if (pct_count != 0 and pct_count != 3) return false;
+                    } else {
+                        // HSL: S and L (indices 1,2) must both be % in legacy syntax
+                        // Actually: in legacy, L without % is valid as bare number... but WPT says no
+                        // hsl(10, 50%, 0) is invalid — L must be %
+                        const s_pct = tokens2[1].len > 0 and tokens2[1][tokens2[1].len - 1] == '%';
+                        const l_pct = tokens2[2].len > 0 and tokens2[2][tokens2[2].len - 1] == '%';
+                        if (s_pct != l_pct) return false;
+                        // In legacy comma syntax, S and L MUST be percentages
+                        if (!s_pct or !l_pct) return false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Reject comma syntax for hwb (modern syntax only)
+    if (val.len >= 4 and eqlIgnoreCase(val[0..4], "hwb(")) {
+        if (color_mod.extractFuncArgs(val)) |inner| {
+            for (inner) |ch| {
+                if (ch == ',') return false;
+            }
+        }
+    }
+
+    return color_mod.parseColor(val) != null;
 }
 
 pub fn isValidColorKeyword(val: []const u8) bool {
