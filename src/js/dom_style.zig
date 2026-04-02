@@ -1443,34 +1443,259 @@ fn formatAsColorSrgb(c: *qjs.JSContext, color: @import("../css/values.zig").Colo
 }
 
 /// Format color() function for computed value: color(srgb R G B) or color(srgb R G B / A)
+/// Alpha is clamped to [0, 1], alpha of 1 is omitted.
 pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
     const color_mod = @import("../css/properties.zig");
     const inner = color_mod.extractFuncArgs(input) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
 
-    var iter = std.mem.tokenizeAny(u8, inner, " \t/,");
+    // Find `/` at depth 0 to properly separate color args from alpha
+    var has_slash = false;
+    var slash_pos: usize = 0;
+    {
+        var depth: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == '/' and depth == 0) {
+                has_slash = true;
+                slash_pos = i;
+                break;
+            }
+        }
+    }
+
+    const color_part = if (has_slash) std.mem.trim(u8, inner[0..slash_pos], " \t") else std.mem.trim(u8, inner, " \t");
+
+    // Parse: colorspace R G B
+    var iter = std.mem.tokenizeAny(u8, color_part, " \t");
     const space = iter.next() orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
 
-    var vals: [4]f32 = .{ 0, 0, 0, 1 };
+    var vals: [3]f32 = .{ 0, 0, 0 };
+    var is_none: [3]bool = .{ false, false, false };
     var count: usize = 0;
     while (iter.next()) |tok| {
-        if (count >= 4) break;
-        vals[count] = color_mod.parseColorComponent(tok, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+        if (count >= 3) break;
+        if (eqlIgnoreCase(tok, "none")) {
+            vals[count] = 0;
+            is_none[count] = true;
+        } else {
+            vals[count] = color_mod.parseColorComponent(tok, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+        }
         count += 1;
     }
     if (count < 3) return qjs.JS_NewStringLen(c, input.ptr, input.len);
 
+    // Parse alpha if present
+    var alpha: f32 = 1.0;
+    var has_alpha = false;
+    var alpha_none = false;
+    if (has_slash) {
+        const alpha_str = std.mem.trim(u8, inner[slash_pos + 1 ..], " \t");
+        if (alpha_str.len > 0) {
+            if (eqlIgnoreCase(alpha_str, "none")) {
+                alpha = 0;
+                has_alpha = true;
+                alpha_none = true;
+            } else {
+                alpha = color_mod.parseColorComponent(alpha_str, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+                has_alpha = true;
+                if (alpha < 0) alpha = 0;
+                if (alpha > 1) alpha = 1;
+            }
+        }
+    }
+
+    // Serialize with none preservation
     var buf: [128]u8 = undefined;
-    const result = if (count >= 4 and vals[3] < 1.0)
-        std.fmt.bufPrint(&buf, "color({s} {d} {d} {d} / {d})", .{ space, vals[0], vals[1], vals[2], vals[3] }) catch return qjs.JS_NewStringLen(c, input.ptr, input.len)
-    else
-        std.fmt.bufPrint(&buf, "color({s} {d} {d} {d})", .{ space, vals[0], vals[1], vals[2] }) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
-    return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    var pos: usize = 0;
+    @memcpy(buf[pos..][0..6], "color(");
+    pos += 6;
+    @memcpy(buf[pos..][0..space.len], space);
+    pos += space.len;
+
+    for (0..3) |i| {
+        buf[pos] = ' ';
+        pos += 1;
+        if (is_none[i]) {
+            @memcpy(buf[pos..][0..4], "none");
+            pos += 4;
+        } else {
+            const s = std.fmt.bufPrint(buf[pos..], "{d}", .{vals[i]}) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            pos += s.len;
+        }
+    }
+
+    if (has_alpha and (alpha_none or alpha < 1.0)) {
+        @memcpy(buf[pos..][0..3], " / ");
+        pos += 3;
+        if (alpha_none) {
+            @memcpy(buf[pos..][0..4], "none");
+            pos += 4;
+        } else {
+            const s = std.fmt.bufPrint(buf[pos..], "{d}", .{alpha}) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            pos += s.len;
+        }
+    }
+
+    buf[pos] = ')';
+    pos += 1;
+    return qjs.JS_NewStringLen(c, &buf, pos);
 }
 
-/// Format modern color functions (oklab/oklch/lab/lch) for computed value
+/// Format modern color functions (oklab/oklch/lab/lch) for computed/specified value.
+/// Canonical serialization per CSS Color 4:
+///   - alpha /1 omitted, /50% → /0.5, negative alpha clamped to 0
+///   - spaces around `/`
+///   - percentage lightness → number (lab/oklab: L% → L*range, lch/oklch: L% → L*range)
+///   - angle units resolved to degrees (bare number) for hue in lch/oklch
 pub fn formatModernColorComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
-    // For now, return as-is (proper serialization requires complex normalization)
-    return qjs.JS_NewStringLen(c, input.ptr, input.len);
+    const color_mod = @import("../css/properties.zig");
+
+    // Extract function name
+    const paren_idx = std.mem.indexOf(u8, input, "(") orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+    var func_lower: [8]u8 = undefined;
+    const func_raw = std.mem.trim(u8, input[0..paren_idx], " \t");
+    if (func_raw.len > func_lower.len) return qjs.JS_NewStringLen(c, input.ptr, input.len);
+    for (func_raw, 0..) |ch, i| {
+        func_lower[i] = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+    }
+    const func_name = func_lower[0..func_raw.len];
+
+    const inner = color_mod.extractFuncArgs(input) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+
+    // Find `/` at depth 0 to separate color args from alpha
+    var has_slash = false;
+    var slash_pos: usize = 0;
+    {
+        var depth: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == '/' and depth == 0) {
+                has_slash = true;
+                slash_pos = i;
+                break;
+            }
+        }
+    }
+
+    const color_part = if (has_slash) std.mem.trim(u8, inner[0..slash_pos], " \t") else std.mem.trim(u8, inner, " \t");
+
+    const is_ok = eqlIgnoreCase(func_name, "oklab") or eqlIgnoreCase(func_name, "oklch");
+    const is_hue_func = eqlIgnoreCase(func_name, "lch") or eqlIgnoreCase(func_name, "oklch");
+
+    // Parse 3 color components, tracking `none`
+    var iter = std.mem.tokenizeAny(u8, color_part, " \t");
+    var vals: [3]f64 = .{ 0, 0, 0 };
+    var is_none: [3]bool = .{ false, false, false };
+    var count: usize = 0;
+    while (iter.next()) |tok| {
+        if (count >= 3) break;
+        if (eqlIgnoreCase(tok, "none")) {
+            vals[count] = 0;
+            is_none[count] = true;
+        } else if (count == 0) {
+            // Lightness
+            if (tok.len > 0 and tok[tok.len - 1] == '%') {
+                const v = std.fmt.parseFloat(f64, tok[0 .. tok.len - 1]) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+                vals[count] = if (is_ok) v / 100.0 else v;
+            } else {
+                vals[count] = std.fmt.parseFloat(f64, tok) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            }
+            // Clamp lightness: lab/lch [0,100], oklab/oklch [0,1]
+            const l_max: f64 = if (is_ok) 1.0 else 100.0;
+            if (vals[count] < 0) vals[count] = 0;
+            if (vals[count] > l_max) vals[count] = l_max;
+        } else if (count == 2 and is_hue_func) {
+            // Hue: angle → degrees (bare number)
+            vals[count] = @floatCast(color_mod.parseAngleComponent(tok) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len));
+        } else {
+            // a/b or chroma
+            if (tok.len > 0 and tok[tok.len - 1] == '%') {
+                const v = std.fmt.parseFloat(f64, tok[0 .. tok.len - 1]) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+                if (is_ok) {
+                    vals[count] = v / 100.0 * 0.4;
+                } else if (count == 1 and eqlIgnoreCase(func_name, "lch")) {
+                    vals[count] = v / 100.0 * 150.0;
+                } else {
+                    vals[count] = v / 100.0 * 125.0;
+                }
+            } else {
+                vals[count] = std.fmt.parseFloat(f64, tok) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            }
+            // Clamp chroma ≥ 0 for lch/oklch
+            if (is_hue_func and count == 1 and vals[count] < 0) vals[count] = 0;
+        }
+        count += 1;
+    }
+    if (count < 3) return qjs.JS_NewStringLen(c, input.ptr, input.len);
+
+    // Parse alpha
+    var alpha: f64 = 1.0;
+    var has_alpha = false;
+    var alpha_none = false;
+    if (has_slash) {
+        const alpha_str = std.mem.trim(u8, inner[slash_pos + 1 ..], " \t");
+        if (alpha_str.len > 0) {
+            if (eqlIgnoreCase(alpha_str, "none")) {
+                alpha = 0;
+                has_alpha = true;
+                alpha_none = true;
+            } else if (alpha_str[alpha_str.len - 1] == '%') {
+                alpha = (std.fmt.parseFloat(f64, alpha_str[0 .. alpha_str.len - 1]) catch return qjs.JS_NewStringLen(c, input.ptr, input.len)) / 100.0;
+                has_alpha = true;
+            } else {
+                alpha = std.fmt.parseFloat(f64, alpha_str) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+                has_alpha = true;
+            }
+            if (!alpha_none) {
+                if (alpha < 0) alpha = 0;
+                if (alpha > 1) alpha = 1;
+            }
+        }
+    }
+
+    // Serialize with `none` preservation
+    var buf: [128]u8 = undefined;
+    var pos: usize = 0;
+    // Function name + "("
+    @memcpy(buf[pos..][0..func_name.len], func_name);
+    pos += func_name.len;
+    buf[pos] = '(';
+    pos += 1;
+
+    // 3 components
+    for (0..3) |i| {
+        if (i > 0) {
+            buf[pos] = ' ';
+            pos += 1;
+        }
+        if (is_none[i]) {
+            @memcpy(buf[pos..][0..4], "none");
+            pos += 4;
+        } else {
+            const s = std.fmt.bufPrint(buf[pos..], "{d}", .{vals[i]}) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            pos += s.len;
+        }
+    }
+
+    // Alpha
+    if (has_alpha and (alpha_none or alpha < 1.0)) {
+        @memcpy(buf[pos..][0..3], " / ");
+        pos += 3;
+        if (alpha_none) {
+            @memcpy(buf[pos..][0..4], "none");
+            pos += 4;
+        } else {
+            const s = std.fmt.bufPrint(buf[pos..], "{d}", .{alpha}) catch return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            pos += s.len;
+        }
+    }
+
+    buf[pos] = ')';
+    pos += 1;
+
+    return qjs.JS_NewStringLen(c, &buf, pos);
 }
 
 // ── CSS Helper Functions ───────────────────────────────────────────
@@ -2729,13 +2954,16 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "hypot(")) return true;
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "log(")) return true;
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "exp(")) return true;
-        // Color functions
+        // Color functions — validate structure
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "lab(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "lch(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "oklab(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "oklch(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "color(")) return true;
+        if (trimmed.len >= 5 and (eqlIgnoreCase(trimmed[0..4], "lab(") or
+            eqlIgnoreCase(trimmed[0..4], "lch(")))
+            return isValidModernColorFunc(trimmed);
+        if (trimmed.len >= 7 and (eqlIgnoreCase(trimmed[0..6], "oklab(") or
+            eqlIgnoreCase(trimmed[0..6], "oklch(")))
+            return isValidModernColorFunc(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "color("))
+            return isValidColorFunc(trimmed);
     }
 
     const prop_id = css_ast.PropertyId.fromString(prop);
@@ -4285,6 +4513,187 @@ pub fn isValidColorKeyword(val: []const u8) bool {
 
 /// Check if value is a color function containing calc() that parseColor can't handle yet
 /// but should still be accepted as valid (e.g., rgb(calc(50 + sign(1em)), 0, 0)).
+/// Validate modern color function syntax: lab/lch/oklab/oklch(C1 C2 C3) or (...C1 C2 C3 / A)
+/// Rejects: 4 args without '/', args without '/'
+fn isValidModernColorFunc(val: []const u8) bool {
+    const color_mod = @import("../css/properties.zig");
+    const inner = color_mod.extractFuncArgs(val) orelse return false;
+
+    // Find '/' at depth 0
+    var has_slash = false;
+    var slash_pos: usize = 0;
+    {
+        var depth: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == '/' and depth == 0) {
+                has_slash = true;
+                slash_pos = i;
+                break;
+            }
+        }
+    }
+
+    const color_part = if (has_slash) std.mem.trim(u8, inner[0..slash_pos], " \t") else std.mem.trim(u8, inner, " \t");
+
+    // Count tokens (space-separated) at depth 0
+    var count: usize = 0;
+    var in_tok = false;
+    var depth: usize = 0;
+    for (color_part) |ch| {
+        if (ch == '(') {
+            depth += 1;
+            in_tok = true;
+        } else if (ch == ')') {
+            if (depth > 0) depth -= 1;
+        } else if ((ch == ' ' or ch == '\t') and depth == 0) {
+            if (in_tok) count += 1;
+            in_tok = false;
+        } else {
+            in_tok = true;
+        }
+    }
+    if (in_tok) count += 1;
+
+    // Must have exactly 3 components (no comma syntax for modern colors)
+    if (count != 3) return false;
+
+    // Validate: a/b components in lab/oklab must not have angle units
+    // Only lch/oklch hue (3rd component) accepts angle units
+    const paren_pos = std.mem.indexOf(u8, val, "(") orelse return false;
+    const fn_name = std.mem.trim(u8, val[0..paren_pos], " \t");
+    const is_hue_func2 = eqlIgnoreCase(fn_name, "lch") or eqlIgnoreCase(fn_name, "oklch");
+
+    // Tokenize to get individual components for validation
+    var comp_iter = std.mem.tokenizeAny(u8, color_part, " \t");
+    var ci: usize = 0;
+    while (comp_iter.next()) |tok| {
+        if (ci >= 3) break;
+        // Skip none/calc
+        if (!eqlIgnoreCase(tok, "none") and !(tok.len >= 5 and eqlIgnoreCase(tok[0..5], "calc("))) {
+            // Angle units only valid for hue (component 2 in lch/oklch)
+            const has_angle = std.mem.endsWith(u8, tok, "deg") or std.mem.endsWith(u8, tok, "rad") or
+                std.mem.endsWith(u8, tok, "grad") or std.mem.endsWith(u8, tok, "turn");
+            if (has_angle and !(ci == 2 and is_hue_func2)) return false;
+        }
+        ci += 1;
+    }
+
+    // If has slash, alpha part must have exactly 1 token
+    if (has_slash) {
+        const alpha_part = std.mem.trim(u8, inner[slash_pos + 1 ..], " \t");
+        if (alpha_part.len == 0) return false;
+    }
+
+    return true;
+}
+
+/// Validate color() function syntax: color(space R G B) or color(space R G B / A)
+/// Rejects: 4 args without '/', deg units, missing colorspace
+fn isValidColorFunc(val: []const u8) bool {
+    const color_mod = @import("../css/properties.zig");
+    const inner = color_mod.extractFuncArgs(val) orelse return false;
+
+    // Find '/' at depth 0
+    var has_slash = false;
+    var slash_pos: usize = 0;
+    {
+        var depth: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == '/' and depth == 0) {
+                has_slash = true;
+                slash_pos = i;
+                break;
+            }
+        }
+    }
+
+    const color_part = if (has_slash) std.mem.trim(u8, inner[0..slash_pos], " \t") else std.mem.trim(u8, inner, " \t");
+
+    // Tokenize at depth 0
+    var tokens: [8][]const u8 = undefined;
+    var count: usize = 0;
+    var start: usize = 0;
+    var in_tok = false;
+    var depth: usize = 0;
+    for (color_part, 0..) |ch, i| {
+        if (ch == '(') {
+            depth += 1;
+            if (!in_tok) {
+                start = i;
+                in_tok = true;
+            }
+        } else if (ch == ')') {
+            if (depth > 0) depth -= 1;
+        } else if ((ch == ' ' or ch == '\t') and depth == 0) {
+            if (in_tok and count < 8) {
+                tokens[count] = color_part[start..i];
+                count += 1;
+            }
+            in_tok = false;
+        } else {
+            if (!in_tok) start = i;
+            in_tok = true;
+        }
+    }
+    if (in_tok and count < 8) {
+        tokens[count] = color_part[start..color_part.len];
+        count += 1;
+    }
+
+    // Must be: colorspace + 3 components = 4 tokens
+    if (count != 4) return false;
+
+    // Validate alpha part if present
+    if (has_slash) {
+        const alpha_part = std.mem.trim(u8, inner[slash_pos + 1 ..], " \t");
+        if (alpha_part.len == 0) return false;
+        // Must be single token: number, percentage, none, or calc()
+        if (!eqlIgnoreCase(alpha_part, "none")) {
+            // Check for trailing garbage (spaces within alpha part)
+            if (std.mem.indexOf(u8, alpha_part, " ") != null) {
+                // Check it's not just a calc() with spaces
+                if (!(alpha_part.len >= 5 and eqlIgnoreCase(alpha_part[0..5], "calc("))) return false;
+            }
+            if (!(alpha_part.len >= 5 and eqlIgnoreCase(alpha_part[0..5], "calc("))) {
+                if (alpha_part.len > 0 and alpha_part[alpha_part.len - 1] == '%') {
+                    _ = std.fmt.parseFloat(f32, alpha_part[0 .. alpha_part.len - 1]) catch return false;
+                } else {
+                    // Must be a keyword like "none" or valid number
+                    _ = std.fmt.parseFloat(f32, alpha_part) catch return false;
+                }
+            }
+        }
+    }
+
+    // Validate colorspace name
+    const cs = tokens[0];
+    if (!(eqlIgnoreCase(cs, "srgb") or eqlIgnoreCase(cs, "srgb-linear") or
+        eqlIgnoreCase(cs, "display-p3") or eqlIgnoreCase(cs, "a98-rgb") or
+        eqlIgnoreCase(cs, "prophoto-rgb") or eqlIgnoreCase(cs, "rec2020") or
+        eqlIgnoreCase(cs, "xyz") or eqlIgnoreCase(cs, "xyz-d50") or
+        eqlIgnoreCase(cs, "xyz-d65")))
+        return false;
+
+    // Validate components (tokens[1..4]): must be number, percentage, none, or calc() — NOT deg/rad/grad/turn
+    for (tokens[1..4]) |tok| {
+        if (eqlIgnoreCase(tok, "none")) continue;
+        if (tok.len >= 5 and eqlIgnoreCase(tok[0..5], "calc(")) continue;
+        if (tok.len > 0 and tok[tok.len - 1] == '%') continue; // percentage OK
+        // Reject angle units
+        if (std.mem.endsWith(u8, tok, "deg") or std.mem.endsWith(u8, tok, "rad") or
+            std.mem.endsWith(u8, tok, "grad") or std.mem.endsWith(u8, tok, "turn"))
+            return false;
+        // Must parse as number
+        _ = std.fmt.parseFloat(f32, tok) catch return false;
+    }
+
+    return true;
+}
+
 fn isColorFuncWithCalc(val: []const u8) bool {
     if (val.len < 4) return false;
     // Must be a known color function

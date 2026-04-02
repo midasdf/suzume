@@ -382,7 +382,7 @@ pub fn findPseudoStart(sel: []const u8) ?usize {
 }
 
 pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially first
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially first (no siblings)
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -400,7 +400,7 @@ pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially last
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially last (no siblings)
     var child = lxb_dom_node_last_child_noi(parent);
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -422,7 +422,7 @@ pub fn isRoot(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially first
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return false;
@@ -440,7 +440,7 @@ pub fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially last
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return false;
@@ -458,7 +458,7 @@ pub fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn getNthIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 0;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // detached = trivially 1st
     var idx: u32 = 0;
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
@@ -472,7 +472,7 @@ pub fn getNthIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 pub fn getNthLastIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent = node.parent orelse return 0;
+    const parent = node.parent orelse return 1; // detached = trivially 1st
     var idx: u32 = 0;
     var child = lxb_dom_node_last_child_noi(parent);
     while (child) |ch| {
@@ -486,7 +486,7 @@ pub fn getNthLastIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 pub fn getNthOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 0;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // detached = trivially 1st
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return 0;
@@ -507,7 +507,7 @@ pub fn getNthOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 pub fn getNthLastOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 0;
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // detached = trivially 1st
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return 0;

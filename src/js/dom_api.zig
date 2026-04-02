@@ -1601,11 +1601,20 @@ fn styleGetPropertyValue(
                 }
                 return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
             }
-            // rgb()/rgba()/hsl()/hsla() → normalize to canonical rgb()/rgba()
+            // CSS Color 4: lab/lch/oklab/oklch preserve their notation in specified values
+            if ((tv.len >= 4 and dom_style.eqlIgnoreCase(tv[0..4], "lab(")) or
+                (tv.len >= 4 and dom_style.eqlIgnoreCase(tv[0..4], "lch(")) or
+                (tv.len >= 6 and dom_style.eqlIgnoreCase(tv[0..6], "oklab(")) or
+                (tv.len >= 6 and dom_style.eqlIgnoreCase(tv[0..6], "oklch(")))
+            {
+                return dom_style.formatModernColorComputed(c, tv);
+            }
+            // color() function → canonical serialization
             const color_mod = @import("../css/properties.zig");
             if (tv.len >= 6 and dom_style.eqlIgnoreCase(tv[0..6], "color(")) {
                 return dom_style.formatColorFuncComputed(c, tv);
             }
+            // rgb()/rgba()/hsl()/hsla()/hwb() → normalize to canonical rgb()/rgba()
             if (color_mod.parseColor(tv)) |color| {
                 var color_buf: [64]u8 = undefined;
                 // Clamp alpha to [0, 1] range

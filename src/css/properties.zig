@@ -417,7 +417,7 @@ pub fn parseColorComponent(tok: []const u8, is_pct_scale: f32) ?f32 {
     return if (is_pct) val / 100.0 * is_pct_scale else val;
 }
 
-fn parseAngleComponent(tok: []const u8) ?f32 {
+pub fn parseAngleComponent(tok: []const u8) ?f32 {
     if (eqlIgnoreCase(tok, "none")) return 0;
     if (std.mem.endsWith(u8, tok, "deg")) {
         return std.fmt.parseFloat(f32, tok[0 .. tok.len - 3]) catch null;
