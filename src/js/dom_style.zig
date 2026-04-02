@@ -788,16 +788,42 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
     {
         const tv = std.mem.trim(u8, val, " \t");
         if (tv.len > 0 and tv[tv.len - 1] == '%') return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
-        if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
+        if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null) {
+            // Simplify calc(X%) → X%
+            if (tv[tv.len - 1] == ')') {
+                const inner = std.mem.trim(u8, tv[5 .. tv.len - 1], " \t");
+                if (inner.len > 0 and inner[inner.len - 1] == '%') {
+                    var simple = true;
+                    for (inner[0 .. inner.len - 1]) |ch| {
+                        if (ch == '+' or ch == '*' or ch == '/' or ch == '(') { simple = false; break; }
+                    }
+                    if (simple) return qjs.JS_NewStringLen(c, inner.ptr, inner.len);
+                }
+            }
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
+        }
     }
     // text-indent: percentages should be preserved in computed value
     if (eqlIgnoreCase(prop, "text-indent")) {
         const tv = std.mem.trim(u8, val, " \t");
         if (tv.len > 0 and tv[tv.len - 1] == '%') return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
-        // calc() with % should be preserved
-        if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null)
+        // calc() with % — simplify calc(X%) → X%, otherwise preserve
+        if (tv.len >= 5 and eqlIgnoreCase(tv[0..5], "calc(") and std.mem.indexOf(u8, tv, "%") != null) {
+            if (tv[tv.len - 1] == ')') {
+                const inner = std.mem.trim(u8, tv[5 .. tv.len - 1], " \t");
+                // Single percentage value: no operators
+                const is_simple_pct = blk: {
+                    if (inner.len == 0 or inner[inner.len - 1] != '%') break :blk false;
+                    for (inner[0 .. inner.len - 1]) |ch| {
+                        if (ch == '+' or ch == '*' or ch == '/' or ch == '(') break :blk false;
+                        // '-' only at start is OK (negative number)
+                    }
+                    break :blk true;
+                };
+                if (is_simple_pct) return qjs.JS_NewStringLen(c, inner.ptr, inner.len);
+            }
             return qjs.JS_NewStringLen(c, tv.ptr, tv.len);
+        }
     }
     // line-height: resolve % to px (number * font-size)
     if (eqlIgnoreCase(prop, "line-height")) {
