@@ -5,44 +5,28 @@ const lxb = @import("../bindings/lexbor.zig").c;
 const api = @import("dom_api.zig");
 const events = @import("events.zig");
 const Box = @import("../layout/box.zig").Box;
+const dom_bindings = @import("dom_bindings.zig");
 
-// ── Helpers ──────────────────────────────────────────────────────────
+// ── Helpers (from shared dom_bindings) ──────────────────────────────
+const lowercaseAttrName = dom_bindings.lowercaseAttrName;
 
-/// Lowercase an attribute name for HTML elements (DOM spec requirement).
-/// Returns a slice into lower_buf if any uppercase chars found, or the original slice.
-fn lowercaseAttrName(name: []const u8, lower_buf: *[256]u8) []const u8 {
-    var has_upper = false;
-    for (name) |ch| {
-        if (ch >= 'A' and ch <= 'Z') {
-            has_upper = true;
-            break;
-        }
-    }
-    if (!has_upper) return name;
-    const len = @min(name.len, 256);
-    for (0..len) |i| {
-        lower_buf[i] = if (name[i] >= 'A' and name[i] <= 'Z') name[i] + 32 else name[i];
-    }
-    return lower_buf[0..len];
-}
-
-// ── External Lexbor functions ────────────────────────────────────────
-extern fn lxb_dom_element_set_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value: [*]const u8, value_len: usize) ?*anyopaque;
-extern fn lxb_dom_element_get_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value_len: *usize) ?[*]const u8;
-extern fn lxb_dom_element_remove_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) lxb.lxb_status_t;
-extern fn lxb_dom_element_has_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) bool;
-extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
-extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
-extern fn lxb_dom_element_next_attribute_noi(attr: *anyopaque) ?*anyopaque;
-extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
-extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
-extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_insert_before(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_text_content(node: *lxb.lxb_dom_node_t, len: *usize) ?[*]const u8;
-extern fn lxb_dom_node_text_content_set(node: *lxb.lxb_dom_node_t, content: [*]const u8, len: usize) lxb.lxb_status_t;
-extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
-extern fn lxb_dom_document_create_text_node(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
+// ── Lexbor functions (from shared dom_bindings) ─────────────────────
+const lxb_dom_element_set_attribute = dom_bindings.lxb_dom_element_set_attribute;
+const lxb_dom_element_get_attribute = dom_bindings.lxb_dom_element_get_attribute;
+const lxb_dom_element_remove_attribute = dom_bindings.lxb_dom_element_remove_attribute;
+const lxb_dom_element_has_attribute = dom_bindings.lxb_dom_element_has_attribute;
+const lxb_dom_element_local_name = dom_bindings.lxb_dom_element_local_name;
+const lxb_dom_element_first_attribute_noi = dom_bindings.lxb_dom_element_first_attribute_noi;
+const lxb_dom_element_next_attribute_noi = dom_bindings.lxb_dom_element_next_attribute_noi;
+const lxb_dom_attr_qualified_name = dom_bindings.lxb_dom_attr_qualified_name;
+const lxb_dom_attr_value_noi = dom_bindings.lxb_dom_attr_value_noi;
+const lxb_dom_node_insert_child = dom_bindings.lxb_dom_node_insert_child;
+const lxb_dom_node_insert_before = dom_bindings.lxb_dom_node_insert_before;
+const lxb_dom_node_insert_after = dom_bindings.lxb_dom_node_insert_after;
+const lxb_dom_node_text_content = dom_bindings.lxb_dom_node_text_content;
+const lxb_dom_node_text_content_set = dom_bindings.lxb_dom_node_text_content_set;
+const lxb_dom_document_create_element = dom_bindings.lxb_dom_document_create_element;
+const lxb_dom_document_create_text_node = dom_bindings.lxb_dom_document_create_text_node;
 
 // ── Helpers (delegated to dom_api) ───────────────────────────────────
 
@@ -161,7 +145,7 @@ pub fn elementGetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
@@ -184,7 +168,7 @@ pub fn elementSetAttribute(
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
     // DOM spec: HTML elements lowercase attribute names
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
     _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -290,7 +274,7 @@ pub fn elementRemoveAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const name_raw = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, name_raw.ptr);
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(name_raw.ptr[0..name_raw.len], &lower_buf);
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -311,7 +295,7 @@ pub fn elementHasAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
@@ -332,7 +316,7 @@ pub fn elementToggleAttribute(
     if (s.len == 0) return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
     // DOM spec: HTML elements lowercase attribute names
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
 
     const has = lxb_dom_element_has_attribute(elem, name.ptr, name.len);

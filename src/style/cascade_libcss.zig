@@ -1,3 +1,9 @@
+/// DEPRECATED: This module is the legacy libcss-based cascade implementation.
+/// The active cascade engine is src/css/cascade.zig (pure Zig implementation).
+/// This file is retained for reference but is not imported anywhere.
+/// It shares parsing patterns (gradient, shadow, color) with css/cascade.zig
+/// that could be extracted to a shared css/parse_values.zig module if this
+/// code is ever reactivated.
 const std = @import("std");
 const css = @import("../bindings/css.zig").c;
 const lxb = @import("../bindings/lexbor.zig").c;
