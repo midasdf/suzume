@@ -465,6 +465,12 @@ fn extractStyleVp(style: *const css.css_computed_style, is_root: bool, vw: f32, 
         else => .auto,
     };
 
+    // Order
+    var order_val: i32 = 0;
+    if (css.css_computed_order(style, &order_val) == css.CSS_ORDER_SET) {
+        result.order = order_val;
+    }
+
     var fg_val: css.css_fixed = 0;
     if (css.css_computed_flex_grow(style, &fg_val) == css.CSS_FLEX_GROW_SET) {
         result.flex_grow = fixedToF32(fg_val);

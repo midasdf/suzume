@@ -533,6 +533,28 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
     } else if (std.mem.eql(u8, prop, "flex-shrink")) {
         const result = std.fmt.bufPrint(&buf, "{d}", .{style.flex_shrink}) catch return qjs.JS_NewStringLen(c, "1", 1);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "flex-basis")) {
+        return switch (style.flex_basis) {
+            .auto => qjs.JS_NewStringLen(c, "auto", 4),
+            .none => qjs.JS_NewStringLen(c, "auto", 4),
+            .px => |v| fmtPx(c, v, &buf),
+            .percent => |v| blk: {
+                const s = std.fmt.bufPrint(&buf, "{d}%", .{v}) catch break :blk qjs.JS_NewStringLen(c, "auto", 4);
+                break :blk qjs.JS_NewStringLen(c, s.ptr, s.len);
+            },
+            .min_content => qjs.JS_NewStringLen(c, "min-content", 11),
+            .max_content => qjs.JS_NewStringLen(c, "max-content", 11),
+            .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
+        };
+    } else if (std.mem.eql(u8, prop, "order")) {
+        const result = std.fmt.bufPrint(&buf, "{d}", .{style.order}) catch return qjs.JS_NewStringLen(c, "0", 1);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "z-index")) {
+        if (style.z_index != 0 or style.position != .static_) {
+            const result = std.fmt.bufPrint(&buf, "{d}", .{style.z_index}) catch return qjs.JS_NewStringLen(c, "auto", 4);
+            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        }
+        return qjs.JS_NewStringLen(c, "auto", 4);
     } else if (std.mem.eql(u8, prop, "box-sizing")) {
         const s = switch (style.box_sizing) {
             .content_box => "content-box",
