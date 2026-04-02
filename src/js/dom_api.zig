@@ -1607,7 +1607,7 @@ fn styleGetPropertyValue(
                 (tv.len >= 6 and dom_style.eqlIgnoreCase(tv[0..6], "oklab(")) or
                 (tv.len >= 6 and dom_style.eqlIgnoreCase(tv[0..6], "oklch(")))
             {
-                return dom_style.formatModernColorComputed(c, tv);
+                return dom_style.formatModernColorSpecified(c, tv);
             }
             // color() function → canonical serialization
             const color_mod = @import("../css/properties.zig");

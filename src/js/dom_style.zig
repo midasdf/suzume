@@ -1468,6 +1468,54 @@ fn formatAsColorSrgb(c: *qjs.JSContext, color: @import("../css/values.zig").Colo
     }
 }
 
+/// Tokenize a string into space-separated tokens, respecting parenthesis depth.
+/// Returns up to max_tokens tokens in the output array.
+fn tokenizeRespectingParens(input: []const u8, out: *[8][]const u8) usize {
+    var count: usize = 0;
+    var depth: usize = 0;
+    var start: usize = 0;
+    var in_tok = false;
+    for (input, 0..) |ch, i| {
+        if (ch == '(') {
+            depth += 1;
+            if (!in_tok) { start = i; in_tok = true; }
+        } else if (ch == ')') {
+            if (depth > 0) depth -= 1;
+            if (!in_tok) { start = i; in_tok = true; }
+        } else if ((ch == ' ' or ch == '\t') and depth == 0) {
+            if (in_tok and count < 8) {
+                out[count] = input[start..i];
+                count += 1;
+            }
+            in_tok = false;
+        } else {
+            if (!in_tok) start = i;
+            in_tok = true;
+        }
+    }
+    if (in_tok and count < 8) {
+        out[count] = input[start..input.len];
+        count += 1;
+    }
+    return count;
+}
+
+/// Try to resolve a calc/math expression to a numeric f32.
+/// Used for resolving calc() inside color function arguments.
+/// pct_base controls percentage resolution: 1.0 for color()/alpha, 100.0 for lab L, etc.
+fn resolveCalcComponentWithBase(tok: []const u8, pct_base: f32) ?f32 {
+    if (tok.len < 4) return null;
+    if (isCssMathFunc(tok)) {
+        return cascade_mod.resolveValueToPx(tok, 16.0, api.g_viewport_width, api.g_viewport_height, pct_base);
+    }
+    return null;
+}
+
+/// Shorthand for color()/alpha context (pct_base=1.0, so 50% → 0.5)
+fn resolveCalcComponent(tok: []const u8) ?f32 {
+    return resolveCalcComponentWithBase(tok, 1.0);
+}
+
 /// Format color() function for computed value: color(srgb R G B) or color(srgb R G B / A)
 /// Alpha is clamped to [0, 1], alpha of 1 is omitted.
 pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
@@ -1492,24 +1540,25 @@ pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue
 
     const color_part = if (has_slash) std.mem.trim(u8, inner[0..slash_pos], " \t") else std.mem.trim(u8, inner, " \t");
 
-    // Parse: colorspace R G B
-    var iter = std.mem.tokenizeAny(u8, color_part, " \t");
-    const space = iter.next() orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+    // Parse: colorspace R G B (paren-aware tokenization for calc())
+    var tokens: [8][]const u8 = undefined;
+    const tok_count = tokenizeRespectingParens(color_part, &tokens);
+    if (tok_count < 4) return qjs.JS_NewStringLen(c, input.ptr, input.len); // space + 3 components
+    const space = tokens[0];
 
     var vals: [3]f32 = .{ 0, 0, 0 };
     var is_none: [3]bool = .{ false, false, false };
-    var count: usize = 0;
-    while (iter.next()) |tok| {
-        if (count >= 3) break;
+    for (0..3) |i| {
+        const tok = tokens[i + 1];
         if (eqlIgnoreCase(tok, "none")) {
-            vals[count] = 0;
-            is_none[count] = true;
+            vals[i] = 0;
+            is_none[i] = true;
+        } else if (resolveCalcComponent(tok)) |v| {
+            vals[i] = v; // pct_base=1.0 already handles % → 0-1
         } else {
-            vals[count] = color_mod.parseColorComponent(tok, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            vals[i] = color_mod.parseColorComponent(tok, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
         }
-        count += 1;
     }
-    if (count < 3) return qjs.JS_NewStringLen(c, input.ptr, input.len);
 
     // Parse alpha if present
     var alpha: f32 = 1.0;
@@ -1522,6 +1571,11 @@ pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue
                 alpha = 0;
                 has_alpha = true;
                 alpha_none = true;
+            } else if (resolveCalcComponent(alpha_str)) |v| {
+                alpha = v; // pct_base=1.0: 50% → 0.5 already
+                has_alpha = true;
+                if (alpha < 0) alpha = 0;
+                if (alpha > 1) alpha = 1;
             } else {
                 alpha = color_mod.parseColorComponent(alpha_str, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
                 has_alpha = true;
@@ -1575,6 +1629,15 @@ pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue
 ///   - percentage lightness → number (lab/oklab: L% → L*range, lch/oklch: L% → L*range)
 ///   - angle units resolved to degrees (bare number) for hue in lch/oklch
 pub fn formatModernColorComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
+    return formatModernColorImpl(c, input, true);
+}
+
+/// For specified values: don't resolve calc(), don't clamp
+pub fn formatModernColorSpecified(c: *qjs.JSContext, input: []const u8) qjs.JSValue {
+    return formatModernColorImpl(c, input, false);
+}
+
+fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: bool) qjs.JSValue {
     const color_mod = @import("../css/properties.zig");
 
     // Extract function name
@@ -1610,16 +1673,34 @@ pub fn formatModernColorComputed(c: *qjs.JSContext, input: []const u8) qjs.JSVal
     const is_ok = eqlIgnoreCase(func_name, "oklab") or eqlIgnoreCase(func_name, "oklch");
     const is_hue_func = eqlIgnoreCase(func_name, "lch") or eqlIgnoreCase(func_name, "oklch");
 
-    // Parse 3 color components, tracking `none`
-    var iter = std.mem.tokenizeAny(u8, color_part, " \t");
+    // Parse 3 color components, tracking `none` (paren-aware for calc())
+    var tokens: [8][]const u8 = undefined;
+    const tok_count = tokenizeRespectingParens(color_part, &tokens);
+    if (tok_count < 3) return qjs.JS_NewStringLen(c, input.ptr, input.len);
+
     var vals: [3]f64 = .{ 0, 0, 0 };
     var is_none: [3]bool = .{ false, false, false };
-    var count: usize = 0;
-    while (iter.next()) |tok| {
-        if (count >= 3) break;
+    for (0..3) |count| {
+        const tok = tokens[count];
         if (eqlIgnoreCase(tok, "none")) {
             vals[count] = 0;
             is_none[count] = true;
+        } else if (resolve_calc and isCssMathFunc(tok)) {
+            // Choose pct_base based on component context:
+            const pct_base: f32 = if (count == 0) (if (is_ok) @as(f32, 1.0) else @as(f32, 100.0))
+            else if (count == 1 and is_hue_func) (if (is_ok) @as(f32, 0.4) else @as(f32, 150.0))
+            else if (is_ok) @as(f32, 0.4)
+            else @as(f32, 125.0);
+            if (resolveCalcComponentWithBase(tok, pct_base)) |resolved| {
+                vals[count] = @floatCast(resolved);
+            } else return qjs.JS_NewStringLen(c, input.ptr, input.len);
+            // Apply same clamping as non-calc path
+            if (count == 0) {
+                const l_max: f64 = if (is_ok) 1.0 else 100.0;
+                if (vals[count] < 0) vals[count] = 0;
+                if (vals[count] > l_max) vals[count] = l_max;
+            }
+            if (is_hue_func and count == 1 and vals[count] < 0) vals[count] = 0;
         } else if (count == 0) {
             // Lightness
             if (tok.len > 0 and tok[tok.len - 1] == '%') {
@@ -1652,9 +1733,7 @@ pub fn formatModernColorComputed(c: *qjs.JSContext, input: []const u8) qjs.JSVal
             // Clamp chroma ≥ 0 for lch/oklch
             if (is_hue_func and count == 1 and vals[count] < 0) vals[count] = 0;
         }
-        count += 1;
     }
-    if (count < 3) return qjs.JS_NewStringLen(c, input.ptr, input.len);
 
     // Parse alpha
     var alpha: f64 = 1.0;
@@ -1667,6 +1746,11 @@ pub fn formatModernColorComputed(c: *qjs.JSContext, input: []const u8) qjs.JSVal
                 alpha = 0;
                 has_alpha = true;
                 alpha_none = true;
+            } else if (resolve_calc and isCssMathFunc(alpha_str)) {
+                if (resolveCalcComponent(alpha_str)) |v| {
+                    alpha = @floatCast(v);
+                    has_alpha = true;
+                } else return qjs.JS_NewStringLen(c, input.ptr, input.len);
             } else if (alpha_str[alpha_str.len - 1] == '%') {
                 alpha = (std.fmt.parseFloat(f64, alpha_str[0 .. alpha_str.len - 1]) catch return qjs.JS_NewStringLen(c, input.ptr, input.len)) / 100.0;
                 has_alpha = true;
