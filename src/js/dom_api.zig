@@ -1940,6 +1940,21 @@ fn createAttrObject(c: *qjs.JSContext, name: []const u8, value: []const u8, owne
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "namespaceURI", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "ownerElement", qjs.JS_DupValue(c, owner));
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
+    // Add Node methods to Attr (DOM spec: Attr inherits from Node)
+    const attr_methods_js =
+        \\(function(a){
+        \\  a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};
+        \\  a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};
+        \\  a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};
+        \\})
+    ;
+    const attr_mfn = qjs.JS_Eval(c, attr_methods_js, attr_methods_js.len, "<attr-m>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(attr_mfn)) {
+        var attr_margs = [1]qjs.JSValue{attr_obj};
+        const attr_mr = qjs.JS_Call(c, attr_mfn, quickjs.JS_UNDEFINED(), 1, &attr_margs);
+        qjs.JS_FreeValue(c, attr_mr);
+        qjs.JS_FreeValue(c, attr_mfn);
+    }
     return attr_obj;
 }
 
@@ -2581,9 +2596,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const ns_js =
             \\(function(){
             \\  var NP=globalThis.__np;
-            \\  NP.lookupPrefix=function(ns){if(!ns)return null;var el=this.nodeType===1?this:this.parentElement;while(el){if(el.namespaceURI===ns&&el.prefix)return el.prefix;el=el.parentElement;}return null;};
-            \\  NP.lookupNamespaceURI=function(prefix){if(this.nodeType===10||this.nodeType===11)return null;var el=this.nodeType===1?this:this.parentElement;while(el){if(prefix===null||prefix===undefined){if(el.namespaceURI&&!el.prefix)return el.namespaceURI;}else if(el.prefix===prefix)return el.namespaceURI;el=el.parentElement;}if(!prefix&&this.nodeType!==11)return 'http://www.w3.org/1999/xhtml';return null;};
-            \\  NP.isDefaultNamespace=function(ns){return this.lookupNamespaceURI(null)===ns;};
+            \\  NP.lookupPrefix=function(ns){if(!ns)return null;var el=this.nodeType===1?this:this.parentElement;while(el){if(el.namespaceURI===ns&&el.prefix)return el.prefix;if(el.attributes)for(var i=0;i<el.attributes.length;i++){var a=el.attributes[i];if(a.prefix==='xmlns'&&a.value===ns)return a.localName;if(a.name==='xmlns'&&a.value===ns&&!el.prefix)return null;}el=el.parentElement;}return null;};
+            \\  NP.lookupNamespaceURI=function(prefix){var p=prefix===undefined?null:prefix;if(this.nodeType===10)return null;var el=this.nodeType===1?this:(this.nodeType===11?null:this.parentElement);while(el){if(p===null||p===''){var d=el.getAttribute('xmlns');if(d!==null)return d||null;if(el.namespaceURI&&!el.prefix)return el.namespaceURI;}else{if(el.prefix===p)return el.namespaceURI;var ns=el.getAttribute('xmlns:'+p);if(ns!==null)return ns||null;if(p==='xml')return'http://www.w3.org/XML/1998/namespace';if(p==='xmlns')return'http://www.w3.org/2000/xmlns/';}el=el.parentElement;}return null;};
+            \\  NP.isDefaultNamespace=function(ns){var r=this.lookupNamespaceURI(null);if(ns===''||ns===undefined)ns=null;return r===ns;};
             \\  NP.isSameNode=function(o){return this===o;};
             \\  NP.hasChildNodes=function(){return this.childNodes&&this.childNodes.length>0;};
             \\  Object.defineProperty(NP,'baseURI',{get:function(){var d=this.ownerDocument||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});
@@ -3479,8 +3494,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const doc_ns_js =
             \\(function(d){
             \\  d.isSameNode=function(o){return d===o;};
-            \\  d.lookupPrefix=function(){return null;};
-            \\  d.lookupNamespaceURI=function(p){if(!p)return 'http://www.w3.org/1999/xhtml';return null;};
+            \\  d.lookupPrefix=function(ns){var de=d.documentElement;return de?de.lookupPrefix(ns):null;};
+            \\  d.lookupNamespaceURI=function(p){if(!p||p==='')return'http://www.w3.org/1999/xhtml';if(p==='xml')return'http://www.w3.org/XML/1998/namespace';if(p==='xmlns')return'http://www.w3.org/2000/xmlns/';var de=d.documentElement;return de?de.lookupNamespaceURI(p):null;};
             \\  d.isDefaultNamespace=function(ns){return ns==='http://www.w3.org/1999/xhtml';};
             \\})
         ;
