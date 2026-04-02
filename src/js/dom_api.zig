@@ -1940,12 +1940,16 @@ fn createAttrObject(c: *qjs.JSContext, name: []const u8, value: []const u8, owne
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "namespaceURI", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "ownerElement", qjs.JS_DupValue(c, owner));
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
-    // Add Node methods to Attr (DOM spec: Attr inherits from Node)
+    // Add Node methods/properties to Attr (DOM spec: Attr inherits from Node)
     const attr_methods_js =
         \\(function(a){
         \\  a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};
         \\  a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};
         \\  a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};
+        \\  Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:null)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});
+        \\  a.childNodes=[];a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
+        \\  a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};
+        \\  a.isConnected=false;a.getRootNode=function(){return this;};
         \\})
     ;
     const attr_mfn = qjs.JS_Eval(c, attr_methods_js, attr_methods_js.len, "<attr-m>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -3448,11 +3452,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\a.cloneNode=function(){var c=document.createAttributeNS(this.namespaceURI,this.name);c.value=this.value;return c;};
             \\Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});
             \\Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});
+            \\Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});
+            \\a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};
+            \\a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};
+            \\a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};
+            \\a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};
+            \\a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
             \\return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
         const create_attr_js =
-            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});return a;})
+            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
