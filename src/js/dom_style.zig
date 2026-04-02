@@ -4538,6 +4538,8 @@ fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
     if (auto_allowed and eqlIgnoreCase(val, "auto")) return true;
     if (isValidColorKeyword(val)) return true;
     if (isColorFuncWithCalc(val)) return true;
+    // Color functions containing var() are always valid (resolved at computed time)
+    if (std.mem.indexOf(u8, val, "var(") != null) return true;
 
     // Reject `none` in legacy comma syntax for rgb/rgba/hsl/hsla
     if (val.len >= 4 and (eqlIgnoreCase(val[0..4], "rgb(") or
@@ -4618,7 +4620,31 @@ fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
         }
     }
 
-    return color_mod.parseColor(val) != null;
+    // Try parsing as-is first
+    if (color_mod.parseColor(val) != null) return true;
+    // Try stripping CSS comments: rgb(/* R */0, /* G */51, /* B */255)
+    if (std.mem.indexOf(u8, val, "/*") != null) {
+        var stripped: [512]u8 = undefined;
+        var spos: usize = 0;
+        var i: usize = 0;
+        while (i < val.len) {
+            if (i + 1 < val.len and val[i] == '/' and val[i + 1] == '*') {
+                // Skip until */
+                i += 2;
+                while (i + 1 < val.len) : (i += 1) {
+                    if (val[i] == '*' and val[i + 1] == '/') { i += 2; break; }
+                }
+            } else {
+                if (spos < stripped.len) {
+                    stripped[spos] = val[i];
+                    spos += 1;
+                }
+                i += 1;
+            }
+        }
+        if (spos > 0 and color_mod.parseColor(stripped[0..spos]) != null) return true;
+    }
+    return false;
 }
 
 pub fn isValidColorKeyword(val: []const u8) bool {
