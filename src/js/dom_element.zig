@@ -986,9 +986,27 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
     _ = qjs.JS_SetPropertyStr(ctx, obj, "item", qjs.JS_NewCFunction(ctx, &classListItem, "item", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "forEach", qjs.JS_NewCFunction(ctx, &classListForEach, "forEach", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toString", qjs.JS_NewCFunction(ctx, &classListGetValue, "toString", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, obj, "entries", qjs.JS_NewCFunction(ctx, &classListEntries, "entries", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, obj, "keys", qjs.JS_NewCFunction(ctx, &classListKeys, "keys", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, obj, "values", qjs.JS_NewCFunction(ctx, &classListValues, "values", 0));
+    // keys/values/entries return iterators (not Arrays) per DOMTokenList spec
+    {
+        const iter_js =
+            \\(function(cl){
+            \\  cl.keys=function(){var i=0,l=this.length;return{next:function(){return i<l?{value:i++,done:false}:{done:true};},
+            \\    [Symbol.iterator]:function(){return this;}}};
+            \\  cl.values=function(){var i=0,l=this.length,t=this;return{next:function(){return i<l?{value:t.item(i++),done:false}:{done:true};},
+            \\    [Symbol.iterator]:function(){return this;}}};
+            \\  cl.entries=function(){var i=0,l=this.length,t=this;return{next:function(){return i<l?{value:[i,t.item(i++)],done:false}:{done:true};},
+            \\    [Symbol.iterator]:function(){return this;}}};
+            \\  cl[Symbol.iterator]=cl.values;
+            \\})
+        ;
+        const iter_fn = qjs.JS_Eval(ctx, iter_js, iter_js.len, "<cl-iter>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(iter_fn)) {
+            var iter_args = [1]qjs.JSValue{obj};
+            const iter_r = qjs.JS_Call(ctx, iter_fn, quickjs.JS_UNDEFINED(), 1, &iter_args);
+            qjs.JS_FreeValue(ctx, iter_r);
+            qjs.JS_FreeValue(ctx, iter_fn);
+        }
+    }
 
     // length getter
     {
