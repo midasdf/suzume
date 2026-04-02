@@ -4,37 +4,38 @@ const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const api = @import("dom_api.zig");
 const events = @import("events.zig");
+const dom_bindings = @import("dom_bindings.zig");
 
-// ── External Lexbor functions ────────────────────────────────────────
-extern fn lxb_dom_node_text_content(node: *lxb.lxb_dom_node_t, len: *usize) ?[*]const u8;
-extern fn lxb_dom_node_text_content_set(node: *lxb.lxb_dom_node_t, content: [*]const u8, len: usize) lxb.lxb_status_t;
-extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_insert_before(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_remove(node: *lxb.lxb_dom_node_t) void;
-extern fn lxb_dom_node_destroy(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
-extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
-extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
-extern fn lxb_dom_element_next_attribute_noi(attr: *anyopaque) ?*anyopaque;
-extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
-extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
-extern fn lxb_dom_element_set_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value: [*]const u8, val_len: usize) ?*anyopaque;
-extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
-extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
-extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
-extern fn lxb_dom_document_create_text_node(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
-extern fn lxb_dom_document_create_comment(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
+// ── Lexbor functions (from shared dom_bindings) ─────────────────────
+const lxb_dom_node_text_content = dom_bindings.lxb_dom_node_text_content;
+const lxb_dom_node_text_content_set = dom_bindings.lxb_dom_node_text_content_set;
+const lxb_dom_node_insert_child = dom_bindings.lxb_dom_node_insert_child;
+const lxb_dom_node_insert_before = dom_bindings.lxb_dom_node_insert_before;
+const lxb_dom_node_insert_after = dom_bindings.lxb_dom_node_insert_after;
+const lxb_dom_node_remove = dom_bindings.lxb_dom_node_remove;
+const lxb_dom_node_destroy = dom_bindings.lxb_dom_node_destroy;
+const lxb_dom_document_create_element = dom_bindings.lxb_dom_document_create_element;
+const lxb_dom_element_first_attribute_noi = dom_bindings.lxb_dom_element_first_attribute_noi;
+const lxb_dom_element_next_attribute_noi = dom_bindings.lxb_dom_element_next_attribute_noi;
+const lxb_dom_attr_qualified_name = dom_bindings.lxb_dom_attr_qualified_name;
+const lxb_dom_attr_value_noi = dom_bindings.lxb_dom_attr_value_noi;
+const lxb_dom_element_set_attribute = dom_bindings.lxb_dom_element_set_attribute;
+const lxb_dom_node_last_child_noi = dom_bindings.lxb_dom_node_last_child_noi;
+const lxb_dom_node_prev_noi = dom_bindings.lxb_dom_node_prev_noi;
+const lxb_dom_element_local_name = dom_bindings.lxb_dom_element_local_name;
+const lxb_dom_document_create_text_node = dom_bindings.lxb_dom_document_create_text_node;
+const lxb_dom_document_create_comment = dom_bindings.lxb_dom_document_create_comment;
 
-// Lexbor HTML serialization
-const lxb_html_serialize_cb_f = ?*const fn (data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(.c) lxb.lxb_status_t;
-extern fn lxb_html_serialize_tree_cb(node: *lxb.lxb_dom_node_t, cb: lxb_html_serialize_cb_f, ctx: ?*anyopaque) lxb.lxb_status_t;
-extern fn lxb_html_serialize_cb(node: *lxb.lxb_dom_node_t, cb: lxb_html_serialize_cb_f, ctx: ?*anyopaque) lxb.lxb_status_t;
+// Lexbor HTML serialization (from shared dom_bindings)
+const lxb_html_serialize_cb_f = dom_bindings.lxb_html_serialize_cb_f;
+const lxb_html_serialize_tree_cb = dom_bindings.lxb_html_serialize_tree_cb;
+const lxb_html_serialize_cb = dom_bindings.lxb_html_serialize_cb;
 
-// Lexbor HTML fragment parsing
-extern fn lxb_html_document_parse_fragment(document: *anyopaque, element: *lxb.lxb_dom_element_t, html: [*]const u8, size: usize) ?*lxb.lxb_dom_node_t;
+// Lexbor HTML fragment parsing (from shared dom_bindings)
+const lxb_html_document_parse_fragment = dom_bindings.lxb_html_document_parse_fragment;
 
-// Lexbor attribute access (needed by nodesAreEqual)
-extern fn lxb_dom_element_get_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value_len: *usize) ?[*]const u8;
+// Lexbor attribute access (from shared dom_bindings)
+const lxb_dom_element_get_attribute = dom_bindings.lxb_dom_element_get_attribute;
 
 // ── Node prototype functions ─────────────────────────────────────────
 
