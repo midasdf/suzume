@@ -7,15 +7,16 @@
 
 ## Motivation
 
-zz has functional file tree and editor views, but lacks standard mouse-driven operations. Users cannot create, rename, or delete files from the file tree, and right-click produces no context menu. This forces users to switch to an external terminal for basic file management. Adding context menus and file tree CRUD brings zz to the usability baseline expected of a modern code editor.
+zz has a functional file tree sidebar and an existing editor context menu (Cut/Copy/Paste/Select All/Select Word/Go to Definition/Find References/Command Palette). However, the file tree lacks CRUD operations — users must switch to an external terminal to create, rename, or delete files. The file tree also has no right-click menu. This spec adds file tree CRUD with context menu support, and refactors the existing ad-hoc context menu state into a typed, reusable component.
 
 ## Goals
 
-- Right-click context menus in file tree and editor
 - File/folder create, rename, delete from file tree
+- Right-click context menu on file tree
 - Copy path to clipboard from file tree
 - Inline text input in file tree for naming operations
-- Lightweight: reuse existing overlay.zig infrastructure
+- Refactor existing editor context menu to share typed MenuItem infrastructure
+- Lightweight: extend existing overlay.zig and file_tree.zig
 
 ## Non-Goals
 
@@ -25,103 +26,125 @@ zz has functional file tree and editor views, but lacks standard mouse-driven op
 - Reveal in File Manager (xdg-open, deferred)
 - Nested/cascading submenus
 
+## Existing Context Menu State
+
+The editor already has a working context menu implemented with ad-hoc state in `main.zig`:
+
+- `context_menu_active: bool` — whether menu is visible
+- `context_menu_x/y: i16` — pixel position
+- `context_menu_selected: i32` — selected item index
+- `context_menu_items` — comptime string array of item labels
+- `executeContextMenuItem()` — string-matching dispatch to actions
+- `overlay.renderContextMenu()` — rendering with hover, separators, keyboard nav
+
+This implementation works but cannot support file tree menus (different items, different actions). This spec replaces the string-based system with a typed `MenuItem`/`MenuAction` model that both editor and file tree menus use.
+
 ## Design
 
-### 1. Context Menu Component
+### 1. Context Menu Component Refactor
 
-Extend the existing context menu rendering in `overlay.zig`.
+Replace the existing ad-hoc context menu with a typed, reusable component in `overlay.zig`.
+
+**Migration from current implementation:**
+1. Remove `context_menu_active`, `context_menu_x`, `context_menu_y`, `context_menu_selected` local variables from `main.zig`
+2. Remove `context_menu_items` comptime string array and `executeContextMenuItem()` string-matching function
+3. Replace with `ContextMenuState` struct (below) and `MenuAction` enum dispatch
+4. Update all ~20 references to `context_menu_active` in main.zig to use mode-based checks
 
 **Data model:**
 
 ```zig
+const MenuAction = enum {
+    // File tree actions
+    tree_new_file,
+    tree_new_folder,
+    tree_rename,
+    tree_delete,
+    tree_copy_path,
+    tree_copy_relative_path,
+    // Editor actions (replaces existing string-matched items)
+    ed_cut,
+    ed_copy,
+    ed_paste,
+    ed_select_all,
+    ed_select_word,
+    ed_goto_definition,
+    ed_find_references,
+    ed_command_palette,
+};
+
 const MenuItem = struct {
     label: []const u8,        // Display text, e.g. "New File"
     shortcut: ?[]const u8,    // Right-aligned hint, e.g. "F2"
-    action: MenuAction,       // Enum identifying the action
+    action: MenuAction,       // Typed action enum
     separator_after: bool,    // Draw 1px separator below this item
     enabled: bool,            // false = grayed out, not selectable
 };
 
-const MenuAction = enum {
-    // File tree actions
-    new_file,
-    new_folder,
-    rename,
-    delete,
-    copy_path,
-    copy_relative_path,
-    // Editor actions
-    cut,
-    copy,
-    paste,
-    goto_definition,
-    rename_symbol,
-    select_all,
+const ContextMenuState = struct {
+    items: []const MenuItem,
+    selected: i32,
+    x: i16,
+    y: i16,
+    source: enum { editor, file_tree },
+    /// For file_tree source: which entry was right-clicked
+    tree_entry_index: ?usize,
 };
 ```
 
 **Rendering:**
-- Background: mantle color + 1px border (surface0)
-- Hover: surface0 highlight on active item
-- Shortcut text: right-aligned in overlay2 color (dimmed)
-- Separator: 1px horizontal line in surface0 color
-- Disabled items: text in overlay0 color, not hoverable
-- Width: auto-sized to widest label + shortcut + padding (min 180px)
-- Position: at mouse click coordinates, clamped to stay within window bounds (flip up/left if near edge)
+- Same visual style as existing `renderContextMenu` (mantle background, 1px border, hover highlight)
+- Added: shortcut text right-aligned in overlay2 color (dimmed)
+- Added: disabled items rendered in overlay0 color, skipped by hover/keyboard
+- Width: auto-sized to widest (label + shortcut + padding), min 180px
 
 **Input handling:**
-- Mouse hover selects item, click executes
-- Up/Down arrow keys navigate (skip separators and disabled items)
-- Enter executes selected item
-- Escape or click outside dismisses
-- Menu dismissed after any action executes
-
-**Mode integration:**
-- Add `context_menu` to the editor mode enum in `main.zig`
-- While in `context_menu` mode, all input routes to menu handler
-- Menu stores: items slice, selected index, pixel position, source context (which file tree entry or editor position triggered it)
+- Unchanged from existing: mouse hover, click, Up/Down, Enter, Escape, click-outside
+- Added: skip disabled items in keyboard navigation
 
 ### 2. File Tree CRUD Operations
 
 #### 2.1 New File / New Folder
 
-**Trigger:** Right-click menu "New File" / "New Folder", or keyboard shortcut (N for file, Shift+N for folder when file tree focused).
+**Trigger:** Right-click menu "New File" / "New Folder".
 
 **Flow:**
-1. Determine target directory (selected entry if directory, or parent of selected file)
+1. Determine target directory: selected entry if directory, parent of selected file, or project root if nothing selected
 2. Enter `tree_input` mode
 3. Show inline input field at the insertion position (below target directory, indented)
 4. User types filename → Enter to confirm
-5. Call `std.fs.cwd().createFile()` or `std.fs.cwd().makeDir()` with full path
-6. On success: refresh file tree, if file → open in new tab
-7. On error (exists, permission denied): show error in status bar, keep input open
+5. Call `std.fs.cwd().createFile(relative_path, .{})` or `std.fs.cwd().makeDir(relative_path)`
+6. On success: targeted refresh of parent directory in file tree (preserve expand/collapse state of other directories), if file → open in new tab
+7. On error (exists, permission denied): show error in status bar message area, keep input open for retry or Esc
 8. Escape cancels, removes input field
 
 #### 2.2 Rename
 
-**Trigger:** Right-click menu "Rename" or F2 key when file tree focused.
+**Trigger:** Right-click menu "Rename" or F2 key when file tree has a selected entry.
 
 **Flow:**
 1. Enter `tree_input` mode
 2. Replace selected entry's display with inline input field
-3. Pre-fill with current filename, select name portion (exclude extension)
-4. Enter confirms → `std.fs.rename()` old path to new path
-5. On success: refresh file tree
-6. If renamed file is open in a tab: update tab's file_path
-7. If LSP active: no explicit notification needed (LSP tracks by URI, file reopen handles it)
+3. Pre-fill with current filename. For extension detection: find last `.` that is not position 0 (so `.gitignore` selects the whole name, `file.test.zig` selects `file.test`)
+4. Enter confirms → `std.fs.cwd().rename(old_relative_path, new_relative_path)`
+5. On success: targeted refresh of parent directory in file tree
+6. If renamed file is open in any tab (check all panes): update each tab's `file_path`
+7. If LSP active and renamed file was open: send `textDocument/didClose` for old URI, then `textDocument/didOpen` for new URI with current buffer content
 8. On error: show in status bar, revert display
 9. Escape cancels
 
 #### 2.3 Delete
 
-**Trigger:** Right-click menu "Delete" or Delete key when file tree focused.
+**Trigger:** Right-click menu "Delete" or Delete key when file tree has a selected entry.
+
+**Guard:** If the selected entry is the project root directory, ignore (no-op). Root is not deletable.
 
 **Flow:**
 1. Enter `confirm_dialog` mode
-2. Show confirmation overlay: "Delete «filename»?" or "Delete «dirname» and its contents?"
+2. Show confirmation overlay: "Delete «filename»?" for files, "Delete «dirname» and its contents?" for directories
 3. Two buttons: [Yes] [No], No is default focus
-4. Yes → `std.fs.cwd().deleteFile()` for files, `std.fs.cwd().deleteTree()` for directories
-5. On success: refresh file tree, close any open tabs for deleted files
+4. Yes → `std.fs.cwd().deleteFile(relative_path)` for files, `std.fs.cwd().deleteTree(relative_path)` for directories
+5. On success: targeted refresh of parent directory in file tree, close any open tabs for deleted files (across all panes)
 6. On error: show in status bar
 7. No or Escape cancels
 
@@ -130,10 +153,10 @@ const MenuAction = enum {
 **Trigger:** Right-click menu only.
 
 **Action:**
-- "Copy Path": set X11 CLIPBOARD selection to absolute path
-- "Copy Relative Path": set CLIPBOARD to path relative to working directory
+- "Copy Path": allocate new `[]u8` with absolute path, pass ownership to `window.setClipboard()`
+- "Copy Relative Path": allocate new `[]u8` with relative path, pass ownership to `window.setClipboard()`
 
-Uses existing clipboard infrastructure in `window.zig`.
+Note: `setClipboard` takes ownership of the allocated slice and frees the previous content. Do not pass a reference to `Entry.path` directly.
 
 ### 3. Inline Input Field
 
@@ -142,9 +165,9 @@ A text input rendered within the file tree area for naming operations.
 **State (in file_tree.zig):**
 ```zig
 const InlineInput = struct {
-    buffer: [256]u8,          // Input text buffer
-    len: usize,               // Current text length
-    cursor: usize,            // Cursor position (byte offset)
+    buffer: [256]u8,          // Input text buffer (UTF-8)
+    len: usize,               // Current text length in bytes
+    cursor: usize,            // Cursor position (byte offset, always at codepoint boundary)
     mode: enum { new_file, new_folder, rename },
     target_dir: []const u8,   // Directory where file will be created
     original_name: ?[]const u8, // For rename: original filename
@@ -157,10 +180,11 @@ const InlineInput = struct {
 - Text cursor: 2px beam, same as editor cursor
 - File/folder icon prefix to indicate type being created
 
-**Input:**
-- Character input appends to buffer
-- Backspace/Delete for editing
-- Left/Right arrow for cursor movement
+**Input (UTF-8 aware):**
+- Character input: append UTF-8 encoded bytes at cursor position
+- Backspace: delete one codepoint before cursor (use `std.unicode.utf8ByteSequenceLength` on the byte before cursor to find codepoint start)
+- Delete: delete one codepoint after cursor
+- Left/Right arrow: move cursor by one codepoint (not byte), using UTF-8 sequence length detection
 - Home/End for start/end
 - Enter confirms
 - Escape cancels
@@ -171,28 +195,7 @@ const InlineInput = struct {
 - Name containing `/` or null bytes → reject, flash status bar warning
 - Existing name at target path → status bar error "File already exists"
 
-### 4. Editor Context Menu
-
-**Menu items:**
-
-| Item | Shortcut | Enabled when | Action |
-|------|----------|-------------|--------|
-| Cut | Ctrl+X | Selection exists | clipboard_cut |
-| Copy | Ctrl+C | Selection exists | clipboard_copy |
-| Paste | Ctrl+V | Always | clipboard_paste |
-| *(separator)* | | | |
-| Go to Definition | F12 | LSP active | goto_definition |
-| Rename Symbol | F2 | LSP active | rename_symbol |
-| *(separator)* | | | |
-| Select All | Ctrl+A | Always | select_all |
-
-**Behavior:**
-- Right-click in editor area → move cursor to click position → show menu
-- Menu items map to existing command functions (no new logic needed)
-- LSP-dependent items check `lsp_client != null` for enabled state
-- Selection-dependent items check `hasSelection()` for enabled state
-
-### 5. Confirmation Dialog
+### 4. Confirmation Dialog
 
 Simple modal for delete confirmation.
 
@@ -208,21 +211,60 @@ Simple modal for delete confirmation.
 - Escape = No
 - Y key = Yes, N key = No (accelerators)
 
-### 6. Mode Additions to main.zig
+### 5. File Tree Refresh Strategy
+
+CRUD operations must not destroy the tree's expand/collapse state.
+
+**Targeted refresh:**
+- After create/rename/delete, only re-scan the affected parent directory
+- Preserve the `expanded` flag of all sibling directories
+- Re-sort entries in the refreshed directory (directories first, alphabetical)
+- If a new file was created, set it as the selected entry
+
+**Implementation:** Add a `refreshDirectory(dir_path)` method to `FileTree` that re-reads only the entries under the specified directory, replacing its children while preserving other subtrees.
+
+### 6. Right-Click Area Routing
+
+**Critical:** The existing right-click handler in `main.zig` (mouse_press, button == .right) assumes all right-clicks are in the editor area. Must add file tree area guard.
+
+**In the mouse_press handler for button == .right:**
+1. Check `file_tree.visible and mouse_x < file_tree.sidebarWidth(&font)` FIRST
+2. If true → determine which file tree entry was clicked (row math from y coordinate + scroll offset), populate file tree menu items, open context menu with `source = .file_tree`
+3. If false → fall through to existing editor right-click handling (move cursor to position, populate editor menu items, open context menu with `source = .editor`)
+
+This mirrors the existing left-click area guard pattern already used for file tree clicks.
+
+### 7. Status Bar Messages
+
+CRUD operations need to display error/success messages. Add a simple transient message mechanism:
+
+**State (in main.zig or view.zig):**
+```zig
+status_message: ?[]const u8 = null,
+status_message_timer: ?i64 = null,  // timestamp when message was set
+```
+
+- Set message on error: `status_message = "File already exists"`
+- Clear after 3 seconds (check in render loop against timerfd or frame count)
+- Render in status bar area, right-aligned or replacing the center section temporarily
+- If no message, status bar shows normal content
+
+### 8. Mode Additions to main.zig
 
 Add to the existing mode enum:
 
 ```
-context_menu   — right-click menu visible, input routes to menu
 tree_input     — inline text input in file tree (new/rename)
 confirm_dialog — delete confirmation overlay
 ```
 
+Note: `context_menu` mode replaces the existing `context_menu_active` bool. This is a refactor, not an addition. All existing checks of `context_menu_active` must be migrated to mode-based checks.
+
 **Mode transitions:**
-- Right-click in file tree → `context_menu` (with file tree items)
-- Right-click in editor → `context_menu` (with editor items)
-- Menu action "New File"/"New Folder"/"Rename" → `tree_input`
-- Menu action "Delete" → `confirm_dialog`
+- Right-click in file tree → set mode `context_menu` (with file tree items)
+- Right-click in editor → set mode `context_menu` (with editor items, same as current behavior)
+- Menu action tree_new_file/tree_new_folder/tree_rename → `tree_input`
+- Menu action tree_delete → `confirm_dialog`
 - Enter/Escape in `tree_input` → `normal`
 - Yes/No/Escape in `confirm_dialog` → `normal`
 - Escape/click-outside in `context_menu` → `normal`
@@ -231,27 +273,33 @@ confirm_dialog — delete confirmation overlay
 
 | File | Change |
 |------|--------|
-| `src/ui/overlay.zig` | Extend context menu rendering, add confirmation dialog |
-| `src/ui/file_tree.zig` | Add InlineInput state, CRUD operations, menu item generation |
-| `src/main.zig` | Add modes, input routing, action dispatch, right-click handling |
-| `src/editor/view.zig` | Editor right-click → menu action connection |
+| `src/ui/overlay.zig` | Refactor `renderContextMenu` to use `MenuItem` slice, add shortcut/disabled rendering, add confirmation dialog render |
+| `src/ui/file_tree.zig` | Add `InlineInput` state, CRUD operations (create/rename/delete/copy path), `refreshDirectory()`, menu item generation, right-click entry detection |
+| `src/main.zig` | Replace `context_menu_active/x/y/selected` with `ContextMenuState`, add `tree_input`/`confirm_dialog` modes, add right-click area routing, add `MenuAction` dispatch, add status bar message state |
+| `src/editor/view.zig` | Minor: status bar message rendering |
 
 No new files created.
 
 ## Edge Cases
 
-- **Rename open file**: Update tab path. Buffer content unchanged (same fd).
-- **Delete open file**: Close tab, discard unsaved changes (confirmed by delete dialog).
+- **Rename open file**: Update tab path in ALL panes (iterate pane tree). Buffer content unchanged. LSP: didClose old + didOpen new.
+- **Delete open file**: Close tab in all panes, discard unsaved changes (confirmed by dialog).
 - **Create in read-only directory**: Status bar error, input stays open for retry or Esc.
-- **Very long filename**: Input buffer 256 bytes, sufficient for any reasonable name.
+- **Very long filename**: Input buffer 256 bytes, sufficient for any reasonable filename.
 - **Concurrent external changes**: File tree refresh on CRUD ops only. No filesystem watcher (consistent with current design).
-- **Delete non-empty directory**: `deleteTree` handles recursion. Confirmation dialog warns about contents.
+- **Delete non-empty directory**: `deleteTree` handles recursion. Dialog says "and its contents".
+- **Delete project root**: Blocked — no-op guard.
+- **Dotfiles rename**: `.gitignore` → entire name selected (no extension split at leading dot).
+- **Multi-dot filenames**: `file.test.zig` → `file.test` selected, `.zig` treated as extension (last dot boundary, unless position 0).
+- **No selection in file tree**: New File/Folder targets project root directory.
+- **Copy path allocation**: Caller allocates new `[]u8` for clipboard. Must not pass borrowed `Entry.path`.
 
 ## Implementation Order
 
-1. Context menu component (overlay.zig) — generic, reusable
-2. File tree CRUD operations (file_tree.zig) — fs operations + inline input
-3. File tree right-click menu (main.zig + file_tree.zig) — connect menu to CRUD
-4. Editor right-click menu (main.zig + view.zig) — connect menu to existing commands
+1. Context menu refactor (overlay.zig + main.zig) — migrate `context_menu_active` bool to typed `ContextMenuState`, `MenuItem`/`MenuAction` model. Preserve existing editor menu behavior.
+2. Right-click area routing (main.zig) — file tree vs editor guard
+3. File tree CRUD operations (file_tree.zig) — fs operations + inline input + targeted refresh
+4. File tree right-click menu (main.zig + file_tree.zig) — connect menu to CRUD
 5. Confirmation dialog (overlay.zig + main.zig) — delete safety gate
-6. End-to-end testing
+6. Status bar messages (main.zig + view.zig) — transient error/success display
+7. End-to-end testing
