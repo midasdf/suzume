@@ -479,6 +479,54 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
             .column_reverse => "column-reverse",
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "flex-wrap")) {
+        const s = switch (style.flex_wrap) {
+            .nowrap => "nowrap",
+            .wrap => "wrap",
+            .wrap_reverse => "wrap-reverse",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "justify-content")) {
+        const s = switch (style.justify_content) {
+            .flex_start => "flex-start",
+            .flex_end => "flex-end",
+            .center => "center",
+            .space_between => "space-between",
+            .space_around => "space-around",
+            .space_evenly => "space-evenly",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "align-content")) {
+        const s = switch (style.align_content) {
+            .stretch => "stretch",
+            .flex_start => "flex-start",
+            .flex_end => "flex-end",
+            .center => "center",
+            .space_between => "space-between",
+            .space_around => "space-around",
+            .space_evenly => "space-evenly",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "align-items")) {
+        const s = switch (style.align_items) {
+            .auto => "stretch", // initial value
+            .stretch => "stretch",
+            .flex_start => "flex-start",
+            .flex_end => "flex-end",
+            .center => "center",
+            .baseline => "baseline",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
+    } else if (std.mem.eql(u8, prop, "align-self")) {
+        const s = switch (style.align_self) {
+            .auto => "auto",
+            .stretch => "stretch",
+            .flex_start => "flex-start",
+            .flex_end => "flex-end",
+            .center => "center",
+            .baseline => "baseline",
+        };
+        return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "flex-grow")) {
         const result = std.fmt.bufPrint(&buf, "{d}", .{style.flex_grow}) catch return qjs.JS_NewStringLen(c, "0", 1);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);

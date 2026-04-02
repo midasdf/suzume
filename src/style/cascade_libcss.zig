@@ -444,6 +444,27 @@ fn extractStyleVp(style: *const css.css_computed_style, is_root: bool, vw: f32, 
         else => .stretch,
     };
 
+    const ac_val = css.css_computed_align_content(style);
+    result.align_content = switch (ac_val) {
+        css.CSS_ALIGN_CONTENT_FLEX_START => .flex_start,
+        css.CSS_ALIGN_CONTENT_FLEX_END => .flex_end,
+        css.CSS_ALIGN_CONTENT_CENTER => .center,
+        css.CSS_ALIGN_CONTENT_SPACE_BETWEEN => .space_between,
+        css.CSS_ALIGN_CONTENT_SPACE_AROUND => .space_around,
+        css.CSS_ALIGN_CONTENT_SPACE_EVENLY => .space_evenly,
+        else => .stretch,
+    };
+
+    const as_val = css.css_computed_align_self(style);
+    result.align_self = switch (as_val) {
+        css.CSS_ALIGN_SELF_FLEX_START => .flex_start,
+        css.CSS_ALIGN_SELF_FLEX_END => .flex_end,
+        css.CSS_ALIGN_SELF_CENTER => .center,
+        css.CSS_ALIGN_SELF_BASELINE => .baseline,
+        css.CSS_ALIGN_SELF_STRETCH => .stretch,
+        else => .auto,
+    };
+
     var fg_val: css.css_fixed = 0;
     if (css.css_computed_flex_grow(style, &fg_val) == css.CSS_FLEX_GROW_SET) {
         result.flex_grow = fixedToF32(fg_val);
