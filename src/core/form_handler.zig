@@ -7,6 +7,7 @@ const TextInput = @import("../ui/input.zig").TextInput;
 const resolveUrl = @import("../net/loader.zig").resolveUrl;
 const Loader = @import("../net/loader.zig").Loader;
 const events = @import("../js/events.zig");
+const http_status = @import("../net/http_status.zig");
 
 /// Walk up the DOM tree to find a form-relevant element (input, button, textarea, select).
 pub fn findFormElement(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
@@ -116,12 +117,17 @@ pub fn findParentForm(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
 pub fn extractQueryParam(query_string: []const u8, param_name: []const u8) ?[]const u8 {
     var pos: usize = 0;
     while (pos < query_string.len) {
-        const eq = std.mem.indexOfScalarPos(u8, query_string, pos, '=') orelse break;
-        const name = query_string[pos..eq];
-        const amp = std.mem.indexOfScalarPos(u8, query_string, eq + 1, '&') orelse query_string.len;
-        if (std.mem.eql(u8, name, param_name)) {
-            return query_string[eq + 1 .. amp];
+        // First find the segment boundary (next '&' or end of string)
+        const amp = std.mem.indexOfScalarPos(u8, query_string, pos, '&') orelse query_string.len;
+        const segment = query_string[pos..amp];
+        // Then look for '=' within this segment
+        if (std.mem.indexOfScalar(u8, segment, '=')) |eq_offset| {
+            const name = segment[0..eq_offset];
+            if (std.mem.eql(u8, name, param_name)) {
+                return segment[eq_offset + 1 ..];
+            }
         }
+        // Skip segments without '=' (bare flags like "?flag&key=val")
         pos = if (amp < query_string.len) amp + 1 else query_string.len;
     }
     return null;
@@ -313,7 +319,7 @@ fn handlePostSubmit(
     };
 
     // Check for redirect (3xx)
-    if (response.status_code >= 300 and response.status_code < 400) {
+    if (http_status.isRedirect(response.status_code)) {
         response.deinit();
         if (navigate_fn(navigate_ctx, url_z)) {
             const final_url = allocator.dupe(u8, resolved_action) catch {

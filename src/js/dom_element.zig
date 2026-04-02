@@ -145,7 +145,7 @@ pub fn elementGetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
@@ -168,7 +168,7 @@ pub fn elementSetAttribute(
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
     // DOM spec: HTML elements lowercase attribute names
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
     _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -274,7 +274,7 @@ pub fn elementRemoveAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const name_raw = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, name_raw.ptr);
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(name_raw.ptr[0..name_raw.len], &lower_buf);
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -295,7 +295,7 @@ pub fn elementHasAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
@@ -316,7 +316,7 @@ pub fn elementToggleAttribute(
     if (s.len == 0) return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
     // DOM spec: HTML elements lowercase attribute names
-    var lower_buf: [256]u8 = undefined;
+    var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
 
     const has = lxb_dom_element_has_attribute(elem, name.ptr, name.len);

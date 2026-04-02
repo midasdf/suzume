@@ -500,8 +500,18 @@ fn signalJsEnabled(doc: *Document) void {
 
     const old_class = class_ptr.?[0..class_len];
 
-    var buf: [2048]u8 = undefined;
-    if (class_len > buf.len) return;
+    // Use stack buffer for typical class strings, fall back to heap for long ones (e.g. Tailwind)
+    var stack_buf: [8192]u8 = undefined;
+    var heap_buf: ?[]u8 = null;
+    defer if (heap_buf) |hb| std.heap.c_allocator.free(hb);
+
+    const buf: []u8 = if (class_len <= stack_buf.len)
+        &stack_buf
+    else blk: {
+        heap_buf = std.heap.c_allocator.alloc(u8, class_len) catch return;
+        break :blk heap_buf.?;
+    };
+
     @memcpy(buf[0..class_len], old_class);
     var new_class: []u8 = buf[0..class_len];
     var changed = false;

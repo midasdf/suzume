@@ -46,7 +46,8 @@ pub extern fn lxb_html_document_parse_fragment(document: *anyopaque, element: *l
 
 /// Lowercase an attribute name for HTML elements (DOM spec requirement).
 /// Returns a slice into lower_buf if any uppercase chars found, or the original slice.
-pub fn lowercaseAttrName(name: []const u8, lower_buf: *[256]u8) []const u8 {
+/// Supports names up to 1024 bytes; longer names are returned as-is (extremely rare).
+pub fn lowercaseAttrName(name: []const u8, lower_buf: *[1024]u8) []const u8 {
     var has_upper = false;
     for (name) |ch| {
         if (ch >= 'A' and ch <= 'Z') {
@@ -55,9 +56,9 @@ pub fn lowercaseAttrName(name: []const u8, lower_buf: *[256]u8) []const u8 {
         }
     }
     if (!has_upper) return name;
-    const len = @min(name.len, 256);
-    for (0..len) |i| {
+    if (name.len > lower_buf.len) return name; // Return as-is rather than silently truncating
+    for (0..name.len) |i| {
         lower_buf[i] = if (name[i] >= 'A' and name[i] <= 'Z') name[i] + 32 else name[i];
     }
-    return lower_buf[0..len];
+    return lower_buf[0..name.len];
 }
