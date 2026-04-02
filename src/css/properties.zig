@@ -354,11 +354,33 @@ fn parseHwbFunc(text: []const u8) ?values.Color {
         black /= sum;
     }
 
-    // Start with HSL (S=100%, L=50%) to get pure hue
-    const hue_rgb = hslToRgb(h, 100, 50);
-    const rf = @as(f32, @floatFromInt(hue_rgb.r)) / 255.0;
-    const gf = @as(f32, @floatFromInt(hue_rgb.g)) / 255.0;
-    const bf = @as(f32, @floatFromInt(hue_rgb.b)) / 255.0;
+    // Pure hue in float (HSL with S=1, L=0.5 → c=1, m=0)
+    var hue = @mod(h, @as(f32, 360.0));
+    if (hue < 0) hue += 360.0;
+    const hp = hue / 60.0;
+    const x = 1.0 - @abs(@mod(hp, 2.0) - 1.0);
+    var rf: f32 = 0;
+    var gf: f32 = 0;
+    var bf: f32 = 0;
+    if (hp < 1.0) {
+        rf = 1;
+        gf = x;
+    } else if (hp < 2.0) {
+        rf = x;
+        gf = 1;
+    } else if (hp < 3.0) {
+        gf = 1;
+        bf = x;
+    } else if (hp < 4.0) {
+        gf = x;
+        bf = 1;
+    } else if (hp < 5.0) {
+        rf = x;
+        bf = 1;
+    } else {
+        rf = 1;
+        bf = x;
+    }
 
     // Mix: color = hue * (1 - white - black) + white
     const r = rf * (1.0 - white - black) + white;
