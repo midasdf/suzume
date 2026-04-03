@@ -949,7 +949,8 @@ fn validateAndExtract(c: *qjs.JSContext, ns_arg: qjs.JSValue, qn_arg: qjs.JSValu
     const qn = qn_s.ptr[0..qn_s.len];
 
     // Step 1: validate qualifiedName against XML Name production
-    if (qn.len > 0 and !isValidXmlName(qn)) {
+    // Empty qualifiedName is always invalid
+    if (qn.len == 0 or !isValidXmlName(qn)) {
         _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         return @as(qjs.JSValue, quickjs.JS_EXCEPTION());
     }
@@ -1271,7 +1272,7 @@ pub fn documentCreateDocumentFragment(
             \\  Object.defineProperty(f,'nodeName',{value:'#document-fragment',writable:false,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'nodeValue',{value:null,writable:false,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'ownerDocument',{value:document,writable:true,configurable:true,enumerable:true});
-            \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3)t+=n.data||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);if(v!==null&&v!==undefined&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
+            \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3)t+=n.data||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);this.__jsChildren=[];if(v!==null&&v!==undefined&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
             \\  f.getElementById=function(id){if(!id||id==='')return null;return this.querySelector('#'+CSS.escape(id));};
             \\})
         ;

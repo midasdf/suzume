@@ -134,9 +134,11 @@ fn fontPathSlice(path: [*:0]const u8) []const u8 {
     return path[0..len];
 }
 
-// Integration test functions are now in tests/test_integration.zig
-const test_integration = @import("../tests/test_integration.zig");
-const testHttp = test_integration.testHttp;
+// Integration test stub (actual tests in tests/test_integration.zig, run via `zig build test`)
+fn testHttp(_: std.mem.Allocator) noreturn {
+    std.debug.print("HTTP integration tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
+    std.process.exit(1);
+}
 
 /// Re-style and re-layout a page after JS DOM mutation.
 /// Rebuilds the style cascade, box tree, and layout from the current DOM state.
@@ -684,9 +686,15 @@ fn navigateTo(
     return true;
 }
 
-// Test functions (testJs, testDomJs) are now in tests/test_integration.zig
-const testJs = test_integration.testJs;
-const testDomJs = test_integration.testDomJs;
+// Test stubs (actual tests in tests/test_integration.zig, run via `zig build test`)
+fn testJs() noreturn {
+    std.debug.print("JS tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
+    std.process.exit(1);
+}
+fn testDomJs() noreturn {
+    std.debug.print("DOM JS tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
+    std.process.exit(1);
+}
 
 // Session management is now in core/session.zig
 const serializeSession = session.serializeSession;
@@ -945,7 +953,9 @@ pub fn main() !void {
         if (storage_inst) |*s| {
             if (s.loadSession()) |session_json| {
                 defer allocator.free(session_json);
-                restoreSession(allocator, session_json, &tab_mgr, &page_states);
+                session.restoreSession(allocator, session_json, &tab_mgr, &page_states.items.len, &struct {
+                    fn noop() void {}
+                }.noop);
 
                 // Auto-load the active (first) tab after session restore
                 if (tab_mgr.getActiveTab()) |tab| {

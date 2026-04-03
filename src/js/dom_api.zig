@@ -2810,7 +2810,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     {
         const classListAtom = qjs.JS_NewAtom(ctx, "classList");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClassList, "get classList", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, elem_proto, classListAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetClassList, "get classList", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetClassList, "set classList", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, classListAtom);
     }
     {
@@ -3467,13 +3467,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};
             \\a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};
             \\a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
-            \\return a;})
+            \\if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
         const create_attr_js =
-            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;return a;})
+            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.cloneNode=function(){var c=document.createAttribute(this.name);c.value=this.value;return c;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+    // Attr constructor for instanceof checks
+    {
+        const attr_ctor_js =
+            \\(function(){
+            \\  function Attr(){}
+            \\  Attr.prototype.constructor = Attr;
+            \\  Attr.prototype[Symbol.toStringTag] = 'Attr';
+            \\  globalThis.Attr = Attr;
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, attr_ctor_js, attr_ctor_js.len, "<attr-ctor>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
     }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateDocumentFragment, "createDocumentFragment", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateEvent, "createEvent", 1));
@@ -3645,7 +3658,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  pi.before = function() {};
             \\  pi.after = function() {};
             \\  pi.replaceWith = function() {};
-            \\  pi.contains = function(o) { return false; };
+            \\  pi.contains = function(o) { return this === o; };
             \\  pi.hasChildNodes = function() { return false; };
             \\  pi.compareDocumentPosition = function(other) {
             \\    if(this===other)return 0;
@@ -3785,7 +3798,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    isEqualNode:function(o){if(!o||o.nodeType!==10)return false;return this.name===o.name&&this.publicId===o.publicId&&this.systemId===o.systemId;},
             \\    isSameNode:function(o){return this===o;},
             \\    hasChildNodes:function(){return false;},
-            \\    contains:function(){return false;},
+            \\    contains:function(o){return this===o;},
             \\  };
             \\  if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);
             \\  var _ch=[dt,d];
@@ -3896,8 +3909,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    prepend: function(){var f=_ch[0]||null;for(var i=arguments.length-1;i>=0;i--){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.insertBefore(n,f);f=n;}},
             \\    append: function(){for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
             \\    replaceChildren: function(){while(_ch.length>0)doc.removeChild(_ch[0]);for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
-            \\    textContent: null,
+            \\    nodeValue: null,
             \\  };
+            \\  Object.defineProperty(doc,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'childNodes',{get:function(){return Array.prototype.slice.call(_ch);},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'firstChild',{get:function(){return _ch.length>0?_ch[0]:null;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'lastChild',{get:function(){return _ch.length>0?_ch[_ch.length-1]:null;},configurable:true,enumerable:true});
@@ -4007,6 +4022,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    dt.ownerDocument=document;
             \\    Object.defineProperty(dt,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
             \\    Object.defineProperty(dt,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'childNodes',{get:function(){return [];},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'firstChild',{get:function(){return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'lastChild',{get:function(){return null;},configurable:true,enumerable:true});
+            \\    dt.hasChildNodes=function(){return false;};
             \\  }
             \\})()
         ;

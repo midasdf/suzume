@@ -24,6 +24,7 @@ const lxb_dom_attr_value_noi = dom_bindings.lxb_dom_attr_value_noi;
 const lxb_dom_node_insert_child = dom_bindings.lxb_dom_node_insert_child;
 const lxb_dom_node_insert_before = dom_bindings.lxb_dom_node_insert_before;
 const lxb_dom_node_insert_after = dom_bindings.lxb_dom_node_insert_after;
+const lxb_dom_node_remove = dom_bindings.lxb_dom_node_remove;
 const lxb_dom_node_text_content = dom_bindings.lxb_dom_node_text_content;
 const lxb_dom_node_text_content_set = dom_bindings.lxb_dom_node_text_content_set;
 const lxb_dom_document_create_element = dom_bindings.lxb_dom_document_create_element;
@@ -517,46 +518,75 @@ pub fn classListAdd(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
-    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const args = if (argc > 0) (argv orelse return quickjs.JS_UNDEFINED()) else null;
 
     // Get the element from classList.__element
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
 
-    const cls_to_add = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM §7.1: Validate ALL tokens first before making changes
+    var arg_idx: usize = 0;
+    if (args) |a| {
+        while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+            const token_s = jsStringToSlice(c, a[arg_idx]) orelse return quickjs.JS_UNDEFINED();
+            if (validateToken(c, token_s.ptr[0..token_s.len])) |exc| {
+                qjs.JS_FreeCString(c, token_s.ptr);
+                return exc;
+            }
+            qjs.JS_FreeCString(c, token_s.ptr);
+        }
+    }
 
-    // DOM §7.1: Validate token
-    if (validateToken(c, cls_to_add.ptr[0..cls_to_add.len])) |exc| return exc;
-    defer qjs.JS_FreeCString(c, cls_to_add.ptr);
-
-    // Get current class
+    // No args + no existing class attribute = no-op
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
+    if (argc == 0 and (cur == null or cur_len == 0)) return quickjs.JS_UNDEFINED();
 
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+    var seen_buf: [128][]const u8 = undefined;
+    var seen_count: usize = 0;
+
+    // First, collect existing unique tokens
     if (cur != null and cur_len > 0) {
-        // Check if already present
-        const current = cur.?[0..cur_len];
-        if (classContains(current, cls_to_add.ptr[0..cls_to_add.len])) return quickjs.JS_UNDEFINED();
-        // Compute required length and use heap allocation if needed
-        const required_len = cur_len + 1 + cls_to_add.len;
-        var stack_buf: [1024]u8 = undefined;
-        const use_heap = required_len > stack_buf.len;
-        const buf = if (use_heap)
-            (std.heap.c_allocator.alloc(u8, required_len) catch return quickjs.JS_EXCEPTION())
-        else
-            stack_buf[0..required_len];
-        defer if (use_heap) std.heap.c_allocator.free(buf);
-        @memcpy(buf[0..cur_len], cur.?[0..cur_len]);
-        buf[cur_len] = ' ';
-        @memcpy(buf[cur_len + 1 ..][0..cls_to_add.len], cls_to_add.ptr[0..cls_to_add.len]);
-        _ = lxb_dom_element_set_attribute(elem, "class", 5, buf.ptr, required_len);
-    } else {
-        _ = lxb_dom_element_set_attribute(elem, "class", 5, cls_to_add.ptr, cls_to_add.len);
+        var iter = std.mem.tokenizeAny(u8, cur.?[0..cur_len], " \t\n\r\x0c");
+        while (iter.next()) |cls| {
+            if (cls.len == 0) continue;
+            var dup = false;
+            for (seen_buf[0..seen_count]) |s| {
+                if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+            }
+            if (dup) continue;
+            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+            const copy_len = @min(cls.len, buf.len - pos);
+            @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
+            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+            pos += copy_len;
+        }
     }
-    normalizeClassAttribute(elem);
-    // Notify MutationObserver of attribute change
+
+    // Then add new tokens (if not already present)
+    arg_idx = 0;
+    if (args) |a| {
+        while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+            const token_s = jsStringToSlice(c, a[arg_idx]) orelse continue;
+            defer qjs.JS_FreeCString(c, token_s.ptr);
+            const token = token_s.ptr[0..token_s.len];
+            var dup = false;
+            for (seen_buf[0..seen_count]) |s| {
+                if (std.mem.eql(u8, s, token)) { dup = true; break; }
+            }
+            if (dup) continue;
+            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+            const copy_len = @min(token.len, buf.len - pos);
+            @memcpy(buf[pos..][0..copy_len], token[0..copy_len]);
+            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+            pos += copy_len;
+        }
+    }
+
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
     events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
     setDomDirty();
     return quickjs.JS_UNDEFINED();
@@ -569,50 +599,69 @@ pub fn classListRemove(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
-    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const args = if (argc > 0) (argv orelse return quickjs.JS_UNDEFINED()) else null;
 
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
 
-    const cls_to_remove = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
-    defer qjs.JS_FreeCString(c, cls_to_remove.ptr);
-    // DOM §7.1: Validate token
-    if (validateToken(c, cls_to_remove.ptr[0..cls_to_remove.len])) |exc| return exc;
+    // DOM §7.1: Validate ALL tokens first
+    if (args) |a| {
+        var arg_idx: usize = 0;
+        while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+            const token_s = jsStringToSlice(c, a[arg_idx]) orelse return quickjs.JS_UNDEFINED();
+            if (validateToken(c, token_s.ptr[0..token_s.len])) |exc| {
+                qjs.JS_FreeCString(c, token_s.ptr);
+                return exc;
+            }
+            qjs.JS_FreeCString(c, token_s.ptr);
+        }
+    }
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     if (cur == null or cur_len == 0) return quickjs.JS_UNDEFINED();
 
-    const current = cur.?[0..cur_len];
-    const remove_str = cls_to_remove.ptr[0..cls_to_remove.len];
+    // Collect tokens to remove
+    var remove_strs: [32][]const u8 = undefined;
+    var remove_ptrs: [32][*]const u8 = undefined;
+    var remove_count: usize = 0;
+    if (args) |a| {
+        var ri: usize = 0;
+        while (ri < @as(usize, @intCast(argc)) and remove_count < remove_strs.len) : (ri += 1) {
+            const token_s = jsStringToSlice(c, a[ri]) orelse continue;
+            remove_ptrs[remove_count] = token_s.ptr;
+            remove_strs[remove_count] = token_s.ptr[0..token_s.len];
+            remove_count += 1;
+        }
+    }
+    defer for (remove_ptrs[0..remove_count]) |p| qjs.JS_FreeCString(c, p);
 
-    // Rebuild class string without the removed class, also dedup (unique token set)
-    var buf: [1024]u8 = undefined;
+    // Rebuild class string without removed classes, also dedup
+    var buf: [4096]u8 = undefined;
     var pos: usize = 0;
-    var seen_buf: [64][]const u8 = undefined;
+    var seen_buf: [128][]const u8 = undefined;
     var seen_count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, current, " \t\n\r\x0c");
-    var first = true;
+    var iter = std.mem.tokenizeAny(u8, cur.?[0..cur_len], " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
-        if (std.mem.eql(u8, cls, remove_str)) continue;
-        // Dedup: skip if already seen
+        // Skip if in remove list
+        var should_remove = false;
+        for (remove_strs[0..remove_count]) |rm| {
+            if (std.mem.eql(u8, cls, rm)) { should_remove = true; break; }
+        }
+        if (should_remove) continue;
+        // Dedup
         var dup = false;
         for (seen_buf[0..seen_count]) |s| {
             if (std.mem.eql(u8, s, cls)) { dup = true; break; }
         }
         if (dup) continue;
-        if (seen_count < seen_buf.len) { seen_buf[seen_count] = cls; seen_count += 1; }
-        if (!first and pos < buf.len) {
-            buf[pos] = ' ';
-            pos += 1;
-        }
+        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
         const copy_len = @min(cls.len, buf.len - pos);
         @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
+        if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
         pos += copy_len;
-        first = false;
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
     events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
@@ -636,13 +685,17 @@ pub fn classListContains(
 
     const cls_name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, cls_name.ptr);
-    // DOM §7.1: Validate token
-    if (validateToken(c, cls_name.ptr[0..cls_name.len])) |exc| return exc;
+    // DOM spec (current): contains() does NOT validate tokens — just returns false for invalid
+    const token = cls_name.ptr[0..cls_name.len];
+    if (token.len == 0) return quickjs.JS_NewBool(false);
+    for (token) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c) return quickjs.JS_NewBool(false);
+    }
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
-    return quickjs.JS_NewBool(classContains(cur.?[0..cur_len], cls_name.ptr[0..cls_name.len]));
+    return quickjs.JS_NewBool(classContains(cur.?[0..cur_len], token));
 }
 
 pub fn classListToggle(
@@ -718,9 +771,19 @@ pub fn classListReplace(
     const new_cls = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, new_cls.ptr);
 
-    // DOM §7.1: Validate both tokens
-    if (validateToken(c, old_cls.ptr[0..old_cls.len])) |exc| return exc;
-    if (validateToken(c, new_cls.ptr[0..new_cls.len])) |exc| return exc;
+    // DOM spec: Check ALL tokens for empty FIRST (SyntaxError), then whitespace (InvalidCharacterError)
+    const old_tok = old_cls.ptr[0..old_cls.len];
+    const new_tok = new_cls.ptr[0..new_cls.len];
+    if (old_tok.len == 0 or new_tok.len == 0)
+        return throwDOMException(c, "SyntaxError", "The token provided must not be empty.");
+    for (old_tok) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c)
+            return throwDOMException(c, "InvalidCharacterError", "The token provided contains HTML space characters, which are not valid in tokens.");
+    }
+    for (new_tok) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c)
+            return throwDOMException(c, "InvalidCharacterError", "The token provided contains HTML space characters, which are not valid in tokens.");
+    }
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
@@ -729,34 +792,41 @@ pub fn classListReplace(
     const cur_str = cur.?[0..cur_len];
     if (!classContains(cur_str, old_cls.ptr[0..old_cls.len])) return quickjs.JS_NewBool(false);
 
-    // DOM spec: If newToken is already in the token set, just remove oldToken
+    // DOM spec: Replace first occurrence of old with new, remove other old occurrences,
+    // and deduplicate (ordered set semantics)
     const old_str = old_cls.ptr[0..old_cls.len];
     const new_str = new_cls.ptr[0..new_cls.len];
-    const new_already_exists = classContains(cur_str, new_str);
 
     var buf: [4096]u8 = undefined;
     var pos: usize = 0;
-    var replaced = false;
+    var seen_buf: [128][]const u8 = undefined;
+    var seen_count: usize = 0;
+    var replaced_first = false;
     var iter = std.mem.tokenizeAny(u8, cur_str, " \t\n\r\x0c");
     while (iter.next()) |tok| {
         if (tok.len == 0) continue;
+        var effective_tok = tok;
         if (std.mem.eql(u8, tok, old_str)) {
-            if (!replaced and !new_already_exists) {
+            if (!replaced_first) {
                 // Replace first occurrence of old with new
-                if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
-                if (pos + new_str.len <= buf.len) {
-                    @memcpy(buf[pos..][0..new_str.len], new_str);
-                    pos += new_str.len;
-                }
+                effective_tok = new_str;
+                replaced_first = true;
+            } else {
+                // Skip subsequent occurrences of old
+                continue;
             }
-            // Skip all occurrences of old token (remove it)
-            replaced = true;
-        } else {
-            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
-            if (pos + tok.len <= buf.len) {
-                @memcpy(buf[pos..][0..tok.len], tok);
-                pos += tok.len;
-            }
+        }
+        // Dedup: skip if already seen
+        var dup = false;
+        for (seen_buf[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, effective_tok)) { dup = true; break; }
+        }
+        if (dup) continue;
+        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (pos + effective_tok.len <= buf.len) {
+            @memcpy(buf[pos..][0..effective_tok.len], effective_tok);
+            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..effective_tok.len]; seen_count += 1; }
+            pos += effective_tok.len;
         }
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
@@ -974,6 +1044,24 @@ pub fn classListSetValue(
     return quickjs.JS_UNDEFINED();
 }
 
+/// classList setter: element.classList = "foo bar" sets the class attribute
+pub fn elementSetClassList(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, s.ptr, s.len);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue {
     const obj = qjs.JS_NewObject(ctx);
     if (quickjs.JS_IsException(obj)) return obj;
@@ -1052,7 +1140,15 @@ pub fn elementGetClassList(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return createClassList(c, this_val);
+    // Return cached classList for object identity (spec requirement)
+    const cached = qjs.JS_GetPropertyStr(c, this_val, "__classList");
+    if (!quickjs.JS_IsUndefined(cached) and !quickjs.JS_IsNull(cached)) {
+        return cached;
+    }
+    qjs.JS_FreeValue(c, cached);
+    const cl = createClassList(c, this_val);
+    _ = qjs.JS_SetPropertyStr(c, this_val, "__classList", qjs.JS_DupValue(c, cl));
+    return cl;
 }
 
 // ── element.attachShadow() stub ─────────────────────────────────────
@@ -1100,20 +1196,34 @@ pub fn elementInsertAdjacentElement(
     defer qjs.JS_FreeCString(c, pos_s.ptr);
     const position = pos_s.ptr[0..pos_s.len];
 
-    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+    // Validate position FIRST before detaching (avoid orphaning on invalid position)
+    const is_before_begin = std.ascii.eqlIgnoreCase(position, "beforebegin");
+    const is_after_begin = std.ascii.eqlIgnoreCase(position, "afterbegin");
+    const is_before_end = std.ascii.eqlIgnoreCase(position, "beforeend");
+    const is_after_end = std.ascii.eqlIgnoreCase(position, "afterend");
+
+    if (!is_before_begin and !is_after_begin and !is_before_end and !is_after_end) {
+        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
+    }
+    // Check parent exists for beforebegin/afterend before detaching
+    if (is_before_begin or is_after_end) {
+        if (node.parent == null) return quickjs.JS_NULL();
+    }
+    // Now safe to detach from old parent
+    if (new_node.parent != null) lxb_dom_node_remove(new_node);
+
+    if (is_before_begin) {
         lxb_dom_node_insert_before(node, new_node);
-    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+    } else if (is_after_begin) {
         if (node.first_child) |first| {
             lxb_dom_node_insert_before(first, new_node);
         } else {
             lxb_dom_node_insert_child(node, new_node);
         }
-    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+    } else if (is_before_end) {
         lxb_dom_node_insert_child(node, new_node);
-    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+    } else { // is_after_end
         lxb_dom_node_insert_after(node, new_node);
-    } else {
-        return quickjs.JS_NULL();
     }
     setDomDirty();
     return qjs.JS_DupValue(c, args[1]);
@@ -1143,6 +1253,7 @@ pub fn elementInsertAdjacentText(
     const text_node = lxb_dom_document_create_text_node(doc, text_s.ptr, text_s.len) orelse return quickjs.JS_UNDEFINED();
 
     if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        if (node.parent == null) return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_before(node, text_node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
         if (node.first_child) |first| {
@@ -1153,9 +1264,10 @@ pub fn elementInsertAdjacentText(
     } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
         lxb_dom_node_insert_child(node, text_node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        if (node.parent == null) return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_after(node, text_node);
     } else {
-        return quickjs.JS_UNDEFINED();
+        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
     }
     setDomDirty();
     return quickjs.JS_UNDEFINED();
