@@ -316,10 +316,22 @@ pub fn elementSetAttributeNS(
     const val = jsStringToSlice(c, args[2]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
 
+    // Capture old value before setting
+    var _ov_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, qname_s.ptr, qname_s.len, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, _ov_buf.len);
+            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = _ov_buf[0..cl];
+        }
+    }
     // Store using the qualified name (prefix:localName) to preserve prefix
     _ = lxb_dom_element_set_attribute(elem, qname_s.ptr, qname_s.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    events.recordMutation(node, "attributes", null, null, qname_s);
+    events.recordMutationWithOldValue(node, "attributes", null, null, qname_s, old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -409,9 +421,21 @@ pub fn elementRemoveAttribute(
     defer qjs.JS_FreeCString(c, name_raw.ptr);
     var lower_buf: [1024]u8 = undefined;
     const name = lowercaseAttrName(name_raw.ptr[0..name_raw.len], &lower_buf);
+    // Capture old value before removal
+    var _ov_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, _ov_buf.len);
+            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = _ov_buf[0..cl];
+        }
+    }
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    events.recordMutation(node, "attributes", null, null, name);
+    events.recordMutationWithOldValue(node, "attributes", null, null, name, old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
