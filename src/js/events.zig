@@ -1534,7 +1534,19 @@ fn jsDocumentDispatchEvent(
     // AT_TARGET on document
     updateEventPhase(c, event_obj, 2);
     setEventCurrentTarget(c, event_obj, doc_obj);
+    // Call document_listener_entries (global doc listeners)
     callEntryListeners(c, &document_listener_entries, event_type, event_obj, doc_obj, true, false);
+    // Also call node-based listeners on the document lexbor node
+    if (!current_event_flags.stop_propagation) {
+        if (dom_api.getNodePublic(c, doc_obj)) |doc_node| {
+            for (listener_entries.items) |*entry| {
+                if (entry.key.node == doc_node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                    callListenersOnNode(c, entry, event_obj, doc_node, true, false);
+                    break;
+                }
+            }
+        }
+    }
 
     // Bubble to window
     const bubbles_val = qjs.JS_GetPropertyStr(c, event_obj, "bubbles");
