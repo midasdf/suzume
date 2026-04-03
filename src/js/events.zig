@@ -1742,11 +1742,13 @@ const MutationRecord = struct {
     type_str: []const u8, // "childList" or "attributes" (static, not owned)
     target: *lxb.lxb_dom_node_t,
     attribute_name: ?[]const u8, // owned copy, null for childList
+    old_value: ?[]const u8 = null, // owned copy, for attributeOldValue/characterDataOldValue
     added_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
     removed_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
 
     fn deinit(self: *MutationRecord) void {
         if (self.attribute_name) |name| allocator.free(@constCast(name));
+        if (self.old_value) |ov| allocator.free(@constCast(ov));
         self.added_nodes.deinit(allocator);
         self.removed_nodes.deinit(allocator);
     }
@@ -1756,6 +1758,7 @@ const ObserveTarget = struct {
     node: *lxb.lxb_dom_node_t,
     child_list: bool,
     attributes: bool,
+    attribute_old_value: bool = false,
     subtree: bool,
 };
 
@@ -1783,6 +1786,18 @@ pub fn recordMutation(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
 ) void {
+    recordMutationWithOldValue(target, mutation_type, added, removed, attr_name, null);
+}
+
+/// Record a mutation with optional old value (for attributeOldValue support).
+pub fn recordMutationWithOldValue(
+    target: *lxb.lxb_dom_node_t,
+    mutation_type: []const u8,
+    added: ?*lxb.lxb_dom_node_t,
+    removed: ?*lxb.lxb_dom_node_t,
+    attr_name: ?[]const u8,
+    old_value: ?[]const u8,
+) void {
     for (mutation_observers.items) |*obs| {
         if (obs.disconnected) continue;
         for (obs.targets.items) |t| {
@@ -1807,6 +1822,16 @@ pub fn recordMutation(
                 if (copy) |c| {
                     @memcpy(c, n);
                     record.attribute_name = c;
+                }
+            }
+            // Store old value if observer requested it and old_value is provided
+            if (old_value != null and t.attribute_old_value) {
+                if (old_value) |ov| {
+                    const ov_copy = allocator.alloc(u8, ov.len) catch null;
+                    if (ov_copy) |ovc| {
+                        @memcpy(ovc, ov);
+                        record.old_value = ovc;
+                    }
                 }
             }
             if (added) |a| record.added_nodes.append(allocator, a) catch {};
@@ -1868,7 +1893,12 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", quickjs.JS_NULL());
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", quickjs.JS_NULL());
+            if (rec.old_value) |ov| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue",
+                    qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", quickjs.JS_NULL());
+            }
 
             _ = qjs.JS_SetPropertyUint32(ctx, records_arr, @intCast(idx), record_obj);
             rec.deinit();
@@ -1975,10 +2005,12 @@ fn jsMutationObserverObserve(
         }
     }
 
+    const attr_old_val = if (argc >= 2) jsBoolProp(c, args[1], "attributeOldValue") else false;
     mutation_observers.items[idx].targets.append(allocator, .{
         .node = target,
         .child_list = child_list,
         .attributes = attributes_opt,
+        .attribute_old_value = attr_old_val,
         .subtree = subtree,
     }) catch {};
     mutation_observers.items[idx].disconnected = false;

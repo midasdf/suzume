@@ -177,10 +177,14 @@ pub fn elementSetAttribute(
     // DOM spec: HTML elements lowercase attribute names
     var lower_buf: [1024]u8 = undefined;
     const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
+    // Capture old value before setting (for MutationObserver attributeOldValue)
+    var old_val_len: usize = 0;
+    const old_val_ptr = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &old_val_len);
+    const old_val: ?[]const u8 = if (old_val_ptr != null and old_val_len > 0) old_val_ptr.?[0..old_val_len] else if (old_val_ptr != null) "" else null;
     _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     if (api.isElementConnected(elem)) {
-        events.recordMutation(node, "attributes", null, null, name.ptr[0..name.len]);
+        events.recordMutationWithOldValue(node, "attributes", null, null, name.ptr[0..name.len], old_val);
         setDomDirty();
     }
     return quickjs.JS_UNDEFINED();
