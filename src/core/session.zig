@@ -66,7 +66,7 @@ pub fn serializeSession(allocator: std.mem.Allocator, tab_mgr: *const TabManager
 /// Restore tabs from session JSON.
 /// Tabs are restored with URLs and titles but pages are NOT loaded (lazy loading).
 pub fn restoreSession(
-    allocator: std.mem.Allocator,
+    _: std.mem.Allocator,
     json: []const u8,
     tab_mgr: *TabManager,
     page_states_len: *usize,

@@ -198,6 +198,29 @@ pub fn elementSetTextContent(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    // DOM spec: for Text, Comment, ProcessingInstruction — textContent sets data directly
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT or
+        node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT or
+        node.type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+    {
+        if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
+            _ = lxb_dom_node_text_content_set(node, "", 0);
+        } else {
+            const s = api.jsStringToSlice(c, args[0]) orelse {
+                _ = lxb_dom_node_text_content_set(node, "", 0);
+                events.recordMutation(node, "characterData", null, null, null);
+                api.setDomDirty();
+                return quickjs.JS_UNDEFINED();
+            };
+            defer qjs.JS_FreeCString(c, s.ptr);
+            _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        }
+        events.recordMutation(node, "characterData", null, null, null);
+        api.setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
+
     // DOM spec: setting textContent to null/undefined removes all children
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
         // Remove all child nodes (don't create empty text node)
