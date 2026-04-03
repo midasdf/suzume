@@ -1263,7 +1263,8 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
             \\(function(){
             \\  function KeyboardEvent(t,o){UIEvent.call(this,t,o);o=o||{};
             \\    this.key=o.key||'';this.code=o.code||'';
-            \\    this.keyCode=o.keyCode||0;this.which=o.which||o.keyCode||0;
+            \\    this.keyCode=o.keyCode||0;this.charCode=o.charCode||0;
+            \\    this.which=o.which||o.keyCode||0;
             \\    this.ctrlKey=!!o.ctrlKey;this.shiftKey=!!o.shiftKey;
             \\    this.altKey=!!o.altKey;this.metaKey=!!o.metaKey;
             \\    this.repeat=!!o.repeat;this.location=o.location||0;
