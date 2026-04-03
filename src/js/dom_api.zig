@@ -3896,8 +3896,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    prepend: function(){var f=_ch[0]||null;for(var i=arguments.length-1;i>=0;i--){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.insertBefore(n,f);f=n;}},
             \\    append: function(){for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
             \\    replaceChildren: function(){while(_ch.length>0)doc.removeChild(_ch[0]);for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
-            \\    textContent: null,
+            \\    nodeValue: null,
             \\  };
+            \\  Object.defineProperty(doc,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\  Object.defineProperty(doc,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'childNodes',{get:function(){return Array.prototype.slice.call(_ch);},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'firstChild',{get:function(){return _ch.length>0?_ch[0]:null;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'lastChild',{get:function(){return _ch.length>0?_ch[_ch.length-1]:null;},configurable:true,enumerable:true});
