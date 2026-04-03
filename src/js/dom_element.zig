@@ -781,34 +781,41 @@ pub fn classListReplace(
     const cur_str = cur.?[0..cur_len];
     if (!classContains(cur_str, old_cls.ptr[0..old_cls.len])) return quickjs.JS_NewBool(false);
 
-    // DOM spec: If newToken is already in the token set, just remove oldToken
+    // DOM spec: Replace first occurrence of old with new, remove other old occurrences,
+    // and deduplicate (ordered set semantics)
     const old_str = old_cls.ptr[0..old_cls.len];
     const new_str = new_cls.ptr[0..new_cls.len];
-    const new_already_exists = classContains(cur_str, new_str);
 
     var buf: [4096]u8 = undefined;
     var pos: usize = 0;
-    var replaced = false;
+    var seen_buf: [128][]const u8 = undefined;
+    var seen_count: usize = 0;
+    var replaced_first = false;
     var iter = std.mem.tokenizeAny(u8, cur_str, " \t\n\r\x0c");
     while (iter.next()) |tok| {
         if (tok.len == 0) continue;
+        var effective_tok = tok;
         if (std.mem.eql(u8, tok, old_str)) {
-            if (!replaced and !new_already_exists) {
+            if (!replaced_first) {
                 // Replace first occurrence of old with new
-                if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
-                if (pos + new_str.len <= buf.len) {
-                    @memcpy(buf[pos..][0..new_str.len], new_str);
-                    pos += new_str.len;
-                }
+                effective_tok = new_str;
+                replaced_first = true;
+            } else {
+                // Skip subsequent occurrences of old
+                continue;
             }
-            // Skip all occurrences of old token (remove it)
-            replaced = true;
-        } else {
-            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
-            if (pos + tok.len <= buf.len) {
-                @memcpy(buf[pos..][0..tok.len], tok);
-                pos += tok.len;
-            }
+        }
+        // Dedup: skip if already seen
+        var dup = false;
+        for (seen_buf[0..seen_count]) |s| {
+            if (std.mem.eql(u8, s, effective_tok)) { dup = true; break; }
+        }
+        if (dup) continue;
+        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (pos + effective_tok.len <= buf.len) {
+            @memcpy(buf[pos..][0..effective_tok.len], effective_tok);
+            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..effective_tok.len]; seen_count += 1; }
+            pos += effective_tok.len;
         }
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
