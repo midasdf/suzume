@@ -178,13 +178,22 @@ pub fn elementSetAttribute(
     var lower_buf: [1024]u8 = undefined;
     const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
     // Capture old value before setting (for MutationObserver attributeOldValue)
-    var old_val_len: usize = 0;
-    const old_val_ptr = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &old_val_len);
-    const old_val: ?[]const u8 = if (old_val_ptr != null and old_val_len > 0) old_val_ptr.?[0..old_val_len] else if (old_val_ptr != null) "" else null;
+    // Must copy to stack buffer because lexbor invalidates pointer on set_attribute
+    var old_val_buf: [4096]u8 = undefined;
+    var old_val_copy: ?[]const u8 = null;
+    {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &ov_len);
+        if (ov_ptr != null) {
+            const copy_len = @min(ov_len, old_val_buf.len);
+            @memcpy(old_val_buf[0..copy_len], ov_ptr.?[0..copy_len]);
+            old_val_copy = old_val_buf[0..copy_len];
+        }
+    }
     _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     if (api.isElementConnected(elem)) {
-        events.recordMutationWithOldValue(node, "attributes", null, null, name.ptr[0..name.len], old_val);
+        events.recordMutationWithOldValue(node, "attributes", null, null, name.ptr[0..name.len], old_val_copy);
         setDomDirty();
     }
     return quickjs.JS_UNDEFINED();
@@ -545,6 +554,10 @@ pub fn classListAdd(
     // No args + no existing class attribute = no-op
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
+    // Save old class value before modification (lexbor invalidates pointer on set)
+    var _ocb: [4096]u8 = undefined;
+    var old_class_copy: ?[]const u8 = null;
+    if (cur != null) { const cl = @min(cur_len, _ocb.len); @memcpy(_ocb[0..cl], cur.?[0..cl]); old_class_copy = _ocb[0..cl]; }
     if (argc == 0 and (cur == null or cur_len == 0)) return quickjs.JS_UNDEFINED();
 
     var buf: [4096]u8 = undefined;
@@ -591,7 +604,7 @@ pub fn classListAdd(
     }
 
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
-    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", if (cur != null) cur.?[0..cur_len] else null);
+    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", old_class_copy);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -624,6 +637,9 @@ pub fn classListRemove(
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
+    var _ocb: [4096]u8 = undefined;
+    var old_class_copy: ?[]const u8 = null;
+    if (cur != null) { const cl = @min(cur_len, _ocb.len); @memcpy(_ocb[0..cl], cur.?[0..cl]); old_class_copy = _ocb[0..cl]; }
     if (cur == null or cur_len == 0) return quickjs.JS_UNDEFINED();
 
     // Collect tokens to remove
@@ -668,7 +684,7 @@ pub fn classListRemove(
         pos += copy_len;
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
-    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", if (cur != null) cur.?[0..cur_len] else null);
+    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", old_class_copy);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -791,6 +807,9 @@ pub fn classListReplace(
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
+    var _ocb: [4096]u8 = undefined;
+    var old_class_copy: ?[]const u8 = null;
+    if (cur != null) { const cl = @min(cur_len, _ocb.len); @memcpy(_ocb[0..cl], cur.?[0..cl]); old_class_copy = _ocb[0..cl]; }
     if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
 
     const cur_str = cur.?[0..cur_len];
@@ -834,7 +853,7 @@ pub fn classListReplace(
         }
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
-    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", if (cur != null) cur.?[0..cur_len] else null);
+    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", old_class_copy);
     setDomDirty();
     return quickjs.JS_NewBool(true);
 }
