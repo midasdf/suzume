@@ -1848,6 +1848,11 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", quickjs.JS_NULL());
             }
+            // Per spec: all MutationRecord fields must be present
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", quickjs.JS_NULL());
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", quickjs.JS_NULL());
 
             _ = qjs.JS_SetPropertyUint32(ctx, records_arr, @intCast(idx), record_obj);
             rec.deinit();
