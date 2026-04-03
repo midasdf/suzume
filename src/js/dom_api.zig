@@ -3645,7 +3645,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  pi.before = function() {};
             \\  pi.after = function() {};
             \\  pi.replaceWith = function() {};
-            \\  pi.contains = function(o) { return false; };
+            \\  pi.contains = function(o) { return this === o; };
             \\  pi.hasChildNodes = function() { return false; };
             \\  pi.compareDocumentPosition = function(other) {
             \\    if(this===other)return 0;
@@ -3785,7 +3785,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    isEqualNode:function(o){if(!o||o.nodeType!==10)return false;return this.name===o.name&&this.publicId===o.publicId&&this.systemId===o.systemId;},
             \\    isSameNode:function(o){return this===o;},
             \\    hasChildNodes:function(){return false;},
-            \\    contains:function(){return false;},
+            \\    contains:function(o){return this===o;},
             \\  };
             \\  if(typeof DocumentType!=='undefined')Object.setPrototypeOf(dt,DocumentType.prototype);
             \\  var _ch=[dt,d];
