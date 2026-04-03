@@ -243,19 +243,23 @@ pub fn elementSetTextContent(
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
-    // DOM spec: 1. Remove all children (detach, not destroy — preserves subtree)
+    // DOM spec: 1. Capture first removed child for MutationObserver
+    const removed_child = node.first_child;
+    // Remove all children (detach, not destroy — preserves subtree)
     while (node.first_child) |child| {
         lxb_dom_node_remove(child);
     }
     // Clear JS-only children (PI, etc.)
     _ = qjs.JS_SetPropertyStr(c, this_val, "__jsChildren", qjs.JS_NewArray(c));
     // DOM spec: 2. If value is not empty, insert a new Text node
+    var added_child: ?*lxb.lxb_dom_node_t = null;
     if (s.len > 0) {
         const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
         const text_node = lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_child(node, text_node);
+        added_child = text_node;
     }
-    events.recordMutation(node, "childList", null, null, null);
+    events.recordMutation(node, "childList", added_child, removed_child, null);
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
