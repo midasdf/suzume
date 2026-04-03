@@ -3467,13 +3467,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};
             \\a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};
             \\a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
-            \\return a;})
+            \\if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
         const create_attr_js =
-            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;return a;})
+            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.cloneNode=function(){var c=document.createAttribute(this.name);c.value=this.value;return c;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
         ;
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
+    }
+    // Attr constructor for instanceof checks
+    {
+        const attr_ctor_js =
+            \\(function(){
+            \\  function Attr(){}
+            \\  Attr.prototype.constructor = Attr;
+            \\  Attr.prototype[Symbol.toStringTag] = 'Attr';
+            \\  globalThis.Attr = Attr;
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, attr_ctor_js, attr_ctor_js.len, "<attr-ctor>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
     }
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createDocumentFragment", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateDocumentFragment, "createDocumentFragment", 0));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createEvent", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateEvent, "createEvent", 1));
