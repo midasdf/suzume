@@ -4022,6 +4022,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    dt.ownerDocument=document;
             \\    Object.defineProperty(dt,'nodeValue',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
             \\    Object.defineProperty(dt,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'childNodes',{get:function(){return [];},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'firstChild',{get:function(){return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'lastChild',{get:function(){return null;},configurable:true,enumerable:true});
+            \\    dt.hasChildNodes=function(){return false;};
             \\  }
             \\})()
         ;
