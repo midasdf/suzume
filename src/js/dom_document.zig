@@ -225,6 +225,19 @@ pub fn implCreateDocumentType(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
+    // DOM spec: validate qualifiedName (browsers are lenient, only reject obvious invalids)
+    if (argc >= 1) {
+        const name_s = api.jsStringToSlice(c, args[0]);
+        if (name_s) |ns| {
+            defer qjs.JS_FreeCString(c, ns.ptr);
+            const name = ns.ptr[0..ns.len];
+            for (name) |ch| {
+                if (ch == '>' or ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
+                    return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+                }
+            }
+        }
+    }
     const obj = qjs.JS_NewObject(c);
     _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 10));
     // name
