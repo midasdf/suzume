@@ -3635,8 +3635,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const pi_js =
             \\(function(target, data) {
             \\  if(!target||target.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
-            \\  var fc=target.charCodeAt(0);if(!(fc>=65&&fc<=90||fc>=97&&fc<=122||fc===95||fc>=0xC0))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
-            \\  for(var i=1;i<target.length;i++){var cc=target.charCodeAt(i);if(!(cc>=65&&cc<=90||cc>=97&&cc<=122||cc>=48&&cc<=57||cc===95||cc===45||cc===46||cc===0xB7||cc>=0xC0))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');}
+            \\  function _isNSC(c){return(c>=65&&c<=90)||(c>=97&&c<=122)||c===95||c===58||(c>=0xC0&&c<=0xD6)||(c>=0xD8&&c<=0xF6)||(c>=0xF8&&c<=0x2FF)||(c>=0x370&&c<=0x37D)||(c>=0x37F&&c<=0x1FFF)||(c>=0x200C&&c<=0x200D)||(c>=0x2070&&c<=0x218F)||(c>=0x2C00&&c<=0x2FEF)||(c>=0x3001&&c<=0xD7FF)||(c>=0xF900&&c<=0xFDCF)||(c>=0xFDF0&&c<=0xFFFD);}
+            \\  function _isNC(c){return _isNSC(c)||(c>=48&&c<=57)||c===45||c===46||c===0xB7||(c>=0x300&&c<=0x36F)||(c>=0x203F&&c<=0x2040);}
+            \\  if(!_isNSC(target.charCodeAt(0)))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
+            \\  for(var i=1;i<target.length;i++){if(!_isNC(target.charCodeAt(i)))throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');}
             \\  if(target.toLowerCase()==='xml')throw new DOMException('The target name "xml" is not allowed.','InvalidCharacterError');
             \\  if(data&&data.indexOf('?>')>=0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');
             \\  var pi = {nodeType:7, nodeName:target, target:target, _data:data||'',

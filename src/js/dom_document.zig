@@ -8,8 +8,8 @@ const events = @import("events.zig");
 // ── External Lexbor functions ────────────────────────────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
 /// Validate an HTML element name per HTML spec §13.1.2.1
-/// HTML is very permissive — only empty and NUL are rejected
-/// Validate element name per DOM spec: must match XML Name production.
+/// HTML createElement: validate per XML Name production (slightly stricter than browsers,
+/// but avoids crashes with truly invalid names in lexbor).
 fn isValidElementName(name: []const u8) bool {
     return isValidXmlName(name);
 }
@@ -225,6 +225,19 @@ pub fn implCreateDocumentType(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
+    // DOM spec: validate qualifiedName (browsers are lenient, only reject obvious invalids)
+    if (argc >= 1) {
+        const name_s = api.jsStringToSlice(c, args[0]);
+        if (name_s) |ns| {
+            defer qjs.JS_FreeCString(c, ns.ptr);
+            const name = ns.ptr[0..ns.len];
+            for (name) |ch| {
+                if (ch == '>' or ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') {
+                    return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+                }
+            }
+        }
+    }
     const obj = qjs.JS_NewObject(c);
     _ = qjs.JS_SetPropertyStr(c, obj, "nodeType", qjs.JS_NewInt32(c, 10));
     // name
