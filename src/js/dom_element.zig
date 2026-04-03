@@ -598,22 +598,23 @@ pub fn classListRemove(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
-    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const args = if (argc > 0) (argv orelse return quickjs.JS_UNDEFINED()) else null;
 
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
 
     // DOM §7.1: Validate ALL tokens first
-    var arg_idx: usize = 0;
-    while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
-        const token_s = jsStringToSlice(c, args[arg_idx]) orelse return quickjs.JS_UNDEFINED();
-        if (validateToken(c, token_s.ptr[0..token_s.len])) |exc| {
+    if (args) |a| {
+        var arg_idx: usize = 0;
+        while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+            const token_s = jsStringToSlice(c, a[arg_idx]) orelse return quickjs.JS_UNDEFINED();
+            if (validateToken(c, token_s.ptr[0..token_s.len])) |exc| {
+                qjs.JS_FreeCString(c, token_s.ptr);
+                return exc;
+            }
             qjs.JS_FreeCString(c, token_s.ptr);
-            return exc;
         }
-        qjs.JS_FreeCString(c, token_s.ptr);
     }
 
     var cur_len: usize = 0;
@@ -624,12 +625,14 @@ pub fn classListRemove(
     var remove_strs: [32][]const u8 = undefined;
     var remove_ptrs: [32][*]const u8 = undefined;
     var remove_count: usize = 0;
-    arg_idx = 0;
-    while (arg_idx < @as(usize, @intCast(argc)) and remove_count < remove_strs.len) : (arg_idx += 1) {
-        const token_s = jsStringToSlice(c, args[arg_idx]) orelse continue;
-        remove_ptrs[remove_count] = token_s.ptr;
-        remove_strs[remove_count] = token_s.ptr[0..token_s.len];
-        remove_count += 1;
+    if (args) |a| {
+        var ri: usize = 0;
+        while (ri < @as(usize, @intCast(argc)) and remove_count < remove_strs.len) : (ri += 1) {
+            const token_s = jsStringToSlice(c, a[ri]) orelse continue;
+            remove_ptrs[remove_count] = token_s.ptr;
+            remove_strs[remove_count] = token_s.ptr[0..token_s.len];
+            remove_count += 1;
+        }
     }
     defer for (remove_ptrs[0..remove_count]) |p| qjs.JS_FreeCString(c, p);
 
