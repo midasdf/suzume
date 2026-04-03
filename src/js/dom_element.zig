@@ -24,6 +24,7 @@ const lxb_dom_attr_value_noi = dom_bindings.lxb_dom_attr_value_noi;
 const lxb_dom_node_insert_child = dom_bindings.lxb_dom_node_insert_child;
 const lxb_dom_node_insert_before = dom_bindings.lxb_dom_node_insert_before;
 const lxb_dom_node_insert_after = dom_bindings.lxb_dom_node_insert_after;
+const lxb_dom_node_remove = dom_bindings.lxb_dom_node_remove;
 const lxb_dom_node_text_content = dom_bindings.lxb_dom_node_text_content;
 const lxb_dom_node_text_content_set = dom_bindings.lxb_dom_node_text_content_set;
 const lxb_dom_document_create_element = dom_bindings.lxb_dom_document_create_element;
@@ -1170,7 +1171,11 @@ pub fn elementInsertAdjacentElement(
     defer qjs.JS_FreeCString(c, pos_s.ptr);
     const position = pos_s.ptr[0..pos_s.len];
 
+    // DOM spec: remove from old parent first
+    if (new_node.parent != null) lxb_dom_node_remove(new_node);
+
     if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        if (node.parent == null) return quickjs.JS_NULL();
         lxb_dom_node_insert_before(node, new_node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
         if (node.first_child) |first| {
@@ -1181,9 +1186,11 @@ pub fn elementInsertAdjacentElement(
     } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
         lxb_dom_node_insert_child(node, new_node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        if (node.parent == null) return quickjs.JS_NULL();
         lxb_dom_node_insert_after(node, new_node);
     } else {
-        return quickjs.JS_NULL();
+        // DOM spec: throw SyntaxError for invalid position
+        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
     }
     setDomDirty();
     return qjs.JS_DupValue(c, args[1]);
@@ -1213,6 +1220,7 @@ pub fn elementInsertAdjacentText(
     const text_node = lxb_dom_document_create_text_node(doc, text_s.ptr, text_s.len) orelse return quickjs.JS_UNDEFINED();
 
     if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        if (node.parent == null) return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_before(node, text_node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
         if (node.first_child) |first| {
@@ -1223,9 +1231,10 @@ pub fn elementInsertAdjacentText(
     } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
         lxb_dom_node_insert_child(node, text_node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        if (node.parent == null) return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_after(node, text_node);
     } else {
-        return quickjs.JS_UNDEFINED();
+        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
     }
     setDomDirty();
     return quickjs.JS_UNDEFINED();
