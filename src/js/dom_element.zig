@@ -770,9 +770,19 @@ pub fn classListReplace(
     const new_cls = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, new_cls.ptr);
 
-    // DOM §7.1: Validate both tokens
-    if (validateToken(c, old_cls.ptr[0..old_cls.len])) |exc| return exc;
-    if (validateToken(c, new_cls.ptr[0..new_cls.len])) |exc| return exc;
+    // DOM spec: Check ALL tokens for empty FIRST (SyntaxError), then whitespace (InvalidCharacterError)
+    const old_tok = old_cls.ptr[0..old_cls.len];
+    const new_tok = new_cls.ptr[0..new_cls.len];
+    if (old_tok.len == 0 or new_tok.len == 0)
+        return throwDOMException(c, "SyntaxError", "The token provided must not be empty.");
+    for (old_tok) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c)
+            return throwDOMException(c, "InvalidCharacterError", "The token provided contains HTML space characters, which are not valid in tokens.");
+    }
+    for (new_tok) |ch| {
+        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c)
+            return throwDOMException(c, "InvalidCharacterError", "The token provided contains HTML space characters, which are not valid in tokens.");
+    }
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
