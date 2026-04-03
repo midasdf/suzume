@@ -227,6 +227,8 @@ pub fn elementSetTextContent(
         while (node.first_child) |child| {
             lxb_dom_node_remove(child);
         }
+        // Clear JS-only children (PI, etc.)
+        _ = qjs.JS_SetPropertyStr(c, this_val, "__jsChildren", qjs.JS_NewArray(c));
         events.recordMutation(node, "childList", null, null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
@@ -235,6 +237,7 @@ pub fn elementSetTextContent(
         while (node.first_child) |child| {
             lxb_dom_node_remove(child);
         }
+        _ = qjs.JS_SetPropertyStr(c, this_val, "__jsChildren", qjs.JS_NewArray(c));
         events.recordMutation(node, "childList", null, null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
@@ -244,6 +247,8 @@ pub fn elementSetTextContent(
     while (node.first_child) |child| {
         lxb_dom_node_remove(child);
     }
+    // Clear JS-only children (PI, etc.)
+    _ = qjs.JS_SetPropertyStr(c, this_val, "__jsChildren", qjs.JS_NewArray(c));
     // DOM spec: 2. If value is not empty, insert a new Text node
     if (s.len > 0) {
         const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
@@ -382,12 +387,27 @@ pub fn elementGetChildNodes(
     if (quickjs.JS_IsException(arr)) return arr;
 
     var idx: u32 = 0;
+    // Lexbor-backed children
     var child: ?*lxb.lxb_dom_node_t = node.first_child;
     while (child) |ch| {
         _ = qjs.JS_SetPropertyUint32(c, arr, idx, api.wrapNode(c, ch));
         idx += 1;
         child = ch.next;
     }
+    // JS-only children (e.g. ProcessingInstruction) tracked in __jsChildren
+    const js_children = qjs.JS_GetPropertyStr(c, this_val, "__jsChildren");
+    if (!quickjs.JS_IsUndefined(js_children) and !quickjs.JS_IsNull(js_children)) {
+        const len_val = qjs.JS_GetPropertyStr(c, js_children, "length");
+        var len: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &len, len_val);
+        qjs.JS_FreeValue(c, len_val);
+        var i: u32 = 0;
+        while (i < @as(u32, @intCast(len))) : (i += 1) {
+            _ = qjs.JS_SetPropertyUint32(c, arr, idx, qjs.JS_GetPropertyUint32(c, js_children, i));
+            idx += 1;
+        }
+    }
+    qjs.JS_FreeValue(c, js_children);
     return arr;
 }
 
@@ -412,7 +432,22 @@ fn appendJsNode(ctx: *qjs.JSContext, parent_js: qjs.JSValue, child_js: qjs.JSVal
     // Set parentNode on child
     _ = qjs.JS_SetPropertyStr(ctx, child_js, "parentNode", qjs.JS_DupValue(ctx, parent_js));
 
-    // The child is a JS object — we can't insert it into the lexbor tree.
+    // Track JS-only children in __jsChildren array on parent for childNodes getter
+    const js_children = qjs.JS_GetPropertyStr(ctx, parent_js, "__jsChildren");
+    if (quickjs.JS_IsUndefined(js_children) or quickjs.JS_IsNull(js_children)) {
+        const arr = qjs.JS_NewArray(ctx);
+        _ = qjs.JS_SetPropertyUint32(ctx, arr, 0, qjs.JS_DupValue(ctx, child_js));
+        _ = qjs.JS_SetPropertyStr(ctx, parent_js, "__jsChildren", arr);
+    } else {
+        // Get current length and append
+        const len_val = qjs.JS_GetPropertyStr(ctx, js_children, "length");
+        var len: i32 = 0;
+        _ = qjs.JS_ToInt32(ctx, &len, len_val);
+        qjs.JS_FreeValue(ctx, len_val);
+        _ = qjs.JS_SetPropertyUint32(ctx, js_children, @intCast(len), qjs.JS_DupValue(ctx, child_js));
+    }
+    qjs.JS_FreeValue(ctx, js_children);
+
     // Set ownerDocument from parent
     const parent_node = api.getNode(ctx, parent_js);
     if (parent_node != null) {
@@ -424,6 +459,34 @@ fn appendJsNode(ctx: *qjs.JSContext, parent_js: qjs.JSValue, child_js: qjs.JSVal
 
     api.setDomDirty();
     return qjs.JS_DupValue(ctx, child_js);
+}
+
+/// Remove a JS-only child from parent's __jsChildren tracking array.
+fn removeJsChildFromParent(ctx: *qjs.JSContext, parent_js: qjs.JSValue, child_js: qjs.JSValue) void {
+    const js_children = qjs.JS_GetPropertyStr(ctx, parent_js, "__jsChildren");
+    defer qjs.JS_FreeValue(ctx, js_children);
+    if (quickjs.JS_IsUndefined(js_children) or quickjs.JS_IsNull(js_children)) return;
+
+    const len_val = qjs.JS_GetPropertyStr(ctx, js_children, "length");
+    var len: i32 = 0;
+    _ = qjs.JS_ToInt32(ctx, &len, len_val);
+    qjs.JS_FreeValue(ctx, len_val);
+
+    // Build a new array without the child
+    const new_arr = qjs.JS_NewArray(ctx);
+    var new_idx: u32 = 0;
+    var i: u32 = 0;
+    while (i < @as(u32, @intCast(len))) : (i += 1) {
+        const item = qjs.JS_GetPropertyUint32(ctx, js_children, i);
+        // Compare by tag + union value (struct JSValue)
+        if (item.tag != child_js.tag or item.u.int32 != child_js.u.int32) {
+            _ = qjs.JS_SetPropertyUint32(ctx, new_arr, new_idx, item);
+            new_idx += 1;
+        } else {
+            qjs.JS_FreeValue(ctx, item);
+        }
+    }
+    _ = qjs.JS_SetPropertyStr(ctx, parent_js, "__jsChildren", new_arr);
 }
 
 /// DOM spec: only Document (9), DocumentFragment (11), and Element (1) can have children.
@@ -549,6 +612,8 @@ pub fn elementRemoveChild(
         defer qjs.JS_FreeValue(c, nt);
         if (nt.tag == qjs.JS_TAG_UNDEFINED)
             return qjs.JS_ThrowTypeError(c, "Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
+        // Remove from __jsChildren tracking on parent
+        removeJsChildFromParent(c, this_val, args[0]);
         // Remove parentNode reference on JS-level node
         _ = qjs.JS_SetPropertyStr(c, args[0], "parentNode", quickjs.JS_NULL());
         api.setDomDirty();

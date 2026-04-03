@@ -1271,7 +1271,7 @@ pub fn documentCreateDocumentFragment(
             \\  Object.defineProperty(f,'nodeName',{value:'#document-fragment',writable:false,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'nodeValue',{value:null,writable:false,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'ownerDocument',{value:document,writable:true,configurable:true,enumerable:true});
-            \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3)t+=n.data||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);if(v!==null&&v!==undefined&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
+            \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3)t+=n.data||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);this.__jsChildren=[];if(v!==null&&v!==undefined&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
             \\  f.getElementById=function(id){if(!id||id==='')return null;return this.querySelector('#'+CSS.escape(id));};
             \\})
         ;
