@@ -591,7 +591,7 @@ pub fn classListAdd(
     }
 
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
-    events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
+    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", if (cur != null) cur.?[0..cur_len] else null);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -668,7 +668,7 @@ pub fn classListRemove(
         pos += copy_len;
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
-    events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
+    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", if (cur != null) cur.?[0..cur_len] else null);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -834,7 +834,7 @@ pub fn classListReplace(
         }
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
-    events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
+    events.recordMutationWithOldValue(@ptrCast(elem), "attributes", null, null, "class", if (cur != null) cur.?[0..cur_len] else null);
     setDomDirty();
     return quickjs.JS_NewBool(true);
 }
