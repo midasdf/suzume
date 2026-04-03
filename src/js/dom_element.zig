@@ -394,10 +394,22 @@ pub fn elementRemoveAttributeNS(
             const attr_qname = attr_name_ptr[0..attr_name_len];
             const attr_local = extractLocalName(attr_qname);
             if (std.mem.eql(u8, attr_local, local_s)) {
+                // Capture old value before removal
+                var _ov_buf2: [4096]u8 = undefined;
+                var ov2: ?[]const u8 = null;
+                {
+                    var ov_len: usize = 0;
+                    const ov_ptr = lxb_dom_attr_value_noi(attr, &ov_len);
+                    if (ov_ptr != null) {
+                        const cl = @min(ov_len, _ov_buf2.len);
+                        @memcpy(_ov_buf2[0..cl], ov_ptr.?[0..cl]);
+                        ov2 = _ov_buf2[0..cl];
+                    }
+                }
                 // Remove by full qualified name
                 _ = lxb_dom_element_remove_attribute(elem, attr_qname.ptr, attr_qname.len);
                 const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-                events.recordMutation(node, "attributes", null, null, local_s);
+                events.recordMutationWithOldValue(node, "attributes", null, null, local_s, ov2);
                 setDomDirty();
                 return quickjs.JS_UNDEFINED();
             }

@@ -8,8 +8,8 @@ const events = @import("events.zig");
 // ── External Lexbor functions ────────────────────────────────────────
 extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
 /// Validate an HTML element name per HTML spec §13.1.2.1
-/// HTML is very permissive — only empty and NUL are rejected
-/// Validate element name per DOM spec: must match XML Name production.
+/// HTML createElement: validate per XML Name production (slightly stricter than browsers,
+/// but avoids crashes with truly invalid names in lexbor).
 fn isValidElementName(name: []const u8) bool {
     return isValidXmlName(name);
 }
