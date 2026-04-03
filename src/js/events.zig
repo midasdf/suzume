@@ -1132,6 +1132,9 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
     const global = qjs.JS_GetGlobalObject(ctx);
     defer qjs.JS_FreeValue(ctx, global);
 
+    // window.event: must be own property, initially undefined (DOM spec)
+    _ = qjs.JS_SetPropertyStr(ctx, global, "event", quickjs.JS_UNDEFINED());
+
     // Add addEventListener/removeEventListener/dispatchEvent to window (global)
     _ = qjs.JS_SetPropertyStr(ctx, global, "addEventListener", qjs.JS_NewCFunction(ctx, &jsAddEventListener, "addEventListener", 3));
     _ = qjs.JS_SetPropertyStr(ctx, global, "removeEventListener", qjs.JS_NewCFunction(ctx, &jsRemoveEventListener, "removeEventListener", 3));
