@@ -478,8 +478,8 @@ fn removeJsChildFromParent(ctx: *qjs.JSContext, parent_js: qjs.JSValue, child_js
     var i: u32 = 0;
     while (i < @as(u32, @intCast(len))) : (i += 1) {
         const item = qjs.JS_GetPropertyUint32(ctx, js_children, i);
-        // Compare by tag + union value (struct JSValue)
-        if (item.tag != child_js.tag or item.u.int32 != child_js.u.int32) {
+        // Compare by tag + pointer identity
+        if (item.tag != child_js.tag or item.u.ptr != child_js.u.ptr) {
             _ = qjs.JS_SetPropertyUint32(ctx, new_arr, new_idx, item);
             new_idx += 1;
         } else {

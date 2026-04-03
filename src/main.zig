@@ -135,8 +135,9 @@ fn fontPathSlice(path: [*:0]const u8) []const u8 {
 }
 
 // Integration test stub (actual tests in tests/test_integration.zig, run via `zig build test`)
-fn testHttp(_: std.mem.Allocator) void {
-    std.debug.print("HTTP integration tests moved to tests/test_integration.zig\n", .{});
+fn testHttp(_: std.mem.Allocator) noreturn {
+    std.debug.print("HTTP integration tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
+    std.process.exit(1);
 }
 
 /// Re-style and re-layout a page after JS DOM mutation.
@@ -685,12 +686,14 @@ fn navigateTo(
     return true;
 }
 
-// Test stubs (actual tests in tests/test_integration.zig)
-fn testJs() void {
-    std.debug.print("JS tests moved to tests/test_integration.zig\n", .{});
+// Test stubs (actual tests in tests/test_integration.zig, run via `zig build test`)
+fn testJs() noreturn {
+    std.debug.print("JS tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
+    std.process.exit(1);
 }
-fn testDomJs() void {
-    std.debug.print("DOM JS tests moved to tests/test_integration.zig\n", .{});
+fn testDomJs() noreturn {
+    std.debug.print("DOM JS tests moved to tests/test_integration.zig. Run: zig build test\n", .{});
+    std.process.exit(1);
 }
 
 // Session management is now in core/session.zig

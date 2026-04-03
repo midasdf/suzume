@@ -538,9 +538,10 @@ pub fn classListAdd(
         }
     }
 
-    // Get current class attribute and build unique ordered token set
+    // No args + no existing class attribute = no-op
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
+    if (argc == 0 and (cur == null or cur_len == 0)) return quickjs.JS_UNDEFINED();
 
     var buf: [4096]u8 = undefined;
     var pos: usize = 0;
@@ -1195,26 +1196,34 @@ pub fn elementInsertAdjacentElement(
     defer qjs.JS_FreeCString(c, pos_s.ptr);
     const position = pos_s.ptr[0..pos_s.len];
 
-    // DOM spec: remove from old parent first
+    // Validate position FIRST before detaching (avoid orphaning on invalid position)
+    const is_before_begin = std.ascii.eqlIgnoreCase(position, "beforebegin");
+    const is_after_begin = std.ascii.eqlIgnoreCase(position, "afterbegin");
+    const is_before_end = std.ascii.eqlIgnoreCase(position, "beforeend");
+    const is_after_end = std.ascii.eqlIgnoreCase(position, "afterend");
+
+    if (!is_before_begin and !is_after_begin and !is_before_end and !is_after_end) {
+        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
+    }
+    // Check parent exists for beforebegin/afterend before detaching
+    if (is_before_begin or is_after_end) {
+        if (node.parent == null) return quickjs.JS_NULL();
+    }
+    // Now safe to detach from old parent
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
 
-    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
-        if (node.parent == null) return quickjs.JS_NULL();
+    if (is_before_begin) {
         lxb_dom_node_insert_before(node, new_node);
-    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+    } else if (is_after_begin) {
         if (node.first_child) |first| {
             lxb_dom_node_insert_before(first, new_node);
         } else {
             lxb_dom_node_insert_child(node, new_node);
         }
-    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+    } else if (is_before_end) {
         lxb_dom_node_insert_child(node, new_node);
-    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
-        if (node.parent == null) return quickjs.JS_NULL();
+    } else { // is_after_end
         lxb_dom_node_insert_after(node, new_node);
-    } else {
-        // DOM spec: throw SyntaxError for invalid position
-        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
     }
     setDomDirty();
     return qjs.JS_DupValue(c, args[1]);
