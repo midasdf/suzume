@@ -949,7 +949,8 @@ fn validateAndExtract(c: *qjs.JSContext, ns_arg: qjs.JSValue, qn_arg: qjs.JSValu
     const qn = qn_s.ptr[0..qn_s.len];
 
     // Step 1: validate qualifiedName against XML Name production
-    if (qn.len > 0 and !isValidXmlName(qn)) {
+    // Empty qualifiedName is always invalid
+    if (qn.len == 0 or !isValidXmlName(qn)) {
         _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         return @as(qjs.JSValue, quickjs.JS_EXCEPTION());
     }
