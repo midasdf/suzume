@@ -517,46 +517,74 @@ pub fn classListAdd(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
-    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const args = if (argc > 0) (argv orelse return quickjs.JS_UNDEFINED()) else null;
 
     // Get the element from classList.__element
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
 
-    const cls_to_add = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    // DOM §7.1: Validate ALL tokens first before making changes
+    var arg_idx: usize = 0;
+    if (args) |a| {
+        while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+            const token_s = jsStringToSlice(c, a[arg_idx]) orelse return quickjs.JS_UNDEFINED();
+            if (validateToken(c, token_s.ptr[0..token_s.len])) |exc| {
+                qjs.JS_FreeCString(c, token_s.ptr);
+                return exc;
+            }
+            qjs.JS_FreeCString(c, token_s.ptr);
+        }
+    }
 
-    // DOM §7.1: Validate token
-    if (validateToken(c, cls_to_add.ptr[0..cls_to_add.len])) |exc| return exc;
-    defer qjs.JS_FreeCString(c, cls_to_add.ptr);
-
-    // Get current class
+    // Get current class attribute and build unique ordered token set
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
 
+    var buf: [4096]u8 = undefined;
+    var pos: usize = 0;
+    var seen_buf: [128][]const u8 = undefined;
+    var seen_count: usize = 0;
+
+    // First, collect existing unique tokens
     if (cur != null and cur_len > 0) {
-        // Check if already present
-        const current = cur.?[0..cur_len];
-        if (classContains(current, cls_to_add.ptr[0..cls_to_add.len])) return quickjs.JS_UNDEFINED();
-        // Compute required length and use heap allocation if needed
-        const required_len = cur_len + 1 + cls_to_add.len;
-        var stack_buf: [1024]u8 = undefined;
-        const use_heap = required_len > stack_buf.len;
-        const buf = if (use_heap)
-            (std.heap.c_allocator.alloc(u8, required_len) catch return quickjs.JS_EXCEPTION())
-        else
-            stack_buf[0..required_len];
-        defer if (use_heap) std.heap.c_allocator.free(buf);
-        @memcpy(buf[0..cur_len], cur.?[0..cur_len]);
-        buf[cur_len] = ' ';
-        @memcpy(buf[cur_len + 1 ..][0..cls_to_add.len], cls_to_add.ptr[0..cls_to_add.len]);
-        _ = lxb_dom_element_set_attribute(elem, "class", 5, buf.ptr, required_len);
-    } else {
-        _ = lxb_dom_element_set_attribute(elem, "class", 5, cls_to_add.ptr, cls_to_add.len);
+        var iter = std.mem.tokenizeAny(u8, cur.?[0..cur_len], " \t\n\r\x0c");
+        while (iter.next()) |cls| {
+            if (cls.len == 0) continue;
+            var dup = false;
+            for (seen_buf[0..seen_count]) |s| {
+                if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+            }
+            if (dup) continue;
+            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+            const copy_len = @min(cls.len, buf.len - pos);
+            @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
+            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+            pos += copy_len;
+        }
     }
-    normalizeClassAttribute(elem);
-    // Notify MutationObserver of attribute change
+
+    // Then add new tokens (if not already present)
+    arg_idx = 0;
+    if (args) |a| {
+        while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+            const token_s = jsStringToSlice(c, a[arg_idx]) orelse continue;
+            defer qjs.JS_FreeCString(c, token_s.ptr);
+            const token = token_s.ptr[0..token_s.len];
+            var dup = false;
+            for (seen_buf[0..seen_count]) |s| {
+                if (std.mem.eql(u8, s, token)) { dup = true; break; }
+            }
+            if (dup) continue;
+            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+            const copy_len = @min(token.len, buf.len - pos);
+            @memcpy(buf[pos..][0..copy_len], token[0..copy_len]);
+            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+            pos += copy_len;
+        }
+    }
+
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
     events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
     setDomDirty();
     return quickjs.JS_UNDEFINED();
@@ -576,43 +604,59 @@ pub fn classListRemove(
     defer qjs.JS_FreeValue(c, elem_val);
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
 
-    const cls_to_remove = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
-    defer qjs.JS_FreeCString(c, cls_to_remove.ptr);
-    // DOM §7.1: Validate token
-    if (validateToken(c, cls_to_remove.ptr[0..cls_to_remove.len])) |exc| return exc;
+    // DOM §7.1: Validate ALL tokens first
+    var arg_idx: usize = 0;
+    while (arg_idx < @as(usize, @intCast(argc))) : (arg_idx += 1) {
+        const token_s = jsStringToSlice(c, args[arg_idx]) orelse return quickjs.JS_UNDEFINED();
+        if (validateToken(c, token_s.ptr[0..token_s.len])) |exc| {
+            qjs.JS_FreeCString(c, token_s.ptr);
+            return exc;
+        }
+        qjs.JS_FreeCString(c, token_s.ptr);
+    }
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     if (cur == null or cur_len == 0) return quickjs.JS_UNDEFINED();
 
-    const current = cur.?[0..cur_len];
-    const remove_str = cls_to_remove.ptr[0..cls_to_remove.len];
+    // Collect tokens to remove
+    var remove_strs: [32][]const u8 = undefined;
+    var remove_ptrs: [32][*]const u8 = undefined;
+    var remove_count: usize = 0;
+    arg_idx = 0;
+    while (arg_idx < @as(usize, @intCast(argc)) and remove_count < remove_strs.len) : (arg_idx += 1) {
+        const token_s = jsStringToSlice(c, args[arg_idx]) orelse continue;
+        remove_ptrs[remove_count] = token_s.ptr;
+        remove_strs[remove_count] = token_s.ptr[0..token_s.len];
+        remove_count += 1;
+    }
+    defer for (remove_ptrs[0..remove_count]) |p| qjs.JS_FreeCString(c, p);
 
-    // Rebuild class string without the removed class, also dedup (unique token set)
-    var buf: [1024]u8 = undefined;
+    // Rebuild class string without removed classes, also dedup
+    var buf: [4096]u8 = undefined;
     var pos: usize = 0;
-    var seen_buf: [64][]const u8 = undefined;
+    var seen_buf: [128][]const u8 = undefined;
     var seen_count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, current, " \t\n\r\x0c");
-    var first = true;
+    var iter = std.mem.tokenizeAny(u8, cur.?[0..cur_len], " \t\n\r\x0c");
     while (iter.next()) |cls| {
         if (cls.len == 0) continue;
-        if (std.mem.eql(u8, cls, remove_str)) continue;
-        // Dedup: skip if already seen
+        // Skip if in remove list
+        var should_remove = false;
+        for (remove_strs[0..remove_count]) |rm| {
+            if (std.mem.eql(u8, cls, rm)) { should_remove = true; break; }
+        }
+        if (should_remove) continue;
+        // Dedup
         var dup = false;
         for (seen_buf[0..seen_count]) |s| {
             if (std.mem.eql(u8, s, cls)) { dup = true; break; }
         }
         if (dup) continue;
-        if (seen_count < seen_buf.len) { seen_buf[seen_count] = cls; seen_count += 1; }
-        if (!first and pos < buf.len) {
-            buf[pos] = ' ';
-            pos += 1;
-        }
+        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
         const copy_len = @min(cls.len, buf.len - pos);
         @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
+        if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
         pos += copy_len;
-        first = false;
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
     events.recordMutation(@ptrCast(elem), "attributes", null, null, "class");
@@ -974,6 +1018,24 @@ pub fn classListSetValue(
     return quickjs.JS_UNDEFINED();
 }
 
+/// classList setter: element.classList = "foo bar" sets the class attribute
+pub fn elementSetClassList(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+    _ = lxb_dom_element_set_attribute(elem, "class", 5, s.ptr, s.len);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue {
     const obj = qjs.JS_NewObject(ctx);
     if (quickjs.JS_IsException(obj)) return obj;
@@ -1052,7 +1114,15 @@ pub fn elementGetClassList(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return createClassList(c, this_val);
+    // Return cached classList for object identity (spec requirement)
+    const cached = qjs.JS_GetPropertyStr(c, this_val, "__classList");
+    if (!quickjs.JS_IsUndefined(cached) and !quickjs.JS_IsNull(cached)) {
+        return cached;
+    }
+    qjs.JS_FreeValue(c, cached);
+    const cl = createClassList(c, this_val);
+    _ = qjs.JS_SetPropertyStr(c, this_val, "__classList", qjs.JS_DupValue(c, cl));
+    return cl;
 }
 
 // ── element.attachShadow() stub ─────────────────────────────────────
