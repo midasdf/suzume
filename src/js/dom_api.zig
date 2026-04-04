@@ -1949,9 +1949,10 @@ fn createAttrObject(c: *qjs.JSContext, name: []const u8, value: []const u8, owne
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "namespaceURI", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "ownerElement", qjs.JS_DupValue(c, owner));
     _ = qjs.JS_SetPropertyStr(c, attr_obj, "specified", quickjs.JS_NewBool(true));
-    // Add Node methods/properties to Attr (DOM spec: Attr inherits from Node)
+    // Add Node methods/properties to Attr and set Attr.prototype
     const attr_methods_js =
         \\(function(a){
+        \\  if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);
         \\  a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};
         \\  a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};
         \\  a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};
@@ -1991,6 +1992,36 @@ fn defineNonEnumerable(c: *qjs.JSContext, obj: qjs.JSValue, name: []const u8, va
 }
 
 
+// ── getElementsByClassName helper ───────────────────────────────────
+
+/// Build CSS selector from space-separated class names: "a b" -> ".a.b"
+pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
+    if (class_name.len == 0) return null;
+    var pos: usize = 0;
+    var i: usize = 0;
+    // Skip leading whitespace
+    while (i < class_name.len and (class_name[i] == ' ' or class_name[i] == '\t' or class_name[i] == '\n' or class_name[i] == '\r' or class_name[i] == 0x0C)) i += 1;
+    if (i >= class_name.len) return null;
+    while (i < class_name.len) {
+        // Skip whitespace between classes
+        while (i < class_name.len and (class_name[i] == ' ' or class_name[i] == '\t' or class_name[i] == '\n' or class_name[i] == '\r' or class_name[i] == 0x0C)) i += 1;
+        if (i >= class_name.len) break;
+        // Add "." prefix for this class
+        if (pos >= buf.len) return null;
+        buf[pos] = '.';
+        pos += 1;
+        // Copy class name until whitespace
+        while (i < class_name.len and class_name[i] != ' ' and class_name[i] != '\t' and class_name[i] != '\n' and class_name[i] != '\r' and class_name[i] != 0x0C) {
+            if (pos >= buf.len) return null;
+            buf[pos] = class_name[i];
+            pos += 1;
+            i += 1;
+        }
+    }
+    if (pos == 0) return null;
+    return buf[0..pos];
+}
+
 // ── element.dataset ─────────────────────────────────────────────────
 
 fn elementGetElementsByClassName(
@@ -2006,13 +2037,10 @@ fn elementGetElementsByClassName(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    // Build CSS selector: ".className"
+    // Build CSS selector: ".className" or ".a.b" for multiple classes
     const class_name = s.ptr[0..s.len];
-    var selector_buf: [256]u8 = undefined;
-    if (class_name.len + 1 > selector_buf.len) return quickjs.JS_NULL();
-    selector_buf[0] = '.';
-    @memcpy(selector_buf[1 .. 1 + class_name.len], class_name);
-    const selector = selector_buf[0 .. 1 + class_name.len];
+    var selector_buf: [512]u8 = undefined;
+    const selector = buildClassSelector(class_name, &selector_buf) orelse return quickjs.JS_NULL();
 
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
@@ -3118,11 +3146,88 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Object.defineProperty(EP,'slot',{get:function(){return this.getAttribute('slot')||'';},set:function(v){this.setAttribute('slot',v);},configurable:true});
             \\  Object.defineProperty(EP,'accessKey',{get:function(){return this.getAttribute('accesskey')||'';},set:function(v){this.setAttribute('accesskey',v);},configurable:true});
             \\  Object.defineProperty(EP,'dir',{get:function(){var v=this.getAttribute('dir');if(v===null)return'';v=v.toLowerCase();if(v==='ltr'||v==='rtl'||v==='auto')return v;return'';},set:function(v){this.setAttribute('dir',v);},configurable:true,enumerable:true});
-            \\  EP.getAttributeNode=function(n){if(!this.hasAttribute(n))return null;return{nodeType:2,name:n,localName:n.toLowerCase(),value:this.getAttribute(n),namespaceURI:null,prefix:null,specified:true,ownerElement:this,get nodeValue(){return this.value;},set nodeValue(v){this.value=v;this.ownerElement.setAttribute(this.name,v);}};};
-            \\  EP.getAttributeNodeNS=function(ns,ln){return this.getAttributeNode(ln);};
-            \\  EP.setAttributeNode=function(attr){var old=this.getAttributeNode(attr.name);this.setAttribute(attr.name,attr.value);attr.ownerElement=this;return old;};
+            \\  var _attrMap=new WeakMap();
+            \\  function _getAttrStore(el){var m=_attrMap.get(el);if(!m){m=Object.create(null);_attrMap.set(el,m);}return m;}
+            \\  function _makeAttr(name,value,ns,prefix,owner){
+            \\    var a=Object.create(typeof Attr!=='undefined'?Attr.prototype:null);
+            \\    a.nodeType=2;a.name=name;a.specified=true;a.namespaceURI=ns||null;
+            \\    a.prefix=prefix||null;a.localName=prefix?name.substring(prefix.length+1):name;
+            \\    a.value=value;a.nodeName=name;a.nodeValue=value;a.textContent=value;
+            \\    a.ownerElement=owner;a.ownerDocument=document;
+            \\    a.childNodes=[];a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
+            \\    a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};
+            \\    a.isConnected=false;a.getRootNode=function(){return this;};
+            \\    a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};
+            \\    a.lookupPrefix=function(n){var oe=this.ownerElement;return oe?oe.lookupPrefix(n):null;};
+            \\    a.isDefaultNamespace=function(n){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(n):false;};
+            \\    a.cloneNode=function(){return _makeAttr(name,this.value,this.namespaceURI,this.prefix,null);};
+            \\    a.isEqualNode=function(o){return o&&o.nodeType===2&&o.name===this.name&&o.value===this.value&&o.namespaceURI===this.namespaceURI;};
+            \\    Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:null)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});
+            \\    return a;
+            \\  }
+            \\  EP.getAttributeNode=function(n){
+            \\    var lc=n.toLowerCase(),store=_getAttrStore(this);
+            \\    if(store[lc]){store[lc].value=this.getAttribute(n)||'';store[lc].nodeValue=store[lc].value;store[lc].textContent=store[lc].value;return store[lc];}
+            \\    if(!this.hasAttribute(n))return null;
+            \\    var a=_makeAttr(lc,this.getAttribute(n)||'',null,null,this);store[lc]=a;return a;
+            \\  };
+            \\  EP.getAttributeNodeNS=function(ns,ln){
+            \\    var key=(ns||'')+'\0'+ln,store=_getAttrStore(this);
+            \\    if(store[key]){store[key].value=this.getAttributeNS(ns,ln)||'';store[key].nodeValue=store[key].value;store[key].textContent=store[key].value;return store[key];}
+            \\    if(!this.hasAttributeNS(ns,ln))return null;
+            \\    var v=this.getAttributeNS(ns,ln)||'',pfx=null,qn=ln;
+            \\    var a=_makeAttr(qn,v,ns,pfx,this);store[key]=a;return a;
+            \\  };
+            \\  EP.setAttributeNode=function(attr){
+            \\    if(attr.ownerElement&&attr.ownerElement!==this){
+            \\      var oe=attr.ownerElement,cn=attr.name;
+            \\      if(oe.hasAttribute&&oe.hasAttribute(cn)){var ca=oe.getAttributeNode(cn);if(ca===attr)throw new DOMException('The attribute is in use.','InUseAttributeError');}
+            \\      attr.ownerElement=null;
+            \\    }
+            \\    var old=this.getAttributeNode(attr.name);
+            \\    this.setAttribute(attr.name,attr.value);
+            \\    attr.ownerElement=this;var store=_getAttrStore(this);store[attr.name.toLowerCase()]=attr;
+            \\    if(old&&old!==attr){old.ownerElement=null;}
+            \\    return old;
+            \\  };
             \\  EP.setAttributeNodeNS=EP.setAttributeNode;
-            \\  EP.removeAttributeNode=function(attr){if(!this.hasAttribute(attr.name))throw new DOMException('','NotFoundError');this.removeAttribute(attr.name);attr.ownerElement=null;return attr;};
+            \\  EP.removeAttributeNode=function(attr){
+            \\    if(!attr||attr.ownerElement!==this)throw new DOMException('The object can not be found here.','NotFoundError');
+            \\    this.removeAttribute(attr.name);attr.ownerElement=null;
+            \\    var store=_getAttrStore(this);delete store[attr.name.toLowerCase()];
+            \\    return attr;
+            \\  };
+            \\  var _nativeRemoveAttr=EP.removeAttribute;
+            \\  EP.removeAttribute=function(n){var store=_getAttrStore(this),key=n.toLowerCase();if(store[key]){store[key].ownerElement=null;delete store[key];}_nativeRemoveAttr.call(this,n);};
+            \\  var _nativeRemoveAttrNS=EP.removeAttributeNS;
+            \\  EP.removeAttributeNS=function(ns,ln){var store=_getAttrStore(this),key=(ns||'')+'\0'+ln;if(store[key]){store[key].ownerElement=null;delete store[key];}var lk=ln.toLowerCase();if(store[lk]){store[lk].ownerElement=null;delete store[lk];}_nativeRemoveAttrNS.call(this,ns,ln);};
+            \\  var _nativeAttrsGet=Object.getOwnPropertyDescriptor(EP,'attributes');
+            \\  if(_nativeAttrsGet&&_nativeAttrsGet.get){
+            \\    var _rawAttrs=_nativeAttrsGet.get;
+            \\    Object.defineProperty(EP,'attributes',{get:function(){
+            \\      var raw=_rawAttrs.call(this),store=_getAttrStore(this),len=raw.length,t={},self=this;
+            \\      for(var i=0;i<len;i++){var ra=raw[i],key=ra.name;var cached=store[key.toLowerCase()];
+            \\        if(cached){cached.value=ra.value;cached.nodeValue=ra.value;cached.textContent=ra.value;t[i]=cached;}
+            \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
+            \\        Object.defineProperty(t,key,{value:t[i],writable:true,enumerable:false,configurable:true});}
+            \\      return new Proxy(t,{
+            \\        get:function(o,p){if(p==='length')return len;
+            \\          if(p==='getNamedItem')return function(n){for(var i=0;i<len;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
+            \\          if(p==='getNamedItemNS')return function(ns,n){for(var i=0;i<len;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
+            \\          if(p==='item')return function(i){return o[i]||null;};
+            \\          if(p==='setNamedItem')return function(a){return self.setAttributeNode(a);};
+            \\          if(p==='setNamedItemNS')return function(a){return self.setAttributeNode(a);};
+            \\          if(p==='removeNamedItem')return function(n){var a=self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');self.removeAttributeNode(a);return a;};
+            \\          if(p==='removeNamedItemNS')return function(ns,n){var a=self.getAttributeNodeNS(ns,n);if(!a)throw new DOMException('','NotFoundError');self.removeAttributeNode(a);return a;};
+            \\          if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield o[i];};
+            \\          if(p===Symbol.toStringTag)return'NamedNodeMap';
+            \\          return o[p];},
+            \\        has:function(o,p){if(p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS')return true;return p in o;},
+            \\        getOwnPropertyDescriptor:function(o,p){return Object.getOwnPropertyDescriptor(o,p);},
+            \\        ownKeys:function(o){return Object.getOwnPropertyNames(o);}
+            \\      });
+            \\    },configurable:true,enumerable:true});
+            \\  }
             \\})();
         ;
         const r = qjs.JS_Eval(ctx, reflected_js, reflected_js.len, "<reflected-attrs>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -3817,7 +3922,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _dtAfter(ref){var x=_ch.indexOf(ref);for(var i=x+1;i<_ch.length;i++)if(_nt(_ch[i])===10)return true;return false;}
             \\  function _elBefore(ref){var x=_ch.indexOf(ref);for(var i=0;i<x;i++)if(_nt(_ch[i])===1)return true;return false;}
             \\  function _isAnc(n,t){var c=t;while(c){if(c===n)return true;c=c.parentNode;}return false;}
-            \\  function _relink(){for(var i=0;i<_ch.length;i++){_ch[i].parentNode=doc;_ch[i].previousSibling=i>0?_ch[i-1]:null;_ch[i].nextSibling=i<_ch.length-1?_ch[i+1]:null;}}
+            \\  function _dp(n,k,v){Object.defineProperty(n,k,{value:v,writable:true,configurable:true,enumerable:true});}
+            \\  function _relink(){for(var i=0;i<_ch.length;i++){_dp(_ch[i],'parentNode',doc);_dp(_ch[i],'previousSibling',i>0?_ch[i-1]:null);_dp(_ch[i],'nextSibling',i<_ch.length-1?_ch[i+1]:null);}}
             \\  function _preBase(node,child){
             \\    if(_isAnc(node,doc))throw new DOMException('The new child element contains the parent.','HierarchyRequestError');
             \\    if(child!==null&&child!==undefined&&_ch.indexOf(child)===-1)throw new DOMException('The node before which the new node is to be inserted is not a child of this node.','NotFoundError');
@@ -3840,13 +3946,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  var doc = {
             \\    nodeType: 9, nodeName: '#document',
-            \\    createElement: function(t) { return document.createElement(t); },
-            \\    createElementNS: function(ns, t) { return document.createElementNS ? document.createElementNS(ns, t) : document.createElement(t); },
-            \\    createTextNode: function(t) { return document.createTextNode(t); },
-            \\    createComment: function(t) { return document.createComment ? document.createComment(t) : {nodeType:8,nodeName:'#comment',data:t,textContent:t}; },
-            \\    createDocumentFragment: function() { return document.createDocumentFragment(); },
+            \\    createElement: function(t) { var e=document.createElement(t);_dp(e,'ownerDocument',doc);return e; },
+            \\    createElementNS: function(ns, t) { var e=document.createElementNS?document.createElementNS(ns,t):document.createElement(t);_dp(e,'ownerDocument',doc);return e; },
+            \\    createTextNode: function(t) { var n=document.createTextNode(t);_dp(n,'ownerDocument',doc);return n; },
+            \\    createComment: function(t) { var n=document.createComment?document.createComment(t):{nodeType:8,nodeName:'#comment',data:t,textContent:t};_dp(n,'ownerDocument',doc);return n; },
+            \\    createDocumentFragment: function() { var f=document.createDocumentFragment();_dp(f,'ownerDocument',doc);return f; },
             \\    createEvent: function(t) { return document.createEvent(t); },
-            \\    createProcessingInstruction: function(t,d) { return document.createProcessingInstruction(t,d); },
+            \\    createProcessingInstruction: function(t,d) { var n=document.createProcessingInstruction(t,d);_dp(n,'ownerDocument',doc);return n; },
             \\    getElementById: function(id) { var de=_elemCh(null); return de?de.querySelector('#'+CSS.escape(id)):null; },
             \\    getElementsByTagName: function(t) { var de=_elemCh(null); return de?de.getElementsByTagName(t):[]; },
             \\    getElementsByClassName: function(c) { var de=_elemCh(null); return de?de.getElementsByClassName(c):[]; },
@@ -3867,7 +3973,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    removeChild: function(node){
             \\      if(!node||(typeof node!=='object'&&typeof node!=='function')||node.nodeType===undefined)throw new TypeError("Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
             \\      var idx=_ch.indexOf(node);if(idx===-1)throw new DOMException('The node to be removed is not a child of this node.','NotFoundError');
-            \\      _ch.splice(idx,1);node.parentNode=null;node.previousSibling=null;node.nextSibling=null;_relink();return node;
+            \\      _ch.splice(idx,1);_dp(node,'parentNode',null);_dp(node,'previousSibling',null);_dp(node,'nextSibling',null);_relink();return node;
             \\    },
             \\    replaceChild: function(node,child){
             \\      if(!node||(typeof node!=='object'&&typeof node!=='function')||node.nodeType===undefined)throw new TypeError("parameter 1 is not of type 'Node'.");
@@ -4078,12 +4184,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.visibilityState = 'visible';
             \\  }
             \\  Object.setPrototypeOf(Document.prototype, Node.prototype);
-            \\  Document.prototype.createElement = function(t) { var e=document.createElement(t); if(this.contentType&&this.contentType!=='text/html'&&this.contentType!=='application/xhtml+xml'){Object.defineProperty(e,'namespaceURI',{value:null,writable:true,configurable:true});}return e; };
-            \\  Document.prototype.createElementNS = function(ns,t) { return document.createElementNS(ns,t); };
-            \\  Document.prototype.createTextNode = function(t) { return document.createTextNode(t); };
-            \\  Document.prototype.createComment = function(t) { return document.createComment(t); };
-            \\  Document.prototype.createDocumentFragment = function() { return document.createDocumentFragment(); };
-            \\  Document.prototype.createProcessingInstruction = function(t,d) { return document.createProcessingInstruction(t,d); };
+            \\  Document.prototype.createElement = function(t) { var e=document.createElement(t); _setOwnerDoc(e,this);if(this.contentType&&this.contentType!=='text/html'&&this.contentType!=='application/xhtml+xml'){Object.defineProperty(e,'namespaceURI',{value:null,writable:true,configurable:true});}return e; };
+            \\  Document.prototype.createElementNS = function(ns,t) { var e=document.createElementNS(ns,t);_setOwnerDoc(e,this);return e; };
+            \\  Document.prototype.createTextNode = function(t) { var n=document.createTextNode(t);_setOwnerDoc(n,this);return n; };
+            \\  Document.prototype.createComment = function(t) { var n=document.createComment(t);_setOwnerDoc(n,this);return n; };
+            \\  Document.prototype.createDocumentFragment = function() { var f=document.createDocumentFragment();_setOwnerDoc(f,this);return f; };
+            \\  Document.prototype.createProcessingInstruction = function(t,d) { var n=document.createProcessingInstruction(t,d);_setOwnerDoc(n,this);return n; };
             \\  Document.prototype.createCDATASection = function(d) { return {nodeType:4,nodeName:'#cdata-section',data:d,textContent:d,nodeValue:d,childNodes:[]}; };
             \\  Document.prototype.createEvent = function(t) { return document.createEvent(t); };
             \\  Document.prototype.getElementById = function(id) { if(this.documentElement) return this.documentElement.querySelector('#'+CSS.escape(id)); return null; };
@@ -4099,44 +4205,53 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(nt===10&&doc.doctype&&doc.doctype!==n)throw new DOMException("HierarchyRequestError","HierarchyRequestError");
             \\    if(nt===11){var ec=0;for(var i=0;i<(n.childNodes?n.childNodes.length:0);i++){if(n.childNodes[i].nodeType===1)ec++;if(n.childNodes[i].nodeType===3)throw new DOMException("HierarchyRequestError","HierarchyRequestError");}if(ec>1||(ec===1&&doc.documentElement))throw new DOMException("HierarchyRequestError","HierarchyRequestError");}
             \\  }
+            \\  function _updateSiblings(doc){
+            \\    var cn=doc._childNodes;
+            \\    for(var i=0;i<cn.length;i++){_defProp(cn[i],'previousSibling',i>0?cn[i-1]:null);_defProp(cn[i],'nextSibling',i<cn.length-1?cn[i+1]:null);}
+            \\  }
+            \\  function _defProp(n,k,v){Object.defineProperty(n,k,{value:v,writable:true,configurable:true,enumerable:true});}
+            \\  function _setOwnerDoc(n,d){_defProp(n,'ownerDocument',d);if(n.childNodes)for(var i=0;i<n.childNodes.length;i++)_setOwnerDoc(n.childNodes[i],d);}
             \\  Document.prototype.appendChild = function(n) {
             \\    _docPreInsert(this,n);
             \\    if(n.parentNode)n.parentNode.removeChild(n);
-            \\    n.parentNode=this;n.ownerDocument=this;
+            \\    _defProp(n,'parentNode',this);_setOwnerDoc(n,this);
             \\    this._childNodes.push(n);
             \\    if(n.nodeType===1)this._children.push(n);
             \\    this.firstChild = this._childNodes[0];
             \\    this.lastChild = this._childNodes[this._childNodes.length-1];
             \\    if(n.nodeType===1 && !this.documentElement) this.documentElement = n;
             \\    if(n.nodeType===10) this.doctype = n;
+            \\    _updateSiblings(this);
             \\    return n;
             \\  };
             \\  Document.prototype.removeChild = function(n) {
             \\    var i=this._childNodes.indexOf(n);if(i>=0)this._childNodes.splice(i,1);
             \\    var j=this._children.indexOf(n);if(j>=0)this._children.splice(j,1);
-            \\    n.parentNode=null;
+            \\    _defProp(n,'parentNode',null);_defProp(n,'previousSibling',null);_defProp(n,'nextSibling',null);
             \\    this.firstChild=this._childNodes[0]||null;this.lastChild=this._childNodes[this._childNodes.length-1]||null;
             \\    if(this.documentElement===n)this.documentElement=null;
             \\    if(this.doctype===n)this.doctype=null;
+            \\    _updateSiblings(this);
             \\    return n;
             \\  };
             \\  Document.prototype.insertBefore = function(n,ref) {
             \\    if(!ref)return this.appendChild(n);
             \\    _docPreInsert(this,n);
             \\    if(n.parentNode)n.parentNode.removeChild(n);
-            \\    n.parentNode=this;n.ownerDocument=this;
+            \\    _defProp(n,'parentNode',this);_setOwnerDoc(n,this);
             \\    var i=this._childNodes.indexOf(ref);if(i>=0)this._childNodes.splice(i,0,n);else this._childNodes.push(n);
             \\    if(n.nodeType===1){var j=this._children.indexOf(ref);if(j>=0)this._children.splice(j,0,n);else this._children.push(n);}
             \\    this.firstChild=this._childNodes[0];this.lastChild=this._childNodes[this._childNodes.length-1];
             \\    if(n.nodeType===1&&!this.documentElement)this.documentElement=n;
             \\    if(n.nodeType===10)this.doctype=n;
+            \\    _updateSiblings(this);
             \\    return n;
             \\  };
             \\  Document.prototype.prepend = function(){var f=this._childNodes[0]||null;for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};_docPreInsert(this,a);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
             \\  Document.prototype.append = function(){for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
             \\  Document.prototype.replaceChildren = function(){while(this._childNodes.length>0)this.removeChild(this._childNodes[this._childNodes.length-1]);for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
-            \\  Document.prototype.adoptNode = function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);var self=this;function setDoc(nd){nd.ownerDocument=self;if(nd.childNodes)for(var i=0;i<nd.childNodes.length;i++)setDoc(nd.childNodes[i]);}setDoc(n);n.parentNode=null;return n; };
+            \\  Document.prototype.adoptNode = function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);_setOwnerDoc(n,this);n.parentNode=null;return n; };
             \\  Document.prototype.createAttribute = function(n) { if(n===undefined)n='undefined';if(n===null)n='null';n=''+n;if(n.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ct=this.contentType||'';var isHTML=(ct==='text/html'||ct==='application/xhtml+xml');var ln=isHTML?n.toLowerCase():n;var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:this,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});return a; };
             \\  Document.prototype.compareDocumentPosition = function(other) {
             \\    if(this===other)return 0;
@@ -4317,8 +4432,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // _rawByTag — native getElementsByTagName that returns a plain array (for live collection query)
     _ = qjs.JS_SetPropertyStr(ctx, global, "__rawDocByTag", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "__rawDocByTag", 1));
+    // _rawByClass — native getElementsByClassName that returns a plain array (for live collection query)
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__rawDocByClass", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByClassName, "__rawDocByClass", 1));
 
-    // Live HTMLCollection Proxy factory + getElementsByTagName override
+    // Live HTMLCollection Proxy factory + getElementsByTagName/getElementsByClassName override
     {
         const live_coll_js =
             \\(function(){
@@ -4349,6 +4466,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function filteredQuery(rawFn,tag,root){if(tag==='*')return rawFn();var lcTag=asciiLower(tag);var hasColon=tag.indexOf(':')>=0;if(hasColon){var all=root.querySelectorAll?root.querySelectorAll('*'):[];var out=[];for(var i=0;i<all.length;i++){if(matchQName(all[i],tag,lcTag))out.push(all[i]);}return out;}var raw=rawFn();var out=[];for(var i=0;i<raw.length;i++){if(matchQName(raw[i],tag,lcTag))out.push(raw[i]);}return out;}
             \\  document.getElementsByTagName=function(tag){return createLiveHTMLColl(function(){return filteredQuery(function(){return __rawDocByTag(tag==='*'?'*':asciiLower(tag));},tag,document.documentElement||document);});};
             \\  Element.prototype.getElementsByTagName=function(tag){var self=this;return createLiveHTMLColl(function(){return filteredQuery(function(){return nativeElemByTag.call(self,tag==='*'?'*':asciiLower(tag));},tag,self);});};
+            \\  var nativeElemByClass=Element.prototype.getElementsByClassName;
+            \\  document.getElementsByClassName=function(cls){return createLiveHTMLColl(function(){return __rawDocByClass(cls);});};
+            \\  Element.prototype.getElementsByClassName=function(cls){var self=this;return createLiveHTMLColl(function(){return nativeElemByClass.call(self,cls);});};
             \\})()
         ;
         const live_r = qjs.JS_Eval(ctx, live_coll_js, live_coll_js.len, "<live-coll>", qjs.JS_EVAL_TYPE_GLOBAL);

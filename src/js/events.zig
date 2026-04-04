@@ -510,19 +510,26 @@ fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSVa
             ret = qjs.JS_ThrowTypeError(ctx, "handleEvent is not a function");
         }
     }
-    // If listener threw, report error via window.onerror (per HTML spec "report the exception")
+    // If listener threw, report error via ErrorEvent on window (per HTML spec "report the exception")
     if (quickjs.JS_IsException(ret)) {
         const exc = qjs.JS_GetException(ctx);
         const global = qjs.JS_GetGlobalObject(ctx);
-        const onerror = qjs.JS_GetPropertyStr(ctx, global, "onerror");
-        if (qjs.JS_IsFunction(ctx, onerror)) {
-            const msg = qjs.JS_ToString(ctx, exc);
-            var onerror_args = [1]qjs.JSValue{msg};
-            const onerror_ret = qjs.JS_Call(ctx, onerror, global, 1, &onerror_args);
-            qjs.JS_FreeValue(ctx, onerror_ret);
-            qjs.JS_FreeValue(ctx, msg);
+        // Report error: call window.onerror (legacy) then dispatch ErrorEvent
+        const report_js =
+            \\(function(w,err){
+            \\  var msg=err&&err.message?err.message:String(err);
+            \\  if(typeof w.onerror==='function'){try{w.onerror(msg,'',0,0,err);}catch(e){}}
+            \\  var ev;try{ev=new ErrorEvent('error',{error:err,message:msg,cancelable:true});}catch(e){ev=new Event('error');ev.error=err;ev.message=msg;}
+            \\  w.dispatchEvent(ev);
+            \\})
+        ;
+        const report_fn = qjs.JS_Eval(ctx, report_js, report_js.len, "<report-err>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(report_fn)) {
+            var report_args = [2]qjs.JSValue{ global, exc };
+            const report_ret = qjs.JS_Call(ctx, report_fn, quickjs.JS_UNDEFINED(), 2, &report_args);
+            qjs.JS_FreeValue(ctx, report_ret);
+            qjs.JS_FreeValue(ctx, report_fn);
         }
-        qjs.JS_FreeValue(ctx, onerror);
         qjs.JS_FreeValue(ctx, global);
         qjs.JS_FreeValue(ctx, exc);
     } else {
