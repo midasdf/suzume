@@ -204,19 +204,23 @@ pub fn elementSetTextContent(
         node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT or
         node.type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
     {
+        // Capture old text for MutationObserver characterDataOldValue
+        var old_len: usize = 0;
+        const old_ptr = lxb_dom_node_text_content(node, &old_len);
+        const old_text: ?[]const u8 = if (old_ptr) |p| p[0..old_len] else null;
         if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
             _ = lxb_dom_node_text_content_set(node, "", 0);
         } else {
             const s = api.jsStringToSlice(c, args[0]) orelse {
                 _ = lxb_dom_node_text_content_set(node, "", 0);
-                events.recordMutation(node, "characterData", null, null, null);
+                events.recordMutationWithOldValue(node, "characterData", null, null, null, old_text);
                 api.setDomDirty();
                 return quickjs.JS_UNDEFINED();
             };
             defer qjs.JS_FreeCString(c, s.ptr);
             _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
         }
-        events.recordMutation(node, "characterData", null, null, null);
+        events.recordMutationWithOldValue(node, "characterData", null, null, null, old_text);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     }

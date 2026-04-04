@@ -39,15 +39,19 @@ pub fn textSetData(
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNodeFromText(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // Capture old text content before mutation for MutationObserver characterDataOldValue
+    var old_len: usize = 0;
+    const old_ptr = lxb_dom_node_text_content(node, &old_len);
+    const old_text: ?[]const u8 = if (old_ptr) |p| p[0..old_len] else null;
     const s = api.jsStringToSlice(c, args[0]) orelse {
         _ = lxb_dom_node_text_content_set(node, "", 0);
-        events.recordMutation(node, "characterData", null, null, null);
+        events.recordMutationWithOldValue(node, "characterData", null, null, null, old_text);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
     _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
-    events.recordMutation(node, "characterData", null, null, null);
+    events.recordMutationWithOldValue(node, "characterData", null, null, null, old_text);
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }

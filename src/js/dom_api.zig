@@ -1994,7 +1994,53 @@ fn defineNonEnumerable(c: *qjs.JSContext, obj: qjs.JSValue, name: []const u8, va
 
 // ── getElementsByClassName helper ───────────────────────────────────
 
+/// Escape a single byte per CSS.escape spec into buf at pos. Returns new pos, or null on overflow.
+fn cssEscapeByte(buf: []u8, pos: usize, ch: u8, is_first: bool) ?usize {
+    const p = pos;
+    if (ch == 0) {
+        // U+0000: replacement character U+FFFD encoded as \fffd
+        const rep = "\\fffd ";
+        if (p + rep.len > buf.len) return null;
+        @memcpy(buf[p..][0..rep.len], rep);
+        return p + rep.len;
+    }
+    // Control chars 0x01-0x1F and 0x7F: hex escape
+    if (ch <= 0x1F or ch == 0x7F) {
+        if (p + 4 > buf.len) return null;
+        const hex = "0123456789abcdef";
+        buf[p] = '\\';
+        buf[p + 1] = hex[ch >> 4];
+        buf[p + 2] = hex[ch & 0xF];
+        buf[p + 3] = ' ';
+        return p + 4;
+    }
+    // Leading digit: hex-escape it
+    if (is_first and ch >= '0' and ch <= '9') {
+        if (p + 4 > buf.len) return null;
+        const hex = "0123456789abcdef";
+        buf[p] = '\\';
+        buf[p + 1] = hex[ch >> 4];
+        buf[p + 2] = hex[ch & 0xF];
+        buf[p + 3] = ' ';
+        return p + 4;
+    }
+    // Safe: letters, digits (non-leading), underscore, >= 0x80
+    if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+        (ch >= '0' and ch <= '9') or ch == '_' or ch == '-' or ch >= 0x80)
+    {
+        if (p >= buf.len) return null;
+        buf[p] = ch;
+        return p + 1;
+    }
+    // Everything else: backslash escape
+    if (p + 2 > buf.len) return null;
+    buf[p] = '\\';
+    buf[p + 1] = ch;
+    return p + 2;
+}
+
 /// Build CSS selector from space-separated class names: "a b" -> ".a.b"
+/// Class tokens are CSS-escaped so names with leading digits, punctuation etc. work.
 pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
     if (class_name.len == 0) return null;
     var pos: usize = 0;
@@ -2010,11 +2056,11 @@ pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
         if (pos >= buf.len) return null;
         buf[pos] = '.';
         pos += 1;
-        // Copy class name until whitespace
+        // Copy class name with CSS escaping until whitespace
+        var first = true;
         while (i < class_name.len and class_name[i] != ' ' and class_name[i] != '\t' and class_name[i] != '\n' and class_name[i] != '\r' and class_name[i] != 0x0C) {
-            if (pos >= buf.len) return null;
-            buf[pos] = class_name[i];
-            pos += 1;
+            pos = cssEscapeByte(buf, pos, class_name[i], first) orelse return null;
+            first = false;
             i += 1;
         }
     }
@@ -2033,7 +2079,7 @@ fn elementGetElementsByClassName(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    _ = getNode(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
@@ -2041,19 +2087,11 @@ fn elementGetElementsByClassName(
     const class_name = s.ptr[0..s.len];
     var selector_buf: [512]u8 = undefined;
     const selector = buildClassSelector(class_name, &selector_buf) orelse {
-        // Whitespace-only or empty: return empty HTMLCollection
-        const empty = qjs.JS_NewArray(c);
-        if (quickjs.JS_IsException(empty)) return empty;
-        dom_doc.wrapAsHTMLCollection(c, empty);
-        return empty;
+        // Whitespace-only or empty: return empty live HTMLCollection
+        return dom_doc.makeLiveHTMLCollection(c, this_val, "");
     };
 
-    const arr = qjs.JS_NewArray(c);
-    if (quickjs.JS_IsException(arr)) return arr;
-    var idx: u32 = 0;
-    dom_sel.walkTreeCollect(c, node, selector, arr, &idx);
-    dom_doc.wrapAsHTMLCollection(c, arr);
-    return arr;
+    return dom_doc.makeLiveHTMLCollection(c, this_val, selector);
 }
 
 fn elementGetElementsByTagName(
@@ -3159,7 +3197,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    a.nodeType=2;a.name=name;a.specified=true;a.namespaceURI=ns||null;
             \\    a.prefix=prefix||null;a.localName=prefix?name.substring(prefix.length+1):name;
             \\    a.value=value;a.nodeName=name;a.nodeValue=value;a.textContent=value;
-            \\    a.ownerElement=owner;a.ownerDocument=document;
+            \\    a.ownerElement=owner;a.ownerDocument=(owner&&owner.ownerDocument)||document;
             \\    a.childNodes=[];a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
             \\    a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};
             \\    a.isConnected=false;a.getRootNode=function(){return this;};
@@ -3196,7 +3234,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(old&&old!==attr){old.ownerElement=null;}
             \\    return old;
             \\  };
-            \\  EP.setAttributeNodeNS=EP.setAttributeNode;
+            \\  EP.setAttributeNodeNS=function(attr){
+            \\    if(attr.ownerElement&&attr.ownerElement!==this){
+            \\      var oe=attr.ownerElement,cn=attr.name;
+            \\      if(oe.hasAttribute&&oe.hasAttribute(cn)){var ca=oe.getAttributeNode(cn);if(ca===attr)throw new DOMException('The attribute is in use.','InUseAttributeError');}
+            \\      attr.ownerElement=null;
+            \\    }
+            \\    var store=_getAttrStore(this);
+            \\    if(attr.namespaceURI){
+            \\      var old=this.getAttributeNodeNS(attr.namespaceURI,attr.localName);
+            \\      this.setAttributeNS(attr.namespaceURI,attr.name,attr.value);
+            \\      var key=(attr.namespaceURI||'')+'\0'+attr.localName;
+            \\      attr.ownerElement=this;store[key]=attr;
+            \\      if(old&&old!==attr){old.ownerElement=null;}
+            \\      return old;
+            \\    }
+            \\    return EP.setAttributeNode.call(this,attr);
+            \\  };
             \\  EP.removeAttributeNode=function(attr){
             \\    if(!attr||attr.ownerElement!==this)throw new DOMException('The object can not be found here.','NotFoundError');
             \\    this.removeAttribute(attr.name);attr.ownerElement=null;
@@ -3210,28 +3264,41 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var _nativeAttrsGet=Object.getOwnPropertyDescriptor(EP,'attributes');
             \\  if(_nativeAttrsGet&&_nativeAttrsGet.get){
             \\    var _rawAttrs=_nativeAttrsGet.get;
-            \\    Object.defineProperty(EP,'attributes',{get:function(){
-            \\      var raw=_rawAttrs.call(this),store=_getAttrStore(this),len=raw.length,t={},self=this;
+            \\    var _proxyCache=new WeakMap();
+            \\    function _syncAttrsTarget(self,t){
+            \\      var raw=_rawAttrs.call(self),store=_getAttrStore(self),len=raw.length;
+            \\      var oldKeys=Object.getOwnPropertyNames(t);
+            \\      for(var k=0;k<oldKeys.length;k++)delete t[oldKeys[k]];
+            \\      t._len=len;
             \\      for(var i=0;i<len;i++){var ra=raw[i],key=ra.name;var cached=store[key.toLowerCase()];
             \\        if(cached){cached.value=ra.value;cached.nodeValue=ra.value;cached.textContent=ra.value;t[i]=cached;}
             \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
             \\        Object.defineProperty(t,key,{value:t[i],writable:true,enumerable:false,configurable:true});}
-            \\      return new Proxy(t,{
-            \\        get:function(o,p){if(p==='length')return len;
-            \\          if(p==='getNamedItem')return function(n){for(var i=0;i<len;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
-            \\          if(p==='getNamedItemNS')return function(ns,n){for(var i=0;i<len;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
-            \\          if(p==='item')return function(i){return o[i]||null;};
-            \\          if(p==='setNamedItem')return function(a){return self.setAttributeNode(a);};
-            \\          if(p==='setNamedItemNS')return function(a){return self.setAttributeNode(a);};
-            \\          if(p==='removeNamedItem')return function(n){var a=self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');self.removeAttributeNode(a);return a;};
-            \\          if(p==='removeNamedItemNS')return function(ns,n){var a=self.getAttributeNodeNS(ns,n);if(!a)throw new DOMException('','NotFoundError');self.removeAttributeNode(a);return a;};
-            \\          if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield o[i];};
-            \\          if(p===Symbol.toStringTag)return'NamedNodeMap';
-            \\          return o[p];},
-            \\        has:function(o,p){if(p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS')return true;return p in o;},
-            \\        getOwnPropertyDescriptor:function(o,p){return Object.getOwnPropertyDescriptor(o,p);},
-            \\        ownKeys:function(o){return Object.getOwnPropertyNames(o);}
-            \\      });
+            \\    }
+            \\    var _handler={
+            \\      get:function(o,p){if(p==='length')return o._len;
+            \\        if(p==='getNamedItem')return function(n){var l=o._len;for(var i=0;i<l;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
+            \\        if(p==='getNamedItemNS')return function(ns,n){var l=o._len;for(var i=0;i<l;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
+            \\        if(p==='item')return function(i){return o[i]||null;};
+            \\        if(p==='setNamedItem')return function(a){return o._self.setAttributeNode(a);};
+            \\        if(p==='setNamedItemNS')return function(a){return o._self.setAttributeNode(a);};
+            \\        if(p==='removeNamedItem')return function(n){var a=o._self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
+            \\        if(p==='removeNamedItemNS')return function(ns,n){var a=o._self.getAttributeNodeNS(ns,n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
+            \\        if(p===Symbol.iterator)return function*(){var l=o._len;for(var i=0;i<l;i++)yield o[i];};
+            \\        if(p===Symbol.toStringTag)return'NamedNodeMap';
+            \\        return o[p];},
+            \\      has:function(o,p){if(p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS')return true;return p in o;},
+            \\      getOwnPropertyDescriptor:function(o,p){return Object.getOwnPropertyDescriptor(o,p);},
+            \\      ownKeys:function(o){return Object.getOwnPropertyNames(o);}
+            \\    };
+            \\    Object.defineProperty(EP,'attributes',{get:function(){
+            \\      var c=_proxyCache.get(this);
+            \\      if(c){_syncAttrsTarget(this,c._t);return c._p;}
+            \\      var t={_self:this,_len:0};
+            \\      _syncAttrsTarget(this,t);
+            \\      var p=new Proxy(t,_handler);
+            \\      _proxyCache.set(this,{_t:t,_p:p});
+            \\      return p;
             \\    },configurable:true,enumerable:true});
             \\  }
             \\})();
@@ -3929,7 +3996,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _elBefore(ref){var x=_ch.indexOf(ref);for(var i=0;i<x;i++)if(_nt(_ch[i])===1)return true;return false;}
             \\  function _isAnc(n,t){var c=t;while(c){if(c===n)return true;c=c.parentNode;}return false;}
             \\  function _dp(n,k,v){Object.defineProperty(n,k,{value:v,writable:true,configurable:true,enumerable:true});}
-            \\  function _relink(){for(var i=0;i<_ch.length;i++){_dp(_ch[i],'parentNode',doc);_dp(_ch[i],'previousSibling',i>0?_ch[i-1]:null);_dp(_ch[i],'nextSibling',i<_ch.length-1?_ch[i+1]:null);}}
+            \\  function _adoptTree(n,d){_dp(n,'ownerDocument',d);if(n.childNodes)for(var i=0;i<n.childNodes.length;i++)_adoptTree(n.childNodes[i],d);if(n.firstChild){var c=n.firstChild;while(c){_adoptTree(c,d);c=c.nextSibling;}}}
+            \\  function _relink(){for(var i=0;i<_ch.length;i++){_dp(_ch[i],'parentNode',doc);_dp(_ch[i],'previousSibling',i>0?_ch[i-1]:null);_dp(_ch[i],'nextSibling',i<_ch.length-1?_ch[i+1]:null);_adoptTree(_ch[i],doc);}}
             \\  function _preBase(node,child){
             \\    if(_isAnc(node,doc))throw new DOMException('The new child element contains the parent.','HierarchyRequestError');
             \\    if(child!==null&&child!==undefined&&_ch.indexOf(child)===-1)throw new DOMException('The node before which the new node is to be inserted is not a child of this node.','NotFoundError');
