@@ -568,6 +568,11 @@ pub fn elementAppendChild(
         // DOM spec step 1: parent must be able to have children
         if (!canHaveChildren(parent.?))
             return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+        // DOM spec: DocType in non-Document parent → HierarchyRequestError
+        var js_nt: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &js_nt, nt);
+        if (js_nt == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
+            return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
         // JS-level node (PI, etc.) — delegate to JS parentNode/childNodes manipulation
         return appendJsNode(c, this_val, args[0]);
     };
@@ -588,11 +593,15 @@ pub fn elementAppendChild(
     // DOM spec: remove from old parent first, record removal mutation
     const old_parent = child.parent;
     if (old_parent != null) {
+        const rm_prev = child.prev;
+        const rm_next = child.next;
         lxb_dom_node_remove(child);
-        events.recordMutation(old_parent.?, "childList", null, child, null);
+        events.recordMutationChildList(old_parent.?, null, child, rm_prev, rm_next);
     }
+    // Capture siblings at insertion point (append = after last child)
+    const ins_prev = lxb_dom_node_last_child_noi(parent.?);
     lxb_dom_node_insert_child(parent.?, child);
-    events.recordMutation(parent.?, "childList", child, null, null);
+    events.recordMutationChildList(parent.?, child, null, ins_prev, null);
     api.setDomDirty();
     // Dynamic script execution: if a <script> is appended, fetch and execute it
     api.maybeExecuteDynamicScriptPublic(c, child, args[0]);
@@ -629,8 +638,10 @@ pub fn elementRemoveChild(
     };
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
     if (child.parent != parent) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
+    const rm_prev = child.prev;
+    const rm_next = child.next;
     lxb_dom_node_remove(child);
-    events.recordMutation(parent, "childList", null, child, null);
+    events.recordMutationChildList(parent, null, child, rm_prev, rm_next);
     api.setDomDirty();
     return qjs.JS_DupValue(c, args[0]);
 }
@@ -756,14 +767,24 @@ pub fn elementInsertBefore(
             effective_ref = ref_node;
         }
     }
-    // Remove from old parent if needed
-    if (new_node.parent != null) lxb_dom_node_remove(new_node);
+    // Remove from old parent if needed (must happen BEFORE sibling calculation
+    // so same-parent moves don't include the moved node in prev/next)
+    const old_parent = new_node.parent;
+    if (old_parent != null) {
+        const rem_prev = new_node.prev;
+        const rem_next = new_node.next;
+        lxb_dom_node_remove(new_node);
+        events.recordMutationChildList(old_parent.?, null, new_node, rem_prev, rem_next);
+    }
+    // Capture siblings at insertion point AFTER detach
+    const ins_prev = if (!ref_is_null) effective_ref.?.prev else lxb_dom_node_last_child_noi(parent.?);
+    const ins_next = if (!ref_is_null) effective_ref else null;
     if (ref_is_null) {
         lxb_dom_node_insert_child(parent.?, new_node);
     } else {
         lxb_dom_node_insert_before(effective_ref.?, new_node);
     }
-    events.recordMutation(parent.?, "childList", new_node, null, null);
+    events.recordMutationChildList(parent.?, new_node, null, ins_prev, ins_next);
     api.setDomDirty();
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
     upgradeSubtreeCustomElements(c, new_node);
@@ -850,10 +871,19 @@ pub fn elementReplaceChild(
     if (new_node == old_node) {
         return qjs.JS_DupValue(c, args[1]);
     }
-    if (new_node.parent != null) lxb_dom_node_remove(new_node);
+    // Capture siblings before mutation
+    const rep_prev = old_node.prev;
+    const rep_next = old_node.next;
+    // Remove new_node from its old parent and record removal mutation
+    if (new_node.parent) |old_p| {
+        const rm_prev = new_node.prev;
+        const rm_next = new_node.next;
+        lxb_dom_node_remove(new_node);
+        events.recordMutationChildList(old_p, null, new_node, rm_prev, rm_next);
+    }
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
-    events.recordMutation(parent, "childList", new_node, old_node, null);
+    events.recordMutationChildList(parent, new_node, old_node, rep_prev, rep_next);
     api.setDomDirty();
     // Dynamic script execution and custom element upgrade
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);

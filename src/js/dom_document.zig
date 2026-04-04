@@ -427,6 +427,29 @@ pub fn implCreateDocument(
         }
     }
 
+    // If doctype is provided, validate it's a DocumentType (nodeType === 10) and append
+    if (argc >= 3 and !quickjs.JS_IsNull(args[2]) and !quickjs.JS_IsUndefined(args[2])) {
+        const nt_val = qjs.JS_GetPropertyStr(c, args[2], "nodeType");
+        var nt_int: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &nt_int, nt_val);
+        qjs.JS_FreeValue(c, nt_val);
+        if (nt_int == 10) {
+            const append_dt_js = "(function(d,dt){d.appendChild(dt);d.doctype=dt;dt.ownerDocument=d;})";
+            const dt_fn = qjs.JS_Eval(c, append_dt_js, append_dt_js.len, "<appendDT>", qjs.JS_EVAL_TYPE_GLOBAL);
+            if (!quickjs.JS_IsException(dt_fn)) {
+                var dt_args = [2]qjs.JSValue{ doc, args[2] };
+                const dt_r = qjs.JS_Call(c, dt_fn, quickjs.JS_UNDEFINED(), 2, &dt_args);
+                if (quickjs.JS_IsException(dt_r)) {
+                    qjs.JS_FreeValue(c, dt_fn);
+                    qjs.JS_FreeValue(c, doc);
+                    return quickjs.JS_EXCEPTION();
+                }
+                qjs.JS_FreeValue(c, dt_r);
+                qjs.JS_FreeValue(c, dt_fn);
+            }
+        }
+    }
+
     // If qualifiedName is provided, create and append document element
     if (qname) |qn| {
         if (qn.len > 0) {
@@ -840,17 +863,20 @@ pub fn documentGetElementsByClassName(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    var selector_buf: [256]u8 = undefined;
+    var selector_buf: [512]u8 = undefined;
     const class_name = s.ptr[0..s.len];
-    if (class_name.len + 1 > selector_buf.len) return quickjs.JS_NULL();
-    selector_buf[0] = '.';
-    @memcpy(selector_buf[1 .. 1 + class_name.len], class_name);
+    const selector = api.buildClassSelector(class_name, &selector_buf) orelse {
+        const empty = qjs.JS_NewArray(c);
+        if (quickjs.JS_IsException(empty)) return empty;
+        wrapAsHTMLCollection(c, empty);
+        return empty;
+    };
 
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
     const doc_node = getDocumentNode() orelse return arr;
     var idx: u32 = 0;
-    api.dom_sel.walkTreeCollect(c, doc_node, selector_buf[0 .. 1 + class_name.len], arr, &idx);
+    api.dom_sel.walkTreeCollect(c, doc_node, selector, arr, &idx);
     wrapAsHTMLCollection(c, arr);
     return arr;
 }

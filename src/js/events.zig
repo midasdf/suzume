@@ -510,19 +510,30 @@ fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSVa
             ret = qjs.JS_ThrowTypeError(ctx, "handleEvent is not a function");
         }
     }
-    // If listener threw, report error via window.onerror (per HTML spec "report the exception")
+    // If listener threw, report error via ErrorEvent on window (per HTML spec "report the exception")
     if (quickjs.JS_IsException(ret)) {
         const exc = qjs.JS_GetException(ctx);
         const global = qjs.JS_GetGlobalObject(ctx);
-        const onerror = qjs.JS_GetPropertyStr(ctx, global, "onerror");
-        if (qjs.JS_IsFunction(ctx, onerror)) {
-            const msg = qjs.JS_ToString(ctx, exc);
-            var onerror_args = [1]qjs.JSValue{msg};
-            const onerror_ret = qjs.JS_Call(ctx, onerror, global, 1, &onerror_args);
-            qjs.JS_FreeValue(ctx, onerror_ret);
-            qjs.JS_FreeValue(ctx, msg);
+        // Report error: call window.onerror (legacy) then dispatch ErrorEvent
+        const report_js =
+            \\(function(w,err){
+            \\  if(w.__isReportingError)return;
+            \\  w.__isReportingError=true;
+            \\  try{
+            \\    var msg=err&&err.message?err.message:String(err);
+            \\    if(typeof w.onerror==='function'){try{w.onerror(msg,'',0,0,err);}catch(e){}}
+            \\    var ev;try{ev=new ErrorEvent('error',{error:err,message:msg,cancelable:true});}catch(e){ev=new Event('error');ev.error=err;ev.message=msg;}
+            \\    w.dispatchEvent(ev);
+            \\  }finally{w.__isReportingError=false;}
+            \\})
+        ;
+        const report_fn = qjs.JS_Eval(ctx, report_js, report_js.len, "<report-err>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(report_fn)) {
+            var report_args = [2]qjs.JSValue{ global, exc };
+            const report_ret = qjs.JS_Call(ctx, report_fn, quickjs.JS_UNDEFINED(), 2, &report_args);
+            qjs.JS_FreeValue(ctx, report_ret);
+            qjs.JS_FreeValue(ctx, report_fn);
         }
-        qjs.JS_FreeValue(ctx, onerror);
         qjs.JS_FreeValue(ctx, global);
         qjs.JS_FreeValue(ctx, exc);
     } else {
@@ -1745,6 +1756,8 @@ const MutationRecord = struct {
     old_value: ?[]const u8 = null, // owned copy, for attributeOldValue/characterDataOldValue
     added_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
     removed_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
+    previous_sibling: ?*lxb.lxb_dom_node_t = null,
+    next_sibling: ?*lxb.lxb_dom_node_t = null,
 
     fn deinit(self: *MutationRecord) void {
         if (self.attribute_name) |name| allocator.free(@constCast(name));
@@ -1759,6 +1772,8 @@ const ObserveTarget = struct {
     child_list: bool,
     attributes: bool,
     attribute_old_value: bool = false,
+    character_data: bool = false,
+    character_data_old_value: bool = false,
     subtree: bool,
 };
 
@@ -1786,10 +1801,19 @@ pub fn recordMutation(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
 ) void {
-    recordMutationWithOldValue(target, mutation_type, added, removed, attr_name, null);
+    recordMutationFull(target, mutation_type, added, removed, attr_name, null, null, null);
 }
 
-/// Record a mutation with optional old value (for attributeOldValue support).
+pub fn recordMutationChildList(
+    target: *lxb.lxb_dom_node_t,
+    added: ?*lxb.lxb_dom_node_t,
+    removed: ?*lxb.lxb_dom_node_t,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
+) void {
+    recordMutationFull(target, "childList", added, removed, null, null, prev_sib, next_sib);
+}
+
 pub fn recordMutationWithOldValue(
     target: *lxb.lxb_dom_node_t,
     mutation_type: []const u8,
@@ -1797,6 +1821,20 @@ pub fn recordMutationWithOldValue(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
     old_value: ?[]const u8,
+) void {
+    recordMutationFull(target, mutation_type, added, removed, attr_name, old_value, null, null);
+}
+
+/// Record a mutation with all fields including previousSibling/nextSibling.
+fn recordMutationFull(
+    target: *lxb.lxb_dom_node_t,
+    mutation_type: []const u8,
+    added: ?*lxb.lxb_dom_node_t,
+    removed: ?*lxb.lxb_dom_node_t,
+    attr_name: ?[]const u8,
+    old_value: ?[]const u8,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
     for (mutation_observers.items) |*obs| {
         if (obs.disconnected) continue;
@@ -1807,6 +1845,7 @@ pub fn recordMutationWithOldValue(
 
             const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list
             else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes
+            else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data
             else false;
             if (!want) continue;
 
@@ -1816,6 +1855,8 @@ pub fn recordMutationWithOldValue(
                 .attribute_name = null,
                 .added_nodes = .empty,
                 .removed_nodes = .empty,
+                .previous_sibling = prev_sib,
+                .next_sibling = next_sib,
             };
             if (attr_name) |n| {
                 const copy = allocator.alloc(u8, n.len) catch null;
@@ -1824,8 +1865,14 @@ pub fn recordMutationWithOldValue(
                     record.attribute_name = c;
                 }
             }
-            // Store old value if observer requested it and old_value is provided
-            if (old_value != null and t.attribute_old_value) {
+            // Store old value only when the matching oldValue option is set for this mutation type
+            const wants_old_value = if (std.mem.eql(u8, mutation_type, "attributes"))
+                t.attribute_old_value
+            else if (std.mem.eql(u8, mutation_type, "characterData"))
+                t.character_data_old_value
+            else
+                false;
+            if (old_value != null and wants_old_value) {
                 if (old_value) |ov| {
                     const ov_copy = allocator.alloc(u8, ov.len) catch null;
                     if (ov_copy) |ovc| {
@@ -1891,8 +1938,16 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
             }
             // Per spec: all MutationRecord fields must be present
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
+            if (rec.previous_sibling) |ps| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", dom_api.wrapNodePublic(ctx, ps));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", quickjs.JS_NULL());
+            }
+            if (rec.next_sibling) |ns| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", dom_api.wrapNodePublic(ctx, ns));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
+            }
             if (rec.old_value) |ov| {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue",
                     qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));
@@ -2006,11 +2061,14 @@ fn jsMutationObserverObserve(
     }
 
     const attr_old_val = if (argc >= 2) jsBoolProp(c, args[1], "attributeOldValue") else false;
+    const char_data_old = if (argc >= 2) jsBoolProp(c, args[1], "characterDataOldValue") else false;
     mutation_observers.items[idx].targets.append(allocator, .{
         .node = target,
         .child_list = child_list,
         .attributes = attributes_opt,
         .attribute_old_value = attr_old_val,
+        .character_data = character_data,
+        .character_data_old_value = char_data_old,
         .subtree = subtree,
     }) catch {};
     mutation_observers.items[idx].disconnected = false;
