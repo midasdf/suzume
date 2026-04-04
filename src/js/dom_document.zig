@@ -188,9 +188,34 @@ pub fn isInvalidNameChar(ch: u8) bool {
     if (ch == '_' or ch == ':' or ch == '-' or ch == '.') return false;
     // Characters that are definitely invalid per all browser implementations:
     return switch (ch) {
-        ' ', '\t', '\n', '\r', '<', '>', '/', '=', '"', '\'',
-        '^', '!', '@', '#', '$', '%', '&', '*', '(', ')',
-        '+', '[', ']', '\\', ';', '`', ',', '~',
+        ' ',
+        '\t',
+        '\n',
+        '\r',
+        '<',
+        '>',
+        '/',
+        '=',
+        '"',
+        '\'',
+        '^',
+        '!',
+        '@',
+        '#',
+        '$',
+        '%',
+        '&',
+        '*',
+        '(',
+        ')',
+        '+',
+        '[',
+        ']',
+        '\\',
+        ';',
+        '`',
+        ',',
+        '~',
         => true,
         else => false, // other chars like {, }, |, ? — browsers allow these in names
     };
@@ -865,20 +890,17 @@ pub fn documentGetElementsByClassName(
 
     var selector_buf: [512]u8 = undefined;
     const class_name = s.ptr[0..s.len];
+    // Get document JS object as root for live collection
+    const global = qjs.JS_GetGlobalObject(c);
+    const doc_js = qjs.JS_GetPropertyStr(c, global, "document");
+    qjs.JS_FreeValue(c, global);
+    defer qjs.JS_FreeValue(c, doc_js);
+
     const selector = api.buildClassSelector(class_name, &selector_buf) orelse {
-        const empty = qjs.JS_NewArray(c);
-        if (quickjs.JS_IsException(empty)) return empty;
-        wrapAsHTMLCollection(c, empty);
-        return empty;
+        return makeLiveHTMLCollection(c, doc_js, "");
     };
 
-    const arr = qjs.JS_NewArray(c);
-    if (quickjs.JS_IsException(arr)) return arr;
-    const doc_node = getDocumentNode() orelse return arr;
-    var idx: u32 = 0;
-    api.dom_sel.walkTreeCollect(c, doc_node, selector, arr, &idx);
-    wrapAsHTMLCollection(c, arr);
-    return arr;
+    return makeLiveHTMLCollection(c, doc_js, selector);
 }
 
 pub fn documentGetElementsByTagName(
@@ -914,6 +936,55 @@ pub fn wrapAsHTMLCollection(c: *qjs.JSContext, arr: qjs.JSValue) void {
         qjs.JS_FreeValue(c, r);
         qjs.JS_FreeValue(c, fn_val);
     }
+}
+
+/// Create a live HTMLCollection backed by querySelectorAll that re-evaluates on access.
+/// root_js is the JS element/document to call querySelectorAll on.
+/// selector is the CSS selector string (empty string = always empty collection).
+pub fn makeLiveHTMLCollection(c: *qjs.JSContext, root_js: qjs.JSValue, selector: []const u8) qjs.JSValue {
+    const js =
+        \\(function(root,sel){
+        \\  if(!sel)return new Proxy([],{
+        \\    get:function(o,p){if(p==='length')return 0;if(p==='item')return function(){return null;};
+        \\      if(p==='namedItem')return function(){return null;};
+        \\      if(p===Symbol.iterator)return function*(){};
+        \\      if(p===Symbol.toStringTag)return'HTMLCollection';
+        \\      if(typeof p==='string'&&!isNaN(p))return undefined;return o[p];}});
+        \\  function _q(){try{return root.querySelectorAll(sel);}catch(e){return[];}}
+        \\  var proxy=new Proxy([],{
+        \\    get:function(o,p){
+        \\      if(p===Symbol.toStringTag)return'HTMLCollection';
+        \\      var r=_q(),len=r.length;
+        \\      if(p==='length')return len;
+        \\      if(p==='item')return function(i){return i>=0&&i<len?r[i]:null;};
+        \\      if(p==='namedItem')return function(n){for(var i=0;i<len;i++){var e=r[i];if(e.id===n||e.name===n)return e;}return null;};
+        \\      if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield r[i];};
+        \\      if(typeof p==='string'&&!isNaN(p)){var i=+p;return i>=0&&i<len?r[i]:undefined;}
+        \\      return o[p];
+        \\    },
+        \\    has:function(o,p){if(p==='length'||p==='item'||p==='namedItem')return true;
+        \\      if(typeof p==='string'&&!isNaN(p)){var r=_q();return +p<r.length;}return p in o;},
+        \\    getOwnPropertyDescriptor:function(o,p){
+        \\      if(typeof p==='string'&&!isNaN(p)){var r=_q(),i=+p;if(i>=0&&i<r.length)return{value:r[i],writable:false,enumerable:true,configurable:true};}
+        \\      if(p==='length'){var r2=_q();return{value:r2.length,writable:false,enumerable:false,configurable:true};}
+        \\      return Object.getOwnPropertyDescriptor(o,p);},
+        \\    ownKeys:function(){var r=_q(),k=[];for(var i=0;i<r.length;i++)k.push(String(i));k.push('length');return k;}
+        \\  });
+        \\  if(typeof HTMLCollection!=='undefined')Object.setPrototypeOf(proxy,HTMLCollection.prototype);
+        \\  return proxy;
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js, js.len, "<live-htmlcol>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(fn_val)) return quickjs.JS_NULL();
+    const sel_js = qjs.JS_NewStringLen(c, selector.ptr, selector.len);
+    // If empty selector, pass null to get empty collection
+    const sel_arg = if (selector.len == 0) quickjs.JS_NULL() else sel_js;
+    var call_args = [2]qjs.JSValue{ root_js, sel_arg };
+    const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 2, &call_args);
+    qjs.JS_FreeValue(c, sel_js);
+    qjs.JS_FreeValue(c, fn_val);
+    if (quickjs.JS_IsException(result)) return quickjs.JS_NULL();
+    return result;
 }
 
 pub fn documentGetElementsByName(
@@ -1158,9 +1229,16 @@ pub fn documentGetTitle(
     var in_space = true; // trim leading
     for (ptr.?[0..len]) |ch| {
         if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0C) {
-            if (!in_space and pos < buf.len) { buf[pos] = ' '; pos += 1; in_space = true; }
+            if (!in_space and pos < buf.len) {
+                buf[pos] = ' ';
+                pos += 1;
+                in_space = true;
+            }
         } else {
-            if (pos < buf.len) { buf[pos] = ch; pos += 1; }
+            if (pos < buf.len) {
+                buf[pos] = ch;
+                pos += 1;
+            }
             in_space = false;
         }
     }
@@ -1374,25 +1452,7 @@ pub fn documentCreateEvent(
                 defer qjs.JS_FreeCString(c, s.ptr);
                 const name = s.ptr[0..s.len];
                 // Legacy event interface aliases per DOM spec §5.1
-                if (std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents") or std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event"
-                else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "compositionevent") or std.ascii.eqlIgnoreCase(name, "textevent")) iface = "CompositionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "storageevent")) iface = "StorageEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "pagetransitionevent")) iface = "PageTransitionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "dragevent") or std.ascii.eqlIgnoreCase(name, "dragevents")) iface = "DragEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "devicemotionevent")) iface = "DeviceMotionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "deviceorientationevent")) iface = "DeviceOrientationEvent"
-                else {
+                if (std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent" else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents") or std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event" else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent" else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent" else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent" else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent" else if (std.ascii.eqlIgnoreCase(name, "compositionevent") or std.ascii.eqlIgnoreCase(name, "textevent")) iface = "CompositionEvent" else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent" else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent" else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent" else if (std.ascii.eqlIgnoreCase(name, "storageevent")) iface = "StorageEvent" else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent" else if (std.ascii.eqlIgnoreCase(name, "pagetransitionevent")) iface = "PageTransitionEvent" else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent" else if (std.ascii.eqlIgnoreCase(name, "dragevent") or std.ascii.eqlIgnoreCase(name, "dragevents")) iface = "DragEvent" else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent" else if (std.ascii.eqlIgnoreCase(name, "devicemotionevent")) iface = "DeviceMotionEvent" else if (std.ascii.eqlIgnoreCase(name, "deviceorientationevent")) iface = "DeviceOrientationEvent" else {
                     // Non-legacy interface → NotSupportedError per DOM spec
                     return throwDOMException(c, "NotSupportedError", "The provided event type is not supported.");
                 }

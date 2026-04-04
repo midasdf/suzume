@@ -280,13 +280,11 @@ fn executeDynamicExternalScript(ctx: *qjs.JSContext, src: []const u8, is_module:
     const allocator = std.heap.c_allocator;
 
     // Resolve URL
-    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:"))
-        blk: {
-            const u = allocator.allocSentinel(u8, src.len, 0) catch return;
-            @memcpy(u, src);
-            break :blk u;
-        }
-    else if (g_current_url) |bu|
+    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:")) blk: {
+        const u = allocator.allocSentinel(u8, src.len, 0) catch return;
+        @memcpy(u, src);
+        break :blk u;
+    } else if (g_current_url) |bu|
         resolveUrl(allocator, bu, src) catch return
     else
         return;
@@ -605,15 +603,10 @@ pub fn throwDOMException(c: *qjs.JSContext, name: []const u8, message: []const u
     const err = qjs.JS_NewObject(c);
     _ = qjs.JS_SetPropertyStr(c, err, "name", qjs.JS_NewStringLen(c, name.ptr, name.len));
     _ = qjs.JS_SetPropertyStr(c, err, "message", qjs.JS_NewStringLen(c, message.ptr, message.len));
-    const code: i32 = if (std.mem.eql(u8, name, "SyntaxError")) 12
-        else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5
-        else if (std.mem.eql(u8, name, "NotFoundError")) 8
-        else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3
-        else 0;
+    const code: i32 = if (std.mem.eql(u8, name, "SyntaxError")) 12 else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, name, "NotFoundError")) 8 else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3 else 0;
     _ = qjs.JS_SetPropertyStr(c, err, "code", qjs.JS_NewInt32(c, code));
     return qjs.JS_Throw(c, err);
 }
-
 
 pub fn classContains(class_str: []const u8, needle: []const u8) bool {
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
@@ -622,7 +615,6 @@ pub fn classContains(class_str: []const u8, needle: []const u8) bool {
     }
     return false;
 }
-
 
 // ── Shorthand ↔ Longhand Expansion ──────────────────────────────────
 
@@ -895,12 +887,13 @@ fn normalizeMarginTrim(val: []const u8) []const u8 {
         const start = pos;
         while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
         const kw = val[start..pos];
-        if (dom_style.eqlIgnoreCase(kw, "block-start")) bs = true
-        else if (dom_style.eqlIgnoreCase(kw, "block-end")) be = true
-        else if (dom_style.eqlIgnoreCase(kw, "inline-start")) is_ = true
-        else if (dom_style.eqlIgnoreCase(kw, "inline-end")) ie = true
-        else if (dom_style.eqlIgnoreCase(kw, "block")) { bs = true; be = true; }
-        else if (dom_style.eqlIgnoreCase(kw, "inline")) { is_ = true; ie = true; }
+        if (dom_style.eqlIgnoreCase(kw, "block-start")) bs = true else if (dom_style.eqlIgnoreCase(kw, "block-end")) be = true else if (dom_style.eqlIgnoreCase(kw, "inline-start")) is_ = true else if (dom_style.eqlIgnoreCase(kw, "inline-end")) ie = true else if (dom_style.eqlIgnoreCase(kw, "block")) {
+            bs = true;
+            be = true;
+        } else if (dom_style.eqlIgnoreCase(kw, "inline")) {
+            is_ = true;
+            ie = true;
+        }
     }
     // Condensation: individual keywords → shorthand where possible
     if (bs and be and is_ and ie) return "block inline";
@@ -1472,16 +1465,13 @@ fn styleSetProperty(
         "normal"
     else if (dom_style.eqlIgnoreCase(prop, "font-style") and dom_style.eqlIgnoreCase(trimmed_val2, "oblique 14deg"))
         "oblique"
-    else if (dom_style.eqlIgnoreCase(prop, "opacity") and trimmed_val2.len > 1 and trimmed_val2[trimmed_val2.len - 1] == '%')
-        blk: {
-            if (std.fmt.parseFloat(f64, trimmed_val2[0 .. trimmed_val2.len - 1])) |pct| {
-                const v = pct / 100.0;
-                const s = std.fmt.bufPrint(&calc_buf, "{d}", .{v}) catch break :blk val;
-                break :blk s;
-            } else |_| break :blk val;
-        }
-    else
-        val;
+    else if (dom_style.eqlIgnoreCase(prop, "opacity") and trimmed_val2.len > 1 and trimmed_val2[trimmed_val2.len - 1] == '%') blk: {
+        if (std.fmt.parseFloat(f64, trimmed_val2[0 .. trimmed_val2.len - 1])) |pct| {
+            const v = pct / 100.0;
+            const s = std.fmt.bufPrint(&calc_buf, "{d}", .{v}) catch break :blk val;
+            break :blk s;
+        } else |_| break :blk val;
+    } else val;
 
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
@@ -1991,10 +1981,73 @@ fn defineNonEnumerable(c: *qjs.JSContext, obj: qjs.JSValue, name: []const u8, va
     }
 }
 
-
 // ── getElementsByClassName helper ───────────────────────────────────
 
+/// Escape a single byte per CSS.escape spec into buf at pos. Returns new pos, or null on overflow.
+/// char_idx is the 0-based position within the token (for leading char rules).
+fn cssEscapeByte(buf: []u8, pos: usize, ch: u8, char_idx: usize, next_ch: ?u8) ?usize {
+    const p = pos;
+    if (ch == 0) {
+        const rep = "\\fffd ";
+        if (p + rep.len > buf.len) return null;
+        @memcpy(buf[p..][0..rep.len], rep);
+        return p + rep.len;
+    }
+    const hex = "0123456789abcdef";
+    // Control chars 0x01-0x1F and 0x7F: hex escape
+    if (ch <= 0x1F or ch == 0x7F) {
+        if (p + 4 > buf.len) return null;
+        buf[p] = '\\';
+        buf[p + 1] = hex[ch >> 4];
+        buf[p + 2] = hex[ch & 0xF];
+        buf[p + 3] = ' ';
+        return p + 4;
+    }
+    // Leading digit: hex-escape
+    if (char_idx == 0 and ch >= '0' and ch <= '9') {
+        if (p + 4 > buf.len) return null;
+        buf[p] = '\\';
+        buf[p + 1] = hex[ch >> 4];
+        buf[p + 2] = hex[ch & 0xF];
+        buf[p + 3] = ' ';
+        return p + 4;
+    }
+    // Leading hyphen: escape if alone or followed by digit
+    if (char_idx == 0 and ch == '-') {
+        const need_escape = if (next_ch) |nc| (nc >= '0' and nc <= '9') else true;
+        if (need_escape) {
+            if (p + 2 > buf.len) return null;
+            buf[p] = '\\';
+            buf[p + 1] = '-';
+            return p + 2;
+        }
+    }
+    // Second char after leading hyphen: digit needs escape (e.g. -1foo)
+    if (char_idx == 1 and ch >= '0' and ch <= '9') {
+        if (p + 4 > buf.len) return null;
+        buf[p] = '\\';
+        buf[p + 1] = hex[ch >> 4];
+        buf[p + 2] = hex[ch & 0xF];
+        buf[p + 3] = ' ';
+        return p + 4;
+    }
+    // Safe: letters, digits (non-leading), underscore, hyphen, >= 0x80
+    if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+        (ch >= '0' and ch <= '9') or ch == '_' or ch == '-' or ch >= 0x80)
+    {
+        if (p >= buf.len) return null;
+        buf[p] = ch;
+        return p + 1;
+    }
+    // Everything else: backslash escape
+    if (p + 2 > buf.len) return null;
+    buf[p] = '\\';
+    buf[p + 1] = ch;
+    return p + 2;
+}
+
 /// Build CSS selector from space-separated class names: "a b" -> ".a.b"
+/// Class tokens are CSS-escaped so names with leading digits, punctuation etc. work.
 pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
     if (class_name.len == 0) return null;
     var pos: usize = 0;
@@ -2010,11 +2063,12 @@ pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
         if (pos >= buf.len) return null;
         buf[pos] = '.';
         pos += 1;
-        // Copy class name until whitespace
+        // Copy class name with CSS escaping until whitespace
+        var char_idx: usize = 0;
         while (i < class_name.len and class_name[i] != ' ' and class_name[i] != '\t' and class_name[i] != '\n' and class_name[i] != '\r' and class_name[i] != 0x0C) {
-            if (pos >= buf.len) return null;
-            buf[pos] = class_name[i];
-            pos += 1;
+            const next_ch: ?u8 = if (i + 1 < class_name.len and class_name[i + 1] != ' ' and class_name[i + 1] != '\t' and class_name[i + 1] != '\n' and class_name[i + 1] != '\r' and class_name[i + 1] != 0x0C) class_name[i + 1] else null;
+            pos = cssEscapeByte(buf, pos, class_name[i], char_idx, next_ch) orelse return null;
+            char_idx += 1;
             i += 1;
         }
     }
@@ -2033,7 +2087,7 @@ fn elementGetElementsByClassName(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    const node = getNode(c, this_val) orelse return quickjs.JS_NULL();
+    _ = getNode(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
@@ -2041,19 +2095,11 @@ fn elementGetElementsByClassName(
     const class_name = s.ptr[0..s.len];
     var selector_buf: [512]u8 = undefined;
     const selector = buildClassSelector(class_name, &selector_buf) orelse {
-        // Whitespace-only or empty: return empty HTMLCollection
-        const empty = qjs.JS_NewArray(c);
-        if (quickjs.JS_IsException(empty)) return empty;
-        dom_doc.wrapAsHTMLCollection(c, empty);
-        return empty;
+        // Whitespace-only or empty: return empty live HTMLCollection
+        return dom_doc.makeLiveHTMLCollection(c, this_val, "");
     };
 
-    const arr = qjs.JS_NewArray(c);
-    if (quickjs.JS_IsException(arr)) return arr;
-    var idx: u32 = 0;
-    dom_sel.walkTreeCollect(c, node, selector, arr, &idx);
-    dom_doc.wrapAsHTMLCollection(c, arr);
-    return arr;
+    return dom_doc.makeLiveHTMLCollection(c, this_val, selector);
 }
 
 fn elementGetElementsByTagName(
@@ -3013,29 +3059,29 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // HTML element subclass constructors (for instanceof checks)
     const html_subclasses = [_][]const u8{
-        "HTMLDivElement",       "HTMLSpanElement",      "HTMLParagraphElement",
-        "HTMLImageElement",     "HTMLAnchorElement",    "HTMLFormElement",
-        "HTMLInputElement",     "HTMLTextAreaElement",  "HTMLSelectElement",
-        "HTMLButtonElement",    "HTMLTableElement",     "HTMLTableRowElement",
-        "HTMLTableCellElement", "HTMLLIElement",        "HTMLUListElement",
-        "HTMLOListElement",     "HTMLHeadingElement",   "HTMLPreElement",
-        "HTMLCanvasElement",    "HTMLVideoElement",     "HTMLAudioElement",
-        "HTMLIFrameElement",    "HTMLLabelElement",     "HTMLScriptElement",
-        "HTMLStyleElement",     "HTMLLinkElement",      "HTMLMetaElement",
-        "HTMLBRElement",        "HTMLHRElement",        "HTMLBodyElement",
-        "HTMLHeadElement",      "HTMLHtmlElement",      "HTMLOptionElement",
-        "HTMLTemplateElement",  "HTMLDialogElement",    "HTMLDetailsElement",
-        "HTMLSummaryElement",   "HTMLFieldSetElement",  "HTMLLegendElement",
-        "HTMLTitleElement",     "HTMLBaseElement",      "HTMLAreaElement",
-        "HTMLDataElement",      "HTMLTimeElement",      "HTMLOutputElement",
-        "HTMLProgressElement",  "HTMLMeterElement",     "HTMLDataListElement",
-        "HTMLOptGroupElement",  "HTMLObjectElement",    "HTMLEmbedElement",
-        "HTMLSourceElement",    "HTMLTrackElement",     "HTMLMapElement",
+        "HTMLDivElement",          "HTMLSpanElement",     "HTMLParagraphElement",
+        "HTMLImageElement",        "HTMLAnchorElement",   "HTMLFormElement",
+        "HTMLInputElement",        "HTMLTextAreaElement", "HTMLSelectElement",
+        "HTMLButtonElement",       "HTMLTableElement",    "HTMLTableRowElement",
+        "HTMLTableCellElement",    "HTMLLIElement",       "HTMLUListElement",
+        "HTMLOListElement",        "HTMLHeadingElement",  "HTMLPreElement",
+        "HTMLCanvasElement",       "HTMLVideoElement",    "HTMLAudioElement",
+        "HTMLIFrameElement",       "HTMLLabelElement",    "HTMLScriptElement",
+        "HTMLStyleElement",        "HTMLLinkElement",     "HTMLMetaElement",
+        "HTMLBRElement",           "HTMLHRElement",       "HTMLBodyElement",
+        "HTMLHeadElement",         "HTMLHtmlElement",     "HTMLOptionElement",
+        "HTMLTemplateElement",     "HTMLDialogElement",   "HTMLDetailsElement",
+        "HTMLSummaryElement",      "HTMLFieldSetElement", "HTMLLegendElement",
+        "HTMLTitleElement",        "HTMLBaseElement",     "HTMLAreaElement",
+        "HTMLDataElement",         "HTMLTimeElement",     "HTMLOutputElement",
+        "HTMLProgressElement",     "HTMLMeterElement",    "HTMLDataListElement",
+        "HTMLOptGroupElement",     "HTMLObjectElement",   "HTMLEmbedElement",
+        "HTMLSourceElement",       "HTMLTrackElement",    "HTMLMapElement",
         "HTMLTableSectionElement", "HTMLTableColElement", "HTMLTableCaptionElement",
-        "HTMLQuoteElement",     "HTMLModElement",       "HTMLPictureElement",
-        "HTMLSlotElement",      "HTMLMenuElement",      "HTMLUnknownElement",
-        "HTMLDirectoryElement", "HTMLDListElement",     "HTMLFontElement",
-        "HTMLFrameElement",     "HTMLFrameSetElement",  "HTMLMarqueeElement",
+        "HTMLQuoteElement",        "HTMLModElement",      "HTMLPictureElement",
+        "HTMLSlotElement",         "HTMLMenuElement",     "HTMLUnknownElement",
+        "HTMLDirectoryElement",    "HTMLDListElement",    "HTMLFontElement",
+        "HTMLFrameElement",        "HTMLFrameSetElement", "HTMLMarqueeElement",
         "HTMLParamElement",
     };
     for (html_subclasses) |name| {
@@ -3159,7 +3205,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    a.nodeType=2;a.name=name;a.specified=true;a.namespaceURI=ns||null;
             \\    a.prefix=prefix||null;a.localName=prefix?name.substring(prefix.length+1):name;
             \\    a.value=value;a.nodeName=name;a.nodeValue=value;a.textContent=value;
-            \\    a.ownerElement=owner;a.ownerDocument=document;
+            \\    a.ownerElement=owner;a.ownerDocument=(owner&&owner.ownerDocument)||document;
             \\    a.childNodes=[];a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
             \\    a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};
             \\    a.isConnected=false;a.getRootNode=function(){return this;};
@@ -3196,7 +3242,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(old&&old!==attr){old.ownerElement=null;}
             \\    return old;
             \\  };
-            \\  EP.setAttributeNodeNS=EP.setAttributeNode;
+            \\  EP.setAttributeNodeNS=function(attr){
+            \\    if(attr.ownerElement&&attr.ownerElement!==this){
+            \\      var oe=attr.ownerElement,cn=attr.name;
+            \\      if(oe.hasAttribute&&oe.hasAttribute(cn)){var ca=oe.getAttributeNode(cn);if(ca===attr)throw new DOMException('The attribute is in use.','InUseAttributeError');}
+            \\      attr.ownerElement=null;
+            \\    }
+            \\    var store=_getAttrStore(this);
+            \\    if(attr.namespaceURI){
+            \\      var old=this.getAttributeNodeNS(attr.namespaceURI,attr.localName);
+            \\      this.setAttributeNS(attr.namespaceURI,attr.name,attr.value);
+            \\      var key=(attr.namespaceURI||'')+'\0'+attr.localName;
+            \\      attr.ownerElement=this;store[key]=attr;
+            \\      if(old&&old!==attr){old.ownerElement=null;}
+            \\      return old;
+            \\    }
+            \\    return EP.setAttributeNode.call(this,attr);
+            \\  };
             \\  EP.removeAttributeNode=function(attr){
             \\    if(!attr||attr.ownerElement!==this)throw new DOMException('The object can not be found here.','NotFoundError');
             \\    this.removeAttribute(attr.name);attr.ownerElement=null;
@@ -3210,28 +3272,41 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var _nativeAttrsGet=Object.getOwnPropertyDescriptor(EP,'attributes');
             \\  if(_nativeAttrsGet&&_nativeAttrsGet.get){
             \\    var _rawAttrs=_nativeAttrsGet.get;
-            \\    Object.defineProperty(EP,'attributes',{get:function(){
-            \\      var raw=_rawAttrs.call(this),store=_getAttrStore(this),len=raw.length,t={},self=this;
+            \\    var _proxyCache=new WeakMap();
+            \\    function _syncAttrsTarget(self,t){
+            \\      var raw=_rawAttrs.call(self),store=_getAttrStore(self),len=raw.length;
+            \\      var oldKeys=Object.getOwnPropertyNames(t);
+            \\      for(var k=0;k<oldKeys.length;k++){var ok=oldKeys[k];if(ok==='_self'||ok==='_len')continue;delete t[ok];}
+            \\      t._len=len;
             \\      for(var i=0;i<len;i++){var ra=raw[i],key=ra.name;var cached=store[key.toLowerCase()];
             \\        if(cached){cached.value=ra.value;cached.nodeValue=ra.value;cached.textContent=ra.value;t[i]=cached;}
             \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
             \\        Object.defineProperty(t,key,{value:t[i],writable:true,enumerable:false,configurable:true});}
-            \\      return new Proxy(t,{
-            \\        get:function(o,p){if(p==='length')return len;
-            \\          if(p==='getNamedItem')return function(n){for(var i=0;i<len;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
-            \\          if(p==='getNamedItemNS')return function(ns,n){for(var i=0;i<len;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
-            \\          if(p==='item')return function(i){return o[i]||null;};
-            \\          if(p==='setNamedItem')return function(a){return self.setAttributeNode(a);};
-            \\          if(p==='setNamedItemNS')return function(a){return self.setAttributeNode(a);};
-            \\          if(p==='removeNamedItem')return function(n){var a=self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');self.removeAttributeNode(a);return a;};
-            \\          if(p==='removeNamedItemNS')return function(ns,n){var a=self.getAttributeNodeNS(ns,n);if(!a)throw new DOMException('','NotFoundError');self.removeAttributeNode(a);return a;};
-            \\          if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield o[i];};
-            \\          if(p===Symbol.toStringTag)return'NamedNodeMap';
-            \\          return o[p];},
-            \\        has:function(o,p){if(p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS')return true;return p in o;},
-            \\        getOwnPropertyDescriptor:function(o,p){return Object.getOwnPropertyDescriptor(o,p);},
-            \\        ownKeys:function(o){return Object.getOwnPropertyNames(o);}
-            \\      });
+            \\    }
+            \\    var _handler={
+            \\      get:function(o,p){if(p==='length')return o._len;
+            \\        if(p==='getNamedItem')return function(n){var l=o._len;for(var i=0;i<l;i++)if(o[i]&&o[i].name===n)return o[i];return null;};
+            \\        if(p==='getNamedItemNS')return function(ns,n){var l=o._len;for(var i=0;i<l;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
+            \\        if(p==='item')return function(i){return o[i]||null;};
+            \\        if(p==='setNamedItem')return function(a){return o._self.setAttributeNode(a);};
+            \\        if(p==='setNamedItemNS')return function(a){return o._self.setAttributeNodeNS(a);};
+            \\        if(p==='removeNamedItem')return function(n){var a=o._self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
+            \\        if(p==='removeNamedItemNS')return function(ns,n){var a=o._self.getAttributeNodeNS(ns,n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
+            \\        if(p===Symbol.iterator)return function*(){var l=o._len;for(var i=0;i<l;i++)yield o[i];};
+            \\        if(p===Symbol.toStringTag)return'NamedNodeMap';
+            \\        return o[p];},
+            \\      has:function(o,p){if(p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS')return true;return p in o;},
+            \\      getOwnPropertyDescriptor:function(o,p){return Object.getOwnPropertyDescriptor(o,p);},
+            \\      ownKeys:function(o){return Object.getOwnPropertyNames(o);}
+            \\    };
+            \\    Object.defineProperty(EP,'attributes',{get:function(){
+            \\      var c=_proxyCache.get(this);
+            \\      if(c){_syncAttrsTarget(this,c._t);return c._p;}
+            \\      var t={_self:this,_len:0};
+            \\      _syncAttrsTarget(this,t);
+            \\      var p=new Proxy(t,_handler);
+            \\      _proxyCache.set(this,{_t:t,_p:p});
+            \\      return p;
             \\    },configurable:true,enumerable:true});
             \\  }
             \\})();
@@ -3663,10 +3738,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     {
         const efp_js = "(function(x,y){return document.body||document.documentElement||null;})";
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementFromPoint", qjs.JS_Eval(ctx, efp_js, efp_js.len, "<efp>", qjs.JS_EVAL_TYPE_GLOBAL));
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementsFromPoint", qjs.JS_Eval(ctx,
-            "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})",
-            "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})".len,
-            "<efps>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementsFromPoint", qjs.JS_Eval(ctx, "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})", "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})".len, "<efps>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
     // document.createTreeWalker
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createTreeWalker", 3));
@@ -3803,8 +3875,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  return pi;
             \\})
         ;
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createProcessingInstruction", qjs.JS_Eval(ctx,
-            pi_js, pi_js.len, "<pi>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createProcessingInstruction", qjs.JS_Eval(ctx, pi_js, pi_js.len, "<pi>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
 
     // Document properties required by jQuery/Sizzle
@@ -3929,7 +4000,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _elBefore(ref){var x=_ch.indexOf(ref);for(var i=0;i<x;i++)if(_nt(_ch[i])===1)return true;return false;}
             \\  function _isAnc(n,t){var c=t;while(c){if(c===n)return true;c=c.parentNode;}return false;}
             \\  function _dp(n,k,v){Object.defineProperty(n,k,{value:v,writable:true,configurable:true,enumerable:true});}
-            \\  function _relink(){for(var i=0;i<_ch.length;i++){_dp(_ch[i],'parentNode',doc);_dp(_ch[i],'previousSibling',i>0?_ch[i-1]:null);_dp(_ch[i],'nextSibling',i<_ch.length-1?_ch[i+1]:null);}}
+            \\  function _adoptTree(n,d){_dp(n,'ownerDocument',d);var c=n.firstChild;while(c){_adoptTree(c,d);c=c.nextSibling;}}
+            \\  function _relink(){for(var i=0;i<_ch.length;i++){_dp(_ch[i],'parentNode',doc);_dp(_ch[i],'previousSibling',i>0?_ch[i-1]:null);_dp(_ch[i],'nextSibling',i<_ch.length-1?_ch[i+1]:null);_adoptTree(_ch[i],doc);}}
             \\  function _preBase(node,child){
             \\    if(_isAnc(node,doc))throw new DOMException('The new child element contains the parent.','HierarchyRequestError');
             \\    if(child!==null&&child!==undefined&&_ch.indexOf(child)===-1)throw new DOMException('The node before which the new node is to be inserted is not a child of this node.','NotFoundError');
@@ -4055,11 +4127,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  return doc;
             \\})
         ;
-        _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx,
-            create_html_doc_js, create_html_doc_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx, create_html_doc_js, create_html_doc_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         const has_feature_js = "(function() { return true; })";
-        _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx,
-            has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx, has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocumentType, "createDocumentType", 3));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocument, "createDocument", 3));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
@@ -4524,5 +4594,3 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 // wrapNodePublic/getNodePublic moved to top of file (near wrapNode/getNode)
 
 // ── CSS Value Validation (for element.style setter) ─────────────────
-
-
