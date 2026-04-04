@@ -130,7 +130,21 @@ pub fn elementSetClassName(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
+    // Capture old class value before modification
+    var _ov_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, _ov_buf.len);
+            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = _ov_buf[0..cl];
+        }
+    }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, s.ptr, s.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutationWithOldValue(node, "attributes", null, null, "class", old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
