@@ -1768,6 +1768,8 @@ const ObserveTarget = struct {
     child_list: bool,
     attributes: bool,
     attribute_old_value: bool = false,
+    character_data: bool = false,
+    character_data_old_value: bool = false,
     subtree: bool,
 };
 
@@ -1839,6 +1841,7 @@ fn recordMutationFull(
 
             const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list
             else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes
+            else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data
             else false;
             if (!want) continue;
 
@@ -1859,7 +1862,7 @@ fn recordMutationFull(
                 }
             }
             // Store old value if observer requested it and old_value is provided
-            if (old_value != null and t.attribute_old_value) {
+            if (old_value != null and (t.attribute_old_value or t.character_data_old_value)) {
                 if (old_value) |ov| {
                     const ov_copy = allocator.alloc(u8, ov.len) catch null;
                     if (ov_copy) |ovc| {
@@ -2048,11 +2051,14 @@ fn jsMutationObserverObserve(
     }
 
     const attr_old_val = if (argc >= 2) jsBoolProp(c, args[1], "attributeOldValue") else false;
+    const char_data_old = if (argc >= 2) jsBoolProp(c, args[1], "characterDataOldValue") else false;
     mutation_observers.items[idx].targets.append(allocator, .{
         .node = target,
         .child_list = child_list,
         .attributes = attributes_opt,
         .attribute_old_value = attr_old_val,
+        .character_data = character_data,
+        .character_data_old_value = char_data_old,
         .subtree = subtree,
     }) catch {};
     mutation_observers.items[idx].disconnected = false;
