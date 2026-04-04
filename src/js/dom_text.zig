@@ -40,9 +40,18 @@ pub fn textSetData(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNodeFromText(c, this_val) orelse return quickjs.JS_UNDEFINED();
     // Capture old text content before mutation for MutationObserver characterDataOldValue
-    var old_len: usize = 0;
-    const old_ptr = lxb_dom_node_text_content(node, &old_len);
-    const old_text: ?[]const u8 = if (old_ptr) |p| p[0..old_len] else null;
+    // Must copy to local buffer because lxb_dom_node_text_content_set invalidates the pointer
+    var old_text_buf: [4096]u8 = undefined;
+    var old_text: ?[]const u8 = null;
+    {
+        var old_len: usize = 0;
+        const old_ptr = lxb_dom_node_text_content(node, &old_len);
+        if (old_ptr) |p| {
+            const copy_len = @min(old_len, old_text_buf.len);
+            @memcpy(old_text_buf[0..copy_len], p[0..copy_len]);
+            old_text = old_text_buf[0..copy_len];
+        }
+    }
     const s = api.jsStringToSlice(c, args[0]) orelse {
         _ = lxb_dom_node_text_content_set(node, "", 0);
         events.recordMutationWithOldValue(node, "characterData", null, null, null, old_text);

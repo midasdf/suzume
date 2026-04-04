@@ -205,9 +205,18 @@ pub fn elementSetTextContent(
         node.type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
     {
         // Capture old text for MutationObserver characterDataOldValue
-        var old_len: usize = 0;
-        const old_ptr = lxb_dom_node_text_content(node, &old_len);
-        const old_text: ?[]const u8 = if (old_ptr) |p| p[0..old_len] else null;
+        // Must copy to local buffer because lxb_dom_node_text_content_set invalidates the pointer
+        var old_text_buf: [4096]u8 = undefined;
+        var old_text: ?[]const u8 = null;
+        {
+            var old_len: usize = 0;
+            const old_ptr = lxb_dom_node_text_content(node, &old_len);
+            if (old_ptr) |p| {
+                const copy_len = @min(old_len, old_text_buf.len);
+                @memcpy(old_text_buf[0..copy_len], p[0..copy_len]);
+                old_text = old_text_buf[0..copy_len];
+            }
+        }
         if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
             _ = lxb_dom_node_text_content_set(node, "", 0);
         } else {

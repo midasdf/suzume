@@ -1995,36 +1995,54 @@ fn defineNonEnumerable(c: *qjs.JSContext, obj: qjs.JSValue, name: []const u8, va
 // ── getElementsByClassName helper ───────────────────────────────────
 
 /// Escape a single byte per CSS.escape spec into buf at pos. Returns new pos, or null on overflow.
-fn cssEscapeByte(buf: []u8, pos: usize, ch: u8, is_first: bool) ?usize {
+/// char_idx is the 0-based position within the token (for leading char rules).
+fn cssEscapeByte(buf: []u8, pos: usize, ch: u8, char_idx: usize, next_ch: ?u8) ?usize {
     const p = pos;
     if (ch == 0) {
-        // U+0000: replacement character U+FFFD encoded as \fffd
         const rep = "\\fffd ";
         if (p + rep.len > buf.len) return null;
         @memcpy(buf[p..][0..rep.len], rep);
         return p + rep.len;
     }
+    const hex = "0123456789abcdef";
     // Control chars 0x01-0x1F and 0x7F: hex escape
     if (ch <= 0x1F or ch == 0x7F) {
         if (p + 4 > buf.len) return null;
-        const hex = "0123456789abcdef";
         buf[p] = '\\';
         buf[p + 1] = hex[ch >> 4];
         buf[p + 2] = hex[ch & 0xF];
         buf[p + 3] = ' ';
         return p + 4;
     }
-    // Leading digit: hex-escape it
-    if (is_first and ch >= '0' and ch <= '9') {
+    // Leading digit: hex-escape
+    if (char_idx == 0 and ch >= '0' and ch <= '9') {
         if (p + 4 > buf.len) return null;
-        const hex = "0123456789abcdef";
         buf[p] = '\\';
         buf[p + 1] = hex[ch >> 4];
         buf[p + 2] = hex[ch & 0xF];
         buf[p + 3] = ' ';
         return p + 4;
     }
-    // Safe: letters, digits (non-leading), underscore, >= 0x80
+    // Leading hyphen: escape if alone or followed by digit
+    if (char_idx == 0 and ch == '-') {
+        const need_escape = if (next_ch) |nc| (nc >= '0' and nc <= '9') else true;
+        if (need_escape) {
+            if (p + 2 > buf.len) return null;
+            buf[p] = '\\';
+            buf[p + 1] = '-';
+            return p + 2;
+        }
+    }
+    // Second char after leading hyphen: digit needs escape (e.g. -1foo)
+    if (char_idx == 1 and ch >= '0' and ch <= '9') {
+        if (p + 4 > buf.len) return null;
+        buf[p] = '\\';
+        buf[p + 1] = hex[ch >> 4];
+        buf[p + 2] = hex[ch & 0xF];
+        buf[p + 3] = ' ';
+        return p + 4;
+    }
+    // Safe: letters, digits (non-leading), underscore, hyphen, >= 0x80
     if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
         (ch >= '0' and ch <= '9') or ch == '_' or ch == '-' or ch >= 0x80)
     {
@@ -2057,10 +2075,11 @@ pub fn buildClassSelector(class_name: []const u8, buf: *[512]u8) ?[]const u8 {
         buf[pos] = '.';
         pos += 1;
         // Copy class name with CSS escaping until whitespace
-        var first = true;
+        var char_idx: usize = 0;
         while (i < class_name.len and class_name[i] != ' ' and class_name[i] != '\t' and class_name[i] != '\n' and class_name[i] != '\r' and class_name[i] != 0x0C) {
-            pos = cssEscapeByte(buf, pos, class_name[i], first) orelse return null;
-            first = false;
+            const next_ch: ?u8 = if (i + 1 < class_name.len and class_name[i + 1] != ' ' and class_name[i + 1] != '\t' and class_name[i + 1] != '\n' and class_name[i + 1] != '\r' and class_name[i + 1] != 0x0C) class_name[i + 1] else null;
+            pos = cssEscapeByte(buf, pos, class_name[i], char_idx, next_ch) orelse return null;
+            char_idx += 1;
             i += 1;
         }
     }
@@ -3268,7 +3287,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    function _syncAttrsTarget(self,t){
             \\      var raw=_rawAttrs.call(self),store=_getAttrStore(self),len=raw.length;
             \\      var oldKeys=Object.getOwnPropertyNames(t);
-            \\      for(var k=0;k<oldKeys.length;k++)delete t[oldKeys[k]];
+            \\      for(var k=0;k<oldKeys.length;k++){var ok=oldKeys[k];if(ok==='_self'||ok==='_len')continue;delete t[ok];}
             \\      t._len=len;
             \\      for(var i=0;i<len;i++){var ra=raw[i],key=ra.name;var cached=store[key.toLowerCase()];
             \\        if(cached){cached.value=ra.value;cached.nodeValue=ra.value;cached.textContent=ra.value;t[i]=cached;}
@@ -3281,7 +3300,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\        if(p==='getNamedItemNS')return function(ns,n){var l=o._len;for(var i=0;i<l;i++){var a=o[i];if(a&&a.localName===n&&a.namespaceURI===ns)return a;}return null;};
             \\        if(p==='item')return function(i){return o[i]||null;};
             \\        if(p==='setNamedItem')return function(a){return o._self.setAttributeNode(a);};
-            \\        if(p==='setNamedItemNS')return function(a){return o._self.setAttributeNode(a);};
+            \\        if(p==='setNamedItemNS')return function(a){return o._self.setAttributeNodeNS(a);};
             \\        if(p==='removeNamedItem')return function(n){var a=o._self.getAttributeNode(n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
             \\        if(p==='removeNamedItemNS')return function(ns,n){var a=o._self.getAttributeNodeNS(ns,n);if(!a)throw new DOMException('','NotFoundError');o._self.removeAttributeNode(a);return a;};
             \\        if(p===Symbol.iterator)return function*(){var l=o._len;for(var i=0;i<l;i++)yield o[i];};
@@ -3996,7 +4015,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _elBefore(ref){var x=_ch.indexOf(ref);for(var i=0;i<x;i++)if(_nt(_ch[i])===1)return true;return false;}
             \\  function _isAnc(n,t){var c=t;while(c){if(c===n)return true;c=c.parentNode;}return false;}
             \\  function _dp(n,k,v){Object.defineProperty(n,k,{value:v,writable:true,configurable:true,enumerable:true});}
-            \\  function _adoptTree(n,d){_dp(n,'ownerDocument',d);if(n.childNodes)for(var i=0;i<n.childNodes.length;i++)_adoptTree(n.childNodes[i],d);if(n.firstChild){var c=n.firstChild;while(c){_adoptTree(c,d);c=c.nextSibling;}}}
+            \\  function _adoptTree(n,d){_dp(n,'ownerDocument',d);var c=n.firstChild;while(c){_adoptTree(c,d);c=c.nextSibling;}}
             \\  function _relink(){for(var i=0;i<_ch.length;i++){_dp(_ch[i],'parentNode',doc);_dp(_ch[i],'previousSibling',i>0?_ch[i-1]:null);_dp(_ch[i],'nextSibling',i<_ch.length-1?_ch[i+1]:null);_adoptTree(_ch[i],doc);}}
             \\  function _preBase(node,child){
             \\    if(_isAnc(node,doc))throw new DOMException('The new child element contains the parent.','HierarchyRequestError');

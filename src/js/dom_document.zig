@@ -943,7 +943,7 @@ pub fn makeLiveHTMLCollection(c: *qjs.JSContext, root_js: qjs.JSValue, selector:
         \\      if(typeof p==='string'&&!isNaN(p)){var r=_q(),i=+p;if(i>=0&&i<r.length)return{value:r[i],writable:false,enumerable:true,configurable:true};}
         \\      if(p==='length'){var r2=_q();return{value:r2.length,writable:false,enumerable:false,configurable:true};}
         \\      return Object.getOwnPropertyDescriptor(o,p);},
-        \\    ownKeys:function(){var r=_q(),k=[];for(var i=0;i<r.length;i++)k.push(String(i));return k;}
+        \\    ownKeys:function(){var r=_q(),k=['length'];for(var i=0;i<r.length;i++)k.push(String(i));return k;}
         \\  });
         \\  if(typeof HTMLCollection!=='undefined')Object.setPrototypeOf(proxy,HTMLCollection.prototype);
         \\  return proxy;
