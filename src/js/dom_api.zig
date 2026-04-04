@@ -4184,7 +4184,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.visibilityState = 'visible';
             \\  }
             \\  Object.setPrototypeOf(Document.prototype, Node.prototype);
-            \\  Document.prototype.createElement = function(t) { var e=document.createElement(t); _setOwnerDoc(e,this);if(this.contentType&&this.contentType!=='text/html'&&this.contentType!=='application/xhtml+xml'){Object.defineProperty(e,'namespaceURI',{value:null,writable:true,configurable:true});}return e; };
+            \\  Document.prototype.createElement = function(t) { var e=document.createElement(t); _setOwnerDoc(e,this);var isXml=this.contentType&&this.contentType!=='text/html'&&this.contentType!=='application/xhtml+xml';if(isXml){_defProp(e,'namespaceURI',null);_defProp(e,'tagName',t);_defProp(e,'localName',t);_defProp(e,'nodeName',t);}return e; };
             \\  Document.prototype.createElementNS = function(ns,t) { var e=document.createElementNS(ns,t);_setOwnerDoc(e,this);return e; };
             \\  Document.prototype.createTextNode = function(t) { var n=document.createTextNode(t);_setOwnerDoc(n,this);return n; };
             \\  Document.prototype.createComment = function(t) { var n=document.createComment(t);_setOwnerDoc(n,this);return n; };
