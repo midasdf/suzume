@@ -130,7 +130,21 @@ pub fn elementSetClassName(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
+    // Capture old class value before modification
+    var _ov_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, "class", 5, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, _ov_buf.len);
+            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = _ov_buf[0..cl];
+        }
+    }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, s.ptr, s.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutationWithOldValue(node, "attributes", null, null, "class", old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -1346,6 +1360,17 @@ pub fn elementGetDataset(
     _ = qjs.JS_SetPropertyStr(c, obj, "__element", qjs.JS_DupValue(c, this_val));
     _ = qjs.JS_SetPropertyStr(c, obj, "get", qjs.JS_NewCFunction(c, &datasetGet, "get", 1));
     _ = qjs.JS_SetPropertyStr(c, obj, "set", qjs.JS_NewCFunction(c, &datasetSet, "set", 2));
+    // Set DOMStringMap prototype for instanceof checks
+    {
+        const dsm_js = "(function(o){if(typeof DOMStringMap!=='undefined')Object.setPrototypeOf(o,DOMStringMap.prototype);})";
+        const dsm_fn = qjs.JS_Eval(c, dsm_js, dsm_js.len, "<dsm>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(dsm_fn)) {
+            var dsm_args = [1]qjs.JSValue{obj};
+            const dsm_r = qjs.JS_Call(c, dsm_fn, quickjs.JS_UNDEFINED(), 1, &dsm_args);
+            qjs.JS_FreeValue(c, dsm_r);
+            qjs.JS_FreeValue(c, dsm_fn);
+        }
+    }
     return obj;
 }
 
