@@ -188,9 +188,34 @@ pub fn isInvalidNameChar(ch: u8) bool {
     if (ch == '_' or ch == ':' or ch == '-' or ch == '.') return false;
     // Characters that are definitely invalid per all browser implementations:
     return switch (ch) {
-        ' ', '\t', '\n', '\r', '<', '>', '/', '=', '"', '\'',
-        '^', '!', '@', '#', '$', '%', '&', '*', '(', ')',
-        '+', '[', ']', '\\', ';', '`', ',', '~',
+        ' ',
+        '\t',
+        '\n',
+        '\r',
+        '<',
+        '>',
+        '/',
+        '=',
+        '"',
+        '\'',
+        '^',
+        '!',
+        '@',
+        '#',
+        '$',
+        '%',
+        '&',
+        '*',
+        '(',
+        ')',
+        '+',
+        '[',
+        ']',
+        '\\',
+        ';',
+        '`',
+        ',',
+        '~',
         => true,
         else => false, // other chars like {, }, |, ? — browsers allow these in names
     };
@@ -943,7 +968,7 @@ pub fn makeLiveHTMLCollection(c: *qjs.JSContext, root_js: qjs.JSValue, selector:
         \\      if(typeof p==='string'&&!isNaN(p)){var r=_q(),i=+p;if(i>=0&&i<r.length)return{value:r[i],writable:false,enumerable:true,configurable:true};}
         \\      if(p==='length'){var r2=_q();return{value:r2.length,writable:false,enumerable:false,configurable:true};}
         \\      return Object.getOwnPropertyDescriptor(o,p);},
-        \\    ownKeys:function(){var r=_q(),k=['length'];for(var i=0;i<r.length;i++)k.push(String(i));return k;}
+        \\    ownKeys:function(){var r=_q(),k=[];for(var i=0;i<r.length;i++)k.push(String(i));k.push('length');return k;}
         \\  });
         \\  if(typeof HTMLCollection!=='undefined')Object.setPrototypeOf(proxy,HTMLCollection.prototype);
         \\  return proxy;
@@ -1204,9 +1229,16 @@ pub fn documentGetTitle(
     var in_space = true; // trim leading
     for (ptr.?[0..len]) |ch| {
         if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0C) {
-            if (!in_space and pos < buf.len) { buf[pos] = ' '; pos += 1; in_space = true; }
+            if (!in_space and pos < buf.len) {
+                buf[pos] = ' ';
+                pos += 1;
+                in_space = true;
+            }
         } else {
-            if (pos < buf.len) { buf[pos] = ch; pos += 1; }
+            if (pos < buf.len) {
+                buf[pos] = ch;
+                pos += 1;
+            }
             in_space = false;
         }
     }
@@ -1420,25 +1452,7 @@ pub fn documentCreateEvent(
                 defer qjs.JS_FreeCString(c, s.ptr);
                 const name = s.ptr[0..s.len];
                 // Legacy event interface aliases per DOM spec §5.1
-                if (std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents") or std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event"
-                else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "compositionevent") or std.ascii.eqlIgnoreCase(name, "textevent")) iface = "CompositionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "storageevent")) iface = "StorageEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "pagetransitionevent")) iface = "PageTransitionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "dragevent") or std.ascii.eqlIgnoreCase(name, "dragevents")) iface = "DragEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "devicemotionevent")) iface = "DeviceMotionEvent"
-                else if (std.ascii.eqlIgnoreCase(name, "deviceorientationevent")) iface = "DeviceOrientationEvent"
-                else {
+                if (std.ascii.eqlIgnoreCase(name, "customevent")) iface = "CustomEvent" else if (std.ascii.eqlIgnoreCase(name, "event") or std.ascii.eqlIgnoreCase(name, "events") or std.ascii.eqlIgnoreCase(name, "htmlevents") or std.ascii.eqlIgnoreCase(name, "svgevents")) iface = "Event" else if (std.ascii.eqlIgnoreCase(name, "mouseevent") or std.ascii.eqlIgnoreCase(name, "mouseevents")) iface = "MouseEvent" else if (std.ascii.eqlIgnoreCase(name, "keyboardevent")) iface = "KeyboardEvent" else if (std.ascii.eqlIgnoreCase(name, "uievent") or std.ascii.eqlIgnoreCase(name, "uievents")) iface = "UIEvent" else if (std.ascii.eqlIgnoreCase(name, "focusevent")) iface = "FocusEvent" else if (std.ascii.eqlIgnoreCase(name, "compositionevent") or std.ascii.eqlIgnoreCase(name, "textevent")) iface = "CompositionEvent" else if (std.ascii.eqlIgnoreCase(name, "messageevent")) iface = "MessageEvent" else if (std.ascii.eqlIgnoreCase(name, "hashchangeevent")) iface = "HashChangeEvent" else if (std.ascii.eqlIgnoreCase(name, "popstateevent")) iface = "PopStateEvent" else if (std.ascii.eqlIgnoreCase(name, "storageevent")) iface = "StorageEvent" else if (std.ascii.eqlIgnoreCase(name, "beforeunloadevent")) iface = "BeforeUnloadEvent" else if (std.ascii.eqlIgnoreCase(name, "pagetransitionevent")) iface = "PageTransitionEvent" else if (std.ascii.eqlIgnoreCase(name, "progressevent")) iface = "ProgressEvent" else if (std.ascii.eqlIgnoreCase(name, "dragevent") or std.ascii.eqlIgnoreCase(name, "dragevents")) iface = "DragEvent" else if (std.ascii.eqlIgnoreCase(name, "touchevent")) iface = "TouchEvent" else if (std.ascii.eqlIgnoreCase(name, "devicemotionevent")) iface = "DeviceMotionEvent" else if (std.ascii.eqlIgnoreCase(name, "deviceorientationevent")) iface = "DeviceOrientationEvent" else {
                     // Non-legacy interface → NotSupportedError per DOM spec
                     return throwDOMException(c, "NotSupportedError", "The provided event type is not supported.");
                 }

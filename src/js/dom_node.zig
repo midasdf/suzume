@@ -1513,7 +1513,9 @@ pub fn nodeCompareDocumentPosition(
         while (depth_a < 64) {
             chain_a[depth_a] = n;
             depth_a += 1;
-            if (n.parent) |p| { n = p; } else break;
+            if (n.parent) |p| {
+                n = p;
+            } else break;
         }
     }
     var chain_b: [64]*lxb.lxb_dom_node_t = undefined;
@@ -1523,7 +1525,9 @@ pub fn nodeCompareDocumentPosition(
         while (depth_b < 64) {
             chain_b[depth_b] = n;
             depth_b += 1;
-            if (n.parent) |p| { n = p; } else break;
+            if (n.parent) |p| {
+                n = p;
+            } else break;
         }
     }
 

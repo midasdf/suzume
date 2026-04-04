@@ -280,13 +280,11 @@ fn executeDynamicExternalScript(ctx: *qjs.JSContext, src: []const u8, is_module:
     const allocator = std.heap.c_allocator;
 
     // Resolve URL
-    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:"))
-        blk: {
-            const u = allocator.allocSentinel(u8, src.len, 0) catch return;
-            @memcpy(u, src);
-            break :blk u;
-        }
-    else if (g_current_url) |bu|
+    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:")) blk: {
+        const u = allocator.allocSentinel(u8, src.len, 0) catch return;
+        @memcpy(u, src);
+        break :blk u;
+    } else if (g_current_url) |bu|
         resolveUrl(allocator, bu, src) catch return
     else
         return;
@@ -605,15 +603,10 @@ pub fn throwDOMException(c: *qjs.JSContext, name: []const u8, message: []const u
     const err = qjs.JS_NewObject(c);
     _ = qjs.JS_SetPropertyStr(c, err, "name", qjs.JS_NewStringLen(c, name.ptr, name.len));
     _ = qjs.JS_SetPropertyStr(c, err, "message", qjs.JS_NewStringLen(c, message.ptr, message.len));
-    const code: i32 = if (std.mem.eql(u8, name, "SyntaxError")) 12
-        else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5
-        else if (std.mem.eql(u8, name, "NotFoundError")) 8
-        else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3
-        else 0;
+    const code: i32 = if (std.mem.eql(u8, name, "SyntaxError")) 12 else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, name, "NotFoundError")) 8 else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3 else 0;
     _ = qjs.JS_SetPropertyStr(c, err, "code", qjs.JS_NewInt32(c, code));
     return qjs.JS_Throw(c, err);
 }
-
 
 pub fn classContains(class_str: []const u8, needle: []const u8) bool {
     var iter = std.mem.tokenizeAny(u8, class_str, " \t\n\r\x0c");
@@ -622,7 +615,6 @@ pub fn classContains(class_str: []const u8, needle: []const u8) bool {
     }
     return false;
 }
-
 
 // ── Shorthand ↔ Longhand Expansion ──────────────────────────────────
 
@@ -895,12 +887,13 @@ fn normalizeMarginTrim(val: []const u8) []const u8 {
         const start = pos;
         while (pos < val.len and val[pos] != ' ' and val[pos] != '\t') pos += 1;
         const kw = val[start..pos];
-        if (dom_style.eqlIgnoreCase(kw, "block-start")) bs = true
-        else if (dom_style.eqlIgnoreCase(kw, "block-end")) be = true
-        else if (dom_style.eqlIgnoreCase(kw, "inline-start")) is_ = true
-        else if (dom_style.eqlIgnoreCase(kw, "inline-end")) ie = true
-        else if (dom_style.eqlIgnoreCase(kw, "block")) { bs = true; be = true; }
-        else if (dom_style.eqlIgnoreCase(kw, "inline")) { is_ = true; ie = true; }
+        if (dom_style.eqlIgnoreCase(kw, "block-start")) bs = true else if (dom_style.eqlIgnoreCase(kw, "block-end")) be = true else if (dom_style.eqlIgnoreCase(kw, "inline-start")) is_ = true else if (dom_style.eqlIgnoreCase(kw, "inline-end")) ie = true else if (dom_style.eqlIgnoreCase(kw, "block")) {
+            bs = true;
+            be = true;
+        } else if (dom_style.eqlIgnoreCase(kw, "inline")) {
+            is_ = true;
+            ie = true;
+        }
     }
     // Condensation: individual keywords → shorthand where possible
     if (bs and be and is_ and ie) return "block inline";
@@ -1472,16 +1465,13 @@ fn styleSetProperty(
         "normal"
     else if (dom_style.eqlIgnoreCase(prop, "font-style") and dom_style.eqlIgnoreCase(trimmed_val2, "oblique 14deg"))
         "oblique"
-    else if (dom_style.eqlIgnoreCase(prop, "opacity") and trimmed_val2.len > 1 and trimmed_val2[trimmed_val2.len - 1] == '%')
-        blk: {
-            if (std.fmt.parseFloat(f64, trimmed_val2[0 .. trimmed_val2.len - 1])) |pct| {
-                const v = pct / 100.0;
-                const s = std.fmt.bufPrint(&calc_buf, "{d}", .{v}) catch break :blk val;
-                break :blk s;
-            } else |_| break :blk val;
-        }
-    else
-        val;
+    else if (dom_style.eqlIgnoreCase(prop, "opacity") and trimmed_val2.len > 1 and trimmed_val2[trimmed_val2.len - 1] == '%') blk: {
+        if (std.fmt.parseFloat(f64, trimmed_val2[0 .. trimmed_val2.len - 1])) |pct| {
+            const v = pct / 100.0;
+            const s = std.fmt.bufPrint(&calc_buf, "{d}", .{v}) catch break :blk val;
+            break :blk s;
+        } else |_| break :blk val;
+    } else val;
 
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
@@ -1990,7 +1980,6 @@ fn defineNonEnumerable(c: *qjs.JSContext, obj: qjs.JSValue, name: []const u8, va
         qjs.JS_FreeValue(c, define_args[1]);
     }
 }
-
 
 // ── getElementsByClassName helper ───────────────────────────────────
 
@@ -3070,29 +3059,29 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // HTML element subclass constructors (for instanceof checks)
     const html_subclasses = [_][]const u8{
-        "HTMLDivElement",       "HTMLSpanElement",      "HTMLParagraphElement",
-        "HTMLImageElement",     "HTMLAnchorElement",    "HTMLFormElement",
-        "HTMLInputElement",     "HTMLTextAreaElement",  "HTMLSelectElement",
-        "HTMLButtonElement",    "HTMLTableElement",     "HTMLTableRowElement",
-        "HTMLTableCellElement", "HTMLLIElement",        "HTMLUListElement",
-        "HTMLOListElement",     "HTMLHeadingElement",   "HTMLPreElement",
-        "HTMLCanvasElement",    "HTMLVideoElement",     "HTMLAudioElement",
-        "HTMLIFrameElement",    "HTMLLabelElement",     "HTMLScriptElement",
-        "HTMLStyleElement",     "HTMLLinkElement",      "HTMLMetaElement",
-        "HTMLBRElement",        "HTMLHRElement",        "HTMLBodyElement",
-        "HTMLHeadElement",      "HTMLHtmlElement",      "HTMLOptionElement",
-        "HTMLTemplateElement",  "HTMLDialogElement",    "HTMLDetailsElement",
-        "HTMLSummaryElement",   "HTMLFieldSetElement",  "HTMLLegendElement",
-        "HTMLTitleElement",     "HTMLBaseElement",      "HTMLAreaElement",
-        "HTMLDataElement",      "HTMLTimeElement",      "HTMLOutputElement",
-        "HTMLProgressElement",  "HTMLMeterElement",     "HTMLDataListElement",
-        "HTMLOptGroupElement",  "HTMLObjectElement",    "HTMLEmbedElement",
-        "HTMLSourceElement",    "HTMLTrackElement",     "HTMLMapElement",
+        "HTMLDivElement",          "HTMLSpanElement",     "HTMLParagraphElement",
+        "HTMLImageElement",        "HTMLAnchorElement",   "HTMLFormElement",
+        "HTMLInputElement",        "HTMLTextAreaElement", "HTMLSelectElement",
+        "HTMLButtonElement",       "HTMLTableElement",    "HTMLTableRowElement",
+        "HTMLTableCellElement",    "HTMLLIElement",       "HTMLUListElement",
+        "HTMLOListElement",        "HTMLHeadingElement",  "HTMLPreElement",
+        "HTMLCanvasElement",       "HTMLVideoElement",    "HTMLAudioElement",
+        "HTMLIFrameElement",       "HTMLLabelElement",    "HTMLScriptElement",
+        "HTMLStyleElement",        "HTMLLinkElement",     "HTMLMetaElement",
+        "HTMLBRElement",           "HTMLHRElement",       "HTMLBodyElement",
+        "HTMLHeadElement",         "HTMLHtmlElement",     "HTMLOptionElement",
+        "HTMLTemplateElement",     "HTMLDialogElement",   "HTMLDetailsElement",
+        "HTMLSummaryElement",      "HTMLFieldSetElement", "HTMLLegendElement",
+        "HTMLTitleElement",        "HTMLBaseElement",     "HTMLAreaElement",
+        "HTMLDataElement",         "HTMLTimeElement",     "HTMLOutputElement",
+        "HTMLProgressElement",     "HTMLMeterElement",    "HTMLDataListElement",
+        "HTMLOptGroupElement",     "HTMLObjectElement",   "HTMLEmbedElement",
+        "HTMLSourceElement",       "HTMLTrackElement",    "HTMLMapElement",
         "HTMLTableSectionElement", "HTMLTableColElement", "HTMLTableCaptionElement",
-        "HTMLQuoteElement",     "HTMLModElement",       "HTMLPictureElement",
-        "HTMLSlotElement",      "HTMLMenuElement",      "HTMLUnknownElement",
-        "HTMLDirectoryElement", "HTMLDListElement",     "HTMLFontElement",
-        "HTMLFrameElement",     "HTMLFrameSetElement",  "HTMLMarqueeElement",
+        "HTMLQuoteElement",        "HTMLModElement",      "HTMLPictureElement",
+        "HTMLSlotElement",         "HTMLMenuElement",     "HTMLUnknownElement",
+        "HTMLDirectoryElement",    "HTMLDListElement",    "HTMLFontElement",
+        "HTMLFrameElement",        "HTMLFrameSetElement", "HTMLMarqueeElement",
         "HTMLParamElement",
     };
     for (html_subclasses) |name| {
@@ -3749,10 +3738,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     {
         const efp_js = "(function(x,y){return document.body||document.documentElement||null;})";
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementFromPoint", qjs.JS_Eval(ctx, efp_js, efp_js.len, "<efp>", qjs.JS_EVAL_TYPE_GLOBAL));
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementsFromPoint", qjs.JS_Eval(ctx,
-            "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})",
-            "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})".len,
-            "<efps>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementsFromPoint", qjs.JS_Eval(ctx, "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})", "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})".len, "<efps>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
     // document.createTreeWalker
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createTreeWalker", 3));
@@ -3889,8 +3875,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  return pi;
             \\})
         ;
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createProcessingInstruction", qjs.JS_Eval(ctx,
-            pi_js, pi_js.len, "<pi>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createProcessingInstruction", qjs.JS_Eval(ctx, pi_js, pi_js.len, "<pi>", qjs.JS_EVAL_TYPE_GLOBAL));
     }
 
     // Document properties required by jQuery/Sizzle
@@ -4142,11 +4127,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  return doc;
             \\})
         ;
-        _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx,
-            create_html_doc_js, create_html_doc_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "createHTMLDocument", qjs.JS_Eval(ctx, create_html_doc_js, create_html_doc_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         const has_feature_js = "(function() { return true; })";
-        _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx,
-            has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx, has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocumentType, "createDocumentType", 3));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocument, "createDocument", 3));
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
@@ -4611,5 +4594,3 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 // wrapNodePublic/getNodePublic moved to top of file (near wrapNode/getNode)
 
 // ── CSS Value Validation (for element.style setter) ─────────────────
-
-
