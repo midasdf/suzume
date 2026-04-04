@@ -1346,6 +1346,17 @@ pub fn elementGetDataset(
     _ = qjs.JS_SetPropertyStr(c, obj, "__element", qjs.JS_DupValue(c, this_val));
     _ = qjs.JS_SetPropertyStr(c, obj, "get", qjs.JS_NewCFunction(c, &datasetGet, "get", 1));
     _ = qjs.JS_SetPropertyStr(c, obj, "set", qjs.JS_NewCFunction(c, &datasetSet, "set", 2));
+    // Set DOMStringMap prototype for instanceof checks
+    {
+        const dsm_js = "(function(o){if(typeof DOMStringMap!=='undefined')Object.setPrototypeOf(o,DOMStringMap.prototype);})";
+        const dsm_fn = qjs.JS_Eval(c, dsm_js, dsm_js.len, "<dsm>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(dsm_fn)) {
+            var dsm_args = [1]qjs.JSValue{obj};
+            const dsm_r = qjs.JS_Call(c, dsm_fn, quickjs.JS_UNDEFINED(), 1, &dsm_args);
+            qjs.JS_FreeValue(c, dsm_r);
+            qjs.JS_FreeValue(c, dsm_fn);
+        }
+    }
     return obj;
 }
 
