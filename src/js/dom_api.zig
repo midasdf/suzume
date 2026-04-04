@@ -4155,8 +4155,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function Document() {
             \\    Object.defineProperty(this,'nodeType',{value:9,writable:false,configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'nodeName',{value:'#document',writable:false,configurable:true,enumerable:true});
-            \\    this._childNodes = [];
-            \\    this._children = [];
+            \\    this._childNodes = [];this._childNodes.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\    this._children = [];this._children.item=function(i){return i>=0&&i<this.length?this[i]:null;};
             \\    Object.defineProperty(this,'childNodes',{get:function(){return this._childNodes;},configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'children',{get:function(){return this._children;},configurable:true,enumerable:true});
             \\    Object.defineProperty(this,'firstChild',{value:null,writable:true,configurable:true,enumerable:true});

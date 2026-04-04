@@ -568,6 +568,11 @@ pub fn elementAppendChild(
         // DOM spec step 1: parent must be able to have children
         if (!canHaveChildren(parent.?))
             return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+        // DOM spec: DocType in non-Document parent → HierarchyRequestError
+        var js_nt: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &js_nt, nt);
+        if (js_nt == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
+            return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
         // JS-level node (PI, etc.) — delegate to JS parentNode/childNodes manipulation
         return appendJsNode(c, this_val, args[0]);
     };
