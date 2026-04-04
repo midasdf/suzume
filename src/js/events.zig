@@ -1752,6 +1752,8 @@ const MutationRecord = struct {
     old_value: ?[]const u8 = null, // owned copy, for attributeOldValue/characterDataOldValue
     added_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
     removed_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
+    previous_sibling: ?*lxb.lxb_dom_node_t = null,
+    next_sibling: ?*lxb.lxb_dom_node_t = null,
 
     fn deinit(self: *MutationRecord) void {
         if (self.attribute_name) |name| allocator.free(@constCast(name));
@@ -1793,10 +1795,19 @@ pub fn recordMutation(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
 ) void {
-    recordMutationWithOldValue(target, mutation_type, added, removed, attr_name, null);
+    recordMutationFull(target, mutation_type, added, removed, attr_name, null, null, null);
 }
 
-/// Record a mutation with optional old value (for attributeOldValue support).
+pub fn recordMutationChildList(
+    target: *lxb.lxb_dom_node_t,
+    added: ?*lxb.lxb_dom_node_t,
+    removed: ?*lxb.lxb_dom_node_t,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
+) void {
+    recordMutationFull(target, "childList", added, removed, null, null, prev_sib, next_sib);
+}
+
 pub fn recordMutationWithOldValue(
     target: *lxb.lxb_dom_node_t,
     mutation_type: []const u8,
@@ -1804,6 +1815,20 @@ pub fn recordMutationWithOldValue(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
     old_value: ?[]const u8,
+) void {
+    recordMutationFull(target, mutation_type, added, removed, attr_name, old_value, null, null);
+}
+
+/// Record a mutation with all fields including previousSibling/nextSibling.
+fn recordMutationFull(
+    target: *lxb.lxb_dom_node_t,
+    mutation_type: []const u8,
+    added: ?*lxb.lxb_dom_node_t,
+    removed: ?*lxb.lxb_dom_node_t,
+    attr_name: ?[]const u8,
+    old_value: ?[]const u8,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
     for (mutation_observers.items) |*obs| {
         if (obs.disconnected) continue;
@@ -1823,6 +1848,8 @@ pub fn recordMutationWithOldValue(
                 .attribute_name = null,
                 .added_nodes = .empty,
                 .removed_nodes = .empty,
+                .previous_sibling = prev_sib,
+                .next_sibling = next_sib,
             };
             if (attr_name) |n| {
                 const copy = allocator.alloc(u8, n.len) catch null;
@@ -1898,8 +1925,16 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
             }
             // Per spec: all MutationRecord fields must be present
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", quickjs.JS_NULL());
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
+            if (rec.previous_sibling) |ps| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", dom_api.wrapNodePublic(ctx, ps));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", quickjs.JS_NULL());
+            }
+            if (rec.next_sibling) |ns| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", dom_api.wrapNodePublic(ctx, ns));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
+            }
             if (rec.old_value) |ov| {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue",
                     qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));

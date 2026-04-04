@@ -588,11 +588,15 @@ pub fn elementAppendChild(
     // DOM spec: remove from old parent first, record removal mutation
     const old_parent = child.parent;
     if (old_parent != null) {
+        const rm_prev = child.prev;
+        const rm_next = child.next;
         lxb_dom_node_remove(child);
-        events.recordMutation(old_parent.?, "childList", null, child, null);
+        events.recordMutationChildList(old_parent.?, null, child, rm_prev, rm_next);
     }
+    // Capture siblings at insertion point (append = after last child)
+    const ins_prev = lxb_dom_node_last_child_noi(parent.?);
     lxb_dom_node_insert_child(parent.?, child);
-    events.recordMutation(parent.?, "childList", child, null, null);
+    events.recordMutationChildList(parent.?, child, null, ins_prev, null);
     api.setDomDirty();
     // Dynamic script execution: if a <script> is appended, fetch and execute it
     api.maybeExecuteDynamicScriptPublic(c, child, args[0]);
@@ -629,8 +633,10 @@ pub fn elementRemoveChild(
     };
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
     if (child.parent != parent) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
+    const rm_prev = child.prev;
+    const rm_next = child.next;
     lxb_dom_node_remove(child);
-    events.recordMutation(parent, "childList", null, child, null);
+    events.recordMutationChildList(parent, null, child, rm_prev, rm_next);
     api.setDomDirty();
     return qjs.JS_DupValue(c, args[0]);
 }
@@ -756,6 +762,9 @@ pub fn elementInsertBefore(
             effective_ref = ref_node;
         }
     }
+    // Capture siblings at insertion point BEFORE mutation
+    const ins_prev = if (!ref_is_null) effective_ref.?.prev else lxb_dom_node_last_child_noi(parent.?);
+    const ins_next = if (!ref_is_null) effective_ref else null;
     // Remove from old parent if needed
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
     if (ref_is_null) {
@@ -763,7 +772,7 @@ pub fn elementInsertBefore(
     } else {
         lxb_dom_node_insert_before(effective_ref.?, new_node);
     }
-    events.recordMutation(parent.?, "childList", new_node, null, null);
+    events.recordMutationChildList(parent.?, new_node, null, ins_prev, ins_next);
     api.setDomDirty();
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
     upgradeSubtreeCustomElements(c, new_node);
@@ -850,10 +859,13 @@ pub fn elementReplaceChild(
     if (new_node == old_node) {
         return qjs.JS_DupValue(c, args[1]);
     }
+    // Capture siblings before mutation
+    const rep_prev = old_node.prev;
+    const rep_next = old_node.next;
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
-    events.recordMutation(parent, "childList", new_node, old_node, null);
+    events.recordMutationChildList(parent, new_node, old_node, rep_prev, rep_next);
     api.setDomDirty();
     // Dynamic script execution and custom element upgrade
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
