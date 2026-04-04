@@ -517,10 +517,14 @@ fn invokeListener(ctx: *qjs.JSContext, callback: qjs.JSValue, this_val: qjs.JSVa
         // Report error: call window.onerror (legacy) then dispatch ErrorEvent
         const report_js =
             \\(function(w,err){
-            \\  var msg=err&&err.message?err.message:String(err);
-            \\  if(typeof w.onerror==='function'){try{w.onerror(msg,'',0,0,err);}catch(e){}}
-            \\  var ev;try{ev=new ErrorEvent('error',{error:err,message:msg,cancelable:true});}catch(e){ev=new Event('error');ev.error=err;ev.message=msg;}
-            \\  w.dispatchEvent(ev);
+            \\  if(w.__isReportingError)return;
+            \\  w.__isReportingError=true;
+            \\  try{
+            \\    var msg=err&&err.message?err.message:String(err);
+            \\    if(typeof w.onerror==='function'){try{w.onerror(msg,'',0,0,err);}catch(e){}}
+            \\    var ev;try{ev=new ErrorEvent('error',{error:err,message:msg,cancelable:true});}catch(e){ev=new Event('error');ev.error=err;ev.message=msg;}
+            \\    w.dispatchEvent(ev);
+            \\  }finally{w.__isReportingError=false;}
             \\})
         ;
         const report_fn = qjs.JS_Eval(ctx, report_js, report_js.len, "<report-err>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -1861,8 +1865,14 @@ fn recordMutationFull(
                     record.attribute_name = c;
                 }
             }
-            // Store old value if observer requested it and old_value is provided
-            if (old_value != null and (t.attribute_old_value or t.character_data_old_value)) {
+            // Store old value only when the matching oldValue option is set for this mutation type
+            const wants_old_value = if (std.mem.eql(u8, mutation_type, "attributes"))
+                t.attribute_old_value
+            else if (std.mem.eql(u8, mutation_type, "characterData"))
+                t.character_data_old_value
+            else
+                false;
+            if (old_value != null and wants_old_value) {
                 if (old_value) |ov| {
                     const ov_copy = allocator.alloc(u8, ov.len) catch null;
                     if (ov_copy) |ovc| {

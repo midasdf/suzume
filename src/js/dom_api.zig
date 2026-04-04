@@ -2040,7 +2040,13 @@ fn elementGetElementsByClassName(
     // Build CSS selector: ".className" or ".a.b" for multiple classes
     const class_name = s.ptr[0..s.len];
     var selector_buf: [512]u8 = undefined;
-    const selector = buildClassSelector(class_name, &selector_buf) orelse return quickjs.JS_NULL();
+    const selector = buildClassSelector(class_name, &selector_buf) orelse {
+        // Whitespace-only or empty: return empty HTMLCollection
+        const empty = qjs.JS_NewArray(c);
+        if (quickjs.JS_IsException(empty)) return empty;
+        dom_doc.wrapAsHTMLCollection(c, empty);
+        return empty;
+    };
 
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;

@@ -767,11 +767,18 @@ pub fn elementInsertBefore(
             effective_ref = ref_node;
         }
     }
-    // Capture siblings at insertion point BEFORE mutation
+    // Remove from old parent if needed (must happen BEFORE sibling calculation
+    // so same-parent moves don't include the moved node in prev/next)
+    const old_parent = new_node.parent;
+    if (old_parent != null) {
+        const rem_prev = new_node.prev;
+        const rem_next = new_node.next;
+        lxb_dom_node_remove(new_node);
+        events.recordMutationChildList(old_parent.?, null, new_node, rem_prev, rem_next);
+    }
+    // Capture siblings at insertion point AFTER detach
     const ins_prev = if (!ref_is_null) effective_ref.?.prev else lxb_dom_node_last_child_noi(parent.?);
     const ins_next = if (!ref_is_null) effective_ref else null;
-    // Remove from old parent if needed
-    if (new_node.parent != null) lxb_dom_node_remove(new_node);
     if (ref_is_null) {
         lxb_dom_node_insert_child(parent.?, new_node);
     } else {
@@ -867,7 +874,13 @@ pub fn elementReplaceChild(
     // Capture siblings before mutation
     const rep_prev = old_node.prev;
     const rep_next = old_node.next;
-    if (new_node.parent != null) lxb_dom_node_remove(new_node);
+    // Remove new_node from its old parent and record removal mutation
+    if (new_node.parent) |old_p| {
+        const rm_prev = new_node.prev;
+        const rm_next = new_node.next;
+        lxb_dom_node_remove(new_node);
+        events.recordMutationChildList(old_p, null, new_node, rm_prev, rm_next);
+    }
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
     events.recordMutationChildList(parent, new_node, old_node, rep_prev, rep_next);
