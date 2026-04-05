@@ -3238,6 +3238,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, document_ctor, "prototype", doc_proto);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Document", document_ctor);
 
+    // HTMLDocument constructor (inherits from Document, for instanceof checks)
+    const html_doc_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "HTMLDocument", 0, qjs.JS_CFUNC_constructor, 0);
+    const html_doc_proto = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPrototype(ctx, html_doc_proto, doc_proto);
+    _ = qjs.JS_SetPropertyStr(ctx, html_doc_ctor, "prototype", html_doc_proto);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLDocument", html_doc_ctor);
+
     const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     {
         const dfp = qjs.JS_NewObject(ctx);
@@ -4326,6 +4333,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "lastModified", qjs.JS_NewString(ctx, ""));
 
     // Set document global (reuses `global` from constructor registration above)
+    // Set document's prototype to HTMLDocument.prototype for instanceof checks
+    {
+        const html_doc_proto_val = qjs.JS_Eval(ctx, "(typeof HTMLDocument!=='undefined'?HTMLDocument.prototype:null)", "(typeof HTMLDocument!=='undefined'?HTMLDocument.prototype:null)".len, "<hdp>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsNull(html_doc_proto_val) and !quickjs.JS_IsUndefined(html_doc_proto_val)) {
+            _ = qjs.JS_SetPrototype(ctx, doc_obj, html_doc_proto_val);
+        }
+        qjs.JS_FreeValue(ctx, html_doc_proto_val);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
 
     // Cache document node so wrapNode(doc_lxb_node) returns doc_obj (identity preservation)
