@@ -1756,6 +1756,7 @@ const MutationRecord = struct {
     type_str: []const u8, // "childList" or "attributes" (static, not owned)
     target: *lxb.lxb_dom_node_t,
     attribute_name: ?[]const u8, // owned copy, null for childList
+    attribute_namespace: ?[]const u8 = null, // owned copy, null unless setAttributeNS
     old_value: ?[]const u8 = null, // owned copy, for attributeOldValue/characterDataOldValue
     added_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
     removed_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
@@ -1764,6 +1765,7 @@ const MutationRecord = struct {
 
     fn deinit(self: *MutationRecord) void {
         if (self.attribute_name) |name| allocator.free(@constCast(name));
+        if (self.attribute_namespace) |ns| allocator.free(@constCast(ns));
         if (self.old_value) |ov| allocator.free(@constCast(ov));
         self.added_nodes.deinit(allocator);
         self.removed_nodes.deinit(allocator);
@@ -1804,7 +1806,7 @@ pub fn recordMutation(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
 ) void {
-    recordMutationFull(target, mutation_type, added, removed, attr_name, null, null, null);
+    recordMutationFull(target, mutation_type, added, removed, attr_name, null, null, null, null);
 }
 
 pub fn recordMutationChildList(
@@ -1814,7 +1816,7 @@ pub fn recordMutationChildList(
     prev_sib: ?*lxb.lxb_dom_node_t,
     next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
-    recordMutationFull(target, "childList", added, removed, null, null, prev_sib, next_sib);
+    recordMutationFull(target, "childList", added, removed, null, null, null, prev_sib, next_sib);
 }
 
 pub fn recordMutationWithOldValue(
@@ -1825,7 +1827,16 @@ pub fn recordMutationWithOldValue(
     attr_name: ?[]const u8,
     old_value: ?[]const u8,
 ) void {
-    recordMutationFull(target, mutation_type, added, removed, attr_name, old_value, null, null);
+    recordMutationFull(target, mutation_type, added, removed, attr_name, null, old_value, null, null);
+}
+
+pub fn recordMutationAttrNS(
+    target: *lxb.lxb_dom_node_t,
+    attr_local_name: []const u8,
+    attr_namespace: ?[]const u8,
+    old_value: ?[]const u8,
+) void {
+    recordMutationFull(target, "attributes", null, null, attr_local_name, attr_namespace, old_value, null, null);
 }
 
 /// Record a mutation with all fields including previousSibling/nextSibling.
@@ -1835,6 +1846,7 @@ fn recordMutationFull(
     added: ?*lxb.lxb_dom_node_t,
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
+    attr_namespace: ?[]const u8,
     old_value: ?[]const u8,
     prev_sib: ?*lxb.lxb_dom_node_t,
     next_sib: ?*lxb.lxb_dom_node_t,
@@ -1866,6 +1878,13 @@ fn recordMutationFull(
                 if (copy) |c| {
                     @memcpy(c, n);
                     record.attribute_name = c;
+                }
+            }
+            if (attr_namespace) |ns| {
+                const ns_copy = allocator.alloc(u8, ns.len) catch null;
+                if (ns_copy) |nc| {
+                    @memcpy(nc, ns);
+                    record.attribute_namespace = nc;
                 }
             }
             // Store old value only when the matching oldValue option is set for this mutation type
@@ -1939,8 +1958,12 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", quickjs.JS_NULL());
             }
-            // Per spec: all MutationRecord fields must be present
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
+            if (rec.attribute_namespace) |ns| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace",
+                    qjs.JS_NewStringLen(ctx, ns.ptr, ns.len));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
+            }
             if (rec.previous_sibling) |ps| {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", dom_api.wrapNodePublic(ctx, ps));
             } else {
