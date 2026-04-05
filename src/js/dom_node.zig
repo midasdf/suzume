@@ -899,16 +899,16 @@ pub fn elementReplaceChild(
     if (new_node == old_node) {
         return qjs.JS_DupValue(c, args[1]);
     }
-    // Capture siblings before mutation
-    const rep_prev = old_node.prev;
-    const rep_next = old_node.next;
-    // Remove new_node from its old parent and record removal mutation
+    // Remove new_node from its old parent first (handles internal replacement)
     if (new_node.parent) |old_p| {
         const rm_prev = new_node.prev;
         const rm_next = new_node.next;
         lxb_dom_node_remove(new_node);
         events.recordMutationChildList(old_p, null, new_node, rm_prev, rm_next);
     }
+    // Capture siblings AFTER new_node removal (correct for internal replacement)
+    const rep_prev = old_node.prev;
+    const rep_next = old_node.next;
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
     events.recordMutationChildList(parent, new_node, old_node, rep_prev, rep_next);
