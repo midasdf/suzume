@@ -2510,14 +2510,61 @@ fn elementSetInnerText(
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Same as textContent setter: replace all children with a text node
+    // HTML spec: innerText setter splits on newlines (\r\n, \r, \n) and inserts <br> between segments
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // Handle null/undefined: clear all children
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
+        _ = lxb_dom_node_text_content_set(node, "", 0);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
-    _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    const text = s.ptr[0..s.len];
+    // Check if text contains any newlines — fast path if not
+    var has_newline = false;
+    for (text) |ch| {
+        if (ch == '\n' or ch == '\r') { has_newline = true; break; }
+    }
+    if (!has_newline) {
+        _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
+    // Slow path: remove all children, then insert text/<br> fragments
+    while (node.first_child) |child| {
+        lxb_dom_node_remove(child);
+        _ = lxb_dom_node_destroy(child);
+    }
+    const doc = getDocument(c) orelse return quickjs.JS_UNDEFINED();
+    var i: usize = 0;
+    while (i < text.len) {
+        // Find the next newline
+        var j = i;
+        while (j < text.len and text[j] != '\n' and text[j] != '\r') j += 1;
+        // Add text node for the segment (even if empty — spec says so)
+        if (j > i) {
+            const tn = lxb_dom_document_create_text_node(doc, text[i..j].ptr, j - i) orelse break;
+            lxb_dom_node_insert_child(node, tn);
+        } else if (i == 0 or (i > 0 and (text[i - 1] == '\n' or text[i - 1] == '\r'))) {
+            // Empty segment at start or between consecutive newlines — no text node needed
+        }
+        if (j >= text.len) break;
+        // Skip newline: \r\n counts as one
+        if (text[j] == '\r' and j + 1 < text.len and text[j + 1] == '\n') {
+            j += 2;
+        } else {
+            j += 1;
+        }
+        // Insert <br> for the newline
+        const br = lxb_dom_document_create_element(doc, "br", 2, null) orelse break;
+        lxb_dom_node_insert_child(node, @ptrCast(br));
+        i = j;
+        continue;
+    }
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
