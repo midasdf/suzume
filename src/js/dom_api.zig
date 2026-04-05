@@ -506,6 +506,25 @@ fn wrapElementNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     const obj = qjs.JS_NewObjectClass(ctx, @intCast(element_class_id));
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));
+    // Set per-element-type prototype based on tag name
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+        if (name_ptr != null and name_len > 0) {
+            const global = qjs.JS_GetGlobalObject(ctx);
+            defer qjs.JS_FreeValue(ctx, global);
+            const proto_map = qjs.JS_GetPropertyStr(ctx, global, "__elProtos");
+            defer qjs.JS_FreeValue(ctx, proto_map);
+            if (!quickjs.JS_IsUndefined(proto_map)) {
+                const proto = qjs.JS_GetPropertyStr(ctx, proto_map, name_ptr.?);
+                defer qjs.JS_FreeValue(ctx, proto);
+                if (!quickjs.JS_IsUndefined(proto) and !quickjs.JS_IsNull(proto)) {
+                    _ = qjs.JS_SetPrototype(ctx, obj, proto);
+                }
+            }
+        }
+    }
     return obj;
 }
 
@@ -3154,8 +3173,54 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     };
     for (html_subclasses) |name| {
         const ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);
-        _ = qjs.JS_SetPropertyStr(ctx, ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
+        // Create per-type prototype inheriting from HTMLElement.prototype
+        // This prevents property leakage between element types (e.g. name, relList)
+        const type_proto = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPrototype(ctx, type_proto, html_element_proto);
+        _ = qjs.JS_SetPropertyStr(ctx, type_proto, "constructor", qjs.JS_DupValue(ctx, ctor));
+        _ = qjs.JS_SetPropertyStr(ctx, ctor, "prototype", type_proto);
         _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
+    }
+
+    // Build tag→prototype map for per-type prototype assignment in wrapNode
+    {
+        const map_js =
+            \\(function(){
+            \\  var m={};var tags={
+            \\    div:'HTMLDivElement',span:'HTMLSpanElement',p:'HTMLParagraphElement',
+            \\    img:'HTMLImageElement',a:'HTMLAnchorElement',form:'HTMLFormElement',
+            \\    input:'HTMLInputElement',textarea:'HTMLTextAreaElement',select:'HTMLSelectElement',
+            \\    button:'HTMLButtonElement',table:'HTMLTableElement',tr:'HTMLTableRowElement',
+            \\    td:'HTMLTableCellElement',th:'HTMLTableCellElement',li:'HTMLLIElement',
+            \\    ul:'HTMLUListElement',ol:'HTMLOListElement',pre:'HTMLPreElement',
+            \\    canvas:'HTMLCanvasElement',video:'HTMLVideoElement',audio:'HTMLAudioElement',
+            \\    iframe:'HTMLIFrameElement',label:'HTMLLabelElement',script:'HTMLScriptElement',
+            \\    style:'HTMLStyleElement',link:'HTMLLinkElement',meta:'HTMLMetaElement',
+            \\    br:'HTMLBRElement',hr:'HTMLHRElement',body:'HTMLBodyElement',
+            \\    head:'HTMLHeadElement',html:'HTMLHtmlElement',option:'HTMLOptionElement',
+            \\    template:'HTMLTemplateElement',dialog:'HTMLDialogElement',details:'HTMLDetailsElement',
+            \\    summary:'HTMLSummaryElement',fieldset:'HTMLFieldSetElement',legend:'HTMLLegendElement',
+            \\    title:'HTMLTitleElement',base:'HTMLBaseElement',area:'HTMLAreaElement',
+            \\    data:'HTMLDataElement',time:'HTMLTimeElement',output:'HTMLOutputElement',
+            \\    progress:'HTMLProgressElement',meter:'HTMLMeterElement',datalist:'HTMLDataListElement',
+            \\    optgroup:'HTMLOptGroupElement',object:'HTMLObjectElement',embed:'HTMLEmbedElement',
+            \\    source:'HTMLSourceElement',track:'HTMLTrackElement',map:'HTMLMapElement',
+            \\    thead:'HTMLTableSectionElement',tbody:'HTMLTableSectionElement',tfoot:'HTMLTableSectionElement',
+            \\    col:'HTMLTableColElement',colgroup:'HTMLTableColElement',caption:'HTMLTableCaptionElement',
+            \\    blockquote:'HTMLQuoteElement',q:'HTMLQuoteElement',ins:'HTMLModElement',del:'HTMLModElement',
+            \\    picture:'HTMLPictureElement',slot:'HTMLSlotElement',menu:'HTMLMenuElement',
+            \\    h1:'HTMLHeadingElement',h2:'HTMLHeadingElement',h3:'HTMLHeadingElement',
+            \\    h4:'HTMLHeadingElement',h5:'HTMLHeadingElement',h6:'HTMLHeadingElement',
+            \\    dir:'HTMLDirectoryElement',dl:'HTMLDListElement',font:'HTMLFontElement',
+            \\    frame:'HTMLFrameElement',frameset:'HTMLFrameSetElement',marquee:'HTMLMarqueeElement',
+            \\    param:'HTMLParamElement'
+            \\  };
+            \\  for(var t in tags){var c=globalThis[tags[t]];if(c)m[t]=c.prototype;}
+            \\  globalThis.__elProtos=m;
+            \\})()
+        ;
+        const map_r = qjs.JS_Eval(ctx, map_js, map_js.len, "<elprotos>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, map_r);
     }
 
     // DOM interface constructors (for instanceof checks in frameworks)
@@ -3262,7 +3327,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const reflected_js =
             \\(function(){
             \\  var EP=Element.prototype;
-            \\  ['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','for'].forEach(function(a){
+            \\  ['src','href','action','type','alt','title','rel','target','placeholder','method','enctype','lang','for'].forEach(function(a){
             \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
             \\  });
             \\  ['disabled','checked','selected','autofocus'].forEach(function(a){
