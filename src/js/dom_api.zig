@@ -521,6 +521,13 @@ fn wrapElementNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
                 defer qjs.JS_FreeValue(ctx, proto);
                 if (!quickjs.JS_IsUndefined(proto) and !quickjs.JS_IsNull(proto)) {
                     _ = qjs.JS_SetPrototype(ctx, obj, proto);
+                } else {
+                    // Unknown tag → HTMLUnknownElement.prototype
+                    const unk_proto = qjs.JS_GetPropertyStr(ctx, proto_map, "__unknown");
+                    defer qjs.JS_FreeValue(ctx, unk_proto);
+                    if (!quickjs.JS_IsUndefined(unk_proto)) {
+                        _ = qjs.JS_SetPrototype(ctx, obj, unk_proto);
+                    }
                 }
             }
         }
@@ -3216,6 +3223,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    param:'HTMLParamElement'
             \\  };
             \\  for(var t in tags){var c=globalThis[tags[t]];if(c)m[t]=c.prototype;}
+            \\  if(globalThis.HTMLUnknownElement)m.__unknown=HTMLUnknownElement.prototype;
             \\  globalThis.__elProtos=m;
             \\})()
         ;
