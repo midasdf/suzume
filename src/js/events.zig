@@ -204,9 +204,26 @@ pub fn jsAddEventListener(
             const dentry = findOrCreateDocumentEntry(event_type) orelse return quickjs.JS_UNDEFINED();
             dentry.callbacks.append(allocator, record) catch {};
         } else {
-            // Window listener
-            const wentry = findOrCreateWindowEntry(event_type) orelse return quickjs.JS_UNDEFINED();
-            wentry.callbacks.append(allocator, record) catch {};
+            // Check if it's a JS-level node (PI, DocumentType, etc.) with nodeType
+            const js_nt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+            defer qjs.JS_FreeValue(c, js_nt);
+            var nt_v: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &nt_v, js_nt);
+            if (nt_v > 0 and nt_v != 9) {
+                // JS-level node: store listeners on the object itself
+                const js_code = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];a.push(cb);el[k]=a;})";
+                const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
+                if (!quickjs.JS_IsException(fn_val)) {
+                    var call_args = [4]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
+                    const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 4, &call_args);
+                    qjs.JS_FreeValue(c, r);
+                    qjs.JS_FreeValue(c, fn_val);
+                }
+            } else {
+                // Window listener
+                const wentry = findOrCreateWindowEntry(event_type) orelse return quickjs.JS_UNDEFINED();
+                wentry.callbacks.append(allocator, record) catch {};
+            }
         }
     }
     return quickjs.JS_UNDEFINED();
@@ -1684,7 +1701,36 @@ fn jsElementDispatchEvent(
         return dom_api.throwDOMException(c, "InvalidStateError", "The event has not been initialized.");
     }
 
-    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_NewBool(true);
+    const node = dom_api.getNodePublic(c, this_val) orelse {
+        // JS-level node (PI, DocumentType, etc.): dispatch from __el_ storage
+        const type_val2 = qjs.JS_GetPropertyStr(c, args[0], "type");
+        defer qjs.JS_FreeValue(c, type_val2);
+        const ts2 = dom_api.jsStringToSlice(c, type_val2) orelse return quickjs.JS_NewBool(true);
+        defer qjs.JS_FreeCString(c, ts2.ptr);
+        _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(true));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "target", qjs.JS_DupValue(c, this_val));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", qjs.JS_DupValue(c, this_val));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 2)); // AT_TARGET
+        const js_dispatch =
+            \\(function(el,evt,type){
+            \\  var k='__el_'+type;var a=el[k];if(a)for(var i=0;i<a.length;i++){
+            \\    if(typeof a[i]==='function')a[i].call(el,evt);
+            \\    else if(a[i]&&typeof a[i].handleEvent==='function')a[i].handleEvent(evt);
+            \\  }
+            \\})
+        ;
+        const fn_val = qjs.JS_Eval(c, js_dispatch, js_dispatch.len, "<jsd>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(fn_val)) {
+            var d_args = [3]qjs.JSValue{ this_val, args[0], type_val2 };
+            const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 3, &d_args);
+            qjs.JS_FreeValue(c, r);
+            qjs.JS_FreeValue(c, fn_val);
+        }
+        _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(false));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", quickjs.JS_NULL());
+        return quickjs.JS_NewBool(true);
+    };
 
     // Get event type from event object's .type property
     const type_val = qjs.JS_GetPropertyStr(c, args[0], "type");
