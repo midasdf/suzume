@@ -4318,6 +4318,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Page Visibility API
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hidden", quickjs.JS_NewBool(false));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "visibilityState", qjs.JS_NewString(ctx, "visible"));
+    // document.baseURI — getter that returns document.URL (or <base> href if present)
+    {
+        const baseuri_js = "(function(){return this.URL||'';})";
+        const baseuri_atom = qjs.JS_NewAtom(ctx, "baseURI");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, baseuri_atom, qjs.JS_Eval(ctx, baseuri_js, baseuri_js.len, "<baseuri>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, baseuri_atom);
+    }
     // document.dir
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dir", qjs.JS_NewString(ctx, ""));
     // document.designMode
