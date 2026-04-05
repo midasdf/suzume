@@ -606,6 +606,44 @@ pub fn elementAppendChild(
         return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
     if (child.type == @as(u32, 10) and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
         return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+    // DOM spec: DocumentFragment — collect children, then insert them individually
+    // Note: our fragments are lexbor divs with JS nodeType overridden to 11, so check JS property
+    var is_fragment = child.type == 11;
+    if (!is_fragment) {
+        const js_nt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, js_nt);
+        var nt_val: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &nt_val, js_nt);
+        is_fragment = nt_val == 11;
+    }
+    if (is_fragment) {
+        // Collect fragment's children before they're moved
+        var frag_children: [64]*lxb.lxb_dom_node_t = undefined;
+        var frag_count: usize = 0;
+        var fc: ?*lxb.lxb_dom_node_t = child.first_child;
+        while (fc) |f| {
+            if (frag_count < frag_children.len) {
+                frag_children[frag_count] = f;
+                frag_count += 1;
+            }
+            fc = f.next;
+        }
+        if (frag_count == 0) return qjs.JS_DupValue(c, args[0]);
+        const ins_prev = lxb_dom_node_last_child_noi(parent.?);
+        // Manually move each child from fragment to parent (lexbor doesn't auto-move fragment children)
+        for (frag_children[0..frag_count]) |fnode| {
+            lxb_dom_node_remove(fnode);
+            lxb_dom_node_insert_child(parent.?, fnode);
+        }
+        // Record mutation with individual children as addedNodes
+        events.recordMutationChildListMulti(parent.?, frag_children[0..frag_count], ins_prev, null);
+        api.setDomDirty();
+        for (frag_children[0..frag_count]) |fc_node| {
+            api.maybeExecuteDynamicScriptPublic(c, fc_node, args[0]);
+            upgradeSubtreeCustomElements(c, fc_node);
+        }
+        return qjs.JS_DupValue(c, args[0]);
+    }
     // DOM spec: remove from old parent first, record removal mutation
     const old_parent = child.parent;
     if (old_parent != null) {
@@ -782,21 +820,53 @@ pub fn elementInsertBefore(
         return appendJsNode(c, this_val, args[0]);
 
     const new_node = new_node_opt.?;
+
+    // DOM spec: DocumentFragment — insert individual children
+    var is_frag = new_node.type == 11;
+    if (!is_frag) {
+        const js_fnt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, js_fnt);
+        var fnt_val: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &fnt_val, js_fnt);
+        is_frag = fnt_val == 11;
+    }
+    if (is_frag) {
+        var frag_ch: [64]*lxb.lxb_dom_node_t = undefined;
+        var fc_count: usize = 0;
+        var fcc: ?*lxb.lxb_dom_node_t = new_node.first_child;
+        while (fcc) |f| {
+            if (fc_count < frag_ch.len) { frag_ch[fc_count] = f; fc_count += 1; }
+            fcc = f.next;
+        }
+        if (fc_count == 0) return qjs.JS_DupValue(c, args[0]);
+        const ref_is_null2 = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
+        const eff_ref2: ?*lxb.lxb_dom_node_t = if (!ref_is_null2) api.getNode(c, args[1]) else null;
+        const frag_prev = if (eff_ref2) |er| er.prev else lxb_dom_node_last_child_noi(parent.?);
+        for (frag_ch[0..fc_count]) |fnode| {
+            lxb_dom_node_remove(fnode);
+            if (eff_ref2) |er| lxb_dom_node_insert_before(er, fnode) else lxb_dom_node_insert_child(parent.?, fnode);
+        }
+        events.recordMutationChildListMulti(parent.?, frag_ch[0..fc_count], frag_prev, eff_ref2);
+        api.setDomDirty();
+        for (frag_ch[0..fc_count]) |fnode| {
+            api.maybeExecuteDynamicScriptPublic(c, fnode, args[0]);
+            upgradeSubtreeCustomElements(c, fnode);
+        }
+        return qjs.JS_DupValue(c, args[0]);
+    }
+
     // DOM spec step 7: if node is child (ref), set ref to node's next sibling
     var effective_ref: ?*lxb.lxb_dom_node_t = null;
     var ref_is_null = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
     if (!ref_is_null) {
         const ref_node = api.getNode(c, args[1]).?;
         if (ref_node == new_node) {
-            // Inserting before itself — use next sibling as reference
             effective_ref = ref_node.next;
             ref_is_null = (effective_ref == null);
         } else {
             effective_ref = ref_node;
         }
     }
-    // Remove from old parent if needed (must happen BEFORE sibling calculation
-    // so same-parent moves don't include the moved node in prev/next)
     const old_parent = new_node.parent;
     if (old_parent != null) {
         const rem_prev = new_node.prev;
@@ -804,7 +874,6 @@ pub fn elementInsertBefore(
         lxb_dom_node_remove(new_node);
         events.recordMutationChildList(old_parent.?, null, new_node, rem_prev, rem_next);
     }
-    // Capture siblings at insertion point AFTER detach
     const ins_prev = if (!ref_is_null) effective_ref.?.prev else lxb_dom_node_last_child_noi(parent.?);
     const ins_next = if (!ref_is_null) effective_ref else null;
     if (ref_is_null) {

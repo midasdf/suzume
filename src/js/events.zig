@@ -1819,6 +1819,39 @@ pub fn recordMutationChildList(
     recordMutationFull(target, "childList", added, removed, null, null, null, prev_sib, next_sib);
 }
 
+/// Record a childList mutation with multiple added nodes (for DocumentFragment insertion).
+pub fn recordMutationChildListMulti(
+    target: *lxb.lxb_dom_node_t,
+    added_nodes: []const *lxb.lxb_dom_node_t,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
+) void {
+    for (mutation_observers.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            const matches = (t.node == target) or
+                (t.subtree and isDescendant(target, t.node));
+            if (!matches) continue;
+            if (!t.child_list) continue;
+
+            var record = MutationRecord{
+                .type_str = "childList",
+                .target = target,
+                .attribute_name = null,
+                .added_nodes = .empty,
+                .removed_nodes = .empty,
+                .previous_sibling = prev_sib,
+                .next_sibling = next_sib,
+            };
+            for (added_nodes) |n| {
+                record.added_nodes.append(allocator, n) catch {};
+            }
+            obs.pending_records.append(allocator, record) catch {};
+            break;
+        }
+    }
+}
+
 pub fn recordMutationWithOldValue(
     target: *lxb.lxb_dom_node_t,
     mutation_type: []const u8,
