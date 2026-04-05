@@ -1375,6 +1375,9 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
             \\  function CompositionEvent(t,o){UIEvent.call(this,t,o);this.data=(o&&o.data)||'';}
             \\  CompositionEvent.prototype=Object.create(UIEvent.prototype);CompositionEvent.prototype.constructor=CompositionEvent;
             \\  globalThis.CompositionEvent=CompositionEvent;
+            \\  function TextEvent(t,o){UIEvent.call(this,t,o);this.data=(o&&o.data)||'';}
+            \\  TextEvent.prototype=Object.create(UIEvent.prototype);TextEvent.prototype.constructor=TextEvent;
+            \\  globalThis.TextEvent=TextEvent;
             \\  function HashChangeEvent(t,o){Event.call(this,t,o);o=o||{};this.oldURL=o.oldURL||'';this.newURL=o.newURL||'';}
             \\  HashChangeEvent.prototype=Object.create(Event.prototype);HashChangeEvent.prototype.constructor=HashChangeEvent;
             \\  globalThis.HashChangeEvent=HashChangeEvent;
