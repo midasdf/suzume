@@ -388,6 +388,51 @@ pub fn elementGetChildren(
         }
         child = ch.next;
     }
+    // Wrap as HTMLCollection with namedItem, item, named properties
+    const wrap_js =
+        \\(function(a){
+        \\  var names={};
+        \\  for(var i=0;i<a.length;i++){var e=a[i];
+        \\    var eid=e.getAttribute&&e.getAttribute('id');
+        \\    if(eid&&!names[eid])names[eid]=e;
+        \\    var ns=e.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===null||ns===undefined){
+        \\      var ename=e.getAttribute&&e.getAttribute('name');
+        \\      if(ename&&!names[ename])names[ename]=e;
+        \\    }
+        \\  }
+        \\  var h={get:function(t,p,r){
+        \\    if(p==='length')return a.length;
+        \\    if(p==='item')return function(i){return a[i>>>0]||null;};
+        \\    if(p==='namedItem')return function(n){return names[n]||null;};
+        \\    if(p===Symbol.iterator)return function*(){for(var i=0;i<a.length;i++)yield a[i];};
+        \\    if(p===Symbol.toStringTag)return'HTMLCollection';
+        \\    if(typeof p==='string'&&/^\d+$/.test(p))return a[p>>>0];
+        \\    if(typeof p==='string'&&names[p])return names[p];
+        \\    return undefined;
+        \\  },has:function(t,p){
+        \\    if(typeof p==='string'&&/^\d+$/.test(p))return(p>>>0)<a.length;
+        \\    return p==='length'||p in names;
+        \\  },ownKeys:function(){
+        \\    var k=[];for(var i=0;i<a.length;i++)k.push(''+i);
+        \\    for(var n in names)k.push(n);return k;
+        \\  },getOwnPropertyDescriptor:function(t,p){
+        \\    if(typeof p==='string'&&/^\d+$/.test(p)&&(p>>>0)<a.length)return{value:a[p>>>0],writable:false,enumerable:true,configurable:true};
+        \\    if(typeof p==='string'&&names[p])return{value:names[p],writable:false,enumerable:false,configurable:true};
+        \\    return undefined;
+        \\  }};
+        \\  if(typeof HTMLCollection!=='undefined'){var p=new Proxy({},h);Object.setPrototypeOf(p,HTMLCollection.prototype);return p;}
+        \\  return new Proxy({},h);
+        \\})
+    ;
+    const wrap_fn = qjs.JS_Eval(c, wrap_js, wrap_js.len, "<children>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(wrap_fn)) {
+        var wrap_args = [1]qjs.JSValue{arr};
+        const result = qjs.JS_Call(c, wrap_fn, quickjs.JS_UNDEFINED(), 1, &wrap_args);
+        qjs.JS_FreeValue(c, wrap_fn);
+        qjs.JS_FreeValue(c, arr);
+        return result;
+    }
+    qjs.JS_FreeValue(c, wrap_fn);
     return arr;
 }
 
