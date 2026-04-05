@@ -2234,6 +2234,29 @@ fn jsMutationObserverTakeRecords(
             _ = qjs.JS_SetPropertyUint32(c, removed, @intCast(j), dom_api.wrapNodePublic(c, n));
         }
         _ = qjs.JS_SetPropertyStr(c, record, "removedNodes", removed);
+        // previousSibling / nextSibling
+        if (rec.previous_sibling) |ps| {
+            _ = qjs.JS_SetPropertyStr(c, record, "previousSibling", dom_api.wrapNodePublic(c, ps));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "previousSibling", quickjs.JS_NULL());
+        }
+        if (rec.next_sibling) |ns| {
+            _ = qjs.JS_SetPropertyStr(c, record, "nextSibling", dom_api.wrapNodePublic(c, ns));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "nextSibling", quickjs.JS_NULL());
+        }
+        // attributeNamespace
+        if (rec.attribute_namespace) |ans| {
+            _ = qjs.JS_SetPropertyStr(c, record, "attributeNamespace", qjs.JS_NewStringLen(c, ans.ptr, ans.len));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "attributeNamespace", quickjs.JS_NULL());
+        }
+        // oldValue
+        if (rec.old_value) |ov| {
+            _ = qjs.JS_SetPropertyStr(c, record, "oldValue", qjs.JS_NewStringLen(c, ov.ptr, ov.len));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "oldValue", quickjs.JS_NULL());
+        }
         _ = qjs.JS_SetPropertyUint32(c, arr, idx, record);
         idx += 1;
     }
