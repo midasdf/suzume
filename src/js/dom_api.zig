@@ -3520,7 +3520,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    ariaAutoComplete:{kw:['inline','list','both','none'],nc:{},iv:'none',dv:'none'},
             \\    ariaBusy:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
             \\    ariaChecked:{kw:['true','false','mixed'],nc:{'':null},iv:null,dv:null},
-            \\    ariaCurrent:{kw:['page','step','location','date','time','true','false'],nc:{'':'false'},iv:'true',dv:'false'},
+            \\    ariaCurrent:{kw:['page','step','location','date','time','true','false'],nc:{'':'true'},iv:'true',dv:'false'},
             \\    ariaDisabled:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
             \\    ariaExpanded:{kw:['true','false'],nc:{'':null},iv:null,dv:null},
             \\    ariaHasPopup:{kw:['true','false','menu','dialog','listbox','tree','grid'],nc:{},iv:'false',dv:null},
