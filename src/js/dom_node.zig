@@ -272,7 +272,10 @@ pub fn elementSetTextContent(
         lxb_dom_node_insert_child(node, text_node);
         added_child = text_node;
     }
-    events.recordMutation(node, "childList", added_child, removed_child, null);
+    // DOM spec: only record childList mutation if something actually changed
+    if (added_child != null or removed_child != null) {
+        events.recordMutation(node, "childList", added_child, removed_child, null);
+    }
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
