@@ -3162,6 +3162,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentType", doctype_ctor);
 
+    // DOMImplementation constructor (for instanceof checks)
+    {
+        const di_js =
+            \\(function(){
+            \\  globalThis.DOMImplementation=function DOMImplementation(){};
+            \\  DOMImplementation.prototype[Symbol.toStringTag]='DOMImplementation';
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, di_js, di_js.len, "<domimpl>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
     // DocumentFragment constructor — new DocumentFragment() creates a real fragment
     // Note: must be set up after document is globally available, but we use JS_Eval deferred
     const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
@@ -3400,6 +3412,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof Selection==='undefined'){globalThis.Selection=function(){};Selection.prototype[Symbol.toStringTag]='Selection';}
             \\  if(typeof TreeWalker==='undefined'){globalThis.TreeWalker=function(){};TreeWalker.prototype[Symbol.toStringTag]='TreeWalker';}
             \\  if(typeof NodeIterator==='undefined'){globalThis.NodeIterator=function(){};NodeIterator.prototype[Symbol.toStringTag]='NodeIterator';}
+            \\  globalThis.__niRegistry=[];
+            \\  globalThis.__niPrev=function(n){if(n.previousSibling){n=n.previousSibling;while(n.lastChild)n=n.lastChild;return n;}return n.parentNode;};
+            \\  globalThis.__niNextNonDesc=function(n,root){while(n&&n!==root){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}return null;};
+            \\  globalThis.__niPreRemove=function(node){for(var i=0;i<__niRegistry.length;i++){var it=__niRegistry[i];if(!it)continue;var ref=it._ref,root=it.root;if(node===root)continue;var d=ref,isAnc=false;while(d){if(d===node){isAnc=true;break;}d=d.parentNode;}if(!isAnc)continue;if(!it._before){it._ref=__niPrev(node);continue;}var next=__niNextNonDesc(node,root);if(next){it._ref=next;continue;}it._ref=__niPrev(node);it._before=false;}};
             \\  if(typeof MediaQueryList==='undefined'){globalThis.MediaQueryList=function(){};MediaQueryList.prototype[Symbol.toStringTag]='MediaQueryList';}
             \\  function rrl(C,attr){Object.defineProperty(C.prototype,'relList',{get:function(){var el=this;var tl=Object.create(DOMTokenList.prototype);tl.toString=function(){return el.getAttribute(attr)||'';};Object.defineProperty(tl,'value',{get:function(){return el.getAttribute(attr)||'';},set:function(v){el.setAttribute(attr,v);}});tl.contains=function(t){return(' '+this.value+' ').indexOf(' '+t+' ')>=0;};tl.add=function(){var v=this.value;for(var i=0;i<arguments.length;i++){var t=arguments[i];if(!this.contains(t))v+=(v?' ':'')+t;}el.setAttribute(attr,v);};tl.remove=function(){for(var i=0;i<arguments.length;i++){var t=arguments[i];var v=(' '+this.value+' ').split(' '+t+' ').join(' ').trim();el.setAttribute(attr,v);}};tl.toggle=function(t,f){if(f!==undefined){if(f)this.add(t);else this.remove(t);return f;}if(this.contains(t)){this.remove(t);return false;}this.add(t);return true;};tl.item=function(i){var a=this.value.split(/\s+/).filter(Boolean);return a[i]||null;};Object.defineProperty(tl,'length',{get:function(){return this.value.split(/\s+/).filter(Boolean).length;}});tl.supports=function(){return true;};tl[Symbol.iterator]=function(){return this.value.split(/\s+/).filter(Boolean)[Symbol.iterator]();};return tl;},configurable:true,enumerable:true});}
             \\  if(typeof HTMLAnchorElement!=='undefined'){var A=HTMLAnchorElement;ru(A,'href');rs(A,'target');rs(A,'download');rs(A,'rel');rs(A,'hreflang');rs(A,'type');rs(A,'text');rrp(A);rrl(A,'rel');
@@ -4132,6 +4148,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx, has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocumentType, "createDocumentType", 3));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocument, "createDocument", 3));
+        // Set DOMImplementation.prototype for instanceof checks
+        {
+            const set_proto_js = "(function(impl){if(typeof DOMImplementation!=='undefined')Object.setPrototypeOf(impl,DOMImplementation.prototype);})";
+            const set_proto_fn = qjs.JS_Eval(ctx, set_proto_js, set_proto_js.len, "<impl-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
+            if (!quickjs.JS_IsException(set_proto_fn)) {
+                var sp_args = [1]qjs.JSValue{qjs.JS_DupValue(ctx, impl)};
+                const sp_r = qjs.JS_Call(ctx, set_proto_fn, quickjs.JS_UNDEFINED(), 1, &sp_args);
+                qjs.JS_FreeValue(ctx, sp_r);
+                qjs.JS_FreeValue(ctx, sp_args[0]);
+                qjs.JS_FreeValue(ctx, set_proto_fn);
+            }
+        }
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
     }
     // document.adoptedStyleSheets (used by CSS-in-JS / popover polyfills)
@@ -4217,6 +4245,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    Object.defineProperty(dt,'firstChild',{get:function(){return null;},configurable:true,enumerable:true});
             \\    Object.defineProperty(dt,'lastChild',{get:function(){return null;},configurable:true,enumerable:true});
             \\    dt.hasChildNodes=function(){return false;};
+            \\    dt.contains=function(n){return this===n;};
+            \\    Object.defineProperty(dt,'nextSibling',{get:function(){var cn=this.parentNode?this.parentNode.childNodes:null;if(!cn)return null;for(var i=0;i<cn.length;i++){if(cn[i]===this)return i+1<cn.length?cn[i+1]:null;}return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'previousSibling',{get:function(){var cn=this.parentNode?this.parentNode.childNodes:null;if(!cn)return null;for(var i=0;i<cn.length;i++){if(cn[i]===this)return i>0?cn[i-1]:null;}return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'nextElementSibling',{get:function(){var n=this.nextSibling;while(n&&n.nodeType!==1)n=n.nextSibling;return n;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'previousElementSibling',{get:function(){var n=this.previousSibling;while(n&&n.nodeType!==1)n=n.previousSibling;return n;},configurable:true,enumerable:true});
+            \\    dt.remove=function(){if(this.parentNode)this.parentNode.removeChild(this);};
             \\  }
             \\})()
         ;

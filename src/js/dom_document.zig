@@ -559,8 +559,21 @@ pub fn documentCreateTreeWalker(
     if (argc < 1) return qjs.JS_ThrowTypeError(c, "Failed to execute 'createTreeWalker': 1 argument required.");
     const args = argv orelse return quickjs.JS_NULL();
 
-    // Get root node
+    // Get root node — must be a valid Node (DOM spec: TypeError if not)
     const root_val = args[0];
+    if (quickjs.JS_IsNull(root_val) or quickjs.JS_IsUndefined(root_val)) {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'createTreeWalker': parameter 1 is not of type 'Node'.");
+    }
+    // Validate it's a Node by checking for nodeType property
+    const nt_val = qjs.JS_GetPropertyStr(c, root_val, "nodeType");
+    defer qjs.JS_FreeValue(c, nt_val);
+    if (quickjs.JS_IsUndefined(nt_val) or quickjs.JS_IsNull(nt_val)) {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'createTreeWalker': parameter 1 is not of type 'Node'.");
+    }
+    var node_type: i32 = 0;
+    if (qjs.JS_ToInt32(c, &node_type, nt_val) < 0 or node_type < 1 or node_type > 12) {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'createTreeWalker': parameter 1 is not of type 'Node'.");
+    }
 
     // Get whatToShow (default: SHOW_ALL = 0xFFFFFFFF)
     // Use unsigned to match DOM spec (4294967295, not -1)
@@ -587,49 +600,30 @@ pub fn documentCreateTreeWalker(
         \\      }
         \\      if (this.filter) {
         \\        var r = typeof this.filter === 'function' ? this.filter(node) : this.filter.acceptNode(node);
-        \\        return r; /* 1=ACCEPT, 2=REJECT, 3=SKIP */
+        \\        return +r; /* Web IDL unsigned short coercion: true→1(ACCEPT), false→0, 2=REJECT, 3=SKIP */
         \\      }
         \\      return 1; /* FILTER_ACCEPT */
         \\    },
         \\    _accepts: function(node) { return this._check(node) === 1; },
         \\    nextNode: function() {
-        \\      var node = this.currentNode;
-        \\      // Try first child
-        \\      if (node.firstChild) {
-        \\        node = node.firstChild;
-        \\        while (node) {
-        \\          if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\          if (node.firstChild) { node = node.firstChild; continue; }
-        \\          while (node && !node.nextSibling) {
-        \\            node = node.parentNode;
-        \\            if (!node || node === this.root) return null;
-        \\          }
-        \\          if (node) node = node.nextSibling;
+        \\      var node = this.currentNode, result = 1;
+        \\      while (true) {
+        \\        while (result !== 2 && node.firstChild) {
+        \\          node = node.firstChild;
+        \\          result = this._check(node);
+        \\          if (result === 1) { this.currentNode = node; return node; }
         \\        }
-        \\        return null;
-        \\      }
-        \\      // No children, try siblings
-        \\      while (node && node !== this.root) {
-        \\        if (node.nextSibling) {
-        \\          node = node.nextSibling;
-        \\          if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\          if (node.firstChild) {
-        \\            node = node.firstChild;
-        \\            while (node) {
-        \\              if (this._accepts(node)) { this.currentNode = node; return node; }
-        \\              if (node.firstChild) { node = node.firstChild; continue; }
-        \\              while (node && !node.nextSibling) {
-        \\                node = node.parentNode;
-        \\                if (!node || node === this.root) return null;
-        \\              }
-        \\              if (node) node = node.nextSibling;
-        \\            }
-        \\          }
-        \\          continue;
+        \\        var tmp = node;
+        \\        while (tmp) {
+        \\          if (tmp === this.root) return null;
+        \\          var sib = tmp.nextSibling;
+        \\          if (sib) { node = sib; break; }
+        \\          tmp = tmp.parentNode;
         \\        }
-        \\        node = node.parentNode;
+        \\        if (!tmp) return null;
+        \\        result = this._check(node);
+        \\        if (result === 1) { this.currentNode = node; return node; }
         \\      }
-        \\      return null;
         \\    },
         \\    previousNode: function() {
         \\      var node = this.currentNode;
@@ -637,15 +631,17 @@ pub fn documentCreateTreeWalker(
         \\        var sib = node.previousSibling;
         \\        while (sib) {
         \\          node = sib;
-        \\          var r = this._check(node);
-        \\          while (r !== 2 && node.lastChild) { node = node.lastChild; r = this._check(node); }
-        \\          if (r === 1) { this.currentNode = node; return node; }
+        \\          var result = this._check(node);
+        \\          while (result !== 2 && node.lastChild) {
+        \\            node = node.lastChild;
+        \\            result = this._check(node);
+        \\          }
+        \\          if (result === 1) { this.currentNode = node; return node; }
         \\          sib = node.previousSibling;
         \\        }
+        \\        if (node === this.root || !node.parentNode) return null;
         \\        node = node.parentNode;
-        \\        if (!node || node === this.root) return null;
-        \\        var pr = this._check(node);
-        \\        if (pr === 1) { this.currentNode = node; return node; }
+        \\        if (this._check(node) === 1) { this.currentNode = node; return node; }
         \\      }
         \\      return null;
         \\    },
@@ -685,12 +681,13 @@ pub fn documentCreateTreeWalker(
         \\      var node = this.currentNode;
         \\      if (node === this.root) return null;
         \\      while (true) {
-        \\        var sib = node.nextSibling;
-        \\        while (sib) {
-        \\          var r = this._check(sib);
-        \\          if (r === 1) { this.currentNode = sib; return sib; }
-        \\          if (r === 3 && sib.firstChild) { sib = sib.firstChild; continue; }
-        \\          sib = sib.nextSibling;
+        \\        var sibling = node.nextSibling;
+        \\        while (sibling) {
+        \\          node = sibling;
+        \\          var r = this._check(node);
+        \\          if (r === 1) { this.currentNode = node; return node; }
+        \\          if (r === 3 && node.firstChild) { sibling = node.firstChild; }
+        \\          else { sibling = node.nextSibling; }
         \\        }
         \\        node = node.parentNode;
         \\        if (!node || node === this.root) return null;
@@ -701,12 +698,13 @@ pub fn documentCreateTreeWalker(
         \\      var node = this.currentNode;
         \\      if (node === this.root) return null;
         \\      while (true) {
-        \\        var sib = node.previousSibling;
-        \\        while (sib) {
-        \\          var r = this._check(sib);
-        \\          if (r === 1) { this.currentNode = sib; return sib; }
-        \\          if (r === 3 && sib.lastChild) { sib = sib.lastChild; continue; }
-        \\          sib = sib.previousSibling;
+        \\        var sibling = node.previousSibling;
+        \\        while (sibling) {
+        \\          node = sibling;
+        \\          var r = this._check(node);
+        \\          if (r === 1) { this.currentNode = node; return node; }
+        \\          if (r === 3 && node.lastChild) { sibling = node.lastChild; }
+        \\          else { sibling = node.previousSibling; }
         \\        }
         \\        node = node.parentNode;
         \\        if (!node || node === this.root) return null;
@@ -714,6 +712,8 @@ pub fn documentCreateTreeWalker(
         \\      }
         \\    }
         \\  };
+        \\  var _currentNode = tw.currentNode;
+        \\  Object.defineProperty(tw,'currentNode',{get:function(){return _currentNode;},set:function(v){if(!v||typeof v!=='object'||v.nodeType===undefined)throw new TypeError("Failed to set 'currentNode': The provided value is not of type 'Node'.");_currentNode=v;},enumerable:true,configurable:true});
         \\  Object.defineProperty(tw,'root',{value:tw.root,writable:false,enumerable:true});
         \\  Object.defineProperty(tw,'whatToShow',{value:tw.whatToShow,writable:false,enumerable:true});
         \\  Object.defineProperty(tw,'filter',{value:tw.filter,writable:false,enumerable:true});
@@ -750,12 +750,13 @@ pub fn documentCreateNodeIterator(
     // Create a TreeWalker first, then wrap as NodeIterator
     const tw = documentCreateTreeWalker(ctx, this_val, argc, argv);
     if (quickjs.JS_IsException(tw) or quickjs.JS_IsNull(tw)) return tw;
-    // Add NodeIterator-specific properties
+    // Add NodeIterator-specific properties (using object properties for pre-removing access)
     const ni_js =
         \\(function(ni){
-        \\  var _ref = ni.root, _before = true;
-        \\  Object.defineProperty(ni,'referenceNode',{get:function(){return _ref;},enumerable:true});
-        \\  Object.defineProperty(ni,'pointerBeforeReferenceNode',{get:function(){return _before;},enumerable:true});
+        \\  ni._ref = ni.root;
+        \\  ni._before = true;
+        \\  Object.defineProperty(ni,'referenceNode',{get:function(){return ni._ref;},enumerable:true});
+        \\  Object.defineProperty(ni,'pointerBeforeReferenceNode',{get:function(){return ni._before;},enumerable:true});
         \\  Object.defineProperty(ni,'root',{value:ni.root,writable:false,enumerable:true});
         \\  Object.defineProperty(ni,'whatToShow',{value:ni.whatToShow,writable:false,enumerable:true});
         \\  Object.defineProperty(ni,'filter',{value:ni.filter,writable:false,enumerable:true});
@@ -763,10 +764,11 @@ pub fn documentCreateNodeIterator(
         \\  ni[Symbol.toStringTag] = 'NodeIterator';
         \\  var origNext = ni.nextNode, origPrev = ni.previousNode, _started = false;
         \\  ni.nextNode = function(){
-        \\    if(!_started){_started=true;var r=ni._check?ni._check(_ref):1;if(r===1){_before=false;return _ref;}}
-        \\    var n=origNext.call(this);if(n){_ref=n;_before=false;}return n;
+        \\    if(!_started){_started=true;var r=ni._check?ni._check(ni._ref):1;if(r===1){ni._before=false;return ni._ref;}}
+        \\    var n=origNext.call(this);if(n){ni._ref=n;ni._before=false;}return n;
         \\  };
-        \\  ni.previousNode = function(){var n=origPrev.call(this);if(n){_ref=n;_before=true;}return n;};
+        \\  ni.previousNode = function(){var n=origPrev.call(this);if(n){ni._ref=n;ni._before=true;}return n;};
+        \\  if(typeof __niRegistry!=='undefined')__niRegistry.push(ni);
         \\})
     ;
     const ni_fn = qjs.JS_Eval(c, ni_js, ni_js.len, "<nodeiter>", qjs.JS_EVAL_TYPE_GLOBAL);

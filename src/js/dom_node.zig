@@ -651,6 +651,18 @@ pub fn elementRemoveChild(
     };
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
     if (child.parent != parent) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
+    // NodeIterator pre-removing steps (DOM spec §6.1): update all active iterators before removal
+    {
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        const pre_remove_fn = qjs.JS_GetPropertyStr(c, global, "__niPreRemove");
+        defer qjs.JS_FreeValue(c, pre_remove_fn);
+        if (qjs.JS_IsFunction(c, pre_remove_fn)) {
+            var call_args = [1]qjs.JSValue{args[0]};
+            const r = qjs.JS_Call(c, pre_remove_fn, global, 1, &call_args);
+            qjs.JS_FreeValue(c, r);
+        }
+    }
     const rm_prev = child.prev;
     const rm_next = child.next;
     lxb_dom_node_remove(child);
