@@ -915,6 +915,21 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
         if (owns_event) qjs.JS_FreeValue(ctx, event_obj);
     }
 
+    // DOM spec: set composedPath (_path) on event object
+    {
+        const path_arr = qjs.JS_NewArray(ctx);
+        for (0..path_len) |pi| {
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(pi), dom_api.wrapNodePublic(ctx, path[pi]));
+        }
+        // Add window as the last element in the path (for connected nodes)
+        if (path_len > 0 and path[path_len - 1].type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+            const global = qjs.JS_GetGlobalObject(ctx);
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), global);
+            // global ref consumed by SetProperty
+        }
+        _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_path", path_arr);
+    }
+
     // DOM spec: set dispatch flag — initEvent must short-circuit while dispatching
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(true));
 
