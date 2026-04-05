@@ -968,6 +968,40 @@ pub fn elementReplaceChild(
     if (new_node == old_node) {
         return qjs.JS_DupValue(c, args[1]);
     }
+
+    // DOM spec: DocumentFragment — replace old_node with fragment's children
+    var is_frag_rc = new_node.type == 11;
+    if (!is_frag_rc) {
+        const js_fnt_rc = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, js_fnt_rc);
+        var fnt_rc: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &fnt_rc, js_fnt_rc);
+        is_frag_rc = fnt_rc == 11;
+    }
+    if (is_frag_rc) {
+        var frag_ch_rc: [64]*lxb.lxb_dom_node_t = undefined;
+        var fc_cnt: usize = 0;
+        var fcc_rc: ?*lxb.lxb_dom_node_t = new_node.first_child;
+        while (fcc_rc) |f| {
+            if (fc_cnt < frag_ch_rc.len) { frag_ch_rc[fc_cnt] = f; fc_cnt += 1; }
+            fcc_rc = f.next;
+        }
+        const rep_prev_f = old_node.prev;
+        const rep_next_f = old_node.next;
+        // Insert fragment children before old_node
+        for (frag_ch_rc[0..fc_cnt]) |fnode| {
+            lxb_dom_node_remove(fnode);
+            lxb_dom_node_insert_before(old_node, fnode);
+        }
+        lxb_dom_node_remove(old_node);
+        if (fc_cnt > 0) {
+            events.recordMutationChildListMulti(parent, frag_ch_rc[0..fc_cnt], rep_prev_f, rep_next_f);
+        }
+        events.recordMutationChildList(parent, null, old_node, rep_prev_f, rep_next_f);
+        api.setDomDirty();
+        return qjs.JS_DupValue(c, args[1]);
+    }
+
     // Remove new_node from its old parent first (handles internal replacement)
     if (new_node.parent) |old_p| {
         const rm_prev = new_node.prev;

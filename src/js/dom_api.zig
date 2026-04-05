@@ -2781,6 +2781,27 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const innerTextAtom = qjs.JS_NewAtom(ctx, "innerText");
         _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, innerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get innerText", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerText, "set innerText", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, innerTextAtom);
+        // outerText: getter = innerText getter, setter replaces element with text/<br> fragment
+        {
+            const ot_setter_js =
+                \\(function(v){
+                \\  var p=this.parentNode;
+                \\  if(!p)throw new DOMException("Failed to set 'outerText': The element has no parent.","NoModificationAllowedError");
+                \\  if(v===undefined||v===null)v='';else v=''+v;
+                \\  if(v===''){p.removeChild(this);return;}
+                \\  var f=document.createDocumentFragment();
+                \\  var lines=v.split(/\r\n|\r|\n/);
+                \\  for(var i=0;i<lines.length;i++){
+                \\    if(i>0)f.appendChild(document.createElement('br'));
+                \\    if(lines[i]!=='')f.appendChild(document.createTextNode(lines[i]));
+                \\  }
+                \\  p.replaceChild(f,this);
+                \\})
+            ;
+            const outerTextAtom = qjs.JS_NewAtom(ctx, "outerText");
+            _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, outerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get outerText", 0), qjs.JS_Eval(ctx, ot_setter_js, ot_setter_js.len, "<outertext>", qjs.JS_EVAL_TYPE_GLOBAL), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+            qjs.JS_FreeAtom(ctx, outerTextAtom);
+        }
     }
     {
         const parentNodeAtom = qjs.JS_NewAtom(ctx, "parentNode");
