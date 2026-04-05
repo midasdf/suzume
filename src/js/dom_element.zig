@@ -483,6 +483,13 @@ pub fn elementRemoveAttribute(
             old_val = _ov_buf[0..cl];
         }
     }
+    // DOM spec: removeAttribute is a no-op if attribute doesn't exist
+    if (old_val == null) {
+        // Check if attribute exists at all (old_val null means no value, but attr might exist with empty value)
+        var check_len: usize = 0;
+        if (lxb_dom_element_get_attribute(elem, name.ptr, name.len, &check_len) == null)
+            return quickjs.JS_UNDEFINED();
+    }
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     events.recordMutationWithOldValue(node, "attributes", null, null, name, old_val);
