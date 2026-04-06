@@ -1015,6 +1015,15 @@ pub fn documentGetElementsByName(
     const doc_node = getDocumentNode() orelse return arr;
     var idx: u32 = 0;
     api.dom_sel.walkTreeCollect(c, doc_node, selector_buf[0 .. prefix.len + name.len + suffix.len], arr, &idx);
+    // Set NodeList prototype for spec compliance (toString should be "[object NodeList]")
+    const set_proto_js = "(function(a){if(typeof NodeList!=='undefined')Object.setPrototypeOf(a,NodeList.prototype);a.item=function(i){return this[i]||null;};})";
+    const nl_fn = qjs.JS_Eval(c, set_proto_js, set_proto_js.len, "<nl>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(nl_fn)) {
+        var fn_args = [1]qjs.JSValue{arr};
+        const r = qjs.JS_Call(c, nl_fn, quickjs.JS_UNDEFINED(), 1, &fn_args);
+        qjs.JS_FreeValue(c, r);
+        qjs.JS_FreeValue(c, nl_fn);
+    }
     return arr;
 }
 
