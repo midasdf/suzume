@@ -517,7 +517,9 @@ fn wrapElementNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
             const proto_map = qjs.JS_GetPropertyStr(ctx, global, "__elProtos");
             defer qjs.JS_FreeValue(ctx, proto_map);
             if (!quickjs.JS_IsUndefined(proto_map)) {
-                const proto = qjs.JS_GetPropertyStr(ctx, proto_map, name_ptr.?);
+                const name_atom = qjs.JS_NewAtomLen(ctx, name_ptr.?, name_len);
+                defer qjs.JS_FreeAtom(ctx, name_atom);
+                const proto = qjs.JS_GetProperty(ctx, proto_map, name_atom);
                 defer qjs.JS_FreeValue(ctx, proto);
                 if (!quickjs.JS_IsUndefined(proto) and !quickjs.JS_IsNull(proto)) {
                     _ = qjs.JS_SetPrototype(ctx, obj, proto);
@@ -4322,7 +4324,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "visibilityState", qjs.JS_NewString(ctx, "visible"));
     // document.baseURI — getter that returns document.URL (or <base> href if present)
     {
-        const baseuri_js = "(function(){return this.URL||'';})";
+        const baseuri_js = "(function(){var b=this.querySelector&&this.querySelector('base[href]');if(b){try{return new URL(b.getAttribute('href'),this.URL).href;}catch(e){}}return this.URL||'';})";
         const baseuri_atom = qjs.JS_NewAtom(ctx, "baseURI");
         _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, baseuri_atom, qjs.JS_Eval(ctx, baseuri_js, baseuri_js.len, "<baseuri>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, baseuri_atom);

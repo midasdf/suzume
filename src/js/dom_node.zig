@@ -662,28 +662,30 @@ pub fn elementAppendChild(
         is_fragment = nt_val == 11;
     }
     if (is_fragment) {
-        // Collect fragment's children before they're moved
-        var frag_children: [64]*lxb.lxb_dom_node_t = undefined;
+        // Collect fragment's children before they're moved (dynamic alloc — no child limit)
         var frag_count: usize = 0;
-        var fc: ?*lxb.lxb_dom_node_t = child.first_child;
-        while (fc) |f| {
-            if (frag_count < frag_children.len) {
-                frag_children[frag_count] = f;
-                frag_count += 1;
-            }
-            fc = f.next;
+        {
+            var fc_count: ?*lxb.lxb_dom_node_t = child.first_child;
+            while (fc_count) |f| { frag_count += 1; fc_count = f.next; }
         }
         if (frag_count == 0) return qjs.JS_DupValue(c, args[0]);
+        const frag_children = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, frag_count) catch return quickjs.JS_UNDEFINED();
+        defer std.heap.c_allocator.free(frag_children);
+        {
+            var fc_fill: ?*lxb.lxb_dom_node_t = child.first_child;
+            var fi: usize = 0;
+            while (fc_fill) |f| { frag_children[fi] = f; fi += 1; fc_fill = f.next; }
+        }
         const ins_prev = lxb_dom_node_last_child_noi(parent.?);
         // Manually move each child from fragment to parent (lexbor doesn't auto-move fragment children)
-        for (frag_children[0..frag_count]) |fnode| {
+        for (frag_children) |fnode| {
             lxb_dom_node_remove(fnode);
             lxb_dom_node_insert_child(parent.?, fnode);
         }
         // Record mutation with individual children as addedNodes
-        events.recordMutationChildListMulti(parent.?, frag_children[0..frag_count], ins_prev, null);
+        events.recordMutationChildListMulti(parent.?, frag_children, ins_prev, null);
         api.setDomDirty();
-        for (frag_children[0..frag_count]) |fc_node| {
+        for (frag_children) |fc_node| {
             api.maybeExecuteDynamicScriptPublic(c, fc_node, args[0]);
             upgradeSubtreeCustomElements(c, fc_node);
         }
@@ -876,24 +878,30 @@ pub fn elementInsertBefore(
         is_frag = fnt_val == 11;
     }
     if (is_frag) {
-        var frag_ch: [64]*lxb.lxb_dom_node_t = undefined;
+        // Dynamic alloc — no child limit
         var fc_count: usize = 0;
-        var fcc: ?*lxb.lxb_dom_node_t = new_node.first_child;
-        while (fcc) |f| {
-            if (fc_count < frag_ch.len) { frag_ch[fc_count] = f; fc_count += 1; }
-            fcc = f.next;
+        {
+            var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            while (fc_cnt_iter) |f| { fc_count += 1; fc_cnt_iter = f.next; }
         }
         if (fc_count == 0) return qjs.JS_DupValue(c, args[0]);
+        const frag_ch = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_count) catch return quickjs.JS_UNDEFINED();
+        defer std.heap.c_allocator.free(frag_ch);
+        {
+            var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            var fi: usize = 0;
+            while (fc_fill) |f| { frag_ch[fi] = f; fi += 1; fc_fill = f.next; }
+        }
         const ref_is_null2 = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
         const eff_ref2: ?*lxb.lxb_dom_node_t = if (!ref_is_null2) api.getNode(c, args[1]) else null;
         const frag_prev = if (eff_ref2) |er| er.prev else lxb_dom_node_last_child_noi(parent.?);
-        for (frag_ch[0..fc_count]) |fnode| {
+        for (frag_ch) |fnode| {
             lxb_dom_node_remove(fnode);
             if (eff_ref2) |er| lxb_dom_node_insert_before(er, fnode) else lxb_dom_node_insert_child(parent.?, fnode);
         }
-        events.recordMutationChildListMulti(parent.?, frag_ch[0..fc_count], frag_prev, eff_ref2);
+        events.recordMutationChildListMulti(parent.?, frag_ch, frag_prev, eff_ref2);
         api.setDomDirty();
-        for (frag_ch[0..fc_count]) |fnode| {
+        for (frag_ch) |fnode| {
             api.maybeExecuteDynamicScriptPublic(c, fnode, args[0]);
             upgradeSubtreeCustomElements(c, fnode);
         }
@@ -1024,24 +1032,29 @@ pub fn elementReplaceChild(
         is_frag_rc = fnt_rc == 11;
     }
     if (is_frag_rc) {
-        var frag_ch_rc: [64]*lxb.lxb_dom_node_t = undefined;
+        // Dynamic alloc — no child limit
         var fc_cnt: usize = 0;
-        var fcc_rc: ?*lxb.lxb_dom_node_t = new_node.first_child;
-        while (fcc_rc) |f| {
-            if (fc_cnt < frag_ch_rc.len) { frag_ch_rc[fc_cnt] = f; fc_cnt += 1; }
-            fcc_rc = f.next;
+        {
+            var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            while (fc_cnt_iter) |f| { fc_cnt += 1; fc_cnt_iter = f.next; }
+        }
+        if (fc_cnt == 0) return qjs.JS_DupValue(c, args[1]);
+        const frag_ch_rc = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_cnt) catch return quickjs.JS_UNDEFINED();
+        defer std.heap.c_allocator.free(frag_ch_rc);
+        {
+            var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            var fi: usize = 0;
+            while (fc_fill) |f| { frag_ch_rc[fi] = f; fi += 1; fc_fill = f.next; }
         }
         const rep_prev_f = old_node.prev;
         const rep_next_f = old_node.next;
         // Insert fragment children before old_node
-        for (frag_ch_rc[0..fc_cnt]) |fnode| {
+        for (frag_ch_rc) |fnode| {
             lxb_dom_node_remove(fnode);
             lxb_dom_node_insert_before(old_node, fnode);
         }
         lxb_dom_node_remove(old_node);
-        if (fc_cnt > 0) {
-            events.recordMutationChildListMulti(parent, frag_ch_rc[0..fc_cnt], rep_prev_f, rep_next_f);
-        }
+        events.recordMutationChildListMulti(parent, frag_ch_rc, rep_prev_f, rep_next_f);
         events.recordMutationChildList(parent, null, old_node, rep_prev_f, rep_next_f);
         api.setDomDirty();
         return qjs.JS_DupValue(c, args[1]);
