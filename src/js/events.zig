@@ -1256,7 +1256,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\    this.defaultPrevented = false;
         \\    this._stopped = false;
         \\    this._stopImmediate = false;
-        \\    this.isTrusted = false;
+        \\    this._trusted=false;Object.defineProperty(this,'isTrusted',{get:Event._isTrustedGetter,configurable:false});
         \\    this.eventPhase = 0;
         \\    this._cancelBubble = false;
         \\    this.timeStamp = (typeof performance!=='undefined'&&performance.now)?performance.now():Date.now();
@@ -1265,6 +1265,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\    this.srcElement = null;
         \\    this._initialized = true;
         \\  }
+        \\  Event._isTrustedGetter=function(){return this._trusted||false;};
         \\  Event.NONE = 0;
         \\  Event.CAPTURING_PHASE = 1;
         \\  Event.AT_TARGET = 2;
