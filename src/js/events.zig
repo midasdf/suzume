@@ -958,7 +958,9 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
         break :blk ev;
     } else blk: {
         owns_event = true;
-        break :blk createEventObject(ctx, event_type, target, target);
+        const eo = createEventObject(ctx, event_type, target, target);
+        _ = qjs.JS_SetPropertyStr(ctx, eo, "_trusted", quickjs.JS_NewBool(true));
+        break :blk eo;
     };
     defer {
         if (owns_event) qjs.JS_FreeValue(ctx, event_obj);
@@ -1182,6 +1184,7 @@ pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     for (window_listener_entries.items) |*entry| {
         if (std.mem.eql(u8, entry.event_type, event_type)) {
             const event_obj = createEventObject(ctx, event_type, null, null);
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_trusted", quickjs.JS_NewBool(true));
             defer qjs.JS_FreeValue(ctx, event_obj);
             var i: usize = 0;
             while (i < entry.callbacks.items.len) {
@@ -1207,6 +1210,7 @@ pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
 pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     // Fire document listeners first, then window listeners (bubbling order)
     const event_obj = createEventObject(ctx, event_type, null, null);
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_trusted", quickjs.JS_NewBool(true));
     defer qjs.JS_FreeValue(ctx, event_obj);
     const global = qjs.JS_GetGlobalObject(ctx);
     defer qjs.JS_FreeValue(ctx, global);
