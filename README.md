@@ -34,16 +34,18 @@ Tested against the official [Web Platform Tests](https://github.com/web-platform
 
 | Area | Score | Subtests |
 |------|-------|----------|
+| reflection-forms | **99.9%** | 1577/1579 |
 | css/css-box | **97.4%** | 299/307 |
 | dom/lists | **93.1%** | 176/189 |
-| html/dom | **88.9%** | 9525/10710 |
+| html/dom | **89.1%** | 9529/10695 |
 | dom/traversal | **83.7%** | 41/49 |
 | dom/nodes | **80.2%** | 7538/9404 |
-| dom/events | **80.0%** | 335/419 |
+| dom/events | **75.5%** | 354/469 |
+| dom/abort | **79.2%** | 19/24 |
 | dom/ranges | **61.4%** | 8404/13689 |
 | css/selectors | **56.4%** | 2220/3934 |
 
-Selected test files at 100%: CharacterData (128/128), ChildNode (135/135), Element-classlist (1420/1420), DOMImplementation-hasFeature (137/137), Node-lookupNamespaceURI (74/74), Node-insertBefore (40/40).
+Selected test files at 100%: CharacterData (128/128), ChildNode (135/135), Element-classlist (1420/1420), Event-constructors.any (14/14), AddEventListenerOptions-once.any (4/4), EventTarget-constructible.any (3/3), DOMImplementation-hasFeature (137/137), Node-insertBefore (40/40).
 
 ### Running WPT
 
