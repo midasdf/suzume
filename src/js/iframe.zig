@@ -98,9 +98,44 @@ fn setupIframe(
         const src = src_ptr.?[0..src_len];
         is_xml = isXmlUrl(src);
         if (fetchIframeContent(src, allocator)) |content| {
+            // Trim trailing whitespace for XML/XHTML — a trailing \n after </html>
+            // becomes a text node in <body> via HTML5 parsing, polluting textContent.
+            var trimmed: []const u8 = content;
+            if (is_xml) {
+                while (trimmed.len > 0 and (trimmed[trimmed.len - 1] == '\n' or
+                    trimmed[trimmed.len - 1] == '\r' or
+                    trimmed[trimmed.len - 1] == ' ' or
+                    trimmed[trimmed.len - 1] == '\t'))
+                {
+                    trimmed = trimmed[0 .. trimmed.len - 1];
+                }
+            }
             fetched_html = content;
-            html_content = content;
+            html_content = trimmed;
             iframe_url = src;
+        }
+    }
+
+    // For XML content (not XHTML), wrap in HTML body so Lexbor preserves elements.
+    // Lexbor is an HTML5 parser — raw XML like <foo>text</foo> produces empty body,
+    // but wrapping it in <body>...</body> preserves the elements correctly.
+    var xml_wrapped: ?[]u8 = null;
+    defer if (xml_wrapped) |w| allocator.free(w);
+
+    if (is_xml and html_content != null) {
+        const content = html_content.?;
+        // Check if this is XHTML (has <html> root) — don't wrap XHTML
+        const is_xhtml_content = std.mem.indexOf(u8, content, "<html") != null;
+        if (!is_xhtml_content) {
+            const prefix = "<!DOCTYPE html><html><head></head><body>";
+            const suffix = "</body></html>";
+            xml_wrapped = allocator.alloc(u8, prefix.len + content.len + suffix.len) catch null;
+            if (xml_wrapped) |w| {
+                @memcpy(w[0..prefix.len], prefix);
+                @memcpy(w[prefix.len..][0..content.len], content);
+                @memcpy(w[prefix.len + content.len ..][0..suffix.len], suffix);
+                html_content = w;
+            }
         }
     }
 
@@ -165,25 +200,88 @@ fn setupIframe(
         const docEl = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "documentElement");
         const bodyEl = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "body");
         const headEl = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "head");
+        const titleVal = qjs.JS_GetPropertyStr(iframe_ctx, iframe_doc_tmp, "title");
 
-        // Override getters with closures that capture the correct elements
+        // Override getters with closures that capture the correct elements/values
+        // title must also be captured because documentGetTitle uses g_document
         const fix_js =
-            \\(function(doc,de,b,h){
+            \\(function(doc,de,b,h,t){
             \\  Object.defineProperty(doc,'documentElement',{get:function(){return de;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'body',{get:function(){return b;},configurable:true,enumerable:true});
             \\  Object.defineProperty(doc,'head',{get:function(){return h;},configurable:true,enumerable:true});
+            \\  var _t=(t||'').replace(/^[\s]+|[\s]+$/g,'');
+            \\  Object.defineProperty(doc,'title',{get:function(){return _t;},set:function(v){_t=v;},configurable:true,enumerable:true});
             \\})
         ;
         const fix_fn = qjs.JS_Eval(iframe_ctx, fix_js, fix_js.len, "<iframe-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
         if (!quickjs.JS_IsException(fix_fn)) {
-            var fix_args = [4]qjs.JSValue{ iframe_doc_tmp, docEl, bodyEl, headEl };
-            const fix_r = qjs.JS_Call(iframe_ctx, fix_fn, quickjs.JS_UNDEFINED(), 4, &fix_args);
+            var fix_args = [5]qjs.JSValue{ iframe_doc_tmp, docEl, bodyEl, headEl, titleVal };
+            const fix_r = qjs.JS_Call(iframe_ctx, fix_fn, quickjs.JS_UNDEFINED(), 5, &fix_args);
             qjs.JS_FreeValue(iframe_ctx, fix_r);
         }
         qjs.JS_FreeValue(iframe_ctx, fix_fn);
         qjs.JS_FreeValue(iframe_ctx, docEl);
         qjs.JS_FreeValue(iframe_ctx, bodyEl);
         qjs.JS_FreeValue(iframe_ctx, headEl);
+        qjs.JS_FreeValue(iframe_ctx, titleVal);
+    }
+
+    // For XML iframes: override documentElement to return body.firstChild (the actual XML root)
+    // Lexbor (HTML5 parser) wraps XML content in <html><head></head><body>...</body></html>
+    // IMPORTANT: Must run BEFORE restoring parent globals, because native DOM getters
+    // (firstChild, childNodes) use g_document which still points to iframe doc here.
+    if (is_xml) {
+        const iframe_global_xml = qjs.JS_GetGlobalObject(iframe_ctx);
+        const iframe_doc_xml = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global_xml, "document");
+        defer qjs.JS_FreeValue(iframe_ctx, iframe_global_xml);
+
+        const is_xhtml = blk: {
+            var path = iframe_url;
+            if (std.mem.indexOfScalar(u8, path, '?')) |q| path = path[0..q];
+            if (std.mem.indexOfScalar(u8, path, '#')) |h| path = path[0..h];
+            if (std.mem.endsWith(u8, path, ".xhtml")) break :blk true;
+            break :blk false;
+        };
+        const xml_fix_js = if (is_xhtml)
+            \\(function(doc){
+            \\  doc.contentType='application/xhtml+xml';
+            \\  var _origCreate=doc.createElement;
+            \\  doc.createElement=function(tag){
+            \\    var e=_origCreate.call(doc,tag);
+            \\    Object.defineProperty(e,'__origLocal',{value:String(tag),writable:true});
+            \\    e.__xmlCaseSensitive=true;
+            \\    return e;
+            \\  };
+            \\})
+        else
+            \\(function(doc){
+            \\  doc.contentType='application/xml';
+            \\  var b=doc.body||doc.getElementsByTagName('body')[0];
+            \\  if(b&&b.firstChild){
+            \\    var xmlRoot=b.firstChild;
+            \\    Object.defineProperty(doc,'documentElement',{get:function(){return xmlRoot;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(doc,'body',{get:function(){return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(doc,'head',{get:function(){return null;},configurable:true,enumerable:true});
+            \\  }
+            \\  var _origCreate=doc.createElement;
+            \\  doc.createElement=function(tag){
+            \\    var e=_origCreate.call(doc,tag);
+            \\    Object.defineProperty(e,'namespaceURI',{value:null,configurable:true});
+            \\    Object.defineProperty(e,'__origLocal',{value:String(tag),writable:true});
+            \\    e.__xmlCaseSensitive=true;
+            \\    return e;
+            \\  };
+            \\})
+        ;
+        const xml_fn = qjs.JS_Eval(iframe_ctx, xml_fix_js, xml_fix_js.len, "<xml-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(xml_fn)) {
+            var xml_args = [1]qjs.JSValue{iframe_doc_xml};
+            const xml_result = qjs.JS_Call(iframe_ctx, xml_fn, quickjs.JS_UNDEFINED(), 1, &xml_args);
+            qjs.JS_FreeValue(iframe_ctx, xml_result);
+            qjs.JS_FreeValue(iframe_ctx, xml_fn);
+        } else {
+            qjs.JS_FreeValue(iframe_ctx, iframe_doc_xml);
+        }
     }
 
     // Restore parent globals (registerDomApis/registerWebApis overwrote them)
@@ -204,44 +302,6 @@ fn setupIframe(
     // Get the iframe context's document object
     const iframe_global = qjs.JS_GetGlobalObject(iframe_ctx);
     const iframe_doc_obj = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global, "document");
-
-    // For XML iframes: override documentElement to return body.firstChild (the actual XML root)
-    // Lexbor (HTML5 parser) wraps XML content in <html><head></head><body>...</body></html>
-    // Note: XHTML files (.xhtml) keep standard HTML document structure
-    if (is_xml) {
-        // Determine if this is pure XML vs XHTML/MathML
-        const is_xhtml = blk: {
-            var path = iframe_url;
-            if (std.mem.indexOfScalar(u8, path, '?')) |q| path = path[0..q];
-            if (std.mem.indexOfScalar(u8, path, '#')) |h| path = path[0..h];
-            if (std.mem.endsWith(u8, path, ".xhtml")) break :blk true;
-            break :blk false;
-        };
-        const xml_fix_js = if (is_xhtml)
-            \\(function(doc){
-            \\  doc.contentType='application/xhtml+xml';
-            \\})
-        else
-            \\(function(doc){
-            \\  doc.contentType='application/xml';
-            \\  var b=doc.body||doc.getElementsByTagName('body')[0];
-            \\  if(b&&b.firstChild){
-            \\    var xmlRoot=b.firstChild;
-            \\    Object.defineProperty(doc,'documentElement',{get:function(){return xmlRoot;},configurable:true,enumerable:true});
-            \\    Object.defineProperty(doc,'body',{get:function(){return null;},configurable:true,enumerable:true});
-            \\    Object.defineProperty(doc,'head',{get:function(){return null;},configurable:true,enumerable:true});
-            \\  }
-            \\})
-        ;
-        const xml_fn = qjs.JS_Eval(iframe_ctx, xml_fix_js, xml_fix_js.len, "<xml-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
-        if (!quickjs.JS_IsException(xml_fn)) {
-            var xml_args = [1]qjs.JSValue{qjs.JS_DupValue(iframe_ctx, iframe_doc_obj)};
-            const xml_result = qjs.JS_Call(iframe_ctx, xml_fn, quickjs.JS_UNDEFINED(), 1, &xml_args);
-            qjs.JS_FreeValue(iframe_ctx, xml_result);
-            qjs.JS_FreeValue(iframe_ctx, xml_args[0]);
-            qjs.JS_FreeValue(iframe_ctx, xml_fn);
-        }
-    }
 
     // Set contentDocument (cross-context: we set it as a property on the parent element)
     // Note: This is a simplified cross-context bridge — the document object

@@ -1201,6 +1201,16 @@ pub fn documentCreateElementNS(
         return quickjs.JS_EXCEPTION();
     }
 
+    // Compute namespace per spec: null, undefined, "" all become JS null
+    const ns_js = blk: {
+        if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) break :blk quickjs.JS_NULL();
+        if (jsStringToSlice(c, args[0])) |ns_s| {
+            defer qjs.JS_FreeCString(c, ns_s.ptr);
+            if (ns_s.len == 0) break :blk quickjs.JS_NULL();
+        }
+        break :blk qjs.JS_DupValue(c, args[0]);
+    };
+
     const s = jsStringToSlice(c, args[1]) orelse {
         // null/undefined → use "null"/"undefined" string
         const tag = "null";
@@ -1208,7 +1218,7 @@ pub fn documentCreateElementNS(
         const elem = lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return quickjs.JS_NULL();
         const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
         const obj = wrapNode(c, node);
-        _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", qjs.JS_DupValue(c, args[0]));
+        _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", ns_js);
         _ = qjs.JS_SetPropertyStr(c, obj, "prefix", quickjs.JS_NULL());
         return obj;
     };
@@ -1224,7 +1234,7 @@ pub fn documentCreateElementNS(
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const obj = wrapNode(c, node);
     // Set namespace-related properties on the JS object
-    _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", qjs.JS_DupValue(c, args[0]));
+    _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", ns_js);
     if (colon_pos) |cp| {
         _ = qjs.JS_SetPropertyStr(c, obj, "prefix", qjs.JS_NewStringLen(c, tag.ptr, cp));
         // Store original-case localName (lexbor lowercases everything)

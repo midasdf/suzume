@@ -2152,6 +2152,127 @@ fn elementGetElementsByTagName(
     return arr;
 }
 
+fn elementGetElementsByTagNameNS(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 2) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const root = getNode(c, this_val) orelse return quickjs.JS_NULL();
+
+    // Get namespace arg (null, "*", or URI string)
+    var ns_filter: ?[]const u8 = null; // null = match null namespace
+    var ns_ptr: ?[*]const u8 = null;
+    var ns_wildcard = false;
+    if (!quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
+        if (jsStringToSlice(c, args[0])) |ns_s| {
+            if (ns_s.len == 1 and ns_s.ptr[0] == '*') {
+                ns_wildcard = true;
+                qjs.JS_FreeCString(c, ns_s.ptr);
+            } else if (ns_s.len == 0) {
+                // Empty string namespace = match elements with null namespace
+                qjs.JS_FreeCString(c, ns_s.ptr);
+                // ns_filter stays null, ns_wildcard stays false
+            } else {
+                ns_filter = ns_s.ptr[0..ns_s.len];
+                ns_ptr = ns_s.ptr;
+            }
+        }
+    }
+    defer if (ns_ptr) |p| qjs.JS_FreeCString(c, p);
+
+    // Get localName arg ("*" or specific name)
+    const ln_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, ln_s.ptr);
+    const local_filter = ln_s.ptr[0..ln_s.len];
+    const ln_wildcard = local_filter.len == 1 and local_filter[0] == '*';
+
+    const arr = qjs.JS_NewArray(c);
+    if (quickjs.JS_IsException(arr)) return arr;
+    var idx: u32 = 0;
+
+    // Walk descendants (not including root itself)
+    walkTreeNS(c, root, ns_filter, ns_wildcard, local_filter, ln_wildcard, arr, &idx);
+
+    dom_doc.wrapAsHTMLCollection(c, arr);
+    return arr;
+}
+
+fn walkTreeNS(
+    c: *qjs.JSContext,
+    root: *lxb.lxb_dom_node_t,
+    ns_filter: ?[]const u8,
+    ns_wildcard: bool,
+    local_filter: []const u8,
+    ln_wildcard: bool,
+    arr: qjs.JSValue,
+    idx: *u32,
+) void {
+    var current: ?*lxb.lxb_dom_node_t = root.first_child;
+    while (current) |node| {
+        if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            // Check localName match
+            var name_len: usize = 0;
+            const name_raw = lxb_dom_element_local_name(elem, &name_len);
+            if (name_raw != null and name_len > 0) {
+                // Get the element's actual localName: use __origLocal if set (preserves case
+                // from createElementNS), otherwise use lexbor name (always lowercase)
+                const js_el = wrapNode(c, node);
+                const orig_local_val = qjs.JS_GetPropertyStr(c, js_el, "__origLocal");
+                var orig_local_slice: ?[]const u8 = null;
+                var orig_local_ptr: ?[*]const u8 = null;
+                if (!quickjs.JS_IsUndefined(orig_local_val) and !quickjs.JS_IsNull(orig_local_val)) {
+                    if (jsStringToSlice(c, orig_local_val)) |ols| {
+                        orig_local_slice = ols.ptr[0..ols.len];
+                        orig_local_ptr = ols.ptr;
+                    }
+                }
+                qjs.JS_FreeValue(c, orig_local_val);
+                defer if (orig_local_ptr) |p| qjs.JS_FreeCString(c, p);
+
+                const elem_local = if (orig_local_slice) |s| s else name_raw.?[0..name_len];
+                // Spec: getElementsByTagNameNS uses exact string comparison for localName
+                const ln_match = ln_wildcard or std.mem.eql(u8, elem_local, local_filter);
+
+                if (ln_match) {
+                    // Check namespace match
+                    const ns_match = if (ns_wildcard) true else blk: {
+                        // Get element's namespace from JS wrapper (reuse js_el from above)
+                        const elem_ns_val = qjs.JS_GetPropertyStr(c, js_el, "namespaceURI");
+                        defer qjs.JS_FreeValue(c, elem_ns_val);
+
+                        if (ns_filter == null) {
+                            // Match elements with null namespace
+                            break :blk quickjs.JS_IsNull(elem_ns_val) or quickjs.JS_IsUndefined(elem_ns_val);
+                        }
+                        // Match specific namespace URI
+                        if (quickjs.JS_IsNull(elem_ns_val) or quickjs.JS_IsUndefined(elem_ns_val))
+                            break :blk false;
+                        if (jsStringToSlice(c, elem_ns_val)) |ens| {
+                            defer qjs.JS_FreeCString(c, ens.ptr);
+                            break :blk std.mem.eql(u8, ens.ptr[0..ens.len], ns_filter.?);
+                        }
+                        break :blk false;
+                    };
+
+                    if (ns_match) {
+                        _ = qjs.JS_SetPropertyUint32(c, arr, idx.*, qjs.JS_DupValue(c, js_el));
+                        idx.* += 1;
+                    }
+                }
+                qjs.JS_FreeValue(c, js_el);
+            }
+            // Recurse into children
+            walkTreeNS(c, node, ns_filter, ns_wildcard, local_filter, ln_wildcard, arr, idx);
+        }
+        current = node.next;
+    }
+}
+
 pub fn upgradeCustomElement(ctx: *qjs.JSContext, elem: qjs.JSValue, tag_ptr: [*]const u8, tag_len: usize) void {
     // Convert tag name to lowercase for registry lookup (null-terminated)
     var lower_buf: [129]u8 = undefined;
@@ -2941,7 +3062,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &elementGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagName", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagName, "getElementsByTagNameNS", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagNameNS, "getElementsByTagNameNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "toggleAttribute", qjs.JS_NewCFunction(ctx, &dom_elem.elementToggleAttribute, "toggleAttribute", 2));
     _ = qjs.JS_SetPropertyStr(ctx, elem_proto, "getAttributeNames", qjs.JS_NewCFunction(ctx, &dom_elem.elementGetAttributeNames, "getAttributeNames", 0));
     // hasAttributes() — returns true if the element has any attributes
@@ -3870,7 +3991,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "writeln", qjs.JS_NewCFunction(ctx, &dom_doc.documentWrite, "writeln", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByClassName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByClassName, "getElementsByClassName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "getElementsByTagName", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "getElementsByTagNameNS", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByTagNameNS", qjs.JS_NewCFunction(ctx, &elementGetElementsByTagNameNS, "getElementsByTagNameNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "getElementsByName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByName, "getElementsByName", 1));
 
     // document.adoptNode / importNode (stub — return the node as-is)

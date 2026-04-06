@@ -421,6 +421,7 @@ pub fn initPageJs(doc: *Document, page_js_rt: *?JsRuntime, loaded_script_urls: *
     dom_api.g_top_frame = .{
         .document = @ptrCast(@alignCast(doc.html_doc)),
         .ctx = js_rt.ctx,
+        .current_url = base_url,
     };
     quickjs.c.JS_SetContextOpaque(js_rt.ctx, @ptrCast(&dom_api.g_top_frame));
 
