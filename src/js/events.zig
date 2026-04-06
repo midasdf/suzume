@@ -211,6 +211,8 @@ pub fn jsAddEventListener(
             _ = qjs.JS_ToInt32(c, &nt_v, js_nt);
             if (nt_v > 0 and nt_v != 9) {
                 // JS-level node: store listeners on the object itself
+                // Free the DupValue'd callback in record since we use JS storage instead
+                qjs.JS_FreeValue(c, record.callback);
                 const js_code = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];a.push(cb);el[k]=a;})";
                 const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(fn_val)) {
@@ -924,8 +926,8 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
         // Add window as the last element in the path (for connected nodes)
         if (path_len > 0 and path[path_len - 1].type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
             const global = qjs.JS_GetGlobalObject(ctx);
-            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), global);
-            // global ref consumed by SetProperty
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), qjs.JS_DupValue(ctx, global));
+            qjs.JS_FreeValue(ctx, global);
         }
         _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_path", path_arr);
     }
