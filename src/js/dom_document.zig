@@ -1272,17 +1272,31 @@ pub fn documentSetTitle(
 
     // Find <title> element in DOM and set its text content
     const doc_node = getDocumentNode() orelse return quickjs.JS_UNDEFINED();
-    if (walkTreeByTag(doc_node, "title")) |title_node| {
+    const doc_ptr = api.g_document orelse return quickjs.JS_UNDEFINED();
+    var title_node = walkTreeByTag(doc_node, "title");
+    // HTML spec: if no title element exists, create one in <head>
+    if (title_node == null) {
+        if (walkTreeByTag(doc_node, "head")) |head_node| {
+            const new_elem = lxb_dom_document_create_element(doc_ptr, "title", 5, null);
+            if (new_elem) |elem| {
+                const elem_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+                lxb_dom_node_insert_child(head_node, elem_node);
+                title_node = elem_node;
+            }
+        }
+    }
+    if (title_node) |tn| {
         // Remove all existing children
-        while (title_node.first_child) |child| {
+        while (tn.first_child) |child| {
             lxb_dom_node_remove(child);
             _ = lxb_dom_node_destroy(child);
         }
-        // Create new text node with the title content
-        const doc_ptr = api.g_document orelse return quickjs.JS_UNDEFINED();
-        const text_node = lxb_dom_document_create_text_node(doc_ptr, new_title.ptr, new_title.len);
-        if (text_node) |tn| {
-            lxb_dom_node_insert_child(title_node, @ptrCast(tn));
+        // Create new text node with the title content (skip if empty)
+        if (new_title.len > 0) {
+            const text_node = lxb_dom_document_create_text_node(doc_ptr, new_title.ptr, new_title.len);
+            if (text_node) |text| {
+                lxb_dom_node_insert_child(tn, @ptrCast(text));
+            }
         }
     }
     return quickjs.JS_UNDEFINED();
