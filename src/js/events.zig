@@ -218,11 +218,11 @@ pub fn jsAddEventListener(
             if (!is_global) {
                 // JS-level node or standalone EventTarget: store listeners on the object
                 qjs.JS_FreeValue(c, record.callback);
-                const js_code = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];a.push(cb);el[k]=a;})";
+                const js_code = "(function(el,type,cb,cap,once){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];for(var i=0;i<a.length;i++)if(a[i].fn===cb)return;a.push({fn:cb,once:once});el[k]=a;})";
                 const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(fn_val)) {
-                    var call_args = [4]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
-                    const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 4, &call_args);
+                    var call_args = [5]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture), quickjs.JS_NewBool(once) };
+                    const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 5, &call_args);
                     qjs.JS_FreeValue(c, r);
                     qjs.JS_FreeValue(c, fn_val);
                 }
@@ -1735,10 +1735,15 @@ fn jsElementDispatchEvent(
         _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 2)); // AT_TARGET
         const js_dispatch =
             \\(function(el,evt,type){
-            \\  var k='__el_'+type;var a=el[k];if(a)for(var i=0;i<a.length;i++){
-            \\    if(typeof a[i]==='function')a[i].call(el,evt);
-            \\    else if(a[i]&&typeof a[i].handleEvent==='function')a[i].handleEvent(evt);
+            \\  var k='__el_'+type;var a=el[k];if(!a)return;
+            \\  var toRemove=[];
+            \\  for(var i=0;i<a.length;i++){
+            \\    var h=a[i],fn=h.fn||h;
+            \\    if(typeof fn==='function')fn.call(el,evt);
+            \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+            \\    if(h.once)toRemove.push(i);
             \\  }
+            \\  for(var j=toRemove.length-1;j>=0;j--)a.splice(toRemove[j],1);
             \\})
         ;
         const fn_val = qjs.JS_Eval(c, js_dispatch, js_dispatch.len, "<jsd>", qjs.JS_EVAL_TYPE_GLOBAL);
