@@ -506,6 +506,34 @@ fn wrapElementNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     const obj = qjs.JS_NewObjectClass(ctx, @intCast(element_class_id));
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));
+    // Set per-element-type prototype based on tag name
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        var name_len: usize = 0;
+        const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+        if (name_ptr != null and name_len > 0) {
+            const global = qjs.JS_GetGlobalObject(ctx);
+            defer qjs.JS_FreeValue(ctx, global);
+            const proto_map = qjs.JS_GetPropertyStr(ctx, global, "__elProtos");
+            defer qjs.JS_FreeValue(ctx, proto_map);
+            if (!quickjs.JS_IsUndefined(proto_map)) {
+                const name_atom = qjs.JS_NewAtomLen(ctx, name_ptr.?, name_len);
+                defer qjs.JS_FreeAtom(ctx, name_atom);
+                const proto = qjs.JS_GetProperty(ctx, proto_map, name_atom);
+                defer qjs.JS_FreeValue(ctx, proto);
+                if (!quickjs.JS_IsUndefined(proto) and !quickjs.JS_IsNull(proto)) {
+                    _ = qjs.JS_SetPrototype(ctx, obj, proto);
+                } else {
+                    // Unknown tag → HTMLUnknownElement.prototype
+                    const unk_proto = qjs.JS_GetPropertyStr(ctx, proto_map, "__unknown");
+                    defer qjs.JS_FreeValue(ctx, unk_proto);
+                    if (!quickjs.JS_IsUndefined(unk_proto)) {
+                        _ = qjs.JS_SetPrototype(ctx, obj, unk_proto);
+                    }
+                }
+            }
+        }
+    }
     return obj;
 }
 
@@ -2510,14 +2538,61 @@ fn elementSetInnerText(
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Same as textContent setter: replace all children with a text node
+    // HTML spec: innerText setter splits on newlines (\r\n, \r, \n) and inserts <br> between segments
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 1) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const node = getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // Handle null/undefined: clear all children
+    if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
+        _ = lxb_dom_node_text_content_set(node, "", 0);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
-    _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+    const text = s.ptr[0..s.len];
+    // Check if text contains any newlines — fast path if not
+    var has_newline = false;
+    for (text) |ch| {
+        if (ch == '\n' or ch == '\r') { has_newline = true; break; }
+    }
+    if (!has_newline) {
+        _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
+    // Slow path: remove all children, then insert text/<br> fragments
+    while (node.first_child) |child| {
+        lxb_dom_node_remove(child);
+        _ = lxb_dom_node_destroy(child);
+    }
+    const doc = getDocument(c) orelse return quickjs.JS_UNDEFINED();
+    var i: usize = 0;
+    while (i < text.len) {
+        // Find the next newline
+        var j = i;
+        while (j < text.len and text[j] != '\n' and text[j] != '\r') j += 1;
+        // Add text node for the segment (even if empty — spec says so)
+        if (j > i) {
+            const tn = lxb_dom_document_create_text_node(doc, text[i..j].ptr, j - i) orelse break;
+            lxb_dom_node_insert_child(node, tn);
+        } else if (i == 0 or (i > 0 and (text[i - 1] == '\n' or text[i - 1] == '\r'))) {
+            // Empty segment at start or between consecutive newlines — no text node needed
+        }
+        if (j >= text.len) break;
+        // Skip newline: \r\n counts as one
+        if (text[j] == '\r' and j + 1 < text.len and text[j + 1] == '\n') {
+            j += 2;
+        } else {
+            j += 1;
+        }
+        // Insert <br> for the newline
+        const br = lxb_dom_document_create_element(doc, "br", 2, null) orelse break;
+        lxb_dom_node_insert_child(node, @ptrCast(br));
+        i = j;
+        continue;
+    }
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -2734,6 +2809,27 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const innerTextAtom = qjs.JS_NewAtom(ctx, "innerText");
         _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, innerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get innerText", 0), qjs.JS_NewCFunction(ctx, &elementSetInnerText, "set innerText", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, innerTextAtom);
+        // outerText: getter = innerText getter, setter replaces element with text/<br> fragment
+        {
+            const ot_setter_js =
+                \\(function(v){
+                \\  var p=this.parentNode;
+                \\  if(!p)throw new DOMException("Failed to set 'outerText': The element has no parent.","NoModificationAllowedError");
+                \\  if(v===undefined||v===null)v='';else v=''+v;
+                \\  if(v===''){p.removeChild(this);return;}
+                \\  var f=document.createDocumentFragment();
+                \\  var lines=v.split(/\r\n|\r|\n/);
+                \\  for(var i=0;i<lines.length;i++){
+                \\    if(i>0)f.appendChild(document.createElement('br'));
+                \\    if(lines[i]!=='')f.appendChild(document.createTextNode(lines[i]));
+                \\  }
+                \\  p.replaceChild(f,this);
+                \\})
+            ;
+            const outerTextAtom = qjs.JS_NewAtom(ctx, "outerText");
+            _ = qjs.JS_DefinePropertyGetSet(ctx, node_proto, outerTextAtom, qjs.JS_NewCFunction(ctx, &elementGetInnerText, "get outerText", 0), qjs.JS_Eval(ctx, ot_setter_js, ot_setter_js.len, "<outertext>", qjs.JS_EVAL_TYPE_GLOBAL), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+            qjs.JS_FreeAtom(ctx, outerTextAtom);
+        }
     }
     {
         const parentNodeAtom = qjs.JS_NewAtom(ctx, "parentNode");
@@ -3086,8 +3182,55 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     };
     for (html_subclasses) |name| {
         const ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, name.ptr, 0, qjs.JS_CFUNC_constructor, 0);
-        _ = qjs.JS_SetPropertyStr(ctx, ctor, "prototype", qjs.JS_DupValue(ctx, html_element_proto));
+        // Create per-type prototype inheriting from HTMLElement.prototype
+        // This prevents property leakage between element types (e.g. name, relList)
+        const type_proto = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPrototype(ctx, type_proto, html_element_proto);
+        _ = qjs.JS_SetPropertyStr(ctx, type_proto, "constructor", qjs.JS_DupValue(ctx, ctor));
+        _ = qjs.JS_SetPropertyStr(ctx, ctor, "prototype", type_proto);
         _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
+    }
+
+    // Build tag→prototype map for per-type prototype assignment in wrapNode
+    {
+        const map_js =
+            \\(function(){
+            \\  var m={};var tags={
+            \\    div:'HTMLDivElement',span:'HTMLSpanElement',p:'HTMLParagraphElement',
+            \\    img:'HTMLImageElement',a:'HTMLAnchorElement',form:'HTMLFormElement',
+            \\    input:'HTMLInputElement',textarea:'HTMLTextAreaElement',select:'HTMLSelectElement',
+            \\    button:'HTMLButtonElement',table:'HTMLTableElement',tr:'HTMLTableRowElement',
+            \\    td:'HTMLTableCellElement',th:'HTMLTableCellElement',li:'HTMLLIElement',
+            \\    ul:'HTMLUListElement',ol:'HTMLOListElement',pre:'HTMLPreElement',
+            \\    canvas:'HTMLCanvasElement',video:'HTMLVideoElement',audio:'HTMLAudioElement',
+            \\    iframe:'HTMLIFrameElement',label:'HTMLLabelElement',script:'HTMLScriptElement',
+            \\    style:'HTMLStyleElement',link:'HTMLLinkElement',meta:'HTMLMetaElement',
+            \\    br:'HTMLBRElement',hr:'HTMLHRElement',body:'HTMLBodyElement',
+            \\    head:'HTMLHeadElement',html:'HTMLHtmlElement',option:'HTMLOptionElement',
+            \\    template:'HTMLTemplateElement',dialog:'HTMLDialogElement',details:'HTMLDetailsElement',
+            \\    summary:'HTMLSummaryElement',fieldset:'HTMLFieldSetElement',legend:'HTMLLegendElement',
+            \\    title:'HTMLTitleElement',base:'HTMLBaseElement',area:'HTMLAreaElement',
+            \\    data:'HTMLDataElement',time:'HTMLTimeElement',output:'HTMLOutputElement',
+            \\    progress:'HTMLProgressElement',meter:'HTMLMeterElement',datalist:'HTMLDataListElement',
+            \\    optgroup:'HTMLOptGroupElement',object:'HTMLObjectElement',embed:'HTMLEmbedElement',
+            \\    source:'HTMLSourceElement',track:'HTMLTrackElement',map:'HTMLMapElement',
+            \\    thead:'HTMLTableSectionElement',tbody:'HTMLTableSectionElement',tfoot:'HTMLTableSectionElement',
+            \\    col:'HTMLTableColElement',colgroup:'HTMLTableColElement',caption:'HTMLTableCaptionElement',
+            \\    blockquote:'HTMLQuoteElement',q:'HTMLQuoteElement',ins:'HTMLModElement',del:'HTMLModElement',
+            \\    picture:'HTMLPictureElement',slot:'HTMLSlotElement',menu:'HTMLMenuElement',
+            \\    h1:'HTMLHeadingElement',h2:'HTMLHeadingElement',h3:'HTMLHeadingElement',
+            \\    h4:'HTMLHeadingElement',h5:'HTMLHeadingElement',h6:'HTMLHeadingElement',
+            \\    dir:'HTMLDirectoryElement',dl:'HTMLDListElement',font:'HTMLFontElement',
+            \\    frame:'HTMLFrameElement',frameset:'HTMLFrameSetElement',marquee:'HTMLMarqueeElement',
+            \\    param:'HTMLParamElement'
+            \\  };
+            \\  for(var t in tags){var c=globalThis[tags[t]];if(c)m[t]=c.prototype;}
+            \\  if(globalThis.HTMLUnknownElement)m.__unknown=HTMLUnknownElement.prototype;
+            \\  globalThis.__elProtos=m;
+            \\})()
+        ;
+        const map_r = qjs.JS_Eval(ctx, map_js, map_js.len, "<elprotos>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, map_r);
     }
 
     // DOM interface constructors (for instanceof checks in frameworks)
@@ -3104,6 +3247,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_proto, "getElementsByTagName", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementsByTagName, "getElementsByTagName", 1));
     _ = qjs.JS_SetPropertyStr(ctx, document_ctor, "prototype", doc_proto);
     _ = qjs.JS_SetPropertyStr(ctx, global, "Document", document_ctor);
+
+    // HTMLDocument constructor (inherits from Document, for instanceof checks)
+    const html_doc_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "HTMLDocument", 0, qjs.JS_CFUNC_constructor, 0);
+    const html_doc_proto = qjs.JS_NewObject(ctx);
+    _ = qjs.JS_SetPrototype(ctx, html_doc_proto, doc_proto);
+    _ = qjs.JS_SetPropertyStr(ctx, html_doc_ctor, "prototype", html_doc_proto);
+    _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLDocument", html_doc_ctor);
 
     const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     {
@@ -3162,6 +3312,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentType", doctype_ctor);
 
+    // DOMImplementation constructor (for instanceof checks)
+    {
+        const di_js =
+            \\(function(){
+            \\  globalThis.DOMImplementation=function DOMImplementation(){};
+            \\  DOMImplementation.prototype[Symbol.toStringTag]='DOMImplementation';
+            \\})()
+        ;
+        const r = qjs.JS_Eval(ctx, di_js, di_js.len, "<domimpl>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, r);
+    }
+
     // DocumentFragment constructor — new DocumentFragment() creates a real fragment
     // Note: must be set up after document is globally available, but we use JS_Eval deferred
     const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
@@ -3182,7 +3344,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const reflected_js =
             \\(function(){
             \\  var EP=Element.prototype;
-            \\  ['src','href','action','type','name','alt','title','rel','target','placeholder','method','enctype','lang','for'].forEach(function(a){
+            \\  ['src','href','action','type','alt','title','rel','target','placeholder','method','enctype','lang','for'].forEach(function(a){
             \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
             \\  });
             \\  ['disabled','checked','selected','autofocus'].forEach(function(a){
@@ -3400,17 +3562,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof Selection==='undefined'){globalThis.Selection=function(){};Selection.prototype[Symbol.toStringTag]='Selection';}
             \\  if(typeof TreeWalker==='undefined'){globalThis.TreeWalker=function(){};TreeWalker.prototype[Symbol.toStringTag]='TreeWalker';}
             \\  if(typeof NodeIterator==='undefined'){globalThis.NodeIterator=function(){};NodeIterator.prototype[Symbol.toStringTag]='NodeIterator';}
+            \\  globalThis.__niRegistry=[];
+            \\  globalThis.__niPrev=function(n){if(n.previousSibling){n=n.previousSibling;while(n.lastChild)n=n.lastChild;return n;}return n.parentNode;};
+            \\  globalThis.__niNextNonDesc=function(n,root){while(n&&n!==root){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}return null;};
+            \\  globalThis.__niPreRemove=function(node){for(var i=0;i<__niRegistry.length;i++){var it=__niRegistry[i];if(!it)continue;var ref=it._ref,root=it.root;if(node===root)continue;var d=ref,isAnc=false;while(d){if(d===node){isAnc=true;break;}d=d.parentNode;}if(!isAnc)continue;if(!it._before){it._ref=__niPrev(node);continue;}var next=__niNextNonDesc(node,root);if(next){it._ref=next;continue;}it._ref=__niPrev(node);it._before=false;}};
             \\  if(typeof MediaQueryList==='undefined'){globalThis.MediaQueryList=function(){};MediaQueryList.prototype[Symbol.toStringTag]='MediaQueryList';}
             \\  function rrl(C,attr){Object.defineProperty(C.prototype,'relList',{get:function(){var el=this;var tl=Object.create(DOMTokenList.prototype);tl.toString=function(){return el.getAttribute(attr)||'';};Object.defineProperty(tl,'value',{get:function(){return el.getAttribute(attr)||'';},set:function(v){el.setAttribute(attr,v);}});tl.contains=function(t){return(' '+this.value+' ').indexOf(' '+t+' ')>=0;};tl.add=function(){var v=this.value;for(var i=0;i<arguments.length;i++){var t=arguments[i];if(!this.contains(t))v+=(v?' ':'')+t;}el.setAttribute(attr,v);};tl.remove=function(){for(var i=0;i<arguments.length;i++){var t=arguments[i];var v=(' '+this.value+' ').split(' '+t+' ').join(' ').trim();el.setAttribute(attr,v);}};tl.toggle=function(t,f){if(f!==undefined){if(f)this.add(t);else this.remove(t);return f;}if(this.contains(t)){this.remove(t);return false;}this.add(t);return true;};tl.item=function(i){var a=this.value.split(/\s+/).filter(Boolean);return a[i]||null;};Object.defineProperty(tl,'length',{get:function(){return this.value.split(/\s+/).filter(Boolean).length;}});tl.supports=function(){return true;};tl[Symbol.iterator]=function(){return this.value.split(/\s+/).filter(Boolean)[Symbol.iterator]();};return tl;},configurable:true,enumerable:true});}
             \\  if(typeof HTMLAnchorElement!=='undefined'){var A=HTMLAnchorElement;ru(A,'href');rs(A,'target');rs(A,'download');rs(A,'rel');rs(A,'hreflang');rs(A,'type');rs(A,'text');rrp(A);rrl(A,'rel');
             \\    (function(){function urlProp(p,fn){Object.defineProperty(A.prototype,p,{get:function(){try{var u=new URL(this.getAttribute('href')||'',document.baseURI);return fn(u);}catch(e){return'';}},configurable:true,enumerable:true});}
             \\    urlProp('protocol',function(u){return u.protocol;});urlProp('hostname',function(u){return u.hostname;});urlProp('port',function(u){return u.port;});urlProp('pathname',function(u){return u.pathname;});urlProp('search',function(u){return u.search;});urlProp('hash',function(u){return u.hash;});urlProp('host',function(u){return u.host;});urlProp('origin',function(u){return u.origin;});})();}
             \\  if(typeof HTMLImageElement!=='undefined'){var I=HTMLImageElement;ru(I,'src');rs(I,'alt');rs(I,'srcset');rs(I,'sizes');rs(I,'referrerPolicy','referrerpolicy');rs(I,'fetchPriority','fetchpriority');rb(I,'isMap','ismap');rs(I,'useMap','usemap');rco(I,'crossOrigin','crossorigin');rs(I,'decoding');rs(I,'loading');}
-            \\  if(typeof HTMLLinkElement!=='undefined'){var L=HTMLLinkElement;ru(L,'href');rs(L,'rel');rs(L,'rev');rs(L,'type');rs(L,'media');rs(L,'integrity');rco(L,'crossOrigin','crossorigin');rs(L,'fetchPriority','fetchpriority');rb(L,'disabled');rs(L,'hreflang');rs(L,'imageSrcset','imagesrcset');rs(L,'imageSizes','imagesizes');rs(L,'target');rs(L,'nonce');rrl(L,'rel');
+            \\  if(typeof HTMLLinkElement!=='undefined'){var L=HTMLLinkElement;ru(L,'href');rs(L,'rel');rs(L,'rev');rs(L,'type');rs(L,'media');rs(L,'integrity');rco(L,'crossOrigin','crossorigin');rs(L,'fetchPriority','fetchpriority');rb(L,'disabled');rs(L,'hreflang');rs(L,'imageSrcset','imagesrcset');rs(L,'imageSizes','imagesizes');rs(L,'target');rs(L,'nonce');rs(L,'charset');rrl(L,'rel');
             \\    (function(){var asKw=['audio','document','embed','fetch','font','image','manifest','object','paintworklet','report','script','sharedworker','style','track','video','worker','xslt',''];Object.defineProperty(L.prototype,'as',{get:function(){var v=(this.getAttribute('as')||'').toLowerCase();return asKw.indexOf(v)>=0?v:'';},set:function(v){this.setAttribute('as',''+v);},configurable:true,enumerable:true});})();
             \\    (function(){var rpKw=['','no-referrer','no-referrer-when-downgrade','same-origin','origin','strict-origin','origin-when-cross-origin','strict-origin-when-cross-origin','unsafe-url'];Object.defineProperty(L.prototype,'referrerPolicy',{get:function(){var v=(this.getAttribute('referrerpolicy')||'').toLowerCase();return rpKw.indexOf(v)>=0?v:'';},set:function(v){this.setAttribute('referrerpolicy',''+v);},configurable:true,enumerable:true});})();}
             \\  if(typeof HTMLMetaElement!=='undefined'){var M=HTMLMetaElement;rs(M,'name');rs(M,'content');rs(M,'httpEquiv','http-equiv');rs(M,'media');rs(M,'scheme');}
-            \\  if(typeof HTMLStyleElement!=='undefined'){rs(HTMLStyleElement,'media');rb(HTMLStyleElement,'disabled');}
+            \\  if(typeof HTMLStyleElement!=='undefined'){rs(HTMLStyleElement,'media');rb(HTMLStyleElement,'disabled');rs(HTMLStyleElement,'nonce');}
             \\})()
         ;
         const er = qjs.JS_Eval(ctx, elem_reflect_js, elem_reflect_js.len, "<elemreflect>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -3423,8 +3589,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\(function(){
             \\  function rs(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
             \\  function rb(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.hasAttribute(a);},set:function(v){if(v)this.setAttribute(a,'');else this.removeAttribute(a);},configurable:true,enumerable:true});}
-            \\  function ri(C,p,a,d){if(!a)a=p.toLowerCase();if(d===undefined)d=0;Object.defineProperty(C.prototype,p,{get:function(){var v=parseInt(this.getAttribute(a),10);return isNaN(v)?d:v;},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function ri(C,p,a,d){if(!a)a=p.toLowerCase();if(d===undefined)d=0;Object.defineProperty(C.prototype,p,{get:function(){var s=this.getAttribute(a);if(s===null)return d;var v=_pint(s);return isNaN(v)?d:v;},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
             \\  function ru(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){var v=this.getAttribute(a);if(v===null)return'';try{return new URL(v,document.baseURI).href;}catch(e){return v;}},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function re(C,p,a,kws,mv,iv){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){var v=this.getAttribute(a);if(v===null)return mv||'';var lv=v.toLowerCase();for(var i=0;i<kws.length;i++){if(kws[i]===lv)return lv;}return iv!==undefined?iv:mv||'';},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  globalThis._pint=function(s){var i=0;while(i<s.length&&(s[i]===' '||s[i]==='\t'||s[i]==='\n'||s[i]==='\f'||s[i]==='\r'))i++;if(i>=s.length)return NaN;var neg=false;if(s[i]==='+')i++;else if(s[i]==='-'){neg=true;i++;}if(i>=s.length||s.charCodeAt(i)<48||s.charCodeAt(i)>57)return NaN;var n=0;while(i<s.length&&s.charCodeAt(i)>=48&&s.charCodeAt(i)<=57){n=n*10+(s.charCodeAt(i)-48);i++;}return neg?-n:n;};
+            \\  function riu(C,p,a,d,min){if(!a)a=p.toLowerCase();if(d===undefined)d=0;if(min===undefined)min=0;Object.defineProperty(C.prototype,p,{get:function(){var s=this.getAttribute(a);if(s===null)return d;var v=_pint(s);if(isNaN(v)||v<min||v<0||v>2147483647)return d;return v;},set:function(v){v=v>>>0;this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function ris(C,p,a,d,min){if(!a)a=p.toLowerCase();if(d===undefined)d=0;if(min===undefined)min=-2147483648;Object.defineProperty(C.prototype,p,{get:function(){var s=this.getAttribute(a);if(s===null)return d;var v=_pint(s);if(isNaN(v)||v<min||v>2147483647)return d;return v;},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function rua(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){var v=this.getAttribute(a);if(v===null||v===undefined)return document.URL||'';if(v==='')return document.URL||'';try{return new URL(v,document.baseURI).href;}catch(e){return v;}},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
             \\  function rco(C){Object.defineProperty(C.prototype,'crossOrigin',{get:function(){var v=this.getAttribute('crossorigin');if(v===null)return null;v=v.toLowerCase();return v==='use-credentials'?'use-credentials':'anonymous';},set:function(v){if(v===null)this.removeAttribute('crossorigin');else this.setAttribute('crossorigin',''+v);},configurable:true,enumerable:true});}
             \\  function rrp(C){var kw=['','no-referrer','no-referrer-when-downgrade','same-origin','origin','strict-origin','origin-when-cross-origin','strict-origin-when-cross-origin','unsafe-url'];Object.defineProperty(C.prototype,'referrerPolicy',{get:function(){var v=(this.getAttribute('referrerpolicy')||'').toLowerCase();return kw.indexOf(v)>=0?v:'';},set:function(v){this.setAttribute('referrerpolicy',''+v);},configurable:true,enumerable:true});}
             \\  if(typeof HTMLIFrameElement!=='undefined'){var IF=HTMLIFrameElement;ru(IF,'src');rs(IF,'srcdoc');rs(IF,'name');rs(IF,'width');rs(IF,'height');rs(IF,'allow');rs(IF,'loading');rrp(IF);rb(IF,'allowFullscreen','allowfullscreen');rs(IF,'align');rs(IF,'scrolling');rs(IF,'frameBorder','frameborder');rs(IF,'marginWidth','marginwidth');rs(IF,'marginHeight','marginheight');}
@@ -3437,15 +3608,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof HTMLCanvasElement!=='undefined'){var CN=HTMLCanvasElement;ri(CN,'width',null,300);ri(CN,'height',null,150);}
             \\  if(typeof HTMLMapElement!=='undefined'){rs(HTMLMapElement,'name');}
             \\  if(typeof HTMLAreaElement!=='undefined'){var AR=HTMLAreaElement;rs(AR,'alt');rs(AR,'coords');rs(AR,'shape');rs(AR,'target');rs(AR,'download');rs(AR,'rel');rrp(AR);rb(AR,'noHref','nohref');ru(AR,'href');}
-            \\  if(typeof HTMLFormElement!=='undefined'){var FM=HTMLFormElement;rs(FM,'name');rs(FM,'method');rs(FM,'target');rs(FM,'acceptCharset','accept-charset');ru(FM,'action');rs(FM,'enctype');rs(FM,'encoding');rs(FM,'autocomplete');rs(FM,'rel');rb(FM,'noValidate','novalidate');}
+            \\  if(typeof HTMLFormElement!=='undefined'){var FM=HTMLFormElement;rs(FM,'name');re(FM,'method',null,['get','post','dialog'],'get','get');rs(FM,'target');rs(FM,'acceptCharset','accept-charset');rua(FM,'action');re(FM,'enctype',null,['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'application/x-www-form-urlencoded','application/x-www-form-urlencoded');re(FM,'encoding','enctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'application/x-www-form-urlencoded','application/x-www-form-urlencoded');rs(FM,'autocomplete');rs(FM,'rel');rb(FM,'noValidate','novalidate');}
             \\  if(typeof HTMLFieldSetElement!=='undefined'){var FS=HTMLFieldSetElement;rs(FS,'name');rb(FS,'disabled');}
             \\  if(typeof HTMLLabelElement!=='undefined'){rs(HTMLLabelElement,'htmlFor','for');}
-            \\  if(typeof HTMLInputElement!=='undefined'){var IN=HTMLInputElement;rs(IN,'name');rs(IN,'type');rs(IN,'value');rs(IN,'defaultValue','value');rs(IN,'accept');rs(IN,'alt');rs(IN,'autocomplete');rs(IN,'dirName','dirname');rs(IN,'formAction','formaction');rs(IN,'formEnctype','formenctype');rs(IN,'formMethod','formmethod');rs(IN,'formTarget','formtarget');rs(IN,'max');rs(IN,'min');rs(IN,'pattern');rs(IN,'placeholder');rs(IN,'src');rs(IN,'step');rs(IN,'align');rs(IN,'useMap','usemap');rs(IN,'capture');rs(IN,'popoverTargetAction','popovertargetaction');ri(IN,'width');ri(IN,'height');ri(IN,'maxLength','maxlength',-1);ri(IN,'minLength','minlength',-1);ri(IN,'size',null,20);rb(IN,'disabled');rb(IN,'checked');rb(IN,'defaultChecked','checked');rb(IN,'multiple');rb(IN,'readOnly','readonly');rb(IN,'required');rb(IN,'formNoValidate','formnovalidate');rb(IN,'autofocus');rb(IN,'indeterminate');}
-            \\  if(typeof HTMLButtonElement!=='undefined'){var BT=HTMLButtonElement;rs(BT,'name');rs(BT,'type');rs(BT,'value');rs(BT,'formAction','formaction');rs(BT,'formEnctype','formenctype');rs(BT,'formMethod','formmethod');rs(BT,'formTarget','formtarget');rs(BT,'popoverTargetAction','popovertargetaction');rb(BT,'disabled');rb(BT,'autofocus');rb(BT,'formNoValidate','formnovalidate');}
+            \\  if(typeof HTMLInputElement!=='undefined'){var IN=HTMLInputElement;rs(IN,'name');re(IN,'type',null,['hidden','text','search','tel','url','email','password','date','month','week','time','datetime-local','number','range','color','checkbox','radio','file','submit','image','reset','button'],'text','text');rs(IN,'value');rs(IN,'defaultValue','value');rs(IN,'accept');rs(IN,'alt');rs(IN,'autocomplete');rs(IN,'dirName','dirname');rua(IN,'formAction','formaction');re(IN,'formEnctype','formenctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'','application/x-www-form-urlencoded');re(IN,'formMethod','formmethod',['get','post','dialog'],'','get');rs(IN,'formTarget','formtarget');rs(IN,'max');rs(IN,'min');rs(IN,'pattern');rs(IN,'placeholder');ru(IN,'src');rs(IN,'step');rs(IN,'align');rs(IN,'useMap','usemap');rs(IN,'capture');rs(IN,'popoverTargetAction','popovertargetaction');ri(IN,'width');ri(IN,'height');ris(IN,'maxLength','maxlength',-1,-1);ris(IN,'minLength','minlength',-1,-1);riu(IN,'size',null,20,1);rb(IN,'disabled');rb(IN,'checked');rb(IN,'defaultChecked','checked');rb(IN,'multiple');rb(IN,'readOnly','readonly');rb(IN,'required');rb(IN,'formNoValidate','formnovalidate');rb(IN,'autofocus');rb(IN,'indeterminate');}
+            \\  if(typeof HTMLButtonElement!=='undefined'){var BT=HTMLButtonElement;rs(BT,'name');re(BT,'type',null,['submit','reset','button'],'submit','submit');rs(BT,'value');rua(BT,'formAction','formaction');re(BT,'formEnctype','formenctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'','application/x-www-form-urlencoded');re(BT,'formMethod','formmethod',['get','post','dialog'],'','get');rs(BT,'formTarget','formtarget');rs(BT,'popoverTargetAction','popovertargetaction');rb(BT,'disabled');rb(BT,'autofocus');rb(BT,'formNoValidate','formnovalidate');}
             \\  if(typeof HTMLSelectElement!=='undefined'){var SL=HTMLSelectElement;rs(SL,'name');rs(SL,'autocomplete');ri(SL,'size',null,0);rb(SL,'disabled');rb(SL,'multiple');rb(SL,'required');rb(SL,'autofocus');}
             \\  if(typeof HTMLOptGroupElement!=='undefined'){rs(HTMLOptGroupElement,'label');rb(HTMLOptGroupElement,'disabled');}
             \\  if(typeof HTMLOptionElement!=='undefined'){var OP=HTMLOptionElement;rs(OP,'label');rs(OP,'value');rb(OP,'disabled');rb(OP,'defaultSelected','selected');rb(OP,'selected');}
-            \\  if(typeof HTMLTextAreaElement!=='undefined'){var TA=HTMLTextAreaElement;rs(TA,'name');rs(TA,'placeholder');rs(TA,'wrap');rs(TA,'autocomplete');rs(TA,'dirName','dirname');ri(TA,'cols',null,20);ri(TA,'rows',null,2);ri(TA,'maxLength','maxlength',-1);ri(TA,'minLength','minlength',-1);rb(TA,'disabled');rb(TA,'readOnly','readonly');rb(TA,'required');rb(TA,'autofocus');}
+            \\  if(typeof HTMLTextAreaElement!=='undefined'){var TA=HTMLTextAreaElement;rs(TA,'name');rs(TA,'placeholder');rs(TA,'wrap');rs(TA,'autocomplete');rs(TA,'dirName','dirname');riu(TA,'cols',null,20,1);riu(TA,'rows',null,2,1);ris(TA,'maxLength','maxlength',-1,-1);ris(TA,'minLength','minlength',-1,-1);rb(TA,'disabled');rb(TA,'readOnly','readonly');rb(TA,'required');rb(TA,'autofocus');}
             \\  if(typeof HTMLOutputElement!=='undefined'){var OU=HTMLOutputElement;rs(OU,'name');rs(OU,'defaultValue');}
             \\  if(typeof HTMLProgressElement!=='undefined'){var PR=HTMLProgressElement;ri(PR,'max',null,1);}
             \\  if(typeof HTMLMeterElement!=='undefined'){var ME=HTMLMeterElement;}
@@ -3480,7 +3651,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\(function(){
             \\  function rs(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
             \\  function rb(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){return this.hasAttribute(a);},set:function(v){if(v)this.setAttribute(a,'');else this.removeAttribute(a);},configurable:true,enumerable:true});}
-            \\  function ri(C,p,a,d){if(!a)a=p.toLowerCase();if(d===undefined)d=0;Object.defineProperty(C.prototype,p,{get:function(){var v=parseInt(this.getAttribute(a),10);return isNaN(v)?d:v;},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
+            \\  function ri(C,p,a,d){if(!a)a=p.toLowerCase();if(d===undefined)d=0;Object.defineProperty(C.prototype,p,{get:function(){var s=this.getAttribute(a);if(s===null)return d;var v=_pint(s);return isNaN(v)?d:v;},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
             \\  function ru(C,p,a){if(!a)a=p.toLowerCase();Object.defineProperty(C.prototype,p,{get:function(){var v=this.getAttribute(a);if(v===null)return'';try{return new URL(v,document.baseURI).href;}catch(e){return v;}},set:function(v){this.setAttribute(a,''+v);},configurable:true,enumerable:true});}
             \\  function rul(C,p,a,d){if(!a)a=p.toLowerCase();if(d===undefined)d=0;Object.defineProperty(C.prototype,p,{get:function(){var v=parseInt(this.getAttribute(a),10);return(isNaN(v)||v<0)?d:v;},set:function(v){v=parseInt(v,10);this.setAttribute(a,''+(isNaN(v)||v<0?d:v));},configurable:true,enumerable:true});}
             \\  if(typeof HTMLMarqueeElement!=='undefined'){var MQ=HTMLMarqueeElement;rs(MQ,'behavior');rs(MQ,'bgColor','bgcolor');rs(MQ,'direction');rs(MQ,'height');rs(MQ,'width');rul(MQ,'hspace',null,0);rul(MQ,'vspace',null,0);rul(MQ,'scrollAmount','scrollamount',6);rul(MQ,'scrollDelay','scrolldelay',85);rb(MQ,'trueSpeed','truespeed');}
@@ -3504,7 +3675,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    ariaAutoComplete:{kw:['inline','list','both','none'],nc:{},iv:'none',dv:'none'},
             \\    ariaBusy:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
             \\    ariaChecked:{kw:['true','false','mixed'],nc:{'':null},iv:null,dv:null},
-            \\    ariaCurrent:{kw:['page','step','location','date','time','true','false'],nc:{'':'false'},iv:'true',dv:'false'},
+            \\    ariaCurrent:{kw:['page','step','location','date','time','true','false'],nc:{'':'true'},iv:'true',dv:'false'},
             \\    ariaDisabled:{kw:['true','false'],nc:{'':'false'},iv:'false',dv:'false'},
             \\    ariaExpanded:{kw:['true','false'],nc:{'':null},iv:null,dv:null},
             \\    ariaHasPopup:{kw:['true','false','menu','dialog','listbox','tree','grid'],nc:{},iv:'false',dv:null},
@@ -4132,6 +4303,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, impl, "hasFeature", qjs.JS_Eval(ctx, has_feature_js, has_feature_js.len, "<impl>", qjs.JS_EVAL_TYPE_GLOBAL));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocumentType", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocumentType, "createDocumentType", 3));
         _ = qjs.JS_SetPropertyStr(ctx, impl, "createDocument", qjs.JS_NewCFunction(ctx, &dom_doc.implCreateDocument, "createDocument", 3));
+        // Set DOMImplementation.prototype for instanceof checks
+        {
+            const set_proto_js = "(function(impl){if(typeof DOMImplementation!=='undefined')Object.setPrototypeOf(impl,DOMImplementation.prototype);})";
+            const set_proto_fn = qjs.JS_Eval(ctx, set_proto_js, set_proto_js.len, "<impl-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
+            if (!quickjs.JS_IsException(set_proto_fn)) {
+                var sp_args = [1]qjs.JSValue{qjs.JS_DupValue(ctx, impl)};
+                const sp_r = qjs.JS_Call(ctx, set_proto_fn, quickjs.JS_UNDEFINED(), 1, &sp_args);
+                qjs.JS_FreeValue(ctx, sp_r);
+                qjs.JS_FreeValue(ctx, sp_args[0]);
+                qjs.JS_FreeValue(ctx, set_proto_fn);
+            }
+        }
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "implementation", impl);
     }
     // document.adoptedStyleSheets (used by CSS-in-JS / popover polyfills)
@@ -4139,6 +4322,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     // Page Visibility API
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "hidden", quickjs.JS_NewBool(false));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "visibilityState", qjs.JS_NewString(ctx, "visible"));
+    // document.baseURI — getter that returns document.URL (or <base> href if present)
+    {
+        const baseuri_js = "(function(){var b=this.querySelector&&this.querySelector('base[href]');if(b){try{return new URL(b.getAttribute('href'),this.URL).href;}catch(e){}}return this.URL||'';})";
+        const baseuri_atom = qjs.JS_NewAtom(ctx, "baseURI");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, baseuri_atom, qjs.JS_Eval(ctx, baseuri_js, baseuri_js.len, "<baseuri>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, baseuri_atom);
+    }
     // document.dir
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "dir", qjs.JS_NewString(ctx, ""));
     // document.designMode
@@ -4164,6 +4354,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "lastModified", qjs.JS_NewString(ctx, ""));
 
     // Set document global (reuses `global` from constructor registration above)
+    // Set document's prototype to HTMLDocument.prototype for instanceof checks
+    {
+        const html_doc_proto_val = qjs.JS_Eval(ctx, "(typeof HTMLDocument!=='undefined'?HTMLDocument.prototype:null)", "(typeof HTMLDocument!=='undefined'?HTMLDocument.prototype:null)".len, "<hdp>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsNull(html_doc_proto_val) and !quickjs.JS_IsUndefined(html_doc_proto_val)) {
+            _ = qjs.JS_SetPrototype(ctx, doc_obj, html_doc_proto_val);
+        }
+        qjs.JS_FreeValue(ctx, html_doc_proto_val);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "document", doc_obj);
 
     // Cache document node so wrapNode(doc_lxb_node) returns doc_obj (identity preservation)
@@ -4217,6 +4415,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    Object.defineProperty(dt,'firstChild',{get:function(){return null;},configurable:true,enumerable:true});
             \\    Object.defineProperty(dt,'lastChild',{get:function(){return null;},configurable:true,enumerable:true});
             \\    dt.hasChildNodes=function(){return false;};
+            \\    dt.contains=function(n){return this===n;};
+            \\    Object.defineProperty(dt,'nextSibling',{get:function(){var cn=this.parentNode?this.parentNode.childNodes:null;if(!cn)return null;for(var i=0;i<cn.length;i++){if(cn[i]===this)return i+1<cn.length?cn[i+1]:null;}return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'previousSibling',{get:function(){var cn=this.parentNode?this.parentNode.childNodes:null;if(!cn)return null;for(var i=0;i<cn.length;i++){if(cn[i]===this)return i>0?cn[i-1]:null;}return null;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'nextElementSibling',{get:function(){var n=this.nextSibling;while(n&&n.nodeType!==1)n=n.nextSibling;return n;},configurable:true,enumerable:true});
+            \\    Object.defineProperty(dt,'previousElementSibling',{get:function(){var n=this.previousSibling;while(n&&n.nodeType!==1)n=n.previousSibling;return n;},configurable:true,enumerable:true});
+            \\    dt.remove=function(){if(this.parentNode)this.parentNode.removeChild(this);};
             \\  }
             \\})()
         ;

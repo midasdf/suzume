@@ -99,7 +99,21 @@ pub fn elementSetId(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
+    // Capture old value for MutationObserver
+    var _ov_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, "id", 2, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, _ov_buf.len);
+            @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = _ov_buf[0..cl];
+        }
+    }
     _ = lxb_dom_element_set_attribute(elem, "id", 2, s.ptr, s.len);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    events.recordMutationWithOldValue(node, "attributes", null, null, "id", old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -345,7 +359,7 @@ pub fn elementSetAttributeNS(
     // Store using the qualified name (prefix:localName) to preserve prefix
     _ = lxb_dom_element_set_attribute(elem, qname_s.ptr, qname_s.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    events.recordMutationWithOldValue(node, "attributes", null, null, qname_s, old_val);
+    events.recordMutationAttrNS(node, local_name, ns_slice, old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -423,7 +437,17 @@ pub fn elementRemoveAttributeNS(
                 // Remove by full qualified name
                 _ = lxb_dom_element_remove_attribute(elem, attr_qname.ptr, attr_qname.len);
                 const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-                events.recordMutationWithOldValue(node, "attributes", null, null, local_s, ov2);
+                // Get namespace from first argument for MutationRecord
+                var rm_ns: ?[]const u8 = null;
+                var rm_ns_cstr: ?[*]const u8 = null;
+                if (!quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
+                    if (jsStringToSlice(c, args[0])) |ns_s| {
+                        rm_ns_cstr = ns_s.ptr;
+                        rm_ns = ns_s.ptr[0..ns_s.len];
+                    }
+                }
+                events.recordMutationAttrNS(node, local_s, rm_ns, ov2);
+                if (rm_ns_cstr) |p| qjs.JS_FreeCString(c, p);
                 setDomDirty();
                 return quickjs.JS_UNDEFINED();
             }
@@ -458,6 +482,13 @@ pub fn elementRemoveAttribute(
             @memcpy(_ov_buf[0..cl], ov_ptr.?[0..cl]);
             old_val = _ov_buf[0..cl];
         }
+    }
+    // DOM spec: removeAttribute is a no-op if attribute doesn't exist
+    if (old_val == null) {
+        // Check if attribute exists at all (old_val null means no value, but attr might exist with empty value)
+        var check_len: usize = 0;
+        if (lxb_dom_element_get_attribute(elem, name.ptr, name.len, &check_len) == null)
+            return quickjs.JS_UNDEFINED();
     }
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);

@@ -272,7 +272,10 @@ pub fn elementSetTextContent(
         lxb_dom_node_insert_child(node, text_node);
         added_child = text_node;
     }
-    events.recordMutation(node, "childList", added_child, removed_child, null);
+    // DOM spec: only record childList mutation if something actually changed
+    if (added_child != null or removed_child != null) {
+        events.recordMutation(node, "childList", added_child, removed_child, null);
+    }
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
@@ -385,6 +388,51 @@ pub fn elementGetChildren(
         }
         child = ch.next;
     }
+    // Wrap as HTMLCollection with namedItem, item, named properties
+    const wrap_js =
+        \\(function(a){
+        \\  var names={};
+        \\  for(var i=0;i<a.length;i++){var e=a[i];
+        \\    var eid=e.getAttribute&&e.getAttribute('id');
+        \\    if(eid&&!names[eid])names[eid]=e;
+        \\    var ns=e.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===null||ns===undefined){
+        \\      var ename=e.getAttribute&&e.getAttribute('name');
+        \\      if(ename&&!names[ename])names[ename]=e;
+        \\    }
+        \\  }
+        \\  var h={get:function(t,p,r){
+        \\    if(p==='length')return a.length;
+        \\    if(p==='item')return function(i){return a[i>>>0]||null;};
+        \\    if(p==='namedItem')return function(n){return names[n]||null;};
+        \\    if(p===Symbol.iterator)return function*(){for(var i=0;i<a.length;i++)yield a[i];};
+        \\    if(p===Symbol.toStringTag)return'HTMLCollection';
+        \\    if(typeof p==='string'&&/^\d+$/.test(p))return a[p>>>0];
+        \\    if(typeof p==='string'&&names[p])return names[p];
+        \\    return undefined;
+        \\  },has:function(t,p){
+        \\    if(typeof p==='string'&&/^\d+$/.test(p))return(p>>>0)<a.length;
+        \\    return p==='length'||p in names;
+        \\  },ownKeys:function(){
+        \\    var k=[];for(var i=0;i<a.length;i++)k.push(''+i);
+        \\    for(var n in names)k.push(n);return k;
+        \\  },getOwnPropertyDescriptor:function(t,p){
+        \\    if(typeof p==='string'&&/^\d+$/.test(p)&&(p>>>0)<a.length)return{value:a[p>>>0],writable:false,enumerable:true,configurable:true};
+        \\    if(typeof p==='string'&&names[p])return{value:names[p],writable:false,enumerable:false,configurable:true};
+        \\    return undefined;
+        \\  }};
+        \\  if(typeof HTMLCollection!=='undefined'){var p=new Proxy({},h);Object.setPrototypeOf(p,HTMLCollection.prototype);return p;}
+        \\  return new Proxy({},h);
+        \\})
+    ;
+    const wrap_fn = qjs.JS_Eval(c, wrap_js, wrap_js.len, "<children>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(wrap_fn)) {
+        var wrap_args = [1]qjs.JSValue{arr};
+        const result = qjs.JS_Call(c, wrap_fn, quickjs.JS_UNDEFINED(), 1, &wrap_args);
+        qjs.JS_FreeValue(c, wrap_fn);
+        qjs.JS_FreeValue(c, arr);
+        return result;
+    }
+    qjs.JS_FreeValue(c, wrap_fn);
     return arr;
 }
 
@@ -603,6 +651,46 @@ pub fn elementAppendChild(
         return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
     if (child.type == @as(u32, 10) and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
         return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+    // DOM spec: DocumentFragment — collect children, then insert them individually
+    // Note: our fragments are lexbor divs with JS nodeType overridden to 11, so check JS property
+    var is_fragment = child.type == 11;
+    if (!is_fragment) {
+        const js_nt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, js_nt);
+        var nt_val: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &nt_val, js_nt);
+        is_fragment = nt_val == 11;
+    }
+    if (is_fragment) {
+        // Collect fragment's children before they're moved (dynamic alloc — no child limit)
+        var frag_count: usize = 0;
+        {
+            var fc_count: ?*lxb.lxb_dom_node_t = child.first_child;
+            while (fc_count) |f| { frag_count += 1; fc_count = f.next; }
+        }
+        if (frag_count == 0) return qjs.JS_DupValue(c, args[0]);
+        const frag_children = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, frag_count) catch return quickjs.JS_UNDEFINED();
+        defer std.heap.c_allocator.free(frag_children);
+        {
+            var fc_fill: ?*lxb.lxb_dom_node_t = child.first_child;
+            var fi: usize = 0;
+            while (fc_fill) |f| { frag_children[fi] = f; fi += 1; fc_fill = f.next; }
+        }
+        const ins_prev = lxb_dom_node_last_child_noi(parent.?);
+        // Manually move each child from fragment to parent (lexbor doesn't auto-move fragment children)
+        for (frag_children) |fnode| {
+            lxb_dom_node_remove(fnode);
+            lxb_dom_node_insert_child(parent.?, fnode);
+        }
+        // Record mutation with individual children as addedNodes
+        events.recordMutationChildListMulti(parent.?, frag_children, ins_prev, null);
+        api.setDomDirty();
+        for (frag_children) |fc_node| {
+            api.maybeExecuteDynamicScriptPublic(c, fc_node, args[0]);
+            upgradeSubtreeCustomElements(c, fc_node);
+        }
+        return qjs.JS_DupValue(c, args[0]);
+    }
     // DOM spec: remove from old parent first, record removal mutation
     const old_parent = child.parent;
     if (old_parent != null) {
@@ -651,6 +739,18 @@ pub fn elementRemoveChild(
     };
     // Verify child is actually a child of parent (DOM spec: NotFoundError)
     if (child.parent != parent) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
+    // NodeIterator pre-removing steps (DOM spec §6.1): update all active iterators before removal
+    {
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        const pre_remove_fn = qjs.JS_GetPropertyStr(c, global, "__niPreRemove");
+        defer qjs.JS_FreeValue(c, pre_remove_fn);
+        if (qjs.JS_IsFunction(c, pre_remove_fn)) {
+            var call_args = [1]qjs.JSValue{args[0]};
+            const r = qjs.JS_Call(c, pre_remove_fn, global, 1, &call_args);
+            qjs.JS_FreeValue(c, r);
+        }
+    }
     const rm_prev = child.prev;
     const rm_next = child.next;
     lxb_dom_node_remove(child);
@@ -767,21 +867,59 @@ pub fn elementInsertBefore(
         return appendJsNode(c, this_val, args[0]);
 
     const new_node = new_node_opt.?;
+
+    // DOM spec: DocumentFragment — insert individual children
+    var is_frag = new_node.type == 11;
+    if (!is_frag) {
+        const js_fnt = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, js_fnt);
+        var fnt_val: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &fnt_val, js_fnt);
+        is_frag = fnt_val == 11;
+    }
+    if (is_frag) {
+        // Dynamic alloc — no child limit
+        var fc_count: usize = 0;
+        {
+            var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            while (fc_cnt_iter) |f| { fc_count += 1; fc_cnt_iter = f.next; }
+        }
+        if (fc_count == 0) return qjs.JS_DupValue(c, args[0]);
+        const frag_ch = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_count) catch return quickjs.JS_UNDEFINED();
+        defer std.heap.c_allocator.free(frag_ch);
+        {
+            var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            var fi: usize = 0;
+            while (fc_fill) |f| { frag_ch[fi] = f; fi += 1; fc_fill = f.next; }
+        }
+        const ref_is_null2 = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
+        const eff_ref2: ?*lxb.lxb_dom_node_t = if (!ref_is_null2) api.getNode(c, args[1]) else null;
+        const frag_prev = if (eff_ref2) |er| er.prev else lxb_dom_node_last_child_noi(parent.?);
+        for (frag_ch) |fnode| {
+            lxb_dom_node_remove(fnode);
+            if (eff_ref2) |er| lxb_dom_node_insert_before(er, fnode) else lxb_dom_node_insert_child(parent.?, fnode);
+        }
+        events.recordMutationChildListMulti(parent.?, frag_ch, frag_prev, eff_ref2);
+        api.setDomDirty();
+        for (frag_ch) |fnode| {
+            api.maybeExecuteDynamicScriptPublic(c, fnode, args[0]);
+            upgradeSubtreeCustomElements(c, fnode);
+        }
+        return qjs.JS_DupValue(c, args[0]);
+    }
+
     // DOM spec step 7: if node is child (ref), set ref to node's next sibling
     var effective_ref: ?*lxb.lxb_dom_node_t = null;
     var ref_is_null = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
     if (!ref_is_null) {
         const ref_node = api.getNode(c, args[1]).?;
         if (ref_node == new_node) {
-            // Inserting before itself — use next sibling as reference
             effective_ref = ref_node.next;
             ref_is_null = (effective_ref == null);
         } else {
             effective_ref = ref_node;
         }
     }
-    // Remove from old parent if needed (must happen BEFORE sibling calculation
-    // so same-parent moves don't include the moved node in prev/next)
     const old_parent = new_node.parent;
     if (old_parent != null) {
         const rem_prev = new_node.prev;
@@ -789,7 +927,6 @@ pub fn elementInsertBefore(
         lxb_dom_node_remove(new_node);
         events.recordMutationChildList(old_parent.?, null, new_node, rem_prev, rem_next);
     }
-    // Capture siblings at insertion point AFTER detach
     const ins_prev = if (!ref_is_null) effective_ref.?.prev else lxb_dom_node_last_child_noi(parent.?);
     const ins_next = if (!ref_is_null) effective_ref else null;
     if (ref_is_null) {
@@ -884,16 +1021,55 @@ pub fn elementReplaceChild(
     if (new_node == old_node) {
         return qjs.JS_DupValue(c, args[1]);
     }
-    // Capture siblings before mutation
-    const rep_prev = old_node.prev;
-    const rep_next = old_node.next;
-    // Remove new_node from its old parent and record removal mutation
+
+    // DOM spec: DocumentFragment — replace old_node with fragment's children
+    var is_frag_rc = new_node.type == 11;
+    if (!is_frag_rc) {
+        const js_fnt_rc = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, js_fnt_rc);
+        var fnt_rc: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &fnt_rc, js_fnt_rc);
+        is_frag_rc = fnt_rc == 11;
+    }
+    if (is_frag_rc) {
+        // Dynamic alloc — no child limit
+        var fc_cnt: usize = 0;
+        {
+            var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            while (fc_cnt_iter) |f| { fc_cnt += 1; fc_cnt_iter = f.next; }
+        }
+        if (fc_cnt == 0) return qjs.JS_DupValue(c, args[1]);
+        const frag_ch_rc = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_cnt) catch return quickjs.JS_UNDEFINED();
+        defer std.heap.c_allocator.free(frag_ch_rc);
+        {
+            var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
+            var fi: usize = 0;
+            while (fc_fill) |f| { frag_ch_rc[fi] = f; fi += 1; fc_fill = f.next; }
+        }
+        const rep_prev_f = old_node.prev;
+        const rep_next_f = old_node.next;
+        // Insert fragment children before old_node
+        for (frag_ch_rc) |fnode| {
+            lxb_dom_node_remove(fnode);
+            lxb_dom_node_insert_before(old_node, fnode);
+        }
+        lxb_dom_node_remove(old_node);
+        events.recordMutationChildListMulti(parent, frag_ch_rc, rep_prev_f, rep_next_f);
+        events.recordMutationChildList(parent, null, old_node, rep_prev_f, rep_next_f);
+        api.setDomDirty();
+        return qjs.JS_DupValue(c, args[1]);
+    }
+
+    // Remove new_node from its old parent first (handles internal replacement)
     if (new_node.parent) |old_p| {
         const rm_prev = new_node.prev;
         const rm_next = new_node.next;
         lxb_dom_node_remove(new_node);
         events.recordMutationChildList(old_p, null, new_node, rm_prev, rm_next);
     }
+    // Capture siblings AFTER new_node removal (correct for internal replacement)
+    const rep_prev = old_node.prev;
+    const rep_next = old_node.next;
     lxb_dom_node_insert_before(old_node, new_node);
     lxb_dom_node_remove(old_node);
     events.recordMutationChildList(parent, new_node, old_node, rep_prev, rep_next);

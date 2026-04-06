@@ -204,9 +204,28 @@ pub fn jsAddEventListener(
             const dentry = findOrCreateDocumentEntry(event_type) orelse return quickjs.JS_UNDEFINED();
             dentry.callbacks.append(allocator, record) catch {};
         } else {
-            // Window listener
-            const wentry = findOrCreateWindowEntry(event_type) orelse return quickjs.JS_UNDEFINED();
-            wentry.callbacks.append(allocator, record) catch {};
+            // Check if it's a JS-level node (PI, DocumentType, etc.) with nodeType
+            const js_nt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+            defer qjs.JS_FreeValue(c, js_nt);
+            var nt_v: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &nt_v, js_nt);
+            if (nt_v > 0 and nt_v != 9) {
+                // JS-level node: store listeners on the object itself
+                // Free the DupValue'd callback in record since we use JS storage instead
+                qjs.JS_FreeValue(c, record.callback);
+                const js_code = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];a.push(cb);el[k]=a;})";
+                const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
+                if (!quickjs.JS_IsException(fn_val)) {
+                    var call_args = [4]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
+                    const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 4, &call_args);
+                    qjs.JS_FreeValue(c, r);
+                    qjs.JS_FreeValue(c, fn_val);
+                }
+            } else {
+                // Window listener
+                const wentry = findOrCreateWindowEntry(event_type) orelse return quickjs.JS_UNDEFINED();
+                wentry.callbacks.append(allocator, record) catch {};
+            }
         }
     }
     return quickjs.JS_UNDEFINED();
@@ -898,6 +917,21 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
         if (owns_event) qjs.JS_FreeValue(ctx, event_obj);
     }
 
+    // DOM spec: set composedPath (_path) on event object
+    {
+        const path_arr = qjs.JS_NewArray(ctx);
+        for (0..path_len) |pi| {
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(pi), dom_api.wrapNodePublic(ctx, path[pi]));
+        }
+        // Add window as the last element in the path (for connected nodes)
+        if (path_len > 0 and path[path_len - 1].type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+            const global = qjs.JS_GetGlobalObject(ctx);
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), qjs.JS_DupValue(ctx, global));
+            qjs.JS_FreeValue(ctx, global);
+        }
+        _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_path", path_arr);
+    }
+
     // DOM spec: set dispatch flag — initEvent must short-circuit while dispatching
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(true));
 
@@ -1375,6 +1409,9 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
             \\  function CompositionEvent(t,o){UIEvent.call(this,t,o);this.data=(o&&o.data)||'';}
             \\  CompositionEvent.prototype=Object.create(UIEvent.prototype);CompositionEvent.prototype.constructor=CompositionEvent;
             \\  globalThis.CompositionEvent=CompositionEvent;
+            \\  function TextEvent(t,o){UIEvent.call(this,t,o);this.data=(o&&o.data)||'';}
+            \\  TextEvent.prototype=Object.create(UIEvent.prototype);TextEvent.prototype.constructor=TextEvent;
+            \\  globalThis.TextEvent=TextEvent;
             \\  function HashChangeEvent(t,o){Event.call(this,t,o);o=o||{};this.oldURL=o.oldURL||'';this.newURL=o.newURL||'';}
             \\  HashChangeEvent.prototype=Object.create(Event.prototype);HashChangeEvent.prototype.constructor=HashChangeEvent;
             \\  globalThis.HashChangeEvent=HashChangeEvent;
@@ -1681,7 +1718,36 @@ fn jsElementDispatchEvent(
         return dom_api.throwDOMException(c, "InvalidStateError", "The event has not been initialized.");
     }
 
-    const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_NewBool(true);
+    const node = dom_api.getNodePublic(c, this_val) orelse {
+        // JS-level node (PI, DocumentType, etc.): dispatch from __el_ storage
+        const type_val2 = qjs.JS_GetPropertyStr(c, args[0], "type");
+        defer qjs.JS_FreeValue(c, type_val2);
+        const ts2 = dom_api.jsStringToSlice(c, type_val2) orelse return quickjs.JS_NewBool(true);
+        defer qjs.JS_FreeCString(c, ts2.ptr);
+        _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(true));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "target", qjs.JS_DupValue(c, this_val));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", qjs.JS_DupValue(c, this_val));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 2)); // AT_TARGET
+        const js_dispatch =
+            \\(function(el,evt,type){
+            \\  var k='__el_'+type;var a=el[k];if(a)for(var i=0;i<a.length;i++){
+            \\    if(typeof a[i]==='function')a[i].call(el,evt);
+            \\    else if(a[i]&&typeof a[i].handleEvent==='function')a[i].handleEvent(evt);
+            \\  }
+            \\})
+        ;
+        const fn_val = qjs.JS_Eval(c, js_dispatch, js_dispatch.len, "<jsd>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(fn_val)) {
+            var d_args = [3]qjs.JSValue{ this_val, args[0], type_val2 };
+            const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 3, &d_args);
+            qjs.JS_FreeValue(c, r);
+            qjs.JS_FreeValue(c, fn_val);
+        }
+        _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(false));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 0));
+        _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", quickjs.JS_NULL());
+        return quickjs.JS_NewBool(true);
+    };
 
     // Get event type from event object's .type property
     const type_val = qjs.JS_GetPropertyStr(c, args[0], "type");
@@ -1753,6 +1819,7 @@ const MutationRecord = struct {
     type_str: []const u8, // "childList" or "attributes" (static, not owned)
     target: *lxb.lxb_dom_node_t,
     attribute_name: ?[]const u8, // owned copy, null for childList
+    attribute_namespace: ?[]const u8 = null, // owned copy, null unless setAttributeNS
     old_value: ?[]const u8 = null, // owned copy, for attributeOldValue/characterDataOldValue
     added_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
     removed_nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t),
@@ -1761,6 +1828,7 @@ const MutationRecord = struct {
 
     fn deinit(self: *MutationRecord) void {
         if (self.attribute_name) |name| allocator.free(@constCast(name));
+        if (self.attribute_namespace) |ns| allocator.free(@constCast(ns));
         if (self.old_value) |ov| allocator.free(@constCast(ov));
         self.added_nodes.deinit(allocator);
         self.removed_nodes.deinit(allocator);
@@ -1801,7 +1869,7 @@ pub fn recordMutation(
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
 ) void {
-    recordMutationFull(target, mutation_type, added, removed, attr_name, null, null, null);
+    recordMutationFull(target, mutation_type, added, removed, attr_name, null, null, null, null);
 }
 
 pub fn recordMutationChildList(
@@ -1811,7 +1879,40 @@ pub fn recordMutationChildList(
     prev_sib: ?*lxb.lxb_dom_node_t,
     next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
-    recordMutationFull(target, "childList", added, removed, null, null, prev_sib, next_sib);
+    recordMutationFull(target, "childList", added, removed, null, null, null, prev_sib, next_sib);
+}
+
+/// Record a childList mutation with multiple added nodes (for DocumentFragment insertion).
+pub fn recordMutationChildListMulti(
+    target: *lxb.lxb_dom_node_t,
+    added_nodes: []const *lxb.lxb_dom_node_t,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
+) void {
+    for (mutation_observers.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            const matches = (t.node == target) or
+                (t.subtree and isDescendant(target, t.node));
+            if (!matches) continue;
+            if (!t.child_list) continue;
+
+            var record = MutationRecord{
+                .type_str = "childList",
+                .target = target,
+                .attribute_name = null,
+                .added_nodes = .empty,
+                .removed_nodes = .empty,
+                .previous_sibling = prev_sib,
+                .next_sibling = next_sib,
+            };
+            for (added_nodes) |n| {
+                record.added_nodes.append(allocator, n) catch {};
+            }
+            obs.pending_records.append(allocator, record) catch {};
+            break;
+        }
+    }
 }
 
 pub fn recordMutationWithOldValue(
@@ -1822,7 +1923,16 @@ pub fn recordMutationWithOldValue(
     attr_name: ?[]const u8,
     old_value: ?[]const u8,
 ) void {
-    recordMutationFull(target, mutation_type, added, removed, attr_name, old_value, null, null);
+    recordMutationFull(target, mutation_type, added, removed, attr_name, null, old_value, null, null);
+}
+
+pub fn recordMutationAttrNS(
+    target: *lxb.lxb_dom_node_t,
+    attr_local_name: []const u8,
+    attr_namespace: ?[]const u8,
+    old_value: ?[]const u8,
+) void {
+    recordMutationFull(target, "attributes", null, null, attr_local_name, attr_namespace, old_value, null, null);
 }
 
 /// Record a mutation with all fields including previousSibling/nextSibling.
@@ -1832,6 +1942,7 @@ fn recordMutationFull(
     added: ?*lxb.lxb_dom_node_t,
     removed: ?*lxb.lxb_dom_node_t,
     attr_name: ?[]const u8,
+    attr_namespace: ?[]const u8,
     old_value: ?[]const u8,
     prev_sib: ?*lxb.lxb_dom_node_t,
     next_sib: ?*lxb.lxb_dom_node_t,
@@ -1863,6 +1974,13 @@ fn recordMutationFull(
                 if (copy) |c| {
                     @memcpy(c, n);
                     record.attribute_name = c;
+                }
+            }
+            if (attr_namespace) |ns| {
+                const ns_copy = allocator.alloc(u8, ns.len) catch null;
+                if (ns_copy) |nc| {
+                    @memcpy(nc, ns);
+                    record.attribute_namespace = nc;
                 }
             }
             // Store old value only when the matching oldValue option is set for this mutation type
@@ -1936,8 +2054,12 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", quickjs.JS_NULL());
             }
-            // Per spec: all MutationRecord fields must be present
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
+            if (rec.attribute_namespace) |ns| {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace",
+                    qjs.JS_NewStringLen(ctx, ns.ptr, ns.len));
+            } else {
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
+            }
             if (rec.previous_sibling) |ps| {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "previousSibling", dom_api.wrapNodePublic(ctx, ps));
             } else {
@@ -2129,6 +2251,29 @@ fn jsMutationObserverTakeRecords(
             _ = qjs.JS_SetPropertyUint32(c, removed, @intCast(j), dom_api.wrapNodePublic(c, n));
         }
         _ = qjs.JS_SetPropertyStr(c, record, "removedNodes", removed);
+        // previousSibling / nextSibling
+        if (rec.previous_sibling) |ps| {
+            _ = qjs.JS_SetPropertyStr(c, record, "previousSibling", dom_api.wrapNodePublic(c, ps));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "previousSibling", quickjs.JS_NULL());
+        }
+        if (rec.next_sibling) |ns| {
+            _ = qjs.JS_SetPropertyStr(c, record, "nextSibling", dom_api.wrapNodePublic(c, ns));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "nextSibling", quickjs.JS_NULL());
+        }
+        // attributeNamespace
+        if (rec.attribute_namespace) |ans| {
+            _ = qjs.JS_SetPropertyStr(c, record, "attributeNamespace", qjs.JS_NewStringLen(c, ans.ptr, ans.len));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "attributeNamespace", quickjs.JS_NULL());
+        }
+        // oldValue
+        if (rec.old_value) |ov| {
+            _ = qjs.JS_SetPropertyStr(c, record, "oldValue", qjs.JS_NewStringLen(c, ov.ptr, ov.len));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, record, "oldValue", quickjs.JS_NULL());
+        }
         _ = qjs.JS_SetPropertyUint32(c, arr, idx, record);
         idx += 1;
     }
