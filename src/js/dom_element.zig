@@ -1418,23 +1418,78 @@ pub fn elementGetDataset(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const obj = qjs.JS_NewObject(c);
-    if (quickjs.JS_IsException(obj)) return obj;
-    _ = qjs.JS_SetPropertyStr(c, obj, "__element", qjs.JS_DupValue(c, this_val));
-    _ = qjs.JS_SetPropertyStr(c, obj, "get", qjs.JS_NewCFunction(c, &datasetGet, "get", 1));
-    _ = qjs.JS_SetPropertyStr(c, obj, "set", qjs.JS_NewCFunction(c, &datasetSet, "set", 2));
-    // Set DOMStringMap prototype for instanceof checks
-    {
-        const dsm_js = "(function(o){if(typeof DOMStringMap!=='undefined')Object.setPrototypeOf(o,DOMStringMap.prototype);})";
-        const dsm_fn = qjs.JS_Eval(c, dsm_js, dsm_js.len, "<dsm>", qjs.JS_EVAL_TYPE_GLOBAL);
-        if (!quickjs.JS_IsException(dsm_fn)) {
-            var dsm_args = [1]qjs.JSValue{obj};
-            const dsm_r = qjs.JS_Call(c, dsm_fn, quickjs.JS_UNDEFINED(), 1, &dsm_args);
-            qjs.JS_FreeValue(c, dsm_r);
-            qjs.JS_FreeValue(c, dsm_fn);
-        }
-    }
-    return obj;
+    // Create a Proxy-based DOMStringMap that intercepts property access
+    const ds_js =
+        \\(function(el){
+        \\  function toAttr(k){
+        \\    var r='data-';
+        \\    for(var i=0;i<k.length;i++){
+        \\      var ch=k[i];
+        \\      if(ch>='A'&&ch<='Z')r+='-'+ch.toLowerCase();
+        \\      else r+=ch;
+        \\    }
+        \\    return r;
+        \\  }
+        \\  function toKey(a){
+        \\    var s=a.slice(5),r='',up=false;
+        \\    for(var i=0;i<s.length;i++){
+        \\      if(s[i]==='-'){up=true;}
+        \\      else if(up){r+=s[i].toUpperCase();up=false;}
+        \\      else r+=s[i];
+        \\    }
+        \\    return r;
+        \\  }
+        \\  function getKeys(){
+        \\    var k=[],attrs=el.attributes;
+        \\    if(attrs)for(var i=0;i<attrs.length;i++){
+        \\      var n=attrs[i].name;
+        \\      if(n.substring(0,5)==='data-'&&n.indexOf('-',5)===-1||n.substring(0,5)==='data-')k.push(toKey(n));
+        \\    }
+        \\    return k;
+        \\  }
+        \\  var h={
+        \\    get:function(t,p){
+        \\      if(typeof p!=='string')return t[p];
+        \\      var v=el.getAttribute(toAttr(p));
+        \\      return v;
+        \\    },
+        \\    set:function(t,p,v){
+        \\      if(typeof p!=='string')return false;
+        \\      el.setAttribute(toAttr(p),''+v);return true;
+        \\    },
+        \\    has:function(t,p){
+        \\      if(typeof p!=='string')return p in t;
+        \\      return el.hasAttribute(toAttr(p));
+        \\    },
+        \\    deleteProperty:function(t,p){
+        \\      if(typeof p!=='string')return false;
+        \\      el.removeAttribute(toAttr(p));return true;
+        \\    },
+        \\    ownKeys:function(){
+        \\      var attrs=el.getAttributeNames?el.getAttributeNames():[];
+        \\      var k=[];
+        \\      for(var i=0;i<attrs.length;i++){
+        \\        var n=attrs[i];
+        \\        if(n.length>5&&n.substring(0,5)==='data-')k.push(toKey(n));
+        \\      }
+        \\      return k;
+        \\    },
+        \\    getOwnPropertyDescriptor:function(t,p){
+        \\      if(typeof p!=='string')return undefined;
+        \\      var v=el.getAttribute(toAttr(p));
+        \\      if(v!==null)return{value:v,writable:true,enumerable:true,configurable:true};
+        \\      return undefined;
+        \\    },
+        \\    getPrototypeOf:function(){return typeof DOMStringMap!=='undefined'?DOMStringMap.prototype:Object.prototype;}
+        \\  };
+        \\  return new Proxy({},h);
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, ds_js, ds_js.len, "<dataset>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(fn_val)) return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeValue(c, fn_val);
+    var call_args = [1]qjs.JSValue{this_val};
+    return qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &call_args);
 }
 
 pub fn datasetGet(
