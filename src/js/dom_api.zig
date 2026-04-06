@@ -3616,7 +3616,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof HTMLSelectElement!=='undefined'){var SL=HTMLSelectElement;rs(SL,'name');rs(SL,'autocomplete');ri(SL,'size',null,0);rb(SL,'disabled');rb(SL,'multiple');rb(SL,'required');rb(SL,'autofocus');}
             \\  if(typeof HTMLOptGroupElement!=='undefined'){rs(HTMLOptGroupElement,'label');rb(HTMLOptGroupElement,'disabled');}
             \\  if(typeof HTMLOptionElement!=='undefined'){var OP=HTMLOptionElement;rs(OP,'label');rs(OP,'value');rb(OP,'disabled');rb(OP,'defaultSelected','selected');rb(OP,'selected');}
-            \\  if(typeof HTMLTextAreaElement!=='undefined'){var TA=HTMLTextAreaElement;rs(TA,'name');rs(TA,'placeholder');rs(TA,'wrap');rs(TA,'autocomplete');rs(TA,'dirName','dirname');riu(TA,'cols',null,20,1);riu(TA,'rows',null,2,1);ris(TA,'maxLength','maxlength',-1,-1);ris(TA,'minLength','minlength',-1,-1);rb(TA,'disabled');rb(TA,'readOnly','readonly');rb(TA,'required');rb(TA,'autofocus');}
+            \\  if(typeof HTMLTextAreaElement!=='undefined'){var TA=HTMLTextAreaElement;rs(TA,'name');rs(TA,'placeholder');rs(TA,'wrap');rs(TA,'autocomplete');rs(TA,'dirName','dirname');riu(TA,'cols',null,20,1);riu(TA,'rows',null,2,1);ris(TA,'maxLength','maxlength',-1,0);ris(TA,'minLength','minlength',-1,0);rb(TA,'disabled');rb(TA,'readOnly','readonly');rb(TA,'required');rb(TA,'autofocus');}
             \\  if(typeof HTMLOutputElement!=='undefined'){var OU=HTMLOutputElement;rs(OU,'name');rs(OU,'defaultValue');}
             \\  if(typeof HTMLProgressElement!=='undefined'){var PR=HTMLProgressElement;ri(PR,'max',null,1);}
             \\  if(typeof HTMLMeterElement!=='undefined'){var ME=HTMLMeterElement;}
