@@ -957,6 +957,7 @@ pub fn elementInsertBefore(
     events.recordMutationChildList(parent.?, new_node, null, ins_prev, ins_next);
     api.setDomDirty();
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
+    maybeSetupDynamicIframe(c, new_node);
     upgradeSubtreeCustomElements(c, new_node);
     return qjs.JS_DupValue(c, args[0]);
 }
@@ -1094,8 +1095,9 @@ pub fn elementReplaceChild(
     lxb_dom_node_remove(old_node);
     events.recordMutationChildList(parent, new_node, old_node, rep_prev, rep_next);
     api.setDomDirty();
-    // Dynamic script execution and custom element upgrade
+    // Dynamic script execution, iframe setup, and custom element upgrade
     api.maybeExecuteDynamicScriptPublic(c, new_node, args[0]);
+    maybeSetupDynamicIframe(c, new_node);
     upgradeSubtreeCustomElements(c, new_node);
     return qjs.JS_DupValue(c, args[1]); // returns the removed (old) node
 }
