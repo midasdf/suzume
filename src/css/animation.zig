@@ -33,16 +33,37 @@ pub const TransitionInstance = struct {
     finished: bool = false,
 };
 
+/// Pending animation/transition event to dispatch to JS.
+pub const PendingEvent = struct {
+    node_ptr: usize, // target element
+    event_type: EventType,
+    name: []const u8, // animation-name or property-name (static, not owned)
+    elapsed_time: f32,
+
+    pub const EventType = enum {
+        transition_end,
+        transition_start,
+        transition_run,
+        transition_cancel,
+        animation_end,
+        animation_start,
+        animation_iteration,
+        animation_cancel,
+    };
+};
+
 /// Active animations for a page.
 pub const AnimationState = struct {
     animations: std.ArrayListUnmanaged(AnimationInstance),
     transitions: std.ArrayListUnmanaged(TransitionInstance),
+    pending_events: std.ArrayListUnmanaged(PendingEvent),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) AnimationState {
         return .{
             .animations = .empty,
             .transitions = .empty,
+            .pending_events = .empty,
             .allocator = allocator,
         };
     }
@@ -50,6 +71,7 @@ pub const AnimationState = struct {
     pub fn deinit(self: *AnimationState) void {
         self.animations.deinit(self.allocator);
         self.transitions.deinit(self.allocator);
+        self.pending_events.deinit(self.allocator);
     }
 
     /// Check if there are any active (non-finished) animations or transitions.
@@ -198,7 +220,7 @@ pub fn applyTransition(style: *ComputedStyle, tr: *TransitionInstance, now_ms: f
 
     if (elapsed_ms >= duration_ms) {
         tr.finished = true;
-        return; // Style already has the target values
+        return; // Style already has the target values (event queued by caller)
     }
 
     if (elapsed_ms < 0) return;

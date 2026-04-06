@@ -409,6 +409,53 @@ fn startHoverTransitions(pg: *PageState, anim_state: *anim_mod.AnimationState) v
 }
 
 /// Walk the box tree and apply CSS animations to elements with animation-name set.
+fn dispatchAnimationEvents(ctx: *quickjs.c.JSContext, anim_state: *anim_mod.AnimationState) void {
+    const qjs = quickjs.c;
+    for (anim_state.pending_events.items) |ev| {
+        // Find the DOM node from pointer
+        const node: *lxb.lxb_dom_node_t = @ptrFromInt(ev.node_ptr);
+        const target_js = dom_api.wrapNode(ctx, node);
+        if (quickjs.JS_IsNull(target_js) or quickjs.JS_IsUndefined(target_js)) continue;
+        defer qjs.JS_FreeValue(ctx, target_js);
+
+        // Determine event constructor and type string
+        const is_transition = switch (ev.event_type) {
+            .transition_end, .transition_start, .transition_run, .transition_cancel => true,
+            else => false,
+        };
+        const type_str = switch (ev.event_type) {
+            .transition_end => "transitionend",
+            .transition_start => "transitionstart",
+            .transition_run => "transitionrun",
+            .transition_cancel => "transitioncancel",
+            .animation_end => "animationend",
+            .animation_start => "animationstart",
+            .animation_iteration => "animationiteration",
+            .animation_cancel => "animationcancel",
+        };
+
+        // Create and dispatch event via JS
+        const js_code = if (is_transition)
+            "(function(el,type,prop,time){var e=new TransitionEvent(type,{propertyName:prop,elapsedTime:time,bubbles:true});el.dispatchEvent(e);})"
+        else
+            "(function(el,type,name,time){var e=new AnimationEvent(type,{animationName:name,elapsedTime:time,bubbles:true});el.dispatchEvent(e);})";
+
+        const fn_val = qjs.JS_Eval(ctx, js_code, js_code.len, "<anim-evt>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(fn_val)) {
+            var args = [4]quickjs.c.JSValue{
+                target_js,
+                qjs.JS_NewStringLen(ctx, type_str.ptr, type_str.len),
+                qjs.JS_NewStringLen(ctx, ev.name.ptr, ev.name.len),
+                qjs.JS_NewFloat64(ctx, @floatCast(ev.elapsed_time)),
+            };
+            const r = qjs.JS_Call(ctx, fn_val, quickjs.JS_UNDEFINED(), 4, &args);
+            qjs.JS_FreeValue(ctx, r);
+            qjs.JS_FreeValue(ctx, fn_val);
+        }
+    }
+    anim_state.pending_events.clearRetainingCapacity();
+}
+
 fn applyAnimationsToBoxTree(
     box: *Box,
     anim_state: *anim_mod.AnimationState,
@@ -424,10 +471,20 @@ fn applyAnimationsToBoxTree(
             // Find the animation instance
             for (anim_state.animations.items) |*anim| {
                 if (std.mem.eql(u8, anim.name, name)) {
+                    const was_finished = anim.finished;
                     if (anim_mod.computeProgress(anim, now_ms)) |progress| {
-                        // Find keyframes rule
                         if (keyframes_map.get(name)) |kf_rule| {
                             anim_mod.applyKeyframes(&box.style, kf_rule.keyframes, progress);
+                        }
+                    }
+                    if (!was_finished and anim.finished) {
+                        if (box.dom_node) |dn| {
+                            anim_state.pending_events.append(anim_state.allocator, .{
+                                .node_ptr = @intFromPtr(dn.lxb_node),
+                                .event_type = .animation_end,
+                                .name = anim.name,
+                                .elapsed_time = anim.duration_s * anim.iteration_count,
+                            }) catch {};
                         }
                     }
                     break;
@@ -441,7 +498,17 @@ fn applyAnimationsToBoxTree(
         const node_ptr = @intFromPtr(dn.lxb_node);
         for (anim_state.transitions.items) |*tr| {
             if (tr.node_ptr == node_ptr and !tr.finished) {
+                const was_finished = tr.finished;
                 anim_mod.applyTransition(&box.style, tr, now_ms);
+                if (!was_finished and tr.finished) {
+                    // Transition just completed — queue transitionend event
+                    anim_state.pending_events.append(anim_state.allocator, .{
+                        .node_ptr = node_ptr,
+                        .event_type = .transition_end,
+                        .name = "all", // TODO: use actual property name
+                        .elapsed_time = tr.duration_s,
+                    }) catch {};
+                }
             }
         }
     }
@@ -1123,6 +1190,12 @@ pub fn main() !void {
                     if (pg.root_box != null and pg.styles != null and as.hasActiveAnimations()) {
                         const now_ms: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp()));
                         applyAnimationsToBoxTree(pg.root_box.?, as, &pg.styles.?.keyframes, now_ms);
+                    }
+                    // Dispatch pending transition/animation events to JS
+                    if (as.pending_events.items.len > 0) {
+                        if (pg.js_rt) |jrt| {
+                            dispatchAnimationEvents(jrt.ctx, as);
+                        }
                     }
                 }
             }
