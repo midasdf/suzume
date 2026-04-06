@@ -188,12 +188,12 @@ pub fn isInvalidNameChar(ch: u8) bool {
     if (std.ascii.isAlphanumeric(ch)) return false;
     if (ch == '_' or ch == ':' or ch == '-' or ch == '.') return false;
     // Characters that are definitely invalid per all browser implementations:
+    // Note: < is allowed in continuation position by browsers; > is always invalid
     return switch (ch) {
         ' ',
         '\t',
         '\n',
         '\r',
-        '<',
         '>',
         '/',
         '=',
@@ -218,7 +218,7 @@ pub fn isInvalidNameChar(ch: u8) bool {
         ',',
         '~',
         => true,
-        else => false, // other chars like {, }, |, ? — browsers allow these in names
+        else => false, // other chars like {, }, |, ?, <, > — browsers allow these in names
     };
 }
 
@@ -366,7 +366,7 @@ pub fn implCreateDocumentType(
         _ = qjs.JS_SetPropertyStr(c, obj, "remove", qjs.JS_Eval(c, rm_js, rm_js.len, "<dt-rm>", qjs.JS_EVAL_TYPE_GLOBAL));
         const cn_js = "(function(d){var o=document.implementation.createDocumentType(this.name,this.publicId,this.systemId);if(d&&this.childNodes)for(var i=0;i<this.childNodes.length;i++)o.childNodes.push(this.childNodes[i].cloneNode(true));return o;})";
         _ = qjs.JS_SetPropertyStr(c, obj, "cloneNode", qjs.JS_Eval(c, cn_js, cn_js.len, "<dt-cn>", qjs.JS_EVAL_TYPE_GLOBAL));
-        const cont_js = "(function(o){return false;})";
+        const cont_js = "(function(o){return this===o;})";
         _ = qjs.JS_SetPropertyStr(c, obj, "contains", qjs.JS_Eval(c, cont_js, cont_js.len, "<dt-cont>", qjs.JS_EVAL_TYPE_GLOBAL));
         const hcn_js = "(function(){return false;})";
         _ = qjs.JS_SetPropertyStr(c, obj, "hasChildNodes", qjs.JS_Eval(c, hcn_js, hcn_js.len, "<dt-hcn>", qjs.JS_EVAL_TYPE_GLOBAL));
@@ -392,6 +392,7 @@ pub fn implCreateDocument(
     const args = argv orelse return quickjs.JS_NULL();
 
     // Get namespace and qualifiedName
+    // Per WebIDL: namespace is DOMString? (nullable), qualifiedName is [LegacyNullToEmptyString] DOMString
     var ns: ?[]const u8 = null;
     var ns_ptr: ?[*]const u8 = null;
     var qname: ?[]const u8 = null;
@@ -402,10 +403,20 @@ pub fn implCreateDocument(
             ns_ptr = s.ptr;
         }
     }
-    if (argc >= 2 and !quickjs.JS_IsNull(args[1]) and !quickjs.JS_IsUndefined(args[1])) {
-        if (jsStringToSlice(c, args[1])) |s| {
-            qname = s.ptr[0..s.len];
-            qname_ptr = s.ptr;
+    if (argc >= 2) {
+        if (quickjs.JS_IsNull(args[1])) {
+            // [LegacyNullToEmptyString]: null → ""
+            qname = "";
+        } else {
+            // undefined → "undefined", other values → toString
+            const str_val = qjs.JS_ToString(c, args[1]);
+            if (!quickjs.JS_IsException(str_val)) {
+                if (jsStringToSlice(c, str_val)) |s| {
+                    qname = s.ptr[0..s.len];
+                    qname_ptr = s.ptr;
+                }
+                qjs.JS_FreeValue(c, str_val);
+            }
         }
     }
     defer {
@@ -418,13 +429,17 @@ pub fn implCreateDocument(
         if (qn.len > 0 and !isValidXmlName(qn)) {
             return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         }
-        // Check namespace constraints
+        // Check namespace constraints per DOM spec:
+        // 1. Split on FIRST colon: empty prefix or localpart → InvalidCharacterError
+        // 2. Then check namespace constraints → NamespaceError
         if (std.mem.indexOfScalar(u8, qn, ':')) |colon_pos| {
-            // Has prefix — namespace must not be null
-            if (ns == null) return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
             const prefix = qn[0..colon_pos];
             const local = qn[colon_pos + 1 ..];
-            if (local.len == 0) return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+            // Empty prefix (:foo) or localpart (foo:) → InvalidCharacterError
+            if (prefix.len == 0 or local.len == 0)
+                return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+            // Has prefix — namespace must not be null
+            if (ns == null) return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");
             // xml: prefix requires XML namespace
             if (std.mem.eql(u8, prefix, "xml") and !std.mem.eql(u8, ns.?, "http://www.w3.org/XML/1998/namespace"))
                 return throwDOMException(c, "NamespaceError", "The namespace URI provided is not valid for the given qualifiedName.");

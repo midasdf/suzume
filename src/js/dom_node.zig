@@ -1815,7 +1815,7 @@ pub fn elementGetNodeType(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    const node = api.getNode(c, this_val) orelse return qjs.JS_NewInt32(c, 1);
+    const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     return switch (node.type) {
         lxb.LXB_DOM_NODE_TYPE_ELEMENT => qjs.JS_NewInt32(c, 1),
         lxb.LXB_DOM_NODE_TYPE_TEXT => qjs.JS_NewInt32(c, 3),
