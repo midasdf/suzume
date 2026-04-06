@@ -1786,10 +1786,12 @@ fn jsElementDispatchEvent(
             \\  for(var i=0;i<copy.length;i++){
             \\    var h=copy[i],fn=h.fn||h;
             \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+            \\    var wasPD=evt.defaultPrevented;
             \\    if(h.passive)evt.preventDefault=function(){};
             \\    else evt.preventDefault=origPD;
             \\    if(typeof fn==='function')fn.call(el,evt);
             \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+            \\    if(h.passive){evt.defaultPrevented=wasPD;evt.returnValue=true;}
             \\  }
             \\  evt.preventDefault=origPD;
             \\})
