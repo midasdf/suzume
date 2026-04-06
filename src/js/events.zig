@@ -209,9 +209,14 @@ pub fn jsAddEventListener(
             defer qjs.JS_FreeValue(c, js_nt);
             var nt_v: i32 = 0;
             _ = qjs.JS_ToInt32(c, &nt_v, js_nt);
-            if (nt_v > 0 and nt_v != 9) {
-                // JS-level node: store listeners on the object itself
-                // Free the DupValue'd callback in record since we use JS storage instead
+            // Check if this is the global/window object
+            const is_global = blk: {
+                const gl = qjs.JS_GetGlobalObject(c);
+                defer qjs.JS_FreeValue(c, gl);
+                break :blk (this_val.tag == gl.tag and this_val.u.ptr == gl.u.ptr);
+            };
+            if (!is_global) {
+                // JS-level node or standalone EventTarget: store listeners on the object
                 qjs.JS_FreeValue(c, record.callback);
                 const js_code = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];a.push(cb);el[k]=a;})";
                 const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);

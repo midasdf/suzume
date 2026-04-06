@@ -104,6 +104,19 @@ if [ ! -d "$WPT_DIR/$AREA" ]; then
     exit 1
 fi
 
+# Generate HTML wrappers for .any.js tests (WPT convention)
+for anyjs in $(find "$AREA/" -name "*.any.js" 2>/dev/null); do
+    wrapper="${anyjs%.any.js}.any.html"
+    if [ ! -f "$wrapper" ]; then
+        cat > "$wrapper" << ANYEOF
+<!DOCTYPE html>
+<script src="/resources/testharness.js"></script>
+<script src="/resources/testharnessreport.js"></script>
+<script src="$(basename "$anyjs")"></script>
+ANYEOF
+    fi
+done
+
 TESTS=$(grep -rl "testharness.js" "$AREA/" 2>/dev/null | grep '\.html$' | sort)
 TEST_COUNT=$(echo "$TESTS" | grep -c '^' || echo 0)
 

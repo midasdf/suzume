@@ -1605,12 +1605,19 @@ pub fn documentWrite(
 
 pub fn jsNoOpConstructor(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    new_target: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewObject(c);
+    // Create object with new.target.prototype for correct prototype chain
+    const proto = qjs.JS_GetPropertyStr(c, new_target, "prototype");
+    const obj = qjs.JS_NewObject(c);
+    if (!quickjs.JS_IsUndefined(proto) and !quickjs.JS_IsNull(proto)) {
+        _ = qjs.JS_SetPrototype(c, obj, proto);
+    }
+    qjs.JS_FreeValue(c, proto);
+    return obj;
 }
 
 /// new Text(data?) — creates a real text node via document.createTextNode
