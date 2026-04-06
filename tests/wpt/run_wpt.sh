@@ -69,17 +69,30 @@ if [ ! -f "$SUZUME_BIN" ]; then
     exit 1
 fi
 
-# Start HTTP server
+# Reuse existing HTTP server and Xvfb if available, otherwise start new ones
+OWN_HTTP=0
+OWN_XVFB=0
+
 cd "$WPT_DIR"
-python3 -m http.server "$PORT" --bind 127.0.0.1 &>/dev/null &
-HTTP_PID=$!
+if curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q "200"; then
+    : # HTTP server already running
+else
+    python3 -m http.server "$PORT" --bind 127.0.0.1 &>/dev/null &
+    HTTP_PID=$!
+    OWN_HTTP=1
+    sleep 1
+fi
 
-# Start Xvfb
-Xvfb "$DISPLAY_NUM" -screen 0 800x600x24 -ac &>/dev/null &
-XVFB_PID=$!
-sleep 1
+if DISPLAY="$DISPLAY_NUM" xdpyinfo &>/dev/null 2>&1; then
+    : # Xvfb already running
+else
+    Xvfb "$DISPLAY_NUM" -screen 0 800x600x24 -ac &>/dev/null &
+    XVFB_PID=$!
+    OWN_XVFB=1
+    sleep 1
+fi
 
-trap "kill $HTTP_PID $XVFB_PID 2>/dev/null" EXIT
+trap '[ "$OWN_HTTP" = 1 ] && kill $HTTP_PID 2>/dev/null; [ "$OWN_XVFB" = 1 ] && kill $XVFB_PID 2>/dev/null' EXIT
 
 # Find testharness test files
 if [ ! -d "$WPT_DIR/$AREA" ]; then
