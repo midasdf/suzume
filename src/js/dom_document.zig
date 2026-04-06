@@ -17,6 +17,7 @@ fn isValidElementName(name: []const u8) bool {
 pub extern fn lxb_dom_document_create_text_node(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_document_create_comment(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
+extern fn lxb_dom_node_insert_before(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 extern fn lxb_dom_node_remove(node: *lxb.lxb_dom_node_t) void;
 extern fn lxb_dom_node_destroy(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_text_content(node: *lxb.lxb_dom_node_t, len: *usize) ?[*]const u8;
@@ -861,7 +862,7 @@ pub fn walkTreeByTag(root: *lxb.lxb_dom_node_t, tag_name: []const u8) ?*lxb.lxb_
 
 pub fn documentGetElementById(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
@@ -873,8 +874,9 @@ pub fn documentGetElementById(
     // DOM spec: getElementById with empty string returns null
     if (s.len == 0) return quickjs.JS_NULL();
 
-    const doc_node = getDocumentNode() orelse return quickjs.JS_NULL();
-    const found = api.dom_sel.walkTreeById(doc_node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
+    // Search from this node (DocumentFragment) or main document
+    const root_node = api.getNodePublic(c, this_val) orelse (getDocumentNode() orelse return quickjs.JS_NULL());
+    const found = api.dom_sel.walkTreeById(root_node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
     return wrapNode(c, found);
 }
 
@@ -1001,6 +1003,7 @@ pub fn documentGetElementsByName(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
+    // Build CSS selector [name="..."]
     var selector_buf: [270]u8 = undefined;
     const name = s.ptr[0..s.len];
     const prefix = "[name=\"";
@@ -1009,22 +1012,49 @@ pub fn documentGetElementsByName(
     @memcpy(selector_buf[0..prefix.len], prefix);
     @memcpy(selector_buf[prefix.len .. prefix.len + name.len], name);
     @memcpy(selector_buf[prefix.len + name.len .. prefix.len + name.len + suffix.len], suffix);
+    const selector = selector_buf[0 .. prefix.len + name.len + suffix.len];
 
-    const arr = qjs.JS_NewArray(c);
-    if (quickjs.JS_IsException(arr)) return arr;
-    const doc_node = getDocumentNode() orelse return arr;
-    var idx: u32 = 0;
-    api.dom_sel.walkTreeCollect(c, doc_node, selector_buf[0 .. prefix.len + name.len + suffix.len], arr, &idx);
-    // Set NodeList prototype for spec compliance (toString should be "[object NodeList]")
-    const set_proto_js = "(function(a){if(typeof NodeList!=='undefined')Object.setPrototypeOf(a,NodeList.prototype);a.item=function(i){return this[i]||null;};})";
-    const nl_fn = qjs.JS_Eval(c, set_proto_js, set_proto_js.len, "<nl>", qjs.JS_EVAL_TYPE_GLOBAL);
-    if (!quickjs.JS_IsException(nl_fn)) {
-        var fn_args = [1]qjs.JSValue{arr};
-        const r = qjs.JS_Call(c, nl_fn, quickjs.JS_UNDEFINED(), 1, &fn_args);
-        qjs.JS_FreeValue(c, r);
-        qjs.JS_FreeValue(c, nl_fn);
-    }
-    return arr;
+    // Return a live NodeList via Proxy that re-queries on access
+    const live_js =
+        \\(function(sel){
+        \\  function _q(){try{var r=document.querySelectorAll(sel),a=[];for(var i=0;i<r.length;i++){var ns=r[i].namespaceURI;if(!ns||ns==='http://www.w3.org/1999/xhtml')a.push(r[i]);}return a;}catch(e){return[];}}
+        \\  return new Proxy({},{
+        \\    get:function(t,p){
+        \\      var r=Array.from(_q()),len=r.length;
+        \\      if(p==='length')return len;
+        \\      if(p==='item')return function(i){return i>=0&&i<len?r[i]:null;};
+        \\      if(p===Symbol.iterator)return function*(){for(var i=0;i<len;i++)yield r[i];};
+        \\      if(p===Symbol.toStringTag)return'NodeList';
+        \\      if(typeof p==='string'&&/^\d+$/.test(p)){var i=p>>>0;return i<len?r[i]:undefined;}
+        \\      if(p==='forEach')return function(cb,th){var a=Array.from(_q());for(var i=0;i<a.length;i++)cb.call(th,a[i],i,this);};
+        \\      if(p==='entries')return function*(){var a=Array.from(_q());for(var i=0;i<a.length;i++)yield[i,a[i]];};
+        \\      if(p==='keys')return function*(){var a=Array.from(_q());for(var i=0;i<a.length;i++)yield i;};
+        \\      if(p==='values')return function*(){var a=Array.from(_q());for(var i=0;i<a.length;i++)yield a[i];};
+        \\      return t[p];
+        \\    },
+        \\    has:function(t,p){
+        \\      if(typeof p==='string'&&/^\d+$/.test(p)){var r=_q();return(p>>>0)<r.length;}
+        \\      return p==='length'||p==='item';
+        \\    },
+        \\    ownKeys:function(){
+        \\      var r=_q(),k=[];for(var i=0;i<r.length;i++)k.push(String(i));return k;
+        \\    },
+        \\    getOwnPropertyDescriptor:function(t,p){
+        \\      var r=Array.from(_q());
+        \\      if(typeof p==='string'&&/^\d+$/.test(p)){var i=p>>>0;if(i<r.length)return{value:r[i],writable:false,enumerable:true,configurable:true};}
+        \\      return undefined;
+        \\    },
+        \\    getPrototypeOf:function(){return typeof NodeList!=='undefined'?NodeList.prototype:Object.prototype;}
+        \\  });
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, live_js, live_js.len, "<gbn>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(fn_val)) return quickjs.JS_NULL();
+    defer qjs.JS_FreeValue(c, fn_val);
+    const sel_str = qjs.JS_NewStringLen(c, selector.ptr, selector.len);
+    defer qjs.JS_FreeValue(c, sel_str);
+    var call_args = [1]qjs.JSValue{sel_str};
+    return qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &call_args);
 }
 
 pub fn documentCreateElement(
@@ -1217,9 +1247,87 @@ pub fn documentGetBody(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
     const doc_node = getDocumentNode() orelse return quickjs.JS_NULL();
-    // Walk to find <body> element
-    const found = walkTreeByTag(doc_node, "body") orelse return quickjs.JS_NULL();
-    return wrapNode(c, found);
+    // HTML spec: body element is the first child of <html> that is <body> or <frameset>
+    const html_node = walkTreeByTag(doc_node, "html") orelse return quickjs.JS_NULL();
+    var child: ?*lxb.lxb_dom_node_t = html_node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var name_len: usize = 0;
+            const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and name_len > 0) {
+                const name = name_ptr.?[0..name_len];
+                if (std.mem.eql(u8, name, "body") or std.mem.eql(u8, name, "frameset")) {
+                    return wrapNode(c, ch);
+                }
+            }
+        }
+        child = ch.next;
+    }
+    return quickjs.JS_NULL();
+}
+
+pub fn documentSetBody(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+
+    // HTML spec: setter must accept only body or frameset elements
+    const new_node = api.getNodePublic(c, args[0]);
+    if (new_node == null or (new_node != null and new_node.?.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT)) {
+        return throwDOMException(c, "HierarchyRequestError", "The new body element must be a 'body' or 'frameset' element.");
+    }
+    const new_elem: *lxb.lxb_dom_element_t = @ptrCast(new_node.?);
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(new_elem, &name_len);
+    if (name_ptr == null or name_len == 0) return throwDOMException(c, "HierarchyRequestError", "The new body element must be a 'body' or 'frameset' element.");
+    const name = name_ptr.?[0..name_len];
+    if (!std.mem.eql(u8, name, "body") and !std.mem.eql(u8, name, "frameset")) {
+        return throwDOMException(c, "HierarchyRequestError", "The new body element must be a 'body' or 'frameset' element.");
+    }
+
+    // Must have a document element (html)
+    const doc_node = getDocumentNode() orelse return throwDOMException(c, "HierarchyRequestError", "No document element.");
+    const html_node = walkTreeByTag(doc_node, "html") orelse return throwDOMException(c, "HierarchyRequestError", "No document element.");
+
+    // Find existing body/frameset to replace
+    var existing: ?*lxb.lxb_dom_node_t = null;
+    var child: ?*lxb.lxb_dom_node_t = html_node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var ch_name_len: usize = 0;
+            const ch_name_ptr = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+            if (ch_name_ptr != null and ch_name_len > 0) {
+                const ch_name = ch_name_ptr.?[0..ch_name_len];
+                if (std.mem.eql(u8, ch_name, "body") or std.mem.eql(u8, ch_name, "frameset")) {
+                    existing = ch;
+                    break;
+                }
+            }
+        }
+        child = ch.next;
+    }
+
+    const nn = new_node.?;
+    // Detach new node from old parent
+    if (nn.parent != null) lxb_dom_node_remove(nn);
+
+    if (existing) |ex| {
+        // Replace existing body/frameset
+        lxb_dom_node_insert_before(ex, nn);
+        lxb_dom_node_remove(ex);
+    } else {
+        // Append to html element
+        lxb_dom_node_insert_child(html_node, nn);
+    }
+    api.setDomDirty();
+    return quickjs.JS_UNDEFINED();
 }
 
 pub fn documentGetTitle(

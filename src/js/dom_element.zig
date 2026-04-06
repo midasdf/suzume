@@ -179,8 +179,13 @@ pub fn elementGetAttribute(
     const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
-    if (val == null) return quickjs.JS_NULL();
-    return qjs.JS_NewStringLen(c, val.?, val_len); // empty string when val_len == 0
+    if (val == null) {
+        // HTML spec: attribute with no value (e.g. <div disabled>) returns ""
+        if (lxb_dom_element_has_attribute(elem, name.ptr, name.len))
+            return qjs.JS_NewStringLen(c, "", 0);
+        return quickjs.JS_NULL();
+    }
+    return qjs.JS_NewStringLen(c, val.?, val_len);
 }
 
 pub fn elementSetAttribute(
@@ -484,12 +489,8 @@ pub fn elementRemoveAttribute(
         }
     }
     // DOM spec: removeAttribute is a no-op if attribute doesn't exist
-    if (old_val == null) {
-        // Check if attribute exists at all (old_val null means no value, but attr might exist with empty value)
-        var check_len: usize = 0;
-        if (lxb_dom_element_get_attribute(elem, name.ptr, name.len, &check_len) == null)
-            return quickjs.JS_UNDEFINED();
-    }
+    if (!lxb_dom_element_has_attribute(elem, name.ptr, name.len))
+        return quickjs.JS_UNDEFINED();
     _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     events.recordMutationWithOldValue(node, "attributes", null, null, name, old_val);
@@ -1313,6 +1314,22 @@ pub fn elementInsertAdjacentElement(
     if (is_before_begin or is_after_end) {
         if (node.parent == null) return quickjs.JS_NULL();
     }
+    // DOM spec: Document can only have one Element child
+    // Determine the parent node for the insertion
+    const parent_node: ?*lxb.lxb_dom_node_t = if (is_before_begin or is_after_end) node.parent else node;
+    if (parent_node) |pn| {
+        if (pn.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            // Check if document already has an element child
+            var child: ?*lxb.lxb_dom_node_t = pn.first_child;
+            while (child) |ch| {
+                if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                    return throwDOMException(c, "HierarchyRequestError", "The operation would yield an incorrect node tree.");
+                }
+                child = ch.next;
+            }
+        }
+    }
+
     // Now safe to detach from old parent
     if (new_node.parent != null) lxb_dom_node_remove(new_node);
 
@@ -1354,24 +1371,39 @@ pub fn elementInsertAdjacentText(
     const text_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, text_s.ptr);
 
+    // Validate position first
+    const is_before_begin = std.ascii.eqlIgnoreCase(position, "beforebegin");
+    const is_after_end = std.ascii.eqlIgnoreCase(position, "afterend");
+    const is_after_begin = std.ascii.eqlIgnoreCase(position, "afterbegin");
+    const is_before_end = std.ascii.eqlIgnoreCase(position, "beforeend");
+    if (!is_before_begin and !is_after_begin and !is_before_end and !is_after_end) {
+        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
+    }
+
+    // DOM spec: Document cannot have Text children
+    const parent_node: ?*lxb.lxb_dom_node_t = if (is_before_begin or is_after_end) node.parent else node;
+    if (parent_node) |pn| {
+        if (pn.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+            return throwDOMException(c, "HierarchyRequestError", "The operation would yield an incorrect node tree.");
+        }
+    }
+
     const text_node = lxb_dom_document_create_text_node(doc, text_s.ptr, text_s.len) orelse return quickjs.JS_UNDEFINED();
 
-    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+    if (is_before_begin) {
         if (node.parent == null) return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_before(node, text_node);
-    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+    } else if (is_after_begin) {
         if (node.first_child) |first| {
             lxb_dom_node_insert_before(first, text_node);
         } else {
             lxb_dom_node_insert_child(node, text_node);
         }
-    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+    } else if (is_before_end) {
         lxb_dom_node_insert_child(node, text_node);
-    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+    } else { // is_after_end
         if (node.parent == null) return quickjs.JS_UNDEFINED();
         lxb_dom_node_insert_after(node, text_node);
-    } else {
-        return throwDOMException(c, "SyntaxError", "An invalid or illegal string was specified.");
     }
     setDomDirty();
     return quickjs.JS_UNDEFINED();

@@ -1327,7 +1327,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
     {
         const js =
             \\(function(){
-            \\  function UIEvent(t,o){Event.call(this,t,o);o=o||{};this.view=o.view||null;this.detail=o.detail||0;}
+            \\  function UIEvent(t,o){Event.call(this,t,o);o=o||{};if(o.view!==undefined&&o.view!==null&&typeof o.view!=='object')throw new TypeError("Failed to construct 'UIEvent': member view is not of type Window.");this.view=o.view||null;this.detail=o.detail||0;}
             \\  UIEvent.prototype=Object.create(Event.prototype);UIEvent.prototype.constructor=UIEvent;
             \\  UIEvent.prototype.initUIEvent=function(t,b,c,v,d){if(this._dispatching)return;this.initEvent(t,b,c);this.view=v;this.detail=d;};
             \\  return UIEvent;})()
@@ -1466,6 +1466,13 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
             \\  function TextEvent(t,o){UIEvent.call(this,t,o);this.data=(o&&o.data)||'';}
             \\  TextEvent.prototype=Object.create(UIEvent.prototype);TextEvent.prototype.constructor=TextEvent;
             \\  globalThis.TextEvent=TextEvent;
+            \\  function MessageEvent(t,o){Event.call(this,t,o);o=o||{};this.data=o.data!==undefined?o.data:null;this.origin=o.origin||'';this.lastEventId=o.lastEventId||'';this.source=o.source||null;this.ports=o.ports||[];}
+            \\  MessageEvent.prototype=Object.create(Event.prototype);MessageEvent.prototype.constructor=MessageEvent;
+            \\  MessageEvent.prototype.initMessageEvent=function(t,b,c,d,o,l,s,p){if(this._dispatching)return;this.initEvent(t,b,c);this.data=d;this.origin=o;this.lastEventId=l;this.source=s;this.ports=p||[];};
+            \\  globalThis.MessageEvent=MessageEvent;
+            \\  function CloseEvent(t,o){Event.call(this,t,o);o=o||{};this.wasClean=!!o.wasClean;this.code=o.code||0;this.reason=o.reason||'';}
+            \\  CloseEvent.prototype=Object.create(Event.prototype);CloseEvent.prototype.constructor=CloseEvent;
+            \\  globalThis.CloseEvent=CloseEvent;
             \\  function HashChangeEvent(t,o){Event.call(this,t,o);o=o||{};this.oldURL=o.oldURL||'';this.newURL=o.newURL||'';}
             \\  HashChangeEvent.prototype=Object.create(Event.prototype);HashChangeEvent.prototype.constructor=HashChangeEvent;
             \\  globalThis.HashChangeEvent=HashChangeEvent;

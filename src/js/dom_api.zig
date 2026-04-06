@@ -3260,6 +3260,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const dfp = qjs.JS_NewObject(ctx);
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, dfp, "getElementById", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementById, "getElementById", 1));
         _ = qjs.JS_SetPropertyStr(ctx, doc_frag_ctor, "prototype", dfp);
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
@@ -3290,6 +3291,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var p={};
             \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
             \\  p.namedItem=function(n){for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
+            \\  Object.defineProperty(p,'length',{get:function(){return 0;},enumerable:true,configurable:true});
             \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
             \\  return p;
             \\})()
@@ -3324,10 +3326,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, r);
     }
 
-    // DocumentFragment constructor — new DocumentFragment() creates a real fragment
-    // Note: must be set up after document is globally available, but we use JS_Eval deferred
-    const docfrag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
-    _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", docfrag_ctor);
+    // DocumentFragment constructor — reuse existing one (with prototype already set up above)
 
     const shadow_root_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "ShadowRoot", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "ShadowRoot", shadow_root_ctor);
@@ -3934,9 +3933,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "location", loc);
     }
 
-    // document.body (getter)
+    // document.body (getter + setter)
     const bodyAtom = qjs.JS_NewAtom(ctx, "body");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, bodyAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetBody, "get body", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, bodyAtom, qjs.JS_NewCFunction(ctx, &dom_doc.documentGetBody, "get body", 0), qjs.JS_NewCFunction(ctx, &dom_doc.documentSetBody, "set body", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, bodyAtom);
 
     // document.title (getter)
@@ -4103,43 +4102,67 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "doctype", dt_obj);
     }
 
-    // document.forms / links / images / scripts / embeds / plugins (HTMLCollection getters)
-    // Uses JS function stored globally, applied to doc_obj after document is on global
+    // document.forms / links / images / scripts / embeds / plugins (live HTMLCollection getters)
+    // Spec: each getter returns the SAME object (identity), data is live (re-queried on access)
     {
         const coll_js =
             \\(function(d){
-            \\  function makeHTMLColl(sel){
-            \\    return function(){
-            \\      var els=d.querySelectorAll(sel);
-            \\      var a=Array.from(els);
-            \\      var names={};
+            \\  function makeLiveColl(sel){
+            \\    var _cache=null;
+            \\    function _q(){return Array.from(d.querySelectorAll(sel));}
+            \\    function _names(a){
+            \\      var n={};
             \\      for(var i=0;i<a.length;i++){
-            \\        var eid=a[i].getAttribute('id');if(eid&&!names[eid])names[eid]=a[i];
-            \\        var ename=a[i].getAttribute('name');if(ename&&!names[ename])names[ename]=a[i];
+            \\        var eid=a[i].getAttribute('id');if(eid&&!n[eid])n[eid]=a[i];
+            \\        var ename=a[i].getAttribute('name');if(ename&&!n[ename])n[ename]=a[i];
             \\      }
-            \\      var h={get:function(t,p){
-            \\        if(p==='length')return a.length;
-            \\        if(p==='item')return function(i){return a[i>>>0]||null;};
-            \\        if(p==='namedItem')return function(n){return names[n]||null;};
-            \\        if(p===Symbol.iterator)return function*(){for(var i=0;i<a.length;i++)yield a[i];};
-            \\        if(p===Symbol.toStringTag)return'HTMLCollection';
-            \\        if(typeof p==='string'&&/^\d+$/.test(p))return a[p>>>0];
-            \\        if(typeof p==='string'&&names[p])return names[p];
-            \\        return undefined;
-            \\      },has:function(t,p){
-            \\        if(typeof p==='string'&&/^\d+$/.test(p))return(p>>>0)<a.length;
-            \\        return p==='length'||p in names;
-            \\      }};
-            \\      if(typeof HTMLCollection!=='undefined')return new Proxy({},Object.assign(h,{getPrototypeOf:function(){return HTMLCollection.prototype;}}));
-            \\      return new Proxy({},h);
+            \\      return n;
+            \\    }
+            \\    return function(){
+            \\      if(_cache)return _cache;
+            \\      _cache=new Proxy({},{
+            \\        get:function(t,p){
+            \\          var a=_q(),names=_names(a);
+            \\          if(p==='length')return a.length;
+            \\          if(p==='item')return function(i){return a[i>>>0]||null;};
+            \\          if(p==='namedItem')return function(n){return names[n]||null;};
+            \\          if(p===Symbol.iterator)return function*(){var b=_q();for(var i=0;i<b.length;i++)yield b[i];};
+            \\          if(p===Symbol.toStringTag)return'HTMLCollection';
+            \\          if(typeof p==='string'&&/^\d+$/.test(p))return a[p>>>0];
+            \\          if(typeof p==='string'&&names[p])return names[p];
+            \\          return t[p];
+            \\        },
+            \\        has:function(t,p){
+            \\          var a=_q(),names=_names(a);
+            \\          if(typeof p==='string'&&/^\d+$/.test(p))return(p>>>0)<a.length;
+            \\          return p==='length'||p==='item'||p==='namedItem'||p in names;
+            \\        },
+            \\        ownKeys:function(){
+            \\          var a=_q(),names=_names(a),k=[];
+            \\          for(var i=0;i<a.length;i++)k.push(String(i));
+            \\          var nk=Object.keys(names);
+            \\          for(var j=0;j<nk.length;j++)if(k.indexOf(nk[j])===-1)k.push(nk[j]);
+            \\          return k;
+            \\        },
+            \\        getOwnPropertyDescriptor:function(t,p){
+            \\          var a=_q(),names=_names(a);
+            \\          if(typeof p==='string'&&/^\d+$/.test(p)){var i=p>>>0;if(i<a.length)return{value:a[i],writable:false,enumerable:true,configurable:true};}
+            \\          if(p==='length')return{value:a.length,writable:false,enumerable:false,configurable:true};
+            \\          if(typeof p==='string'&&names[p])return{value:names[p],writable:false,enumerable:false,configurable:true};
+            \\          return undefined;
+            \\        },
+            \\        getPrototypeOf:function(){return typeof HTMLCollection!=='undefined'?HTMLCollection.prototype:Object.prototype;}
+            \\      });
+            \\      return _cache;
             \\    };
             \\  }
-            \\  Object.defineProperty(d,'forms',{get:makeHTMLColl('form'),configurable:true,enumerable:true});
-            \\  Object.defineProperty(d,'links',{get:makeHTMLColl('a[href],area[href]'),configurable:true,enumerable:true});
-            \\  Object.defineProperty(d,'images',{get:makeHTMLColl('img'),configurable:true,enumerable:true});
-            \\  Object.defineProperty(d,'scripts',{get:makeHTMLColl('script'),configurable:true,enumerable:true});
-            \\  Object.defineProperty(d,'embeds',{get:makeHTMLColl('embed'),configurable:true,enumerable:true});
-            \\  Object.defineProperty(d,'plugins',{get:makeHTMLColl('embed'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'forms',{get:makeLiveColl('form'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'links',{get:makeLiveColl('a[href],area[href]'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'images',{get:makeLiveColl('img'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'scripts',{get:makeLiveColl('script'),configurable:true,enumerable:true});
+            \\  var _embedsGetter=makeLiveColl('embed');
+            \\  Object.defineProperty(d,'embeds',{get:_embedsGetter,configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'plugins',{get:_embedsGetter,configurable:true,enumerable:true});
             \\})
         ;
         const coll_fn = qjs.JS_Eval(ctx, coll_js, coll_js.len, "<doccoll>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -4151,20 +4174,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         }
     }
 
-    // document.scripts
-    {
-        const scripts_js = "(function(){return document.querySelectorAll('script');})";
-        const scriptsAtom = qjs.JS_NewAtom(ctx, "scripts");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, scriptsAtom, qjs.JS_Eval(ctx, scripts_js, scripts_js.len, "<scripts>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-        qjs.JS_FreeAtom(ctx, scriptsAtom);
-    }
-    // document.embeds/plugins (empty)
-    {
-        const empty_js = "(function(){return [];})";
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "embeds", qjs.JS_Eval(ctx, empty_js, empty_js.len, "<embeds>", qjs.JS_EVAL_TYPE_GLOBAL));
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "plugins", qjs.JS_Eval(ctx, empty_js, empty_js.len, "<plugins>", qjs.JS_EVAL_TYPE_GLOBAL));
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "applets", qjs.JS_NewArray(ctx)); // deprecated, always empty
-    }
+    // document.applets (deprecated, always empty)
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "applets", qjs.JS_NewArray(ctx));
 
     // document.implementation
     {
