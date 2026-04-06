@@ -3278,6 +3278,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var p={};
             \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
             \\  p.forEach=function(cb,t){for(var i=0;i<this.length;i++)cb.call(t,this[i],i,this);};
+            \\  p.map=function(cb,t){var r=[];for(var i=0;i<this.length;i++)r.push(cb.call(t,this[i],i,this));return r;};
+            \\  p.join=function(s){var r='';for(var i=0;i<this.length;i++){if(i>0)r+=s===undefined?',':s;r+=this[i];}return r;};
+            \\  p.indexOf=function(v,f){for(var i=f||0;i<this.length;i++)if(this[i]===v)return i;return -1;};
             \\  p.entries=function(){var a=[];for(var i=0;i<this.length;i++)a.push([i,this[i]]);return a[Symbol.iterator]();};
             \\  p.keys=function(){var a=[];for(var i=0;i<this.length;i++)a.push(i);return a[Symbol.iterator]();};
             \\  p.values=function(){var a=[];for(var i=0;i<this.length;i++)a.push(this[i]);return a[Symbol.iterator]();};
@@ -3299,6 +3302,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  p.namedItem=function(n){for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
             \\  Object.defineProperty(p,'length',{get:function(){return 0;},enumerable:true,configurable:true});
             \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
+            \\  p.map=function(cb,t){var r=[];for(var i=0;i<this.length;i++)r.push(cb.call(t,this[i],i,this));return r;};
+            \\  p.join=function(s){var r='';for(var i=0;i<this.length;i++){if(i>0)r+=s===undefined?',':s;r+=this[i];}return r;};
+            \\  p.indexOf=function(v,f){for(var i=f||0;i<this.length;i++)if(this[i]===v)return i;return -1;};
+            \\  p.forEach=function(cb,t){for(var i=0;i<this.length;i++)cb.call(t,this[i],i,this);};
             \\  return p;
             \\})()
         ;
