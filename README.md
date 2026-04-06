@@ -17,10 +17,10 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 - Table layout with colspan, cellpadding, content-based column sizing
 - ::before/::after pseudo-elements
 - :link pseudo-class, CSS background propagation (spec-compliant)
-- CSS transforms (translate)
+- CSS transforms (translate), transitions, animations
 - 120+ CSS properties, 200+ unit tests
 - HTML5 parsing via lexbor
-- **JavaScript engine** — QuickJS-ng with full DOM/Web API (see Benchmark below)
+- **JavaScript engine** — QuickJS-ng with full DOM/Web API
 - X11/XCB framebuffer rendering via libnsfb
 - FreeType + HarfBuzz text shaping (CJK support)
 - Tab browsing, keyboard navigation, find-in-page
@@ -28,47 +28,36 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 - Mouse wheel scrolling
 - SSL certificate fallback with hostname verification
 
-## Benchmark
+## Web Platform Tests (WPT)
 
-**111/111 (100%)** on the internal capability test suite.
+Tested against the official [Web Platform Tests](https://github.com/web-platform-tests/wpt) suite:
 
-| Category | Score | Details |
-|----------|-------|---------|
-| DOM Core | 28/28 | createElement, querySelector, classList, innerHTML, etc. |
-| CSS / Style | 5/5 | getComputedStyle, style manipulation |
-| Events | 6/6 | addEventListener, removeEventListener, bubbling, dispatchEvent |
-| Timers | 6/6 | setTimeout, setInterval, requestAnimationFrame, performance.now |
-| Web APIs | 6/6 | console, JSON, window, navigator |
-| ES6+ | 21/21 | let/const, arrow functions, async/await, Proxy, optional chaining, etc. |
-| Form Elements | 4/4 | input.value, textarea.value, select.value |
-| Mouse Events | 3/3 | mousedown, mouseup, mousemove |
-| Event Correctness | 1/1 | removeEventListener identity check |
-| Scroll APIs | 5/5 | scrollTo, scrollBy, scrollX/Y, pageYOffset |
-| Navigation APIs | 5/5 | location.assign/replace, history.pushState/replaceState/back |
-| XHR | 5/5 | XMLHttpRequest with open/send/setRequestHeader/readyState |
-| MutationObserver | 3/3 | constructor, observe, disconnect |
-| Advanced Web | 12/12 | fetch, localStorage, Canvas 2D, WebSocket, Worker, Blob, crypto, etc. |
-| Error Handling | 2/2 | try/catch, TypeError |
+| Area | Score | Subtests |
+|------|-------|----------|
+| css/css-box | **97.4%** | 299/307 |
+| dom/lists | **93.1%** | 176/189 |
+| html/dom | **88.9%** | 9525/10710 |
+| dom/traversal | **83.7%** | 41/49 |
+| dom/nodes | **80.2%** | 7538/9404 |
+| dom/events | **80.0%** | 335/419 |
+| dom/ranges | **61.4%** | 8404/13689 |
+| css/selectors | **56.4%** | 2220/3934 |
 
-Additional test suites:
-- **QuickJS ES features**: 62/62 (100%) — ES2024 full coverage incl. import.meta, Atomics.waitAsync
-- **DOM API audit**: 74/74 (100%) — TextEncoder, Intl, AbortController, TreeWalker, Range, etc.
-- **Real site JS errors**: 0 on HN, Reddit, CNN, Wikipedia, DDG, Lobsters, npm
+Selected test files at 100%: CharacterData (128/128), ChildNode (135/135), Element-classlist (1420/1420), DOMImplementation-hasFeature (137/137), Node-lookupNamespaceURI (74/74), Node-insertBefore (40/40).
 
-## Tested Sites
+### Running WPT
 
-| Site | Status | Notes |
-|------|--------|-------|
-| Hacker News | Works well | Correct colors, layout density, text spacing |
-| GitHub | Works well | File lists, README rendering |
-| Brave Search | Works well | Search results with sublinks |
-| MDN | Works well | Article content fully readable |
-| old.reddit.com | Works well | 2-column layout, sidebar, posts |
-| CSS Zen Garden | Works well | Background colors, text layout |
-| Smashing Magazine | Works well | Articles, categories, search bar |
-| Wikipedia | Readable | Article content, limited JS |
-| example.com | Near-perfect | Background propagation, centering |
-| anthropic.com | Partially working | Heavy JS, basic content visible |
+```bash
+# First-time setup
+bash tests/wpt/run_wpt.sh setup
+
+# Run a test area
+bash tests/wpt/run_wpt.sh dom/nodes
+bash tests/wpt/run_wpt.sh css/css-box
+bash tests/wpt/run_wpt.sh html/dom
+
+# Multiple areas can run in parallel (reuses shared HTTP server + Xvfb)
+```
 
 ## Building
 
@@ -100,17 +89,18 @@ src/
 
 ## JavaScript Engine
 
-Powered by QuickJS-ng v0.12.1 with comprehensive Web API layer:
+Powered by QuickJS-ng with comprehensive Web API layer:
 
 - **ES2024 complete** — BigInt, private fields, top-level await, Array.at, Object.groupBy, etc.
 - **ES Modules** — `<script type="module">`, import/export, HTTP-based module loader
 - **DOM API** — querySelector, createElement, classList, innerHTML, MutationObserver, TreeWalker
-- **Events** — addEventListener/removeEventListener with identity check, mouse/keyboard events, bubbling
+- **Events** — addEventListener/removeEventListener, mouse/keyboard events, bubbling, composedPath
 - **Networking** — fetch() with POST/headers/body, XMLHttpRequest, WebSocket (curl-based)
 - **Workers** — Web Worker with separate QuickJS runtime per thread, postMessage/onmessage
 - **Canvas 2D** — getContext('2d'), fillRect/clearRect/strokeRect, software pixel buffer
 - **Storage** — localStorage, sessionStorage, persistent cookies (curl cookie engine)
 - **Navigation** — location.assign/replace, history.pushState/back/forward, SPA routing
+- **iframe** — Dynamic iframe with contentDocument/contentWindow, same-origin browsing contexts
 - **Intl** — DateTimeFormat, NumberFormat, PluralRules, Collator, RelativeTimeFormat
 - **Encoding** — TextEncoder/TextDecoder, atob/btoa, Blob, crypto.getRandomValues
 
@@ -125,6 +115,7 @@ The CSS engine is fully self-implemented in Zig with no external CSS library dep
 - **Properties** — 120+ properties with color, length, percentage, calc() parsing
 - **Variables** — CSS custom properties with var() resolution and cycle detection
 - **Media queries** — @media with width, height, prefers-color-scheme
+- **Transitions/Animations** — CSS transitions with event dispatch, @keyframes animations
 
 ## License
 
