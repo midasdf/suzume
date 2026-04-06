@@ -1886,7 +1886,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\      var r=__suzume_dom_parse(str);
         \\      if(!r||!r.documentElement){var c=document.createElement('div');c.innerHTML=str;r={documentElement:c,body:c,head:null,hasDoctype:false};}
         \\      var docEl=r.documentElement,bodyEl=r.body,headEl=r.head;
-        \\      var doc=Object.create(Document.prototype);
+        \\      var doc=r;Object.setPrototypeOf(doc,Document.prototype);
         \\      Object.defineProperties(doc,{
         \\        nodeType:{value:9,writable:false},nodeName:{value:'#document',writable:false},
         \\        ownerDocument:{value:null,writable:true,configurable:true},
@@ -1933,7 +1933,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\      doc.createTreeWalker=function(r,w,f){return document.createTreeWalker(r,w,f);};
         \\      doc.createNodeIterator=function(r,w,f){return document.createNodeIterator(r,w,f);};
         \\      doc.createRange=function(){return document.createRange();};
-        \\      doc.addEventListener=function(){};doc.removeEventListener=function(){};doc.dispatchEvent=function(){return true;};
+        \\      doc.addEventListener=Element.prototype.addEventListener;doc.removeEventListener=Element.prototype.removeEventListener;doc.dispatchEvent=Element.prototype.dispatchEvent;
         \\      doc.hasFocus=function(){return false;};
         \\      doc.title='';
         \\      return doc;

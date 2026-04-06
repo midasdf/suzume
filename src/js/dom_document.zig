@@ -1833,8 +1833,8 @@ pub fn suzumeDomParse(
         }
     }
 
-    // Build result object
-    const result = qjs.JS_NewObject(c);
+    // Build result object — wrap the document node so it has opaque pointer for addEventListener
+    const result = wrapNode(c, doc_node);
     if (doc_element) |de| {
         _ = qjs.JS_SetPropertyStr(c, result, "documentElement", wrapNode(c, de));
     } else {
