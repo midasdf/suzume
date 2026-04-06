@@ -1798,7 +1798,10 @@ fn jsElementDispatchEvent(
         _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(false));
         _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 0));
         _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", quickjs.JS_NULL());
-        return quickjs.JS_NewBool(true);
+        // Return !defaultPrevented per spec
+        const dp = qjs.JS_GetPropertyStr(c, args[0], "defaultPrevented");
+        defer qjs.JS_FreeValue(c, dp);
+        return quickjs.JS_NewBool(!(qjs.JS_ToBool(c, dp) > 0));
     };
 
     // Get event type from event object's .type property
