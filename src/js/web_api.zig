@@ -2151,15 +2151,15 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  function AbortSignal(){this.aborted=false;this.reason=undefined;this._evtMap={};this.onabort=null;}
         \\  AbortSignal.prototype.addEventListener=function(t,fn,o){if(!this._evtMap[t])this._evtMap[t]=[];this._evtMap[t].push({fn:fn,once:!!(o&&o.once)});};
         \\  AbortSignal.prototype.removeEventListener=function(t,fn){var a=this._evtMap[t];if(a)for(var i=a.length-1;i>=0;i--)if(a[i].fn===fn)a.splice(i,1);};
-        \\  AbortSignal.prototype.dispatchEvent=function(e){var a=this._evtMap[e.type];if(a){a=a.slice();for(var i=0;i<a.length;i++){try{a[i].fn.call(this,e);}catch(ex){}if(a[i].once)this.removeEventListener(e.type,a[i].fn);}}return!e.defaultPrevented;};
+        \\  AbortSignal.prototype.dispatchEvent=function(e){e.target=this;e.currentTarget=this;var a=this._evtMap[e.type];if(a){a=a.slice();for(var i=0;i<a.length;i++){try{a[i].fn.call(this,e);}catch(ex){}if(a[i].once)this.removeEventListener(e.type,a[i].fn);}}e.currentTarget=null;return!e.defaultPrevented;};
         \\  AbortSignal.prototype.throwIfAborted=function(){if(this.aborted)throw this.reason;};
         \\  AbortSignal.abort=function(reason){var s=new AbortSignal();s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');return s;};
-        \\  AbortSignal.timeout=function(ms){var s=new AbortSignal();setTimeout(function(){s.aborted=true;s.reason=new DOMException('The operation timed out.','TimeoutError');var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);},ms);return s;};
+        \\  AbortSignal.timeout=function(ms){var s=new AbortSignal();setTimeout(function(){s.aborted=true;s.reason=new DOMException('The operation timed out.','TimeoutError');var e=new Event('abort');e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);},ms);return s;};
         \\  AbortSignal.any=function(signals){var s=new AbortSignal();for(var i=0;i<signals.length;i++){if(signals[i].aborted){s.aborted=true;s.reason=signals[i].reason;return s;}}
         \\    for(var i=0;i<signals.length;i++){(function(sig){sig.addEventListener('abort',function(){if(!s.aborted){s.aborted=true;s.reason=sig.reason;var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}});})(signals[i]);}return s;};
         \\  globalThis.AbortSignal=AbortSignal;
         \\  function AbortController(){this.signal=new AbortSignal();}
-        \\  AbortController.prototype.abort=function(reason){var s=this.signal;if(!s.aborted){s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};
+        \\  AbortController.prototype.abort=function(reason){var s=this.signal;if(!s.aborted){s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');var e=new Event('abort');e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};
         \\  globalThis.AbortController=AbortController;
         \\}
         \\if(typeof MessageEvent==='undefined'){
