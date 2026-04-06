@@ -706,9 +706,29 @@ pub fn elementAppendChild(
     api.setDomDirty();
     // Dynamic script execution: if a <script> is appended, fetch and execute it
     api.maybeExecuteDynamicScriptPublic(c, child, args[0]);
+    // Dynamic iframe setup: if an <iframe> is appended, create contentDocument/contentWindow
+    maybeSetupDynamicIframe(c, child);
     // Upgrade custom elements in the inserted subtree
     upgradeSubtreeCustomElements(c, child);
     return qjs.JS_DupValue(c, args[0]);
+}
+
+/// If the inserted node is an <iframe>, set up contentDocument/contentWindow.
+fn maybeSetupDynamicIframe(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) void {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    var name_len: usize = 0;
+    const name = lxb_dom_element_local_name(elem, &name_len);
+    if (name == null or name_len != 6) return;
+    if (!std.mem.eql(u8, name.?[0..6], "iframe")) return;
+    // Check if contentDocument is already set (avoid double setup)
+    const js_elem = api.wrapNode(ctx, node);
+    defer qjs.JS_FreeValue(ctx, js_elem);
+    const cd = qjs.JS_GetPropertyStr(ctx, js_elem, "contentDocument");
+    const has_cd = !quickjs.JS_IsNull(cd) and !quickjs.JS_IsUndefined(cd);
+    qjs.JS_FreeValue(ctx, cd);
+    if (has_cd) return;
+    api.iframe.setupDynamicIframe(ctx, elem);
 }
 
 pub fn elementRemoveChild(

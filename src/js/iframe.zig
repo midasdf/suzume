@@ -300,6 +300,18 @@ fn setupIframe(
     _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", content_window);
     _ = qjs.JS_SetPropertyStr(parent_ctx, content_window, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
 
+    // Update window.frames (window[idx] = contentWindow, window.length++)
+    {
+        const parent_global = qjs.JS_GetGlobalObject(parent_ctx);
+        defer qjs.JS_FreeValue(parent_ctx, parent_global);
+        const len_val = qjs.JS_GetPropertyStr(parent_ctx, parent_global, "length");
+        var len: i32 = 0;
+        _ = qjs.JS_ToInt32(parent_ctx, &len, len_val);
+        qjs.JS_FreeValue(parent_ctx, len_val);
+        _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), qjs.JS_DupValue(parent_ctx, content_window));
+        _ = qjs.JS_SetPropertyStr(parent_ctx, parent_global, "length", qjs.JS_NewInt32(parent_ctx, len + 1));
+    }
+
     // Fire load event on iframe element (in parent context)
     // Many WPT tests depend on iframe.onload
     {
@@ -361,6 +373,163 @@ pub fn resetIframes() void {
         iframe_frames[i] = .{};
     }
     iframe_count = 0;
+}
+
+/// Set up a dynamically-created iframe (from JS appendChild/insertBefore).
+/// Lightweight version of setupIframe: no layout, no font cache needed.
+pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element_t) void {
+    if (iframe_count >= frame_state.MAX_IFRAME_COUNT) return;
+
+    const allocator = std.heap.c_allocator;
+    const rt = qjs.JS_GetRuntime(parent_ctx) orelse return;
+
+    // Get srcdoc/src for content
+    var src_len: usize = 0;
+    const src_ptr = lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
+    var srcdoc_len: usize = 0;
+    const srcdoc_ptr = lxb_dom_element_get_attribute(elem, "srcdoc", 6, &srcdoc_len);
+
+    var html_content: ?[]const u8 = null;
+    var iframe_url: []const u8 = "about:blank";
+    var fetched_html: ?[]u8 = null;
+    defer if (fetched_html) |fh| allocator.free(fh);
+
+    if (srcdoc_ptr != null and srcdoc_len > 0) {
+        html_content = srcdoc_ptr.?[0..srcdoc_len];
+        iframe_url = "about:srcdoc";
+    } else if (src_ptr != null and src_len > 0) {
+        const src = src_ptr.?[0..src_len];
+        if (fetchIframeContent(src, allocator)) |content| {
+            fetched_html = content;
+            html_content = content;
+            iframe_url = src;
+        }
+    }
+
+    // Parse HTML into Lexbor Document
+    const iframe_doc = if (html_content) |html|
+        Document.parse(html) catch null
+    else
+        Document.parse("<!DOCTYPE html><html><head></head><body></body></html>") catch null;
+
+    if (iframe_doc == null) return;
+
+    const idx = iframe_count;
+    iframe_docs[idx] = iframe_doc;
+    iframe_count += 1;
+
+    const doc_ptr: *anyopaque = @ptrCast(@alignCast(iframe_doc.?.html_doc));
+
+    // Create new JSContext
+    const iframe_ctx = qjs.JS_NewContext(rt) orelse return;
+    iframe_contexts[idx] = iframe_ctx;
+
+    // FrameState
+    iframe_frames[idx] = .{
+        .document = doc_ptr,
+        .ctx = iframe_ctx,
+        .current_url = iframe_url,
+        .parent_frame = &api.g_top_frame,
+        .depth = 1,
+    };
+    qjs.JS_SetContextOpaque(iframe_ctx, @ptrCast(&iframe_frames[idx]));
+
+    // Save parent globals
+    const saved_doc = api.g_document;
+    const saved_url = api.g_top_frame.current_url;
+    const saved_dirty = api.dom_dirty;
+    const saved_web_ctx = web_api.getGlobalCtx();
+
+    // Register APIs on iframe context
+    api.registerDomApis(rt, iframe_ctx, doc_ptr);
+    events.registerEventApis(iframe_ctx);
+    const CtxWrapper = struct { ctx: *qjs.JSContext };
+    var ctx_wrap = CtxWrapper{ .ctx = iframe_ctx };
+    web_api.registerWebApis(&ctx_wrap);
+    events.injectElementEventMethods(iframe_ctx, api.element_class_id);
+
+    // Fix document element getters for iframe context
+    {
+        const ig = qjs.JS_GetGlobalObject(iframe_ctx);
+        defer qjs.JS_FreeValue(iframe_ctx, ig);
+        const id = qjs.JS_GetPropertyStr(iframe_ctx, ig, "document");
+        defer qjs.JS_FreeValue(iframe_ctx, id);
+        const de = qjs.JS_GetPropertyStr(iframe_ctx, id, "documentElement");
+        const b = qjs.JS_GetPropertyStr(iframe_ctx, id, "body");
+        const h = qjs.JS_GetPropertyStr(iframe_ctx, id, "head");
+        const fix =
+            \\(function(doc,de,b,h){
+            \\  Object.defineProperty(doc,'documentElement',{get:function(){return de;},configurable:true});
+            \\  Object.defineProperty(doc,'body',{get:function(){return b;},configurable:true});
+            \\  Object.defineProperty(doc,'head',{get:function(){return h;},configurable:true});
+            \\})
+        ;
+        const fix_fn = qjs.JS_Eval(iframe_ctx, fix, fix.len, "<dif>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(fix_fn)) {
+            var fa = [4]qjs.JSValue{ id, de, b, h };
+            const fr = qjs.JS_Call(iframe_ctx, fix_fn, quickjs.JS_UNDEFINED(), 4, &fa);
+            qjs.JS_FreeValue(iframe_ctx, fr);
+        }
+        qjs.JS_FreeValue(iframe_ctx, fix_fn);
+        qjs.JS_FreeValue(iframe_ctx, de);
+        qjs.JS_FreeValue(iframe_ctx, b);
+        qjs.JS_FreeValue(iframe_ctx, h);
+    }
+
+    // Restore parent globals
+    api.g_document = saved_doc;
+    api.g_top_frame.document = saved_doc;
+    api.g_top_frame.current_url = saved_url;
+    api.dom_dirty = saved_dirty;
+    web_api.setGlobalCtx(saved_web_ctx);
+
+    // Set contentDocument/contentWindow on parent element
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const js_elem = api.wrapNode(parent_ctx, node);
+
+    const iframe_global = qjs.JS_GetGlobalObject(iframe_ctx);
+    const iframe_doc_obj = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global, "document");
+
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", iframe_doc_obj);
+
+    // contentWindow bridge
+    const cw_js =
+        \\(function(ig){
+        \\  var cw={document:ig.document,parent:window,top:window,
+        \\    location:{href:ig.location?ig.location.href:'about:blank'},
+        \\    navigator:window.navigator,closed:false,
+        \\    addEventListener:function(t,f,o){ig.addEventListener(t,f,o);},
+        \\    removeEventListener:function(t,f,o){ig.removeEventListener(t,f,o);},
+        \\    dispatchEvent:function(e){return ig.dispatchEvent(e);},
+        \\    getComputedStyle:ig.getComputedStyle,
+        \\    setTimeout:ig.setTimeout,clearTimeout:ig.clearTimeout,
+        \\    postMessage:function(){},focus:function(){},blur:function(){},
+        \\    close:function(){this.closed=true;}};
+        \\  cw.window=cw;cw.self=cw;return cw;
+        \\})
+    ;
+    const cw_fn = qjs.JS_Eval(parent_ctx, cw_js, cw_js.len, "<dicw>", qjs.JS_EVAL_TYPE_GLOBAL);
+    var cw_args = [1]qjs.JSValue{iframe_global};
+    const cw = qjs.JS_Call(parent_ctx, cw_fn, quickjs.JS_UNDEFINED(), 1, &cw_args);
+    qjs.JS_FreeValue(parent_ctx, cw_fn);
+    qjs.JS_FreeValue(parent_ctx, iframe_global);
+
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", cw);
+    _ = qjs.JS_SetPropertyStr(parent_ctx, cw, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+
+    // Update window.frames (window[idx] = contentWindow, window.length++)
+    {
+        const parent_global = qjs.JS_GetGlobalObject(parent_ctx);
+        defer qjs.JS_FreeValue(parent_ctx, parent_global);
+        const len_val = qjs.JS_GetPropertyStr(parent_ctx, parent_global, "length");
+        var len: i32 = 0;
+        _ = qjs.JS_ToInt32(parent_ctx, &len, len_val);
+        qjs.JS_FreeValue(parent_ctx, len_val);
+        _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), qjs.JS_DupValue(parent_ctx, cw));
+        _ = qjs.JS_SetPropertyStr(parent_ctx, parent_global, "length", qjs.JS_NewInt32(parent_ctx, len + 1));
+    }
+
+    qjs.JS_FreeValue(parent_ctx, js_elem);
 }
 
 fn buildIframeLayout(maybe_doc: ?Document, elem: *lxb.lxb_dom_element_t, allocator: std.mem.Allocator, idx: u32, fonts: ?*FontCache) void {
