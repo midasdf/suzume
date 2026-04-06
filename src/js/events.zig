@@ -283,6 +283,25 @@ pub fn jsRemoveEventListener(
             }
         }
     } else {
+        // Check for JS-level listener storage (__el_ properties)
+        {
+            const is_global = blk: {
+                const gl = qjs.JS_GetGlobalObject(c);
+                defer qjs.JS_FreeValue(c, gl);
+                break :blk (this_val.tag == gl.tag and this_val.u.ptr == gl.u.ptr);
+            };
+            if (!is_global and !isDocumentObject(c, this_val)) {
+                const rm_js = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k];if(!a)return;for(var i=0;i<a.length;i++){if(a[i].fn===cb){a.splice(i,1);return;}}})";
+                const rm_fn = qjs.JS_Eval(c, rm_js, rm_js.len, "<rel>", qjs.JS_EVAL_TYPE_GLOBAL);
+                if (!quickjs.JS_IsException(rm_fn)) {
+                    var rm_args = [4]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
+                    const rm_r = qjs.JS_Call(c, rm_fn, quickjs.JS_UNDEFINED(), 4, &rm_args);
+                    qjs.JS_FreeValue(c, rm_r);
+                    qjs.JS_FreeValue(c, rm_fn);
+                }
+                return quickjs.JS_UNDEFINED();
+            }
+        }
         // Document or Window listener removal
         const entries_list = if (isDocumentObject(c, this_val)) &document_listener_entries else &window_listener_entries;
         for (entries_list.items) |*entry| {
@@ -1736,14 +1755,13 @@ fn jsElementDispatchEvent(
         const js_dispatch =
             \\(function(el,evt,type){
             \\  var k='__el_'+type;var a=el[k];if(!a)return;
-            \\  var toRemove=[];
-            \\  for(var i=0;i<a.length;i++){
-            \\    var h=a[i],fn=h.fn||h;
+            \\  var copy=a.slice();
+            \\  for(var i=0;i<copy.length;i++){
+            \\    var h=copy[i],fn=h.fn||h;
+            \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
             \\    if(typeof fn==='function')fn.call(el,evt);
             \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
-            \\    if(h.once)toRemove.push(i);
             \\  }
-            \\  for(var j=toRemove.length-1;j>=0;j--)a.splice(toRemove[j],1);
             \\})
         ;
         const fn_val = qjs.JS_Eval(c, js_dispatch, js_dispatch.len, "<jsd>", qjs.JS_EVAL_TYPE_GLOBAL);
