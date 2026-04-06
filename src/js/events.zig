@@ -153,6 +153,28 @@ pub fn jsAddEventListener(
             const once_val = qjs.JS_GetPropertyStr(c, args[2], "once");
             if (once_val.tag != qjs.JS_TAG_UNDEFINED) once = qjs.JS_ToBool(c, once_val) > 0;
             qjs.JS_FreeValue(c, once_val);
+
+            // signal option: AbortSignal integration
+            const sig_val = qjs.JS_GetPropertyStr(c, args[2], "signal");
+            defer qjs.JS_FreeValue(c, sig_val);
+            if (sig_val.tag != qjs.JS_TAG_UNDEFINED) {
+                if (quickjs.JS_IsNull(sig_val)) {
+                    return qjs.JS_ThrowTypeError(c, "Failed to execute 'addEventListener': signal must not be null.");
+                }
+                // If signal is already aborted, don't add the listener
+                const aborted = qjs.JS_GetPropertyStr(c, sig_val, "aborted");
+                defer qjs.JS_FreeValue(c, aborted);
+                if (qjs.JS_ToBool(c, aborted) > 0) return quickjs.JS_UNDEFINED();
+                // Register abort handler to remove the listener
+                const sig_js = "(function(sig,el,type,cb,cap){sig.addEventListener('abort',function(){el.removeEventListener(type,cb,cap);},{once:true});})";
+                const sig_fn = qjs.JS_Eval(c, sig_js, sig_js.len, "<sig>", qjs.JS_EVAL_TYPE_GLOBAL);
+                if (!quickjs.JS_IsException(sig_fn)) {
+                    var sig_args = [5]qjs.JSValue{ sig_val, this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
+                    const sig_r = qjs.JS_Call(c, sig_fn, quickjs.JS_UNDEFINED(), 5, &sig_args);
+                    qjs.JS_FreeValue(c, sig_r);
+                    qjs.JS_FreeValue(c, sig_fn);
+                }
+            }
         } else {
             // Legacy: addEventListener(type, cb, useCapture) — any truthy value = capture
             capture = qjs.JS_ToBool(c, args[2]) > 0;
@@ -1223,6 +1245,8 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
     const event_ctor_js =
         \\(function() {
         \\  function Event(type, opts) {
+        \\    if(!(this instanceof Event))throw new TypeError("Failed to construct 'Event': Please use the 'new' operator.");
+        \\    if(arguments.length<1)throw new TypeError("Failed to construct 'Event': 1 argument required.");
         \\    if (typeof type !== 'string' && typeof type !== 'undefined') type = String(type);
         \\    this.type = type || '';
         \\    var o = opts || {};
