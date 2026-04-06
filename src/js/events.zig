@@ -117,13 +117,17 @@ fn findOrCreateEntry(node: *lxb.lxb_dom_node_t, event_type: []const u8) ?*Listen
 
 pub fn jsAddEventListener(
     ctx: ?*qjs.JSContext,
-    this_val: qjs.JSValue,
+    this_val_raw: qjs.JSValue,
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 2) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
+    // QuickJS passes undefined for bare calls like addEventListener(...).
+    // Treat undefined this as the global/window object (sloppy mode behavior).
+    const this_val = if (quickjs.JS_IsUndefined(this_val_raw)) qjs.JS_GetGlobalObject(c) else this_val_raw;
+    defer if (quickjs.JS_IsUndefined(this_val_raw)) qjs.JS_FreeValue(c, this_val);
 
     // Get event type string
     const type_s = dom_api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
@@ -261,13 +265,15 @@ pub fn jsAddEventListener(
 
 pub fn jsRemoveEventListener(
     ctx: ?*qjs.JSContext,
-    this_val: qjs.JSValue,
+    this_val_raw: qjs.JSValue,
     argc: c_int,
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 2) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
+    const this_val = if (quickjs.JS_IsUndefined(this_val_raw)) qjs.JS_GetGlobalObject(c) else this_val_raw;
+    defer if (quickjs.JS_IsUndefined(this_val_raw)) qjs.JS_FreeValue(c, this_val);
 
     const type_s = dom_api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, type_s.ptr);
@@ -1780,7 +1786,13 @@ fn jsElementDispatchEvent(
     }
 
     const node = dom_api.getNodePublic(c, this_val) orelse {
-        // JS-level node (PI, DocumentType, etc.): dispatch from __el_ storage
+        // Check if this is the window/global object — dispatch from native storage
+        const is_window = blk: {
+            const gl = qjs.JS_GetGlobalObject(c);
+            defer qjs.JS_FreeValue(c, gl);
+            break :blk (this_val.tag == gl.tag and this_val.u.ptr == gl.u.ptr);
+        };
+
         const type_val2 = qjs.JS_GetPropertyStr(c, args[0], "type");
         defer qjs.JS_FreeValue(c, type_val2);
         const ts2 = dom_api.jsStringToSlice(c, type_val2) orelse return quickjs.JS_NewBool(true);
@@ -1789,31 +1801,15 @@ fn jsElementDispatchEvent(
         _ = qjs.JS_SetPropertyStr(c, args[0], "target", qjs.JS_DupValue(c, this_val));
         _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", qjs.JS_DupValue(c, this_val));
         _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 2)); // AT_TARGET
-        const js_dispatch =
-            \\(function(el,evt,type){
-            \\  var k='__el_'+type;var a=el[k];if(!a)return;
-            \\  var copy=a.slice();
-            \\  var origPD=evt.preventDefault;
-            \\  for(var i=0;i<copy.length;i++){
-            \\    var h=copy[i],fn=h.fn||h;
-            \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
-            \\    var wasPD=evt.defaultPrevented;
-            \\    if(h.passive)evt.preventDefault=function(){};
-            \\    else evt.preventDefault=origPD;
-            \\    if(typeof fn==='function')fn.call(el,evt);
-            \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
-            \\    if(h.passive){evt.defaultPrevented=wasPD;evt.returnValue=true;}
-            \\  }
-            \\  evt.preventDefault=origPD;
-            \\})
-        ;
-        const fn_val = qjs.JS_Eval(c, js_dispatch, js_dispatch.len, "<jsd>", qjs.JS_EVAL_TYPE_GLOBAL);
-        if (!quickjs.JS_IsException(fn_val)) {
-            var d_args = [3]qjs.JSValue{ this_val, args[0], type_val2 };
-            const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 3, &d_args);
-            qjs.JS_FreeValue(c, r);
-            qjs.JS_FreeValue(c, fn_val);
+
+        if (is_window) {
+            // Dispatch using native window listener entries
+            dispatchToNativeEntries(c, &window_listener_entries, ts2.ptr[0..ts2.len], args[0], this_val);
+        } else {
+            // JS-level node (PI, DocumentType, etc.): dispatch from __el_ storage
+            dispatchToJsEntries(c, this_val, args[0], type_val2);
         }
+
         _ = qjs.JS_SetPropertyStr(c, args[0], "_dispatching", quickjs.JS_NewBool(false));
         _ = qjs.JS_SetPropertyStr(c, args[0], "eventPhase", qjs.JS_NewInt32(c, 0));
         _ = qjs.JS_SetPropertyStr(c, args[0], "currentTarget", quickjs.JS_NULL());
@@ -1842,6 +1838,73 @@ pub const jsAddEventListenerPub = jsAddEventListener;
 pub const jsRemoveEventListenerPub = jsRemoveEventListener;
 pub const jsWindowDispatchEventPub = jsWindowDispatchEvent;
 pub const jsElementDispatchEventPub = jsElementDispatchEvent;
+
+/// Dispatch event to native listener entries (window or document).
+fn dispatchToNativeEntries(c: *qjs.JSContext, entries: *std.ArrayListUnmanaged(WindowListenerEntry), event_type: []const u8, event_obj: qjs.JSValue, target: qjs.JSValue) void {
+    for (entries.items) |*entry| {
+        if (!std.mem.eql(u8, entry.event_type, event_type)) continue;
+        var i: usize = 0;
+        while (i < entry.callbacks.items.len) {
+            const rec = entry.callbacks.items[i];
+            if (rec.once) {
+                qjs.JS_FreeValue(c, rec.callback);
+                _ = entry.callbacks.orderedRemove(i);
+            } else {
+                i += 1;
+            }
+            // Save/restore defaultPrevented for passive listeners
+            const saved_dp = qjs.JS_GetPropertyStr(c, event_obj, "defaultPrevented");
+            if (qjs.JS_IsFunction(c, rec.callback)) {
+                var call_args = [1]qjs.JSValue{event_obj};
+                const r = qjs.JS_Call(c, rec.callback, target, 1, &call_args);
+                qjs.JS_FreeValue(c, r);
+            } else {
+                // handleEvent pattern
+                const he = qjs.JS_GetPropertyStr(c, rec.callback, "handleEvent");
+                if (qjs.JS_IsFunction(c, he)) {
+                    var call_args = [1]qjs.JSValue{event_obj};
+                    const r = qjs.JS_Call(c, he, rec.callback, 1, &call_args);
+                    qjs.JS_FreeValue(c, r);
+                }
+                qjs.JS_FreeValue(c, he);
+            }
+            if (rec.passive) {
+                _ = qjs.JS_SetPropertyStr(c, event_obj, "defaultPrevented", saved_dp);
+            } else {
+                qjs.JS_FreeValue(c, saved_dp);
+            }
+        }
+    }
+}
+
+/// Dispatch event to JS-level __el_ storage on target object.
+fn dispatchToJsEntries(c: *qjs.JSContext, target: qjs.JSValue, event_obj: qjs.JSValue, type_val: qjs.JSValue) void {
+    const js_dispatch =
+        \\(function(el,evt,type){
+        \\  var k='__el_'+type;var a=el[k];if(!a)return;
+        \\  var copy=a.slice();
+        \\  var origPD=evt.preventDefault;
+        \\  for(var i=0;i<copy.length;i++){
+        \\    var h=copy[i],fn=h.fn||h;
+        \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+        \\    var wasPD=evt.defaultPrevented;
+        \\    if(h.passive)evt.preventDefault=function(){};
+        \\    else evt.preventDefault=origPD;
+        \\    if(typeof fn==='function')fn.call(el,evt);
+        \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+        \\    if(h.passive){evt.defaultPrevented=wasPD;evt.returnValue=true;}
+        \\  }
+        \\  evt.preventDefault=origPD;
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_dispatch, js_dispatch.len, "<jsd>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        var d_args = [3]qjs.JSValue{ target, event_obj, type_val };
+        const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 3, &d_args);
+        qjs.JS_FreeValue(c, r);
+        qjs.JS_FreeValue(c, fn_val);
+    }
+}
 
 /// Expose the element_class_id for the event system to inject methods.
 pub fn getElementClassId() qjs.JSClassID {
