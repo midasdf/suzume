@@ -4103,24 +4103,52 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "doctype", dt_obj);
     }
 
-    // document.forms / links / images (query-based getters)
+    // document.forms / links / images / scripts / embeds / plugins (HTMLCollection getters)
+    // Uses JS function stored globally, applied to doc_obj after document is on global
     {
-        const forms_js = "(function(){return document.querySelectorAll('form');})";
-        const formsAtom = qjs.JS_NewAtom(ctx, "forms");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, formsAtom, qjs.JS_Eval(ctx, forms_js, forms_js.len, "<forms>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-        qjs.JS_FreeAtom(ctx, formsAtom);
-    }
-    {
-        const links_js = "(function(){return document.querySelectorAll('a[href],area[href]');})";
-        const linksAtom = qjs.JS_NewAtom(ctx, "links");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, linksAtom, qjs.JS_Eval(ctx, links_js, links_js.len, "<links>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-        qjs.JS_FreeAtom(ctx, linksAtom);
-    }
-    {
-        const images_js = "(function(){return document.querySelectorAll('img');})";
-        const imagesAtom = qjs.JS_NewAtom(ctx, "images");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, doc_obj, imagesAtom, qjs.JS_Eval(ctx, images_js, images_js.len, "<images>", qjs.JS_EVAL_TYPE_GLOBAL), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
-        qjs.JS_FreeAtom(ctx, imagesAtom);
+        const coll_js =
+            \\(function(d){
+            \\  function makeHTMLColl(sel){
+            \\    return function(){
+            \\      var els=d.querySelectorAll(sel);
+            \\      var a=Array.from(els);
+            \\      var names={};
+            \\      for(var i=0;i<a.length;i++){
+            \\        var eid=a[i].getAttribute('id');if(eid&&!names[eid])names[eid]=a[i];
+            \\        var ename=a[i].getAttribute('name');if(ename&&!names[ename])names[ename]=a[i];
+            \\      }
+            \\      var h={get:function(t,p){
+            \\        if(p==='length')return a.length;
+            \\        if(p==='item')return function(i){return a[i>>>0]||null;};
+            \\        if(p==='namedItem')return function(n){return names[n]||null;};
+            \\        if(p===Symbol.iterator)return function*(){for(var i=0;i<a.length;i++)yield a[i];};
+            \\        if(p===Symbol.toStringTag)return'HTMLCollection';
+            \\        if(typeof p==='string'&&/^\d+$/.test(p))return a[p>>>0];
+            \\        if(typeof p==='string'&&names[p])return names[p];
+            \\        return undefined;
+            \\      },has:function(t,p){
+            \\        if(typeof p==='string'&&/^\d+$/.test(p))return(p>>>0)<a.length;
+            \\        return p==='length'||p in names;
+            \\      }};
+            \\      if(typeof HTMLCollection!=='undefined')return new Proxy({},Object.assign(h,{getPrototypeOf:function(){return HTMLCollection.prototype;}}));
+            \\      return new Proxy({},h);
+            \\    };
+            \\  }
+            \\  Object.defineProperty(d,'forms',{get:makeHTMLColl('form'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'links',{get:makeHTMLColl('a[href],area[href]'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'images',{get:makeHTMLColl('img'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'scripts',{get:makeHTMLColl('script'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'embeds',{get:makeHTMLColl('embed'),configurable:true,enumerable:true});
+            \\  Object.defineProperty(d,'plugins',{get:makeHTMLColl('embed'),configurable:true,enumerable:true});
+            \\})
+        ;
+        const coll_fn = qjs.JS_Eval(ctx, coll_js, coll_js.len, "<doccoll>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(coll_fn)) {
+            var coll_args = [1]qjs.JSValue{doc_obj};
+            const coll_r = qjs.JS_Call(ctx, coll_fn, quickjs.JS_UNDEFINED(), 1, &coll_args);
+            qjs.JS_FreeValue(ctx, coll_r);
+            qjs.JS_FreeValue(ctx, coll_fn);
+        }
     }
 
     // document.scripts
