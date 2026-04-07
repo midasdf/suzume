@@ -49,6 +49,28 @@ fn encodeUtf8(code: u32, buf: []u8) usize {
     return 0;
 }
 
+/// Find next unescaped dot in a selector string (skips \. sequences)
+fn findUnescapedDot(s: []const u8) ?usize {
+    var i: usize = 0;
+    while (i < s.len) {
+        if (s[i] == '\\' and i + 1 < s.len) { i += 2; continue; }
+        if (s[i] == '.') return i;
+        i += 1;
+    }
+    return null;
+}
+
+/// Find first unescaped char in a selector string
+fn findUnescapedChar(s: []const u8, ch: u8) ?usize {
+    var i: usize = 0;
+    while (i < s.len) {
+        if (s[i] == '\\' and i + 1 < s.len) { i += 2; continue; }
+        if (s[i] == ch) return i;
+        i += 1;
+    }
+    return null;
+}
+
 /// Decode CSS escape sequences in a selector value.
 /// Returns the decoded string in buf, or input if no escapes present.
 fn decodeCssEscapes(input: []const u8, buf: []u8) []const u8 {
@@ -471,13 +493,15 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
 
     // Check for attribute selector embedded in compound: tag[attr], .class[attr], etc.
     if (sel[0] != '[') {
-        // Find first '[' not inside parens
+        // Find first unescaped '[' not inside parens
         var depth_b: u32 = 0;
         var bracket_pos: ?usize = null;
-        for (sel, 0..) |ch, bi| {
-            if (ch == '(') depth_b += 1
-            else if (ch == ')' and depth_b > 0) depth_b -= 1
-            else if (ch == '[' and depth_b == 0) { bracket_pos = bi; break; }
+        var bi: usize = 0;
+        while (bi < sel.len) : (bi += 1) {
+            if (sel[bi] == '\\' and bi + 1 < sel.len) { bi += 1; continue; } // skip escape
+            if (sel[bi] == '(') depth_b += 1
+            else if (sel[bi] == ')' and depth_b > 0) depth_b -= 1
+            else if (sel[bi] == '[' and depth_b == 0) { bracket_pos = bi; break; }
         }
         if (bracket_pos) |bp| {
             if (bp > 0) {
@@ -521,7 +545,7 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         const class_val = val.?[0..val_len];
         var rest = sel[1..];
         while (rest.len > 0) {
-            const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            const next_dot = findUnescapedDot(rest) orelse rest.len;
             if (next_dot == 0) return false;
             var esc_buf: [512]u8 = undefined;
             const decoded = decodeCssEscapes(rest[0..next_dot], &esc_buf);
@@ -535,7 +559,7 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel.len == 1 and sel[0] == '*') return true;
 
     // Compound: tag.class1.class2 or tag#id
-    if (std.mem.indexOfScalar(u8, sel, '.')) |dot| {
+    if (findUnescapedDot(sel)) |dot| {
         if (dot > 0) {
             // tag.class1.class2...
             var name_len: usize = 0;
@@ -547,7 +571,7 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             const class_val = val.?[0..val_len];
             var rest = sel[dot + 1 ..];
             while (rest.len > 0) {
-                const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+                const next_dot = findUnescapedDot(rest) orelse rest.len;
                 if (next_dot == 0) return false;
                 var esc_buf_c: [512]u8 = undefined;
                 const decoded_c = decodeCssEscapes(rest[0..next_dot], &esc_buf_c);
@@ -1144,7 +1168,7 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
         var rest = selector[1..];
         while (rest.len > 0) {
             // Find next dot (start of next class) or end
-            const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            const next_dot = findUnescapedDot(rest) orelse rest.len;
             if (next_dot == 0) return false; // empty class like ".foo..bar"
             var esc_buf_cls: [512]u8 = undefined;
             const decoded_cls = decodeCssEscapes(rest[0..next_dot], &esc_buf_cls);
@@ -1160,7 +1184,7 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
 
     // Find dot position ONLY before bracket (dot inside [attr="val.ue"] is not a class)
     const dot_search_end = bracket_idx orelse selector.len;
-    const dot_idx = std.mem.indexOfScalar(u8, selector[0..dot_search_end], '.');
+    const dot_idx = findUnescapedDot(selector[0..dot_search_end]);
 
     // Determine the tag name portion end
     const tag_end = dot_idx orelse bracket_idx orelse selector.len;
@@ -1183,7 +1207,7 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
         // Split chained classes by '.' and check each
         var rest = selector[di + 1 .. class_end];
         while (rest.len > 0) {
-            const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            const next_dot = findUnescapedDot(rest) orelse rest.len;
             if (next_dot == 0) return false;
             var esc_buf_cls2: [512]u8 = undefined;
             const decoded_cls2 = decodeCssEscapes(rest[0..next_dot], &esc_buf_cls2);
