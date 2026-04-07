@@ -5028,6 +5028,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      if(sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^[<>{}()\[\]]$/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^#$/.test(t)||/^\.(\d|\.|\s*$)/.test(t)||/\.\s*$/.test(t)||/\.$/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var _nb=t.replace(/\[[^\]]*\]/g,'');if(/\.\./.test(_nb)||/#\./.test(_nb))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/[^+~>]\s*%/.test(t)||/\+\+/.test(t)||/~~/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/\[\s*\*\s*=/.test(t)&&!/\[\s*\*\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/\[\s*\*\|\*\s*=/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
@@ -5055,11 +5056,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  var _nm=Element.prototype.matches,_nc=Element.prototype.closest;
             \\  var _nqs=Element.prototype.querySelector,_nqsa=Element.prototype.querySelectorAll;
-            \\  Element.prototype.matches=function(s){_vSel(s,'matches');return _nm.call(this,s);};
+            \\  Element.prototype.matches=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'matches': 1 argument required, but only 0 present.");_vSel(s,'matches');return _nm.call(this,s);};
             \\  Element.prototype.webkitMatchesSelector=Element.prototype.matches;
-            \\  Element.prototype.closest=function(s){_vSel(s,'closest');return _nc.call(this,s);};
-            \\  Element.prototype.querySelector=function(s){_vSel(s,'querySelector');return _nqs.call(this,s);};
-            \\  Element.prototype.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _nqsa.call(this,s);};
+            \\  Element.prototype.closest=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'closest': 1 argument required, but only 0 present.");_vSel(s,'closest');return _nc.call(this,s);};
+            \\  Element.prototype.querySelector=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelector': 1 argument required, but only 0 present.");_vSel(s,'querySelector');return _nqs.call(this,s);};
+            \\  Element.prototype.querySelectorAll=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelectorAll': 1 argument required, but only 0 present.");_vSel(s,'querySelectorAll');return _nqsa.call(this,s);};
             \\  var _dqs=document.querySelector,_dqsa=document.querySelectorAll;
             \\  document.querySelector=function(s){_vSel(s,'querySelector');return _dqs.call(document,s);};
             \\  document.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _dqsa.call(document,s);};
