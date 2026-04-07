@@ -4979,7 +4979,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(arguments.length<1)throw new TypeError("Failed to execute '"+meth+"': 1 argument required, but only 0 present.");
             \\    s=String(s);
             \\    if(s==='')throw new DOMException("Failed to execute '"+meth+"': '' is not a valid selector.","SyntaxError");
-            \\    var parts=s.split(',');
+            \\    function _splitTopCommas(str){var parts=[],start=0,d=0;for(var i=0;i<str.length;i++){var c=str[i];if(c==='('||c==='[')d++;else if((c===')'||c===']')&&d>0)d--;else if(c===','&&d===0){parts.push(str.substring(start,i));start=i+1;}}parts.push(str.substring(start));return parts;}
+            \\    var parts=_splitTopCommas(s);
             \\    for(var p=0;p<parts.length;p++){
             \\      var t=parts[p].trim();
             \\      if(t==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
