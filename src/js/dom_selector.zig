@@ -307,6 +307,33 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             if (elem_lang == null) return false;
             return matchLangBCP47(lang_arg, elem_lang.?);
         }
+        // :heading / :heading(N) — CSS Selectors Level 5
+        if (std.ascii.eqlIgnoreCase(sel, ":heading") or
+            (sel.len > 9 and std.ascii.eqlIgnoreCase(sel[0..9], ":heading(") and sel[sel.len - 1] == ')'))
+        {
+            // Get element local name
+            var tag_len: usize = 0;
+            const tag_ptr = lxb_dom_element_local_name(elem, &tag_len);
+            if (tag_ptr == null or tag_len < 2) return false;
+            const tag = tag_ptr.?[0..tag_len];
+            // Check if h1-h6
+            if (tag_len != 2 or (tag[0] != 'h' and tag[0] != 'H')) return false;
+            const level = tag[1];
+            if (level < '1' or level > '6') return false;
+            const elem_level: i32 = @as(i32, level - '0');
+            // :heading without args matches all h1-h6
+            if (std.ascii.eqlIgnoreCase(sel, ":heading")) return true;
+            // :heading(N, ...) — check comma-separated integer levels
+            const args = std.mem.trim(u8, sel[9 .. sel.len - 1], " \t");
+            var it = std.mem.splitScalar(u8, args, ',');
+            while (it.next()) |part| {
+                const trimmed = std.mem.trim(u8, part, " \t");
+                if (trimmed.len == 0) continue;
+                const n = std.fmt.parseInt(i32, trimmed, 10) catch continue;
+                if (n == elem_level) return true;
+            }
+            return false;
+        }
         // Unknown pseudo — return false (conservative)
         return false;
     }
