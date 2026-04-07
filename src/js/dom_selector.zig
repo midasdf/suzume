@@ -528,8 +528,12 @@ pub fn getNthLastOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 /// Match An+B formula: "odd", "even", "3", "2n", "2n+1", "-n+3", etc.
-pub fn matchNthFormula(arg: []const u8, idx: u32) bool {
+pub fn matchNthFormula(raw_arg: []const u8, idx: u32) bool {
     if (idx == 0) return false;
+    // Strip all CSS whitespace (space, tab, newline, carriage return, form feed)
+    const ws = " \t\n\r\x0c";
+    const arg = std.mem.trim(u8, raw_arg, ws);
+    if (arg.len == 0) return false;
     if (std.ascii.eqlIgnoreCase(arg, "odd")) return (idx % 2) == 1;
     if (std.ascii.eqlIgnoreCase(arg, "even")) return (idx % 2) == 0;
     if (std.ascii.eqlIgnoreCase(arg, "n")) return true; // matches all
@@ -541,7 +545,7 @@ pub fn matchNthFormula(arg: []const u8, idx: u32) bool {
         // Parse A (before n)
         var a: i32 = 1;
         if (n_pos > 0) {
-            const a_str = std.mem.trim(u8, arg[0..n_pos], " \t");
+            const a_str = std.mem.trim(u8, arg[0..n_pos], ws);
             if (a_str.len == 1 and a_str[0] == '-') { a = -1; }
             else if (a_str.len == 1 and a_str[0] == '+') { a = 1; }
             else if (a_str.len > 0) { a = std.fmt.parseInt(i32, a_str, 10) catch return false; }
@@ -549,7 +553,7 @@ pub fn matchNthFormula(arg: []const u8, idx: u32) bool {
         // Parse B (after n)
         var b: i32 = 0;
         if (n_pos + 1 < arg.len) {
-            const b_str = std.mem.trim(u8, arg[n_pos + 1 ..], " \t");
+            const b_str = std.mem.trim(u8, arg[n_pos + 1 ..], ws);
             if (b_str.len > 0) { b = std.fmt.parseInt(i32, b_str, 10) catch return false; }
         }
         // Match: idx = An + B for some non-negative integer n
