@@ -4995,7 +4995,6 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      if(/\[\s*class\s*=\s+\S/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^\s*>/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/[\^$]\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/[^\\]?\|/.test(t)&&!/\[.*\|/.test(t)&&!/\*\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var m=t.match(/::([a-z-]+)/g);if(m)for(var j=0;j<m.length;j++){if(!_knownPelem.test(m[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
             \\      if(/:::/.test(t)||/::\s/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var pm=t.match(/:(?!:)([a-z-]+(\()?)/g);if(pm)for(var j=0;j<pm.length;j++){if(!_knownPseudo.test(pm[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}

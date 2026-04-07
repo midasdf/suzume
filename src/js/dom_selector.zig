@@ -1133,6 +1133,26 @@ pub fn prevElementSibling(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
 /// inner is the relative selector, e.g. "> .a > .b" or ".a + .b" or just ".a"
 fn hasRelativeMatch(node: *lxb.lxb_dom_node_t, inner: []const u8) bool {
     if (inner.len == 0) return false;
+    // Handle comma-separated selector list (any match = true)
+    {
+        var depth: u32 = 0;
+        var start: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(' or ch == '[') depth += 1
+            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+            else if (ch == ',' and depth == 0) {
+                const part = std.mem.trim(u8, inner[start..i], " \t");
+                if (part.len > 0 and hasRelativeMatchSingle(node, part)) return true;
+                start = i + 1;
+            }
+        }
+        const last = std.mem.trim(u8, inner[start..], " \t");
+        return last.len > 0 and hasRelativeMatchSingle(node, last);
+    }
+}
+
+fn hasRelativeMatchSingle(node: *lxb.lxb_dom_node_t, inner: []const u8) bool {
+    if (inner.len == 0) return false;
     // Determine first combinator
     var combinator: u8 = ' '; // default: descendant
     var rest = inner;
