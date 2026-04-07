@@ -148,7 +148,14 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":scope")) return true; // :scope matches the context element
         if (std.ascii.eqlIgnoreCase(sel, ":empty")) {
             const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-            return node.first_child == null;
+            var child = node.first_child;
+            while (@intFromPtr(child) != 0) {
+                const t = child.*.type;
+                // Element(1) or Text(3) or CDATA(4) nodes make it non-empty
+                if (t == 1 or t == 3 or t == 4) return false;
+                child = child.*.next;
+            }
+            return true;
         }
         if (std.ascii.eqlIgnoreCase(sel, ":enabled")) {
             return !lxb_dom_element_has_attribute(elem, "disabled", 8);
