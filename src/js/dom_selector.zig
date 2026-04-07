@@ -580,10 +580,11 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
 }
 
 pub fn findPseudoStart(sel: []const u8) ?usize {
-    // Find ':' that's not inside [] or () — marks start of pseudo-class
+    // Find ':' that's not inside [] or () and not CSS-escaped — marks start of pseudo-class
     var depth: u32 = 0;
     var i: usize = 0;
     while (i < sel.len) : (i += 1) {
+        if (sel[i] == '\\' and i + 1 < sel.len) { i += 1; continue; } // skip CSS escape
         if (sel[i] == '(' or sel[i] == '[') depth += 1
         else if ((sel[i] == ')' or sel[i] == ']') and depth > 0) depth -= 1
         else if (sel[i] == ':' and depth == 0) return i;

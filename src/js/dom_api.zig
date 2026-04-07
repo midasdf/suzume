@@ -5017,41 +5017,44 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _vSel(s,meth){
             \\    if(arguments.length<1)throw new TypeError("Failed to execute '"+meth+"': 1 argument required, but only 0 present.");
             \\    s=String(s);
+            \\    /* Strip CSS escape sequences before validation so \: etc. don't confuse checks */
+            \\    var _sn=s.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\    if(s==='')throw new DOMException("Failed to execute '"+meth+"': '' is not a valid selector.","SyntaxError");
             \\    function _splitTopCommas(str){var parts=[],start=0,d=0;for(var i=0;i<str.length;i++){var c=str[i];if(c==='('||c==='[')d++;else if((c===')'||c===']')&&d>0)d--;else if(c===','&&d===0){parts.push(str.substring(start,i));start=i+1;}}parts.push(str.substring(start));return parts;}
             \\    var parts=_splitTopCommas(s);
             \\    for(var p=0;p<parts.length;p++){
             \\      var t=parts[p].trim();
             \\      if(t==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var tn=t.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\      var sq=0,rn=0,cu=0;
             \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
             \\      if(sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/^[<>{}()\[\]]$/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/^#$/.test(t)||/^\.(\d|\.|\s*$)/.test(t)||/\.\s*$/.test(t)||/\.$/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      var _nb=t.replace(/\[[^\]]*\]/g,'');if(/\.\./.test(_nb)||/#\./.test(_nb))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/[^+~>]\s*%/.test(t)||/\+\+/.test(t)||/~~/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/^[<>{}()\[\]]$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/^#$/.test(tn)||/^\.(\d|\.|\s*$)/.test(tn)||/\.\s*$/.test(tn)||/\.$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var _nb=tn.replace(/\[[^\]]*\]/g,'');if(/\.\./.test(_nb)||/#\./.test(_nb))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/[^+~>]\s*%/.test(tn)||/\+\+/.test(tn)||/~~/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/\[\s*\*\s*=/.test(t)&&!/\[\s*\*\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/\[\s*\*\|\*\s*=/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/\[\s*class\s*=\s+\S/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^\s*>/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/[\^$]\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/:(?:not|has)\(\s*\)/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/::slotted\(\s*\)/.test(t)||/::slotted\(\s*\d/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/::slotted(?!\()/.test(t)&&!/::slotted\(/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/:has(?!\()(?!-)/.test(t)&&t.indexOf(':has(')< 0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/:has\(\s*\d/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/:has\([^)]*,\s*\d/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/:not\(\s*::/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      (function(){var hm=t.match(/:heading\(([^)]*)\)/);if(hm){if(hm[1].trim()==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");var ha=hm[1].split(',');for(var hi=0;hi<ha.length;hi++){if(!/^\s*-?\d+\s*$/.test(ha[hi]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}})();
-            \\      (function(){var sm=t.match(/:state\(([^)]*)\)/);if(sm){var sv=sm[1].trim();if(!sv||/^[0-9]/.test(sv)||/[\s():!]/.test(sv))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}if(/:state(?!\()/.test(t)&&t.indexOf(':state(')<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");})();
-            \\      (function(){var hi=t.indexOf(':has(');if(hi>=0){var d=0;for(var ci=hi+5;ci<t.length;ci++){if(t[ci]==='(')d++;else if(t[ci]===')'){if(d===0){var inner=t.substring(hi+5,ci);if(/:has\(/.test(inner)){var bp=inner.indexOf(':has(');var pre=inner.substring(0,bp);if(!/:is\($|:where\($/.test(pre.slice(-4)))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}break;}d--;}}}})()
-            \\      if(/::slotted\([^)]*\)\s*[>+~ ]\s*::slotted/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/::(?:part\([^)]*\)\s*[>+~ ]\s*::part)/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/::slotted\([^)]*\):[a-z]/.test(t)&&!/::slotted\([^)]*\)::/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      if(/::(?:before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button):(?!:)[a-z]/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      var m=t.match(/::([a-z-]+)/g);if(m)for(var j=0;j<m.length;j++){if(!_knownPelem.test(m[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
-            \\      if(/:::/.test(t)||/::\s/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      var _pcRe=/:([a-z-]+(\()?)/g,_pcM;while((_pcM=_pcRe.exec(t))!==null){if(_pcM.index>0&&t[_pcM.index-1]===':')continue;if(!_knownPseudo.test(_pcM[0]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
+            \\      if(/:(?:not|has)\(\s*\)/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::slotted\(\s*\)/.test(tn)||/::slotted\(\s*\d/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::slotted(?!\()/.test(tn)&&!/::slotted\(/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:has(?!\()(?!-)/.test(tn)&&tn.indexOf(':has(')< 0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:has\(\s*\d/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:has\([^)]*,\s*\d/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:not\(\s*::/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      (function(){var hm=tn.match(/:heading\(([^)]*)\)/);if(hm){if(hm[1].trim()==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");var ha=hm[1].split(',');for(var hi=0;hi<ha.length;hi++){if(!/^\s*-?\d+\s*$/.test(ha[hi]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}})();
+            \\      (function(){var sm=tn.match(/:state\(([^)]*)\)/);if(sm){var sv=sm[1].trim();if(!sv||/^[0-9]/.test(sv)||/[\s():!]/.test(sv))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}if(/:state(?!\()/.test(tn)&&tn.indexOf(':state(')<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");})();
+            \\      (function(){var hi=tn.indexOf(':has(');if(hi>=0){var d=0;for(var ci=hi+5;ci<tn.length;ci++){if(tn[ci]==='(')d++;else if(tn[ci]===')'){if(d===0){var inner=tn.substring(hi+5,ci);if(/:has\(/.test(inner)){var bp=inner.indexOf(':has(');var pre=inner.substring(0,bp);if(!/:is\($|:where\($/.test(pre.slice(-4)))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}break;}d--;}}}})()
+            \\      if(/::slotted\([^)]*\)\s*[>+~ ]\s*::slotted/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::(?:part\([^)]*\)\s*[>+~ ]\s*::part)/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::slotted\([^)]*\):[a-z]/.test(tn)&&!/::slotted\([^)]*\)::/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::(?:before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button):(?!:)[a-z]/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var m=tn.match(/::([a-z-]+)/g);if(m)for(var j=0;j<m.length;j++){if(!_knownPelem.test(m[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
+            \\      if(/:::/.test(tn)||/::\s/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var _pcRe=/:([a-z-]+(\()?)/g,_pcM;while((_pcM=_pcRe.exec(tn))!==null){if(_pcM.index>0&&tn[_pcM.index-1]===':')continue;if(!_knownPseudo.test(_pcM[0]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
             \\    }
             \\  }
             \\  var _nm=Element.prototype.matches,_nc=Element.prototype.closest;
