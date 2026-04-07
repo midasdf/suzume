@@ -296,6 +296,13 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":checked")) {
             return lxb_dom_element_has_attribute(elem, "checked", 7);
         }
+        if (std.ascii.eqlIgnoreCase(sel, ":target")) {
+            if (api.url_fragment_len == 0) return false;
+            var id_len: usize = 0;
+            const id_ptr = lxb_dom_element_get_attribute(elem, "id", 2, &id_len);
+            if (id_ptr == null or id_len == 0) return false;
+            return id_len == api.url_fragment_len and std.mem.eql(u8, id_ptr.?[0..id_len], api.url_fragment[0..api.url_fragment_len]);
+        }
         if (std.ascii.eqlIgnoreCase(sel, ":focus")) {
             return api.active_element != null and api.active_element.? == @as(*lxb.lxb_dom_node_t, @ptrCast(elem));
         }

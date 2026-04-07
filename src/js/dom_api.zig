@@ -67,6 +67,10 @@ pub var active_element: ?*lxb.lxb_dom_node_t = null;
 /// Currently hovered element (set from main.zig on mouse move).
 pub var hovered_element: ?*lxb.lxb_dom_node_t = null;
 
+/// Current URL fragment (without #) for :target pseudo-class matching.
+pub var url_fragment: [256]u8 = undefined;
+pub var url_fragment_len: usize = 0;
+
 /// Scroll position, synced from main.zig.
 pub var scroll_x: f32 = 0;
 pub var scroll_y: f32 = 0;

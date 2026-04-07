@@ -262,6 +262,19 @@ const hexDigit = script_executor.hexDigit;
 /// Initialize JavaScript for a loaded page: set up DOM APIs, execute scripts, fire events.
 /// Delegates to core/script_executor.zig.
 fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, fonts: ?*painter_mod.FontCache) void {
+    // Extract URL fragment for :target pseudo-class
+    if (base_url) |url| {
+        if (std.mem.indexOfScalar(u8, url, '#')) |hash_pos| {
+            const frag = url[hash_pos + 1 ..];
+            const copy_len = @min(frag.len, dom_api.url_fragment.len);
+            @memcpy(dom_api.url_fragment[0..copy_len], frag[0..copy_len]);
+            dom_api.url_fragment_len = copy_len;
+        } else {
+            dom_api.url_fragment_len = 0;
+        }
+    } else {
+        dom_api.url_fragment_len = 0;
+    }
     script_executor.initPageJs(doc, &page.js_rt, &page.loaded_script_urls, allocator, loader, base_url, fonts);
 }
 

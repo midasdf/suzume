@@ -120,9 +120,22 @@ fn jsSuzumeUpdateUrl(
     const s_len = std.mem.len(str);
     defer qjs.JS_FreeCString(c, str);
 
+    // Extract URL fragment for :target pseudo-class
+    const url_slice = str[0..s_len];
+    if (std.mem.indexOfScalar(u8, url_slice, '#')) |hash_pos| {
+        const frag = url_slice[hash_pos + 1 ..];
+        const dom_api_ref = @import("dom_api.zig");
+        const copy_len = @min(frag.len, dom_api_ref.url_fragment.len);
+        @memcpy(dom_api_ref.url_fragment[0..copy_len], frag[0..copy_len]);
+        dom_api_ref.url_fragment_len = copy_len;
+    } else {
+        const dom_api_ref2 = @import("dom_api.zig");
+        dom_api_ref2.url_fragment_len = 0;
+    }
+
     if (pending_url_update) |old| std.heap.c_allocator.free(old);
     const copy = std.heap.c_allocator.alloc(u8, s_len) catch return quickjs.JS_UNDEFINED();
-    @memcpy(copy, str[0..s_len]);
+    @memcpy(copy, url_slice);
     pending_url_update = copy;
     return quickjs.JS_UNDEFINED();
 }
