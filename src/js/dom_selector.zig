@@ -1251,8 +1251,8 @@ pub fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
     var next_combinator: Combinator = .descendant;
 
     while (i < trimmed.len and count < out.len) {
-        // Skip whitespace
-        while (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t')) i += 1;
+        // Skip CSS whitespace (space, tab, LF, CR, FF)
+        while (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t' or trimmed[i] == '\n' or trimmed[i] == '\r' or trimmed[i] == 0x0C)) i += 1;
         if (i >= trimmed.len) break;
 
         // Check for combinator tokens
@@ -1286,14 +1286,14 @@ pub fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
                         hcount += 1;
                     }
                     // Skip optional whitespace after hex escape (it's part of the escape, not a combinator)
-                    if (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t')) i += 1;
+                    if (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t' or trimmed[i] == '\n' or trimmed[i] == '\r' or trimmed[i] == 0x0C)) i += 1;
                 } else {
                     i += 1; // skip escaped character
                 }
                 continue;
             }
             if (paren_depth == 0 and bracket_depth == 0 and
-                (c == ' ' or c == '\t' or c == '>' or c == '+' or c == '~')) break;
+                (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C or c == '>' or c == '+' or c == '~')) break;
             if (c == '(') paren_depth += 1
             else if (c == ')' and paren_depth > 0) paren_depth -= 1
             else if (c == '[') bracket_depth += 1
