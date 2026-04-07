@@ -249,10 +249,27 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             return true;
         }
         if (std.ascii.eqlIgnoreCase(sel, ":enabled")) {
-            return !lxb_dom_element_has_attribute(elem, "disabled", 8);
+            // Per spec: only form elements (input, button, select, textarea, fieldset) match :enabled/:disabled
+            var name_len_e: usize = 0;
+            const name_ptr_e = lxb_dom_element_local_name(elem, &name_len_e);
+            if (name_ptr_e == null) return false;
+            const tag_e = name_ptr_e.?[0..name_len_e];
+            if (std.ascii.eqlIgnoreCase(tag_e, "input") or std.ascii.eqlIgnoreCase(tag_e, "button") or
+                std.ascii.eqlIgnoreCase(tag_e, "select") or std.ascii.eqlIgnoreCase(tag_e, "textarea") or
+                std.ascii.eqlIgnoreCase(tag_e, "fieldset"))
+                return !lxb_dom_element_has_attribute(elem, "disabled", 8);
+            return false;
         }
         if (std.ascii.eqlIgnoreCase(sel, ":disabled")) {
-            return lxb_dom_element_has_attribute(elem, "disabled", 8);
+            var name_len_d: usize = 0;
+            const name_ptr_d = lxb_dom_element_local_name(elem, &name_len_d);
+            if (name_ptr_d == null) return false;
+            const tag_d = name_ptr_d.?[0..name_len_d];
+            if (std.ascii.eqlIgnoreCase(tag_d, "input") or std.ascii.eqlIgnoreCase(tag_d, "button") or
+                std.ascii.eqlIgnoreCase(tag_d, "select") or std.ascii.eqlIgnoreCase(tag_d, "textarea") or
+                std.ascii.eqlIgnoreCase(tag_d, "fieldset"))
+                return lxb_dom_element_has_attribute(elem, "disabled", 8);
+            return false;
         }
         if (std.ascii.eqlIgnoreCase(sel, ":checked")) {
             return lxb_dom_element_has_attribute(elem, "checked", 7);
@@ -496,31 +513,49 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         }
         return false;
     }
-    // .class
+    // .class (may be chained: .class1.class2.class3)
     if (sel[0] == '.') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-        if (val != null and val_len > 0) {
+        if (val == null or val_len == 0) return false;
+        const class_val = val.?[0..val_len];
+        var rest = sel[1..];
+        while (rest.len > 0) {
+            const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            if (next_dot == 0) return false;
             var esc_buf: [512]u8 = undefined;
-            const decoded = decodeCssEscapes(sel[1..], &esc_buf);
-            return api.classContains(val.?[0..val_len], decoded);
+            const decoded = decodeCssEscapes(rest[0..next_dot], &esc_buf);
+            if (!api.classContains(class_val, decoded)) return false;
+            if (next_dot >= rest.len) break;
+            rest = rest[next_dot + 1 ..];
         }
-        return false;
+        return true;
     }
     // * (universal)
     if (sel.len == 1 and sel[0] == '*') return true;
 
-    // Compound: tag.class or tag#id
+    // Compound: tag.class1.class2 or tag#id
     if (std.mem.indexOfScalar(u8, sel, '.')) |dot| {
         if (dot > 0) {
-            // tag.class
+            // tag.class1.class2...
             var name_len: usize = 0;
             const name_ptr = lxb_dom_element_local_name(elem, &name_len);
             if (name_ptr == null or !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], sel[0..dot])) return false;
             var val_len: usize = 0;
             const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-            if (val != null and val_len > 0) return api.classContains(val.?[0..val_len], sel[dot + 1 ..]);
-            return false;
+            if (val == null or val_len == 0) return false;
+            const class_val = val.?[0..val_len];
+            var rest = sel[dot + 1 ..];
+            while (rest.len > 0) {
+                const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+                if (next_dot == 0) return false;
+                var esc_buf_c: [512]u8 = undefined;
+                const decoded_c = decodeCssEscapes(rest[0..next_dot], &esc_buf_c);
+                if (!api.classContains(class_val, decoded_c)) return false;
+                if (next_dot >= rest.len) break;
+                rest = rest[next_dot + 1 ..];
+            }
+            return true;
         }
     }
     if (std.mem.indexOfScalar(u8, sel, '#')) |hash| {
@@ -1098,14 +1133,25 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
         return val_len == decoded2.len and std.mem.eql(u8, val.?[0..val_len], decoded2);
     }
 
-    // .class selector
+    // .class selector (may be chained: .class1.class2.class3)
     if (selector[0] == '.') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
         if (val == null or val_len == 0) return false;
-        var esc_buf2: [512]u8 = undefined;
-        const decoded2 = decodeCssEscapes(selector[1..], &esc_buf2);
-        return api.classContains(val.?[0..val_len], decoded2);
+        const class_val = val.?[0..val_len];
+        // Split chained classes by '.' and check each
+        var rest = selector[1..];
+        while (rest.len > 0) {
+            // Find next dot (start of next class) or end
+            const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            if (next_dot == 0) return false; // empty class like ".foo..bar"
+            var esc_buf_cls: [512]u8 = undefined;
+            const decoded_cls = decodeCssEscapes(rest[0..next_dot], &esc_buf_cls);
+            if (!api.classContains(class_val, decoded_cls)) return false;
+            if (next_dot >= rest.len) break;
+            rest = rest[next_dot + 1 ..];
+        }
+        return true;
     }
 
     // Find bracket position (attribute selector start)
@@ -1126,13 +1172,24 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
             !std.ascii.eqlIgnoreCase(name_ptr.?[0..name_len], selector[0..tag_end])) return false;
     }
 
-    // Check class (tag.class or tag.class[attr])
+    // Check class (tag.class1.class2 or tag.class[attr])
     if (dot_idx) |di| {
         const class_end = bracket_idx orelse selector.len;
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-        if (val == null or val_len == 0 or
-            !api.classContains(val.?[0..val_len], selector[di + 1 .. class_end])) return false;
+        if (val == null or val_len == 0) return false;
+        const class_val = val.?[0..val_len];
+        // Split chained classes by '.' and check each
+        var rest = selector[di + 1 .. class_end];
+        while (rest.len > 0) {
+            const next_dot = std.mem.indexOfScalar(u8, rest, '.') orelse rest.len;
+            if (next_dot == 0) return false;
+            var esc_buf_cls2: [512]u8 = undefined;
+            const decoded_cls2 = decodeCssEscapes(rest[0..next_dot], &esc_buf_cls2);
+            if (!api.classContains(class_val, decoded_cls2)) return false;
+            if (next_dot >= rest.len) break;
+            rest = rest[next_dot + 1 ..];
+        }
     }
 
     // Check attribute selectors [attr="value"][attr2="value2"]...
