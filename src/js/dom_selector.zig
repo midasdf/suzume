@@ -12,6 +12,97 @@ extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_n
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
+// ── CSS escape decoding (CSS Syntax §4.3.7) ────────────────────────
+fn isHexDigit(c: u8) bool {
+    return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
+}
+fn hexVal(c: u8) u32 {
+    if (c >= '0' and c <= '9') return c - '0';
+    if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+    return 0;
+}
+fn encodeUtf8(code: u32, buf: []u8) usize {
+    if (code < 0x80) {
+        if (buf.len < 1) return 0;
+        buf[0] = @intCast(code);
+        return 1;
+    } else if (code < 0x800) {
+        if (buf.len < 2) return 0;
+        buf[0] = @intCast(0xC0 | (code >> 6));
+        buf[1] = @intCast(0x80 | (code & 0x3F));
+        return 2;
+    } else if (code < 0x10000) {
+        if (buf.len < 3) return 0;
+        buf[0] = @intCast(0xE0 | (code >> 12));
+        buf[1] = @intCast(0x80 | ((code >> 6) & 0x3F));
+        buf[2] = @intCast(0x80 | (code & 0x3F));
+        return 3;
+    } else if (code <= 0x10FFFF) {
+        if (buf.len < 4) return 0;
+        buf[0] = @intCast(0xF0 | (code >> 18));
+        buf[1] = @intCast(0x80 | ((code >> 12) & 0x3F));
+        buf[2] = @intCast(0x80 | ((code >> 6) & 0x3F));
+        buf[3] = @intCast(0x80 | (code & 0x3F));
+        return 4;
+    }
+    return 0;
+}
+
+/// Decode CSS escape sequences in a selector value.
+/// Returns the decoded string in buf, or input if no escapes present.
+fn decodeCssEscapes(input: []const u8, buf: []u8) []const u8 {
+    // Fast path: no backslash
+    if (std.mem.indexOfScalar(u8, input, '\\') == null) return input;
+    var i: usize = 0;
+    var out: usize = 0;
+    while (i < input.len and out < buf.len) {
+        if (input[i] == '\\' and i + 1 < input.len) {
+            i += 1;
+            if (isHexDigit(input[i])) {
+                var code: u32 = 0;
+                var count: usize = 0;
+                while (i < input.len and count < 6 and isHexDigit(input[i])) {
+                    code = code * 16 + hexVal(input[i]);
+                    i += 1;
+                    count += 1;
+                }
+                // Skip optional single whitespace after hex
+                if (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n' or input[i] == '\r')) i += 1;
+                // Invalid code points → U+FFFD
+                if (code == 0 or code > 0x10FFFF or (code >= 0xD800 and code <= 0xDFFF)) {
+                    if (out + 3 <= buf.len) {
+                        buf[out] = 0xEF;
+                        buf[out + 1] = 0xBF;
+                        buf[out + 2] = 0xBD;
+                        out += 3;
+                    }
+                } else {
+                    out += encodeUtf8(code, buf[out..]);
+                }
+            } else {
+                buf[out] = input[i];
+                out += 1;
+                i += 1;
+            }
+        } else if (input[i] == '\\' and i + 1 == input.len) {
+            // Backslash at EOF → U+FFFD
+            if (out + 3 <= buf.len) {
+                buf[out] = 0xEF;
+                buf[out + 1] = 0xBF;
+                buf[out + 2] = 0xBD;
+                out += 3;
+            }
+            i += 1;
+        } else {
+            buf[out] = input[i];
+            out += 1;
+            i += 1;
+        }
+    }
+    return buf[0..out];
+}
+
 // ── element.matches(selector) ───────────────────────────────────────
 
 pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
@@ -381,8 +472,11 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel[0] == '#') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
-        if (val != null and val_len == sel.len - 1) {
-            return std.mem.eql(u8, val.?[0..val_len], sel[1..]);
+        if (val == null) return false;
+        var esc_buf: [512]u8 = undefined;
+        const decoded = decodeCssEscapes(sel[1..], &esc_buf);
+        if (val_len == decoded.len) {
+            return std.mem.eql(u8, val.?[0..val_len], decoded);
         }
         return false;
     }
@@ -391,7 +485,9 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
         if (val != null and val_len > 0) {
-            return api.classContains(val.?[0..val_len], sel[1..]);
+            var esc_buf: [512]u8 = undefined;
+            const decoded = decodeCssEscapes(sel[1..], &esc_buf);
+            return api.classContains(val.?[0..val_len], decoded);
         }
         return false;
     }
@@ -661,19 +757,22 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     if (expected.len >= 2 and (expected[0] == '"' or expected[0] == '\'') and expected[expected.len - 1] == expected[0]) {
         expected = expected[1 .. expected.len - 1];
     }
+    // Decode CSS escapes in expected value
+    var esc_buf: [512]u8 = undefined;
+    const decoded_exp = decodeCssEscapes(expected, &esc_buf);
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
     if (val == null) return false;
     const actual = val.?[0..val_len];
 
     return switch (op_type) {
-        '=' => std.mem.eql(u8, actual, expected),
-        '^' => actual.len >= expected.len and std.mem.eql(u8, actual[0..expected.len], expected),
-        '$' => actual.len >= expected.len and std.mem.eql(u8, actual[actual.len - expected.len ..], expected),
-        '*' => std.mem.indexOf(u8, actual, expected) != null,
-        '~' => api.classContains(actual, expected),
-        '|' => std.mem.eql(u8, actual, expected) or
-            (actual.len > expected.len and std.mem.eql(u8, actual[0..expected.len], expected) and actual[expected.len] == '-'),
+        '=' => std.mem.eql(u8, actual, decoded_exp),
+        '^' => actual.len >= decoded_exp.len and std.mem.eql(u8, actual[0..decoded_exp.len], decoded_exp),
+        '$' => actual.len >= decoded_exp.len and std.mem.eql(u8, actual[actual.len - decoded_exp.len ..], decoded_exp),
+        '*' => std.mem.indexOf(u8, actual, decoded_exp) != null,
+        '~' => api.classContains(actual, decoded_exp),
+        '|' => std.mem.eql(u8, actual, decoded_exp) or
+            (actual.len > decoded_exp.len and std.mem.eql(u8, actual[0..decoded_exp.len], decoded_exp) and actual[decoded_exp.len] == '-'),
         else => false,
     };
 }
@@ -977,15 +1076,20 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
     if (selector[0] == '#') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "id", 2, &val_len);
-        return val != null and val_len == selector.len - 1 and
-            std.mem.eql(u8, val.?[0..val_len], selector[1..]);
+        if (val == null) return false;
+        var esc_buf2: [512]u8 = undefined;
+        const decoded2 = decodeCssEscapes(selector[1..], &esc_buf2);
+        return val_len == decoded2.len and std.mem.eql(u8, val.?[0..val_len], decoded2);
     }
 
     // .class selector
     if (selector[0] == '.') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
-        return val != null and val_len > 0 and api.classContains(val.?[0..val_len], selector[1..]);
+        if (val == null or val_len == 0) return false;
+        var esc_buf2: [512]u8 = undefined;
+        const decoded2 = decodeCssEscapes(selector[1..], &esc_buf2);
+        return api.classContains(val.?[0..val_len], decoded2);
     }
 
     // Find bracket position (attribute selector start)
@@ -1068,12 +1172,28 @@ pub fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
             continue;
         }
 
-        // Read selector token (until space or combinator, respecting () and [])
+        // Read selector token (until space or combinator, respecting (), [], and CSS escapes)
         const start = i;
         var paren_depth: u32 = 0;
         var bracket_depth: u32 = 0;
         while (i < trimmed.len) {
             const c = trimmed[i];
+            // CSS escape: skip \X or \HHHHHH (+ optional space)
+            if (c == '\\' and i + 1 < trimmed.len) {
+                i += 1; // skip backslash
+                if (isHexDigit(trimmed[i])) {
+                    var hcount: usize = 0;
+                    while (i < trimmed.len and hcount < 6 and isHexDigit(trimmed[i])) {
+                        i += 1;
+                        hcount += 1;
+                    }
+                    // Skip optional whitespace after hex escape (it's part of the escape, not a combinator)
+                    if (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t')) i += 1;
+                } else {
+                    i += 1; // skip escaped character
+                }
+                continue;
+            }
             if (paren_depth == 0 and bracket_depth == 0 and
                 (c == ' ' or c == '\t' or c == '>' or c == '+' or c == '~')) break;
             if (c == '(') paren_depth += 1
