@@ -4890,6 +4890,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         \\DOMException.prototype = Object.create(Error.prototype);
         \\DOMException.prototype.constructor = DOMException;
         \\DOMException.prototype.toString = function() { return 'DOMException: ' + this.message; };
+        \\DOMException.INDEX_SIZE_ERR=1;DOMException.DOMSTRING_SIZE_ERR=2;DOMException.HIERARCHY_REQUEST_ERR=3;
+        \\DOMException.WRONG_DOCUMENT_ERR=4;DOMException.INVALID_CHARACTER_ERR=5;DOMException.NO_DATA_ALLOWED_ERR=6;
+        \\DOMException.NO_MODIFICATION_ALLOWED_ERR=7;DOMException.NOT_FOUND_ERR=8;DOMException.NOT_SUPPORTED_ERR=9;
+        \\DOMException.INUSE_ATTRIBUTE_ERR=10;DOMException.INVALID_STATE_ERR=11;DOMException.SYNTAX_ERR=12;
+        \\DOMException.INVALID_MODIFICATION_ERR=13;DOMException.NAMESPACE_ERR=14;DOMException.INVALID_ACCESS_ERR=15;
+        \\DOMException.VALIDATION_ERR=16;DOMException.TYPE_MISMATCH_ERR=17;DOMException.SECURITY_ERR=18;
+        \\DOMException.NETWORK_ERR=19;DOMException.ABORT_ERR=20;DOMException.URL_MISMATCH_ERR=21;
+        \\DOMException.QUOTA_EXCEEDED_ERR=22;DOMException.TIMEOUT_ERR=23;DOMException.INVALID_NODE_TYPE_ERR=24;
+        \\DOMException.DATA_CLONE_ERR=25;
     ;
     const exc_result = qjs.JS_Eval(ctx, dom_exc_script.ptr, dom_exc_script.len, "<domexception>", 0);
     qjs.JS_FreeValue(ctx, exc_result);
@@ -4996,8 +5005,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     {
         const sel_valid_js =
             \\(function(){
-            \\  var _knownPseudo=/^:(hover|active|focus|focus-within|focus-visible|visited|link|any-link|target|root|empty|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type|enabled|disabled|checked|indeterminate|default|read-only|read-write|placeholder-shown|defined|scope|host|lang|dir|is|not|has|where|nth-child|nth-last-child|nth-of-type|nth-last-of-type|optional|required|valid|invalid|in-range|out-of-range|autofill)(\(|$)/;
-            \\  var _knownPelem=/^::(before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button)$/;
+            \\  var _knownPseudo=/^:(hover|active|focus|focus-within|focus-visible|visited|link|any-link|target|root|empty|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type|enabled|disabled|checked|indeterminate|default|read-only|read-write|placeholder-shown|defined|scope|host|lang|dir|is|not|has|where|nth-child|nth-last-child|nth-of-type|nth-last-of-type|optional|required|valid|invalid|in-range|out-of-range|autofill|heading|state|user-valid|user-invalid|modal|fullscreen|picture-in-picture|paused|playing|current|past|future|local-link|target-within)(\(|$)/;
+            \\  var _knownPelem=/^::(before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button|part|slotted)(\(|$)/;
             \\  function _vSel(s,meth){
             \\    if(arguments.length<1)throw new TypeError("Failed to execute '"+meth+"': 1 argument required, but only 0 present.");
             \\    s=String(s);
@@ -5018,9 +5027,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      if(/\[\s*class\s*=\s+\S/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^\s*>/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/[\^$]\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:(?:not|has)\(\s*\)/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::slotted\(\s*\)/.test(t)||/::slotted\(\s*\d/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::slotted(?!\()/.test(t)&&!/::slotted\(/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:has(?!\()(?!-)/.test(t)&&t.indexOf(':has(')< 0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:has\(\s*\d/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:has\([^)]*,\s*\d/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/:not\(\s*::/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      (function(){var hm=t.match(/:heading\(([^)]*)\)/);if(hm){if(hm[1].trim()==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");var ha=hm[1].split(',');for(var hi=0;hi<ha.length;hi++){if(!/^\s*-?\d+\s*$/.test(ha[hi]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}})();
+            \\      (function(){var sm=t.match(/:state\(([^)]*)\)/);if(sm){var sv=sm[1].trim();if(!sv||/^[0-9]/.test(sv)||/[\s():!]/.test(sv))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}if(/:state(?!\()/.test(t)&&t.indexOf(':state(')<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");})();
+            \\      (function(){var hi=t.indexOf(':has(');if(hi>=0){var d=0;for(var ci=hi+5;ci<t.length;ci++){if(t[ci]==='(')d++;else if(t[ci]===')'){if(d===0){var inner=t.substring(hi+5,ci);if(/:has\(/.test(inner)){var bp=inner.indexOf(':has(');var pre=inner.substring(0,bp);if(!/:is\($|:where\($/.test(pre.slice(-4)))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}break;}d--;}}}})()
+            \\      if(/::slotted\([^)]*\)\s*[>+~ ]\s*::slotted/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::(?:part\([^)]*\)\s*[>+~ ]\s*::part)/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::slotted\([^)]*\):[a-z]/.test(t)&&!/::slotted\([^)]*\)::/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/::(?:before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button):(?!:)[a-z]/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var m=t.match(/::([a-z-]+)/g);if(m)for(var j=0;j<m.length;j++){if(!_knownPelem.test(m[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
             \\      if(/:::/.test(t)||/::\s/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
-            \\      var pm=t.match(/:(?!:)([a-z-]+(\()?)/g);if(pm)for(var j=0;j<pm.length;j++){if(!_knownPseudo.test(pm[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
+            \\      var _pcRe=/:([a-z-]+(\()?)/g,_pcM;while((_pcM=_pcRe.exec(t))!==null){if(_pcM.index>0&&t[_pcM.index-1]===':')continue;if(!_knownPseudo.test(_pcM[0]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
             \\    }
             \\  }
             \\  var _nm=Element.prototype.matches,_nc=Element.prototype.closest;
@@ -5037,6 +5060,111 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         const sv_r = qjs.JS_Eval(ctx, sel_valid_js, sel_valid_js.len, "<sel-valid>", qjs.JS_EVAL_TYPE_GLOBAL);
         qjs.JS_FreeValue(ctx, sv_r);
+    }
+
+    // ── CSSOM: CSSStyleSheet, CSSStyleRule, style.sheet, CSS.supports("selector()") ──
+    {
+        const cssom_js =
+            \\(function(){
+            \\  // ── Selector canonicalization ──
+            \\  function _findClose(s,i,o,c){var d=0,q=0,qc='';for(;i<s.length;i++){if(q){if(s[i]===qc&&s[i-1]!=='\\')q=0;continue;}if(s[i]==='"'||s[i]==="'"){q=1;qc=s[i];continue;}if(s[i]===o)d++;else if(s[i]===c){d--;if(d===0)return i;}}return s.length-1;}
+            \\  function _splitTop(s,sep){var p=[],d=0,last=0,q=0,qc='';for(var i=0;i<s.length;i++){if(q){if(s[i]===qc&&s[i-1]!=='\\')q=0;continue;}if(s[i]==='"'||s[i]==="'"){q=1;qc=s[i];continue;}if(s[i]==='('||s[i]==='[')d++;else if(s[i]===')'||s[i]===']')d--;else if(s[i]===sep&&d===0){p.push(s.substring(last,i));last=i+1;}}p.push(s.substring(last));return p;}
+            \\  function _canonAttr(a){
+            \\    var inner=a.substring(1,a.length-1).trim();
+            \\    if(inner.charAt(0)==='|')inner=inner.substring(1);
+            \\    var m=inner.match(/^([^\~\|\^\$\*=]+)([~|^$*]?=)(.+)$/);
+            \\    if(!m)return '['+inner+']';
+            \\    var nm=m[1].trim(),op=m[2],val=m[3].trim();
+            \\    var flag='';
+            \\    if(/\s+[iIsS]$/.test(val)){flag=' '+val.slice(-1);val=val.slice(0,-2).trim();}
+            \\    if(val.charAt(0)==='"'){}
+            \\    else if(val.charAt(0)==="'"){val='"'+val.substring(1,val.length-1)+'"';}
+            \\    else{val='"'+val+'"';}
+            \\    return '['+nm+op+val+flag+']';
+            \\  }
+            \\  function _normCombinatorsOuter(s){
+            \\    var r='',i=0,d=0;
+            \\    while(i<s.length){
+            \\      if(s[i]==='('||s[i]==='['){d++;r+=s[i];i++;}
+            \\      else if(s[i]===')'||s[i]===']'){d--;r+=s[i];i++;}
+            \\      else if(d===0&&(s[i]==='>'||s[i]==='+'||(s[i]==='~'&&s[i+1]!=='='))){
+            \\        var c=s[i];while(r.length&&r[r.length-1]===' ')r=r.slice(0,-1);
+            \\        r+=' '+c+' ';i++;while(i<s.length&&s[i]===' ')i++;
+            \\      }
+            \\      else{r+=s[i];i++;}
+            \\    }
+            \\    return r.replace(/\s{2,}/g,' ').trim();
+            \\  }
+            \\  function _canonOne(s){
+            \\    var r='',i=0;
+            \\    while(i<s.length){
+            \\      if(s[i]==='['){var j=_findClose(s,i,'[',']');r+=_canonAttr(s.substring(i,j+1));i=j+1;}
+            \\      else if(s[i]==='('){var j=_findClose(s,i,'(',')');var inner=s.substring(i+1,j);r+='('+_canonSel(inner)+')';i=j+1;}
+            \\      else{r+=s[i];i++;}
+            \\    }
+            \\    r=_normCombinatorsOuter(r);
+            \\    r=r.replace(/\*\|\*/g,'*');
+            \\    r=r.replace(/^\*(?=[:.\[#])/,'');
+            \\    return r;
+            \\  }
+            \\  function _canonSel(s){var parts=_splitTop(s.trim(),',');for(var i=0;i<parts.length;i++)parts[i]=_canonOne(parts[i].trim());return parts.join(', ');}
+            \\
+            \\  // ── CSSStyleRule ──
+            \\  function CSSStyleRule(sel,body){this.type=1;this.selectorText=sel;this._body=body||'';}
+            \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){return this.selectorText+' { '+this._body+' }';},enumerable:true,configurable:true});
+            \\  CSSStyleRule.prototype.style={cssText:'',getPropertyValue:function(){return '';},setProperty:function(){},removeProperty:function(){return '';}};
+            \\
+            \\  // ── CSSStyleSheet ──
+            \\  function _Sheet(){this.cssRules=[];this.disabled=false;this.ownerNode=null;this.type='text/css';}
+            \\  _Sheet.prototype.insertRule=function(rule,index){
+            \\    if(index===void 0)index=0;
+            \\    var bi=rule.indexOf('{');
+            \\    if(bi===-1){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
+            \\    var sel=rule.substring(0,bi).trim();
+            \\    var ei=rule.lastIndexOf('}');
+            \\    var body=ei>bi?rule.substring(bi+1,ei).trim():'';
+            \\    if(!sel){var ex=new DOMException("Invalid selector",'SyntaxError');ex.code=12;throw ex;}
+            \\    try{document.querySelector(sel);}catch(e){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+sel+"' is not a valid selector.",'SyntaxError');ex.code=12;throw ex;}
+            \\    var canon=_canonSel(sel);
+            \\    var ro=new CSSStyleRule(canon,body);
+            \\    if(index<0||index>this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
+            \\    this.cssRules.splice(index,0,ro);
+            \\    return index;
+            \\  };
+            \\  _Sheet.prototype.deleteRule=function(index){
+            \\    if(index<0||index>=this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
+            \\    this.cssRules.splice(index,1);
+            \\  };
+            \\  _Sheet.prototype.replaceSync=function(css){this._css=css;};
+            \\  _Sheet.prototype.replace=function(css){this._css=css;return Promise.resolve(this);};
+            \\  globalThis.CSSStyleSheet=_Sheet;
+            \\
+            \\  // ── style.sheet property via createElement override ──
+            \\  var _origCE=document.createElement;
+            \\  document.createElement=function(tag){
+            \\    var el=_origCE.call(document,tag);
+            \\    if(typeof tag==='string'&&tag.toLowerCase()==='style'){
+            \\      var sh=new _Sheet();sh.ownerNode=el;
+            \\      Object.defineProperty(el,'sheet',{get:function(){return sh;},configurable:true});
+            \\    }
+            \\    return el;
+            \\  };
+            \\
+            \\  // ── CSS.supports("selector(...)") ──
+            \\  if(typeof CSS!=='undefined'&&CSS.supports){
+            \\    var _origSup=CSS.supports.bind(CSS);
+            \\    CSS.supports=function(cond,val){
+            \\      if(arguments.length===1&&typeof cond==='string'){
+            \\        var m=cond.match(/^selector\((.+)\)$/);
+            \\        if(m){try{document.querySelector(m[1]);return true;}catch(e){return false;}}
+            \\      }
+            \\      return _origSup.apply(null,arguments);
+            \\    };
+            \\  }
+            \\})()
+        ;
+        const cssom_r = qjs.JS_Eval(ctx, cssom_js, cssom_js.len, "<cssom>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, cssom_r);
     }
 
     qjs.JS_FreeValue(ctx, global);
