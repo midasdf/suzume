@@ -259,6 +259,29 @@ fn maybeExecuteDynamicScript(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t, js_
         }
     }
 
+    // Set document.currentScript to the actual <script> element
+    const script_js = wrapNode(ctx, node);
+    {
+        const global = qjs.JS_GetGlobalObject(ctx);
+        defer qjs.JS_FreeValue(ctx, global);
+        const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
+        defer qjs.JS_FreeValue(ctx, doc_obj);
+        if (!quickjs.JS_IsUndefined(doc_obj) and !quickjs.JS_IsNull(doc_obj)) {
+            _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "currentScript", qjs.JS_DupValue(ctx, script_js));
+        }
+    }
+    defer {
+        // Restore document.currentScript to null after execution
+        const global = qjs.JS_GetGlobalObject(ctx);
+        defer qjs.JS_FreeValue(ctx, global);
+        const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
+        defer qjs.JS_FreeValue(ctx, doc_obj);
+        if (!quickjs.JS_IsUndefined(doc_obj) and !quickjs.JS_IsNull(doc_obj)) {
+            _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "currentScript", quickjs.JS_NULL());
+        }
+    }
+    defer qjs.JS_FreeValue(ctx, script_js);
+
     // Check for src attribute (external script)
     var src_len: usize = 0;
     const src_ptr: ?[*]const u8 = lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
