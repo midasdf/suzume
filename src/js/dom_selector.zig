@@ -242,15 +242,15 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             return false;
         }
         // :nth-of-type(N)
-        if (sel.len > 14 and std.ascii.eqlIgnoreCase(sel[0..14], ":nth-of-type(") and sel[sel.len - 1] == ')') {
-            const arg = std.mem.trim(u8, sel[14 .. sel.len - 1], " \t");
+        if (sel.len > 13 and std.ascii.eqlIgnoreCase(sel[0..13], ":nth-of-type(") and sel[sel.len - 1] == ')') {
+            const arg = std.mem.trim(u8, sel[13 .. sel.len - 1], " \t");
             const idx_val = getNthOfTypeIndex(@ptrCast(elem));
             if (matchNthFormula(arg, idx_val)) return true;
             return false;
         }
         // :nth-last-of-type(N)
-        if (sel.len > 19 and std.ascii.eqlIgnoreCase(sel[0..19], ":nth-last-of-type(") and sel[sel.len - 1] == ')') {
-            const arg = std.mem.trim(u8, sel[19 .. sel.len - 1], " \t");
+        if (sel.len > 18 and std.ascii.eqlIgnoreCase(sel[0..18], ":nth-last-of-type(") and sel[sel.len - 1] == ')') {
+            const arg = std.mem.trim(u8, sel[18 .. sel.len - 1], " \t");
             const idx_val = getNthLastOfTypeIndex(@ptrCast(elem));
             if (matchNthFormula(arg, idx_val)) return true;
             return false;
@@ -605,6 +605,8 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
         '$' => actual.len >= expected.len and std.mem.eql(u8, actual[actual.len - expected.len ..], expected),
         '*' => std.mem.indexOf(u8, actual, expected) != null,
         '~' => api.classContains(actual, expected),
+        '|' => std.mem.eql(u8, actual, expected) or
+            (actual.len > expected.len and std.mem.eql(u8, actual[0..expected.len], expected) and actual[expected.len] == '-'),
         else => false,
     };
 }
@@ -953,17 +955,7 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
             if (selector[pos] != '[') break;
             const attr_start = pos + 1;
             const close = std.mem.indexOfScalarPos(u8, selector, attr_start, ']') orelse return false;
-            const attr_inner = selector[attr_start..close];
-            if (std.mem.indexOf(u8, attr_inner, "=\"")) |eq_idx| {
-                const attr_name = attr_inner[0..eq_idx];
-                const attr_val = std.mem.trim(u8, attr_inner[eq_idx + 2 ..], "\"'");
-                var av_len: usize = 0;
-                const av = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &av_len);
-                if (av == null or av_len != attr_val.len or !std.mem.eql(u8, av.?[0..av_len], attr_val)) return false;
-            } else {
-                var av_len: usize = 0;
-                if (lxb_dom_element_get_attribute(elem, attr_inner.ptr, attr_inner.len, &av_len) == null) return false;
-            }
+            if (!matchAttributeSelector(elem, selector[attr_start..close])) return false;
             pos = close + 1;
         }
     }

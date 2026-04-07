@@ -377,8 +377,7 @@ fn setupIframe(
     {
         const load_js =
             \\(function(el){
-            \\  var e = new Event('load');
-            \\  if(el.onload) el.onload(e);
+            \\  var e = new Event('load',{bubbles:false,cancelable:false});
             \\  el.dispatchEvent(e);
             \\})
         ;
@@ -536,6 +535,23 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         qjs.JS_FreeValue(iframe_ctx, h);
     }
 
+    // Fix iframe document querySelector/querySelectorAll to use this.documentElement
+    // (native documentQuerySelector uses global doc pointer which is the parent doc)
+    {
+        const qs_fix_js =
+            \\(function(){
+            \\  var d=document;
+            \\  d.querySelector=function(s){var de=d.documentElement;return de?de.querySelector(s):null;};
+            \\  d.querySelectorAll=function(s){var de=d.documentElement;return de?de.querySelectorAll(s):[];};
+            \\  d.getElementById=function(id){var de=d.documentElement;return de?de.querySelector('#'+CSS.escape(id)):null;};
+            \\  d.getElementsByTagName=function(t){var de=d.documentElement;if(!de)return[];var r=de.getElementsByTagName(t);if(t==='*'){var a=[de];for(var i=0;i<r.length;i++)a.push(r[i]);return a;}return r;};
+            \\  d.getElementsByClassName=function(c){var de=d.documentElement;return de?de.getElementsByClassName(c):[];};
+            \\})()
+        ;
+        const qs_r = qjs.JS_Eval(iframe_ctx, qs_fix_js, qs_fix_js.len, "<iframe-qs-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(iframe_ctx, qs_r);
+    }
+
     // Restore parent globals
     api.g_document = saved_doc;
     api.g_top_frame.document = saved_doc;
@@ -677,12 +693,7 @@ pub fn fireIframeLoadEvents(parent_ctx: *qjs.JSContext) void {
         \\(function(){
         \\  var iframes = document.querySelectorAll('iframe');
         \\  for(var i=0; i<iframes.length; i++){
-        \\    var e = new Event('load');
-        \\    var handler = iframes[i].onload || null;
-        \\    if(!handler && iframes[i].getAttribute('onload')){
-        \\      try { handler = new Function('event', iframes[i].getAttribute('onload')); } catch(ex){}
-        \\    }
-        \\    if(handler) try { handler.call(iframes[i], e); } catch(ex){}
+        \\    var e = new Event('load',{bubbles:false,cancelable:false});
         \\    try { iframes[i].dispatchEvent(e); } catch(ex){}
         \\  }
         \\})()

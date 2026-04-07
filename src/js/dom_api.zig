@@ -4922,6 +4922,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  var nativeElemByClass=Element.prototype.getElementsByClassName;
             \\  document.getElementsByClassName=function(cls){return createLiveHTMLColl(function(){return __rawDocByClass(cls);});};
             \\  Element.prototype.getElementsByClassName=function(cls){var self=this;return createLiveHTMLColl(function(){return nativeElemByClass.call(self,cls);});};
+            \\  var nativeElemByTagNS=Element.prototype.getElementsByTagNameNS;
+            \\  var nativeDocByTagNS=document.getElementsByTagNameNS;
+            \\  document.getElementsByTagNameNS=function(ns,ln){return createLiveHTMLColl(function(){return nativeDocByTagNS.call(document,ns,ln);});};
+            \\  Element.prototype.getElementsByTagNameNS=function(ns,ln){var self=this;return createLiveHTMLColl(function(){return nativeElemByTagNS.call(self,ns,ln);});};
             \\})()
         ;
         const live_r = qjs.JS_Eval(ctx, live_coll_js, live_coll_js.len, "<live-coll>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -4963,6 +4967,53 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         const cn_r = qjs.JS_Eval(ctx, live_cn_js, live_cn_js.len, "<live-cn>", qjs.JS_EVAL_TYPE_GLOBAL);
         qjs.JS_FreeValue(ctx, cn_r);
+    }
+
+    // Selector validation shim — throws TypeError/SyntaxError per DOM spec
+    {
+        const sel_valid_js =
+            \\(function(){
+            \\  var _knownPseudo=/^:(hover|active|focus|focus-within|focus-visible|visited|link|any-link|target|root|empty|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type|enabled|disabled|checked|indeterminate|default|read-only|read-write|placeholder-shown|defined|scope|host|lang|dir|is|not|has|where|nth-child|nth-last-child|nth-of-type|nth-last-of-type|optional|required|valid|invalid|in-range|out-of-range|autofill)(\(|$)/;
+            \\  var _knownPelem=/^::(before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button)$/;
+            \\  function _vSel(s,meth){
+            \\    if(arguments.length<1)throw new TypeError("Failed to execute '"+meth+"': 1 argument required, but only 0 present.");
+            \\    s=String(s);
+            \\    if(s==='')throw new DOMException("Failed to execute '"+meth+"': '' is not a valid selector.","SyntaxError");
+            \\    var parts=s.split(',');
+            \\    for(var p=0;p<parts.length;p++){
+            \\      var t=parts[p].trim();
+            \\      if(t==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var sq=0,rn=0,cu=0;
+            \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
+            \\      if(sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/^[<>{}()\[\]]$/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/^#$/.test(t)||/^\.(\d|\.|\s*$)/.test(t)||/\.\s*$/.test(t)||/\.$/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/[^+~>]\s*%/.test(t)||/\+\+/.test(t)||/~~/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/\[\s*\*\s*=/.test(t)&&!/\[\s*\*\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/\[\s*\*\|\*\s*=/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/\[\s*class\s*=\s+\S/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/^\s*>/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/[\^$]\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(/[^\\]?\|/.test(t)&&!/\[.*\|/.test(t)&&!/\*\|/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var m=t.match(/::([a-z-]+)/g);if(m)for(var j=0;j<m.length;j++){if(!_knownPelem.test(m[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
+            \\      if(/:::/.test(t)||/::\s/.test(t))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var pm=t.match(/:(?!:)([a-z-]+(\()?)/g);if(pm)for(var j=0;j<pm.length;j++){if(!_knownPseudo.test(pm[j]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
+            \\    }
+            \\  }
+            \\  var _nm=Element.prototype.matches,_nc=Element.prototype.closest;
+            \\  var _nqs=Element.prototype.querySelector,_nqsa=Element.prototype.querySelectorAll;
+            \\  Element.prototype.matches=function(s){_vSel(s,'matches');return _nm.call(this,s);};
+            \\  Element.prototype.webkitMatchesSelector=Element.prototype.matches;
+            \\  Element.prototype.closest=function(s){_vSel(s,'closest');return _nc.call(this,s);};
+            \\  Element.prototype.querySelector=function(s){_vSel(s,'querySelector');return _nqs.call(this,s);};
+            \\  Element.prototype.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _nqsa.call(this,s);};
+            \\  var _dqs=document.querySelector,_dqsa=document.querySelectorAll;
+            \\  document.querySelector=function(s){_vSel(s,'querySelector');return _dqs.call(document,s);};
+            \\  document.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _dqsa.call(document,s);};
+            \\})()
+        ;
+        const sv_r = qjs.JS_Eval(ctx, sel_valid_js, sel_valid_js.len, "<sel-valid>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, sv_r);
     }
 
     qjs.JS_FreeValue(ctx, global);
