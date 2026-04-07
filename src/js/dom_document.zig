@@ -526,43 +526,248 @@ pub fn documentCreateRange(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const range_js =
+    // Use the global __createRange factory (set up in initRangePrototype)
+    const factory_js = "typeof __createRange==='function'?__createRange():null";
+    const result = qjs.JS_Eval(c, factory_js, factory_js.len, "<range>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsNull(result) or quickjs.JS_IsException(result)) {
+        // Fallback: call initRangePrototype first, then try again
+        const retry_js = "typeof __createRange==='function'?__createRange():{}";
+        return qjs.JS_Eval(c, retry_js, retry_js.len, "<range>", qjs.JS_EVAL_TYPE_GLOBAL);
+    }
+    return result;
+}
+
+/// Initialize Range.prototype and the __createRange factory function
+/// Called once during DOM setup to create spec-compliant Range objects
+pub fn initRangePrototype(c: *qjs.JSContext) void {
+    const range_init_js =
         \\(function(){
-        \\  var r={startContainer:document,startOffset:0,endContainer:document,endOffset:0,commonAncestorContainer:document};
-        \\  Object.defineProperty(r,'collapsed',{get:function(){return this.startContainer===this.endContainer&&this.startOffset===this.endOffset;},configurable:true,enumerable:true});
-        \\  r._updateAncestor=function(){var a=this.startContainer,b=this.endContainer;if(a===b){this.commonAncestorContainer=a;return;}
-        \\    var pa=[],n=a;while(n){pa.push(n);n=n.parentNode;}n=b;while(n){for(var i=0;i<pa.length;i++)if(pa[i]===n){this.commonAncestorContainer=n;return;}n=n.parentNode;}
-        \\    this.commonAncestorContainer=document;};
-        \\  r.setStart=function(n,o){this.startContainer=n;this.startOffset=o;this._updateAncestor();};
-        \\  r.setEnd=function(n,o){this.endContainer=n;this.endOffset=o;this._updateAncestor();};
-        \\  r.setStartBefore=function(n){this.startContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.startOffset=i;this._updateAncestor();};
-        \\  r.setStartAfter=function(n){this.startContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.startOffset=i+1;this._updateAncestor();};
-        \\  r.setEndBefore=function(n){this.endContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.endOffset=i;this._updateAncestor();};
-        \\  r.setEndAfter=function(n){this.endContainer=n.parentNode;var i=0;var c=n.parentNode.firstChild;while(c&&c!==n){i++;c=c.nextSibling;}this.endOffset=i+1;this._updateAncestor();};
-        \\  r.selectNode=function(n){if(n.parentNode){this.setStartBefore(n);this.setEndAfter(n);}};
-        \\  r.selectNodeContents=function(n){this.startContainer=n;this.startOffset=0;this.endContainer=n;this.endOffset=n.childNodes?n.childNodes.length:0;this._updateAncestor();};
-        \\  r.collapse=function(toStart){if(toStart){this.endContainer=this.startContainer;this.endOffset=this.startOffset;}else{this.startContainer=this.endContainer;this.startOffset=this.endOffset;}this._updateAncestor();};
-        \\  r.cloneRange=function(){var nr=document.createRange();nr.setStart(this.startContainer,this.startOffset);nr.setEnd(this.endContainer,this.endOffset);return nr;};
-        \\  r.cloneContents=function(){return document.createDocumentFragment();};
-        \\  r.deleteContents=function(){};
-        \\  r.extractContents=function(){return document.createDocumentFragment();};
-        \\  r.insertNode=function(n){var sc=this.startContainer;if(sc.nodeType===3){var p=sc.parentNode;if(p)p.insertBefore(n,sc);}else{var ref=sc.childNodes[this.startOffset]||null;sc.insertBefore(n,ref);}};
-        \\  r.surroundContents=function(n){};
-        \\  r.compareBoundaryPoints=function(how,sr){return 0;};
-        \\  r.isPointInRange=function(n,o){return false;};
-        \\  r.comparePoint=function(n,o){return 0;};
-        \\  r.intersectsNode=function(n){return false;};
-        \\  r.detach=function(){};
-        \\  r.toString=function(){return '';};
-        \\  r.createContextualFragment=function(html){var t=document.createElement('div');t.innerHTML=html;var f=document.createDocumentFragment();while(t.firstChild)f.appendChild(t.firstChild);return f;};
-        \\  r.getBoundingClientRect=function(){return{x:0,y:0,width:0,height:0,top:0,right:0,bottom:0,left:0};};
-        \\  r.getClientRects=function(){return[];};
-        \\  r.START_TO_START=0;r.START_TO_END=1;r.END_TO_END=2;r.END_TO_START=3;
-        \\  return r;
+        \\  /* === Helper: node length per DOM spec === */
+        \\  function nLen(n){
+        \\    var t=n.nodeType;
+        \\    if(t===10)return 0; /* DocumentType */
+        \\    if(t===3||t===7||t===8)return(n.data||n.textContent||'').length; /* Text,PI,Comment */
+        \\    return n.childNodes?n.childNodes.length:0;
+        \\  }
+        \\  /* === Helper: root of node === */
+        \\  function root(n){while(n.parentNode)n=n.parentNode;return n;}
+        \\  /* === Helper: index of node in parent === */
+        \\  function idx(n){var i=0,c=n.parentNode?n.parentNode.firstChild:null;while(c&&c!==n){i++;c=c.nextSibling;}return i;}
+        \\  /* === Boundary point comparison (DOM spec §5.2) === */
+        \\  /* Returns -1 (before), 0 (equal), 1 (after) */
+        \\  function bpCmp(nA,oA,nB,oB){
+        \\    if(nA===nB)return oA<oB?-1:oA>oB?1:0;
+        \\    var pos=nA.compareDocumentPosition(nB);
+        \\    if(pos&16){ /* CONTAINS: nA is ancestor of nB */
+        \\      var ch=nB;while(ch.parentNode!==nA)ch=ch.parentNode;
+        \\      return oA<=idx(ch)?-1:1;
+        \\    }
+        \\    if(pos&8){ /* CONTAINED_BY: nB is ancestor of nA */
+        \\      var ch=nA;while(ch.parentNode!==nB)ch=ch.parentNode;
+        \\      return idx(ch)<oB?-1:1;
+        \\    }
+        \\    if(pos&4)return -1; /* FOLLOWING: nB follows nA */
+        \\    if(pos&2)return 1;  /* PRECEDING: nB precedes nA */
+        \\    return 0; /* disconnected */
+        \\  }
+        \\  /* === Range prototype === */
+        \\  var RP=typeof Range!=='undefined'?Range.prototype:{};
+        \\  RP._ua=function(){
+        \\    var a=this.startContainer,b=this.endContainer;
+        \\    if(a===b){this.commonAncestorContainer=a;return;}
+        \\    var pa=[],n=a;while(n){pa.push(n);n=n.parentNode;}
+        \\    n=b;while(n){for(var i=0;i<pa.length;i++)if(pa[i]===n){this.commonAncestorContainer=n;return;}n=n.parentNode;}
+        \\    this.commonAncestorContainer=document;
+        \\  };
+        \\  Object.defineProperty(RP,'collapsed',{get:function(){return this.startContainer===this.endContainer&&this.startOffset===this.endOffset;},configurable:true,enumerable:true});
+        \\  RP.setStart=function(n,o){
+        \\    if(!n||n.nodeType===undefined)throw new TypeError("Invalid node");
+        \\    o=o>>>0;if(o>nLen(n))throw new DOMException('','IndexSizeError');
+        \\    this.startContainer=n;this.startOffset=o;
+        \\    /* If start is after end, set end = start */
+        \\    if(bpCmp(this.startContainer,this.startOffset,this.endContainer,this.endOffset)>0){
+        \\      this.endContainer=this.startContainer;this.endOffset=this.startOffset;}
+        \\    this._ua();
+        \\  };
+        \\  RP.setEnd=function(n,o){
+        \\    if(!n||n.nodeType===undefined)throw new TypeError("Invalid node");
+        \\    o=o>>>0;if(o>nLen(n))throw new DOMException('','IndexSizeError');
+        \\    this.endContainer=n;this.endOffset=o;
+        \\    if(bpCmp(this.startContainer,this.startOffset,this.endContainer,this.endOffset)>0){
+        \\      this.startContainer=this.endContainer;this.startOffset=this.endOffset;}
+        \\    this._ua();
+        \\  };
+        \\  RP.setStartBefore=function(n){var p=n.parentNode;if(!p)throw new DOMException('','InvalidNodeTypeError');this.setStart(p,idx(n));};
+        \\  RP.setStartAfter=function(n){var p=n.parentNode;if(!p)throw new DOMException('','InvalidNodeTypeError');this.setStart(p,idx(n)+1);};
+        \\  RP.setEndBefore=function(n){var p=n.parentNode;if(!p)throw new DOMException('','InvalidNodeTypeError');this.setEnd(p,idx(n));};
+        \\  RP.setEndAfter=function(n){var p=n.parentNode;if(!p)throw new DOMException('','InvalidNodeTypeError');this.setEnd(p,idx(n)+1);};
+        \\  RP.selectNode=function(n){var p=n.parentNode;if(!p)throw new DOMException('','InvalidNodeTypeError');var i=idx(n);this.setStart(p,i);this.setEnd(p,i+1);};
+        \\  RP.selectNodeContents=function(n){this.startContainer=n;this.startOffset=0;this.endContainer=n;this.endOffset=nLen(n);this._ua();};
+        \\  RP.collapse=function(toStart){
+        \\    if(toStart){this.endContainer=this.startContainer;this.endOffset=this.startOffset;}
+        \\    else{this.startContainer=this.endContainer;this.startOffset=this.endOffset;}
+        \\    this._ua();
+        \\  };
+        \\  RP.cloneRange=function(){var nr=__createRange();nr.startContainer=this.startContainer;nr.startOffset=this.startOffset;nr.endContainer=this.endContainer;nr.endOffset=this.endOffset;nr._ua();return nr;};
+        \\  RP.compareBoundaryPoints=function(how,sr){
+        \\    if(!(sr instanceof Range))throw new TypeError("Argument is not a Range");
+        \\    if(root(this.startContainer)!==root(sr.startContainer))throw new DOMException('','WrongDocumentError');
+        \\    var thisP,thisO,srcP,srcO;
+        \\    switch(how){
+        \\      case 0:thisP=this.startContainer;thisO=this.startOffset;srcP=sr.startContainer;srcO=sr.startOffset;break;
+        \\      case 1:thisP=this.startContainer;thisO=this.startOffset;srcP=sr.endContainer;srcO=sr.endOffset;break;
+        \\      case 2:thisP=this.endContainer;thisO=this.endOffset;srcP=sr.endContainer;srcO=sr.endOffset;break;
+        \\      case 3:thisP=this.endContainer;thisO=this.endOffset;srcP=sr.startContainer;srcO=sr.startOffset;break;
+        \\      default:throw new DOMException('','NotSupportedError');
+        \\    }
+        \\    return bpCmp(thisP,thisO,srcP,srcO);
+        \\  };
+        \\  RP.isPointInRange=function(n,o){
+        \\    if(root(n)!==root(this.startContainer))return false;
+        \\    if(n.nodeType===10)throw new DOMException('','InvalidNodeTypeError');
+        \\    o=o>>>0;if(o>nLen(n))throw new DOMException('','IndexSizeError');
+        \\    if(bpCmp(n,o,this.startContainer,this.startOffset)<0)return false;
+        \\    if(bpCmp(n,o,this.endContainer,this.endOffset)>0)return false;
+        \\    return true;
+        \\  };
+        \\  RP.comparePoint=function(n,o){
+        \\    if(root(n)!==root(this.startContainer))throw new DOMException('','WrongDocumentError');
+        \\    if(n.nodeType===10)throw new DOMException('','InvalidNodeTypeError');
+        \\    o=o>>>0;if(o>nLen(n))throw new DOMException('','IndexSizeError');
+        \\    if(bpCmp(n,o,this.startContainer,this.startOffset)<0)return -1;
+        \\    if(bpCmp(n,o,this.endContainer,this.endOffset)>0)return 1;
+        \\    return 0;
+        \\  };
+        \\  RP.intersectsNode=function(n){
+        \\    if(root(n)!==root(this.startContainer))return false;
+        \\    var p=n.parentNode;
+        \\    if(!p)return true;
+        \\    var offset=idx(n);
+        \\    return bpCmp(p,offset,this.endContainer,this.endOffset)<0&&bpCmp(p,offset+1,this.startContainer,this.startOffset)>0;
+        \\  };
+        \\  RP.toString=function(){
+        \\    var s=this.startContainer,so=this.startOffset,e=this.endContainer,eo=this.endOffset;
+        \\    if(s===e){
+        \\      if(s.nodeType===3)return(s.data||'').substring(so,eo);
+        \\      return '';
+        \\    }
+        \\    var result='';
+        \\    /* Collect text within range using tree walker */
+        \\    if(s.nodeType===3)result+=(s.data||'').substring(so);
+        \\    /* Walk all text nodes between start and end */
+        \\    var cur=s;
+        \\    function nextNode(n){if(n.firstChild)return n.firstChild;while(n){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}return null;}
+        \\    cur=nextNode(s);
+        \\    while(cur&&cur!==e){
+        \\      if(cur.nodeType===3)result+=cur.data||'';
+        \\      if(cur.contains&&cur.contains(e))cur=cur.firstChild;
+        \\      else cur=nextNode(cur);
+        \\    }
+        \\    if(e.nodeType===3)result+=(e.data||'').substring(0,eo);
+        \\    return result;
+        \\  };
+        \\  RP.detach=function(){};
+        \\  RP.cloneContents=function(){
+        \\    var f=document.createDocumentFragment();
+        \\    if(this.collapsed)return f;
+        \\    var s=this.startContainer,so=this.startOffset,e=this.endContainer,eo=this.endOffset;
+        \\    if(s===e&&s.nodeType===3){f.appendChild(document.createTextNode((s.data||'').substring(so,eo)));return f;}
+        \\    /* Simplified: clone text in range */
+        \\    if(s.nodeType===3){f.appendChild(document.createTextNode((s.data||'').substring(so)));}
+        \\    var cur=s;
+        \\    function next(n){if(n.firstChild)return n.firstChild;while(n){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}return null;}
+        \\    cur=next(s);
+        \\    while(cur&&cur!==e){
+        \\      if(cur.nodeType===3){f.appendChild(document.createTextNode(cur.data||''));}
+        \\      else if(cur.nodeType===1){f.appendChild(cur.cloneNode(false));}
+        \\      if(cur.contains&&cur.contains(e)){cur=cur.firstChild;}else{cur=next(cur);}
+        \\    }
+        \\    if(e.nodeType===3){f.appendChild(document.createTextNode((e.data||'').substring(0,eo)));}
+        \\    return f;
+        \\  };
+        \\  RP.deleteContents=function(){
+        \\    if(this.collapsed)return;
+        \\    var s=this.startContainer,so=this.startOffset,e=this.endContainer,eo=this.endOffset;
+        \\    if(s===e&&s.nodeType===3){s.deleteData(so,eo-so);return;}
+        \\    /* Collect nodes fully in range, then remove */
+        \\    var toRemove=[];
+        \\    function next(n){if(n.firstChild)return n.firstChild;while(n){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}return null;}
+        \\    var cur=next(s);
+        \\    while(cur&&cur!==e){
+        \\      var n2=next(cur);
+        \\      if(!cur.contains||!cur.contains(e)){toRemove.push(cur);}
+        \\      cur=n2;
+        \\    }
+        \\    for(var i=0;i<toRemove.length;i++){if(toRemove[i].parentNode)toRemove[i].parentNode.removeChild(toRemove[i]);}
+        \\    if(s.nodeType===3&&s.deleteData)s.deleteData(so,(s.data||'').length-so);
+        \\    if(e.nodeType===3&&e.deleteData)e.deleteData(0,eo);
+        \\    this.collapse(true);
+        \\  };
+        \\  RP.extractContents=function(){
+        \\    var f=this.cloneContents();
+        \\    this.deleteContents();
+        \\    return f;
+        \\  };
+        \\  RP.insertNode=function(n){
+        \\    var sc=this.startContainer,so=this.startOffset;
+        \\    if(sc.nodeType===3){var p=sc.parentNode;if(p){var ref=sc;
+        \\      if(so>0&&so<(sc.data||'').length){sc.splitText(so);ref=sc.nextSibling;}
+        \\      else if(so===0)ref=sc;
+        \\      else ref=sc.nextSibling;
+        \\      p.insertBefore(n,ref);}}
+        \\    else{var ref=sc.childNodes[so]||null;sc.insertBefore(n,ref);}
+        \\  };
+        \\  RP.surroundContents=function(newParent){
+        \\    var s=this.startContainer,e=this.endContainer;
+        \\    /* Check for partial non-Text containment */
+        \\    if(s.nodeType!==3&&s!==e&&(s.contains?!s.contains(e):true))throw new DOMException('','InvalidStateError');
+        \\    if(newParent.nodeType===11||newParent.nodeType===9||newParent.nodeType===10)throw new DOMException('','InvalidNodeTypeError');
+        \\    var frag=this.extractContents();
+        \\    while(newParent.firstChild)newParent.removeChild(newParent.firstChild);
+        \\    this.insertNode(newParent);
+        \\    newParent.appendChild(frag);
+        \\    this.selectNode(newParent);
+        \\  };
+        \\  RP.createContextualFragment=function(html){
+        \\    var t=document.createElement('div');t.innerHTML=html;
+        \\    var f=document.createDocumentFragment();while(t.firstChild)f.appendChild(t.firstChild);return f;
+        \\  };
+        \\  RP.getBoundingClientRect=function(){return{x:0,y:0,width:0,height:0,top:0,right:0,bottom:0,left:0};};
+        \\  RP.getClientRects=function(){return[];};
+        \\  /* Static constants on prototype */
+        \\  RP.START_TO_START=0;RP.START_TO_END=1;RP.END_TO_END=2;RP.END_TO_START=3;
+        \\  /* Factory function — accepts optional ownerDoc */
+        \\  globalThis.__createRange=function(doc){
+        \\    var d=doc||document;
+        \\    var r=Object.create(RP);
+        \\    r.startContainer=d;r.startOffset=0;r.endContainer=d;r.endOffset=0;r.commonAncestorContainer=d;
+        \\    return r;
+        \\  };
+        \\  /* Override Range constructor so new Range() works */
+        \\  if(typeof Range!=='undefined'){
+        \\    var oldProto=Range.prototype;
+        \\    var props=Object.getOwnPropertyNames(RP);
+        \\    for(var i=0;i<props.length;i++){
+        \\      var d=Object.getOwnPropertyDescriptor(RP,props[i]);
+        \\      if(d)Object.defineProperty(oldProto,props[i],d);
+        \\    }
+        \\    Range.START_TO_START=0;Range.START_TO_END=1;Range.END_TO_END=2;Range.END_TO_START=3;
+        \\    Range.prototype.START_TO_START=0;Range.prototype.START_TO_END=1;Range.prototype.END_TO_END=2;Range.prototype.END_TO_START=3;
+        \\    /* Patch constructor to init fields */
+        \\    var _origRange=Range;
+        \\    globalThis.Range=function Range(){
+        \\      var r=Object.create(_origRange.prototype);
+        \\      r.startContainer=document;r.startOffset=0;r.endContainer=document;r.endOffset=0;r.commonAncestorContainer=document;
+        \\      return r;
+        \\    };
+        \\    globalThis.Range.prototype=_origRange.prototype;
+        \\    globalThis.Range.START_TO_START=0;globalThis.Range.START_TO_END=1;globalThis.Range.END_TO_END=2;globalThis.Range.END_TO_START=3;
+        \\    _origRange.prototype.constructor=globalThis.Range;
+        \\  }
         \\})()
     ;
-    const range = qjs.JS_Eval(c, range_js, range_js.len, "<range>", qjs.JS_EVAL_TYPE_GLOBAL);
-    return range;
+    const r = qjs.JS_Eval(c, range_init_js, range_init_js.len, "<range-init>", qjs.JS_EVAL_TYPE_GLOBAL);
+    qjs.JS_FreeValue(c, r);
 }
 
 pub fn documentCreateTreeWalker(

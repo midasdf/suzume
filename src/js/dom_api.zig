@@ -1952,7 +1952,7 @@ fn elementGetAttributes(
         \\      return Object.getOwnPropertyDescriptor(o,p);
         \\    },
         \\    ownKeys: function(o) {
-        \\      return Object.getOwnPropertyNames(o);
+        \\      return Object.getOwnPropertyNames(o).filter(function(k){return k!=='_self'&&k!=='_len';});
         \\    }
         \\  });
         \\})
@@ -3443,13 +3443,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\(function(){
             \\  var p={};
             \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
-            \\  p.namedItem=function(n){for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
+            \\  p.namedItem=function(n){if(!n)return null;for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
             \\  Object.defineProperty(p,'length',{get:function(){return 0;},enumerable:true,configurable:true});
             \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
             \\  p.map=function(cb,t){var r=[];for(var i=0;i<this.length;i++)r.push(cb.call(t,this[i],i,this));return r;};
             \\  p.join=function(s){var r='';for(var i=0;i<this.length;i++){if(i>0)r+=s===undefined?',':s;r+=this[i];}return r;};
             \\  p.indexOf=function(v,f){for(var i=f||0;i<this.length;i++)if(this[i]===v)return i;return -1;};
-            \\  p.forEach=function(cb,t){for(var i=0;i<this.length;i++)cb.call(t,this[i],i,this);};
             \\  return p;
             \\})()
         ;
@@ -3459,7 +3458,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, global, "HTMLCollection", htmlcol_ctor);
 
     const range_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "Range", 0, qjs.JS_CFUNC_constructor, 0);
+    // Explicitly create Range.prototype
+    {
+        const rp = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPropertyStr(ctx, rp, "constructor", qjs.JS_DupValue(ctx, range_ctor));
+        _ = qjs.JS_SetPropertyStr(ctx, range_ctor, "prototype", rp);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, global, "Range", range_ctor);
+    // Initialize Range.prototype with spec-compliant methods + __createRange factory
+    dom_doc.initRangePrototype(ctx);
 
     // DocumentType constructor
     const doctype_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentType", 0, qjs.JS_CFUNC_constructor, 0);
@@ -3614,8 +3621,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\        if(p===Symbol.toStringTag)return'NamedNodeMap';
             \\        return o[p];},
             \\      has:function(o,p){if(p==='length'||p==='getNamedItem'||p==='item'||p==='getNamedItemNS'||p==='setNamedItem'||p==='removeNamedItem'||p==='setNamedItemNS'||p==='removeNamedItemNS')return true;return p in o;},
-            \\      getOwnPropertyDescriptor:function(o,p){return Object.getOwnPropertyDescriptor(o,p);},
-            \\      ownKeys:function(o){return Object.getOwnPropertyNames(o);}
+            \\      getOwnPropertyDescriptor:function(o,p){if(p==='_self'||p==='_len')return undefined;return Object.getOwnPropertyDescriptor(o,p);},
+            \\      ownKeys:function(o){return Object.getOwnPropertyNames(o).filter(function(k){return k!=='_self'&&k!=='_len';});}
             \\    };
             \\    Object.defineProperty(EP,'attributes',{get:function(){
             \\      var c=_proxyCache.get(this);
@@ -4441,7 +4448,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    createAttributeNS: function(ns,qn) { return document.createAttributeNS(ns,qn); },
             \\    createTreeWalker: function(r,w,f) { return document.createTreeWalker(r,w,f); },
             \\    createNodeIterator: function(r,w,f) { return document.createNodeIterator(r,w,f); },
-            \\    createRange: function() { return document.createRange(); },
+            \\    createRange: function() { return __createRange(this); },
             \\    ownerDocument: null,
             \\    contentType: 'text/html',
             \\    characterSet: 'UTF-8',
@@ -4752,7 +4759,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var n=o.parentNode;while(n){if(n===this)return true;n=n.parentNode;}return false;
             \\  };
             \\  Document.prototype.createAttributeNS = function(ns,qn) { return document.createAttributeNS(ns,qn); };
-            \\  Document.prototype.createRange = function() { return document.createRange(); };
+            \\  Document.prototype.createRange = function() { return __createRange(this); };
             \\  Document.prototype.createTreeWalker = function(r,w,f) { return document.createTreeWalker(r,w,f); };
             \\  Document.prototype.createNodeIterator = function(r,w,f) { return document.createNodeIterator(r,w,f); };
             \\  Document.prototype.implementation = document.implementation;
@@ -4928,7 +4935,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function createLiveHTMLColl(queryFn){
             \\    var expandos=Object.create(null),cache=null,cacheVer=-1;
             \\    function q(){var v=__domVer();if(cacheVer!==v){var r=queryFn();cache=[];for(var i=0;i<r.length;i++)cache.push(r[i]);cacheVer=v;}return cache;}
-            \\    function ni(name){var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
+            \\    function ni(name){if(!name)return null;var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
             \\    var t=Object.create(HTMLCollection.prototype);
             \\    return new Proxy(t,{
             \\      get:function(t,p){

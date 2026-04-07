@@ -1437,13 +1437,14 @@ pub fn elementGetDataset(
         \\      else if(up){r+=s[i].toUpperCase();up=false;}
         \\      else r+=s[i];
         \\    }
+        \\    if(up)r+='-';
         \\    return r;
         \\  }
         \\  function getKeys(){
         \\    var k=[],attrs=el.attributes;
         \\    if(attrs)for(var i=0;i<attrs.length;i++){
         \\      var n=attrs[i].name;
-        \\      if(n.substring(0,5)==='data-'&&n.indexOf('-',5)===-1||n.substring(0,5)==='data-')k.push(toKey(n));
+        \\      if(n.length>=5&&n.substring(0,5)==='data-')k.push(toKey(n));
         \\    }
         \\    return k;
         \\  }
@@ -1470,7 +1471,7 @@ pub fn elementGetDataset(
         \\      var k=[];
         \\      for(var i=0;i<attrs.length;i++){
         \\        var n=attrs[i];
-        \\        if(n.length>5&&n.substring(0,5)==='data-')k.push(toKey(n));
+        \\        if(n.length>=5&&n.substring(0,5)==='data-')k.push(toKey(n));
         \\      }
         \\      return k;
         \\    },
