@@ -257,6 +257,22 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":checked")) {
             return lxb_dom_element_has_attribute(elem, "checked", 7);
         }
+        if (std.ascii.eqlIgnoreCase(sel, ":focus")) {
+            return api.active_element != null and api.active_element.? == @as(*lxb.lxb_dom_node_t, @ptrCast(elem));
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":focus-visible")) {
+            return api.active_element != null and api.active_element.? == @as(*lxb.lxb_dom_node_t, @ptrCast(elem));
+        }
+        if (std.ascii.eqlIgnoreCase(sel, ":focus-within")) {
+            const ae = api.active_element orelse return false;
+            // Check if elem is ancestor-or-self of active element
+            var cur: ?*lxb.lxb_dom_node_t = ae;
+            while (cur) |n| {
+                if (n == @as(*lxb.lxb_dom_node_t, @ptrCast(elem))) return true;
+                cur = n.parent;
+            }
+            return false;
+        }
         if (std.ascii.eqlIgnoreCase(sel, ":required")) {
             return lxb_dom_element_has_attribute(elem, "required", 8);
         }

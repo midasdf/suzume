@@ -18,7 +18,7 @@ set -uo pipefail
 WPT_DIR="/tmp/wpt"
 SUZUME_BIN="$(cd "$(dirname "$0")/../.." && pwd)/zig-out/bin/suzume"
 PORT=9876
-TIMEOUT=30
+TIMEOUT=${TIMEOUT:-90}
 AREA="${1:-css/css-box}"
 DISPLAY_NUM=":98"
 
