@@ -278,6 +278,35 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             }
             return std.ascii.eqlIgnoreCase(dir_arg, resolved_dir);
         }
+        // :lang(tag) — BCP 47 extended filtering (RFC 4647 §3.4)
+        if (sel.len > 6 and std.ascii.eqlIgnoreCase(sel[0..6], ":lang(") and sel[sel.len - 1] == ')') {
+            const lang_arg = std.mem.trim(u8, sel[6 .. sel.len - 1], " \t\"'");
+            if (lang_arg.len == 0) return false;
+            // Find element's language: walk up tree for lang attribute
+            const node_ptr: *lxb.lxb_dom_node_t = @ptrCast(elem);
+            var cur: ?*lxb.lxb_dom_node_t = node_ptr;
+            var elem_lang: ?[]const u8 = null;
+            while (cur) |c| {
+                if (c.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                    const el: *lxb.lxb_dom_element_t = @ptrCast(c);
+                    var lang_len: usize = 0;
+                    const lang_val = lxb_dom_element_get_attribute(el, "lang", 4, &lang_len);
+                    if (lang_val != null and lang_len > 0) {
+                        elem_lang = lang_val.?[0..lang_len];
+                        break;
+                    }
+                    // Also check xml:lang
+                    const xmllang = lxb_dom_element_get_attribute(el, "xml:lang", 8, &lang_len);
+                    if (xmllang != null and lang_len > 0) {
+                        elem_lang = xmllang.?[0..lang_len];
+                        break;
+                    }
+                }
+                cur = c.parent;
+            }
+            if (elem_lang == null) return false;
+            return matchLangBCP47(lang_arg, elem_lang.?);
+        }
         // Unknown pseudo — return false (conservative)
         return false;
     }
@@ -1242,4 +1271,69 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
         }
         current = nextDfsNode(node, root);
     }
+}
+
+/// BCP 47 extended filtering (RFC 4647 §3.4)
+/// Returns true if the element's language tag matches the given range.
+pub fn matchLangBCP47(range: []const u8, tag: []const u8) bool {
+    if (range.len == 0 or tag.len == 0) return false;
+    // Wildcard matches everything
+    if (range.len == 1 and range[0] == '*') return true;
+
+    // Split range and tag into subtags by '-'
+    var range_subtags: [16][]const u8 = undefined;
+    var range_count: usize = 0;
+    {
+        var start: usize = 0;
+        for (range, 0..) |ch, i| {
+            if (ch == '-') {
+                if (range_count < 16) { range_subtags[range_count] = range[start..i]; range_count += 1; }
+                start = i + 1;
+            }
+        }
+        if (range_count < 16) { range_subtags[range_count] = range[start..]; range_count += 1; }
+    }
+    var tag_subtags: [16][]const u8 = undefined;
+    var tag_count: usize = 0;
+    {
+        var start: usize = 0;
+        for (tag, 0..) |ch, i| {
+            if (ch == '-') {
+                if (tag_count < 16) { tag_subtags[tag_count] = tag[start..i]; tag_count += 1; }
+                start = i + 1;
+            }
+        }
+        if (tag_count < 16) { tag_subtags[tag_count] = tag[start..]; tag_count += 1; }
+    }
+
+    if (range_count == 0 or tag_count == 0) return false;
+
+    // Step 1: primary subtags must match (case-insensitive)
+    if (!std.ascii.eqlIgnoreCase(range_subtags[0], tag_subtags[0])) return false;
+
+    // Extended filtering: walk through range subtags
+    var ri: usize = 1; // range index
+    var ti: usize = 1; // tag index
+    while (ri < range_count) {
+        const r_sub = range_subtags[ri];
+        if (r_sub.len == 1 and r_sub[0] == '*') {
+            // Wildcard subtag matches anything; advance range only
+            ri += 1;
+            continue;
+        }
+        if (ti >= tag_count) return false; // ran out of tag subtags
+        const t_sub = tag_subtags[ti];
+        if (std.ascii.eqlIgnoreCase(r_sub, t_sub)) {
+            // Match: advance both
+            ri += 1;
+            ti += 1;
+        } else if (t_sub.len == 1) {
+            // Singleton subtag in tag blocks skipping (RFC 4647 §3.4 step 3D)
+            return false;
+        } else {
+            // Skip this tag subtag and try again
+            ti += 1;
+        }
+    }
+    return true;
 }
