@@ -5077,6 +5077,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var nm=m[1].trim(),op=m[2],val=m[3].trim();
             \\    var flag='';
             \\    if(/\s+[iIsS]$/.test(val)){flag=' '+val.slice(-1);val=val.slice(0,-2).trim();}
+            \\    else if(/["'][iIsS]$/.test(val)){flag=' '+val.slice(-1);val=val.slice(0,-1);}
             \\    if(val.charAt(0)==='"'){}
             \\    else if(val.charAt(0)==="'"){val='"'+val.substring(1,val.length-1)+'"';}
             \\    else{val='"'+val+'"';}
@@ -5110,8 +5111,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function _canonSel(s){var parts=_splitTop(s.trim(),',');for(var i=0;i<parts.length;i++)parts[i]=_canonOne(parts[i].trim());return parts.join(', ');}
             \\
             \\  // ── CSSStyleRule ──
-            \\  function CSSStyleRule(sel,body){this.type=1;this.selectorText=sel;this._body=body||'';}
-            \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){return this.selectorText+' { '+this._body+' }';},enumerable:true,configurable:true});
+            \\  function CSSStyleRule(sel,body){this.type=1;this._sel=sel;this._body=body||'';}
+            \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{get:function(){return this._sel;},set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=_canonSel(c);}catch(e){}},enumerable:true,configurable:true});
+            \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){return this._sel+' { '+this._body+' }';},enumerable:true,configurable:true});
             \\  CSSStyleRule.prototype.style={cssText:'',getPropertyValue:function(){return '';},setProperty:function(){},removeProperty:function(){return '';}};
             \\
             \\  // ── CSSStyleSheet ──
@@ -5120,7 +5122,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(index===void 0)index=0;
             \\    var bi=rule.indexOf('{');
             \\    if(bi===-1){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
-            \\    var sel=rule.substring(0,bi).trim();
+            \\    var sel=rule.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
             \\    var ei=rule.lastIndexOf('}');
             \\    var body=ei>bi?rule.substring(bi+1,ei).trim():'';
             \\    if(!sel){var ex=new DOMException("Invalid selector",'SyntaxError');ex.code=12;throw ex;}
@@ -5139,16 +5141,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  _Sheet.prototype.replace=function(css){this._css=css;return Promise.resolve(this);};
             \\  globalThis.CSSStyleSheet=_Sheet;
             \\
-            \\  // ── style.sheet property via createElement override ──
-            \\  var _origCE=document.createElement;
-            \\  document.createElement=function(tag){
-            \\    var el=_origCE.call(document,tag);
-            \\    if(typeof tag==='string'&&tag.toLowerCase()==='style'){
-            \\      var sh=new _Sheet();sh.ownerNode=el;
-            \\      Object.defineProperty(el,'sheet',{get:function(){return sh;},configurable:true});
-            \\    }
-            \\    return el;
-            \\  };
+            \\  // ── style.sheet property via Element prototype getter ──
+            \\  var _sheetMap=new WeakMap();
+            \\  Object.defineProperty(Element.prototype,'sheet',{get:function(){
+            \\    if(!this.tagName||this.tagName.toUpperCase()!=='STYLE')return void 0;
+            \\    var sh=_sheetMap.get(this);if(!sh){sh=new _Sheet();sh.ownerNode=this;_sheetMap.set(this,sh);}return sh;
+            \\  },configurable:true,enumerable:true});
             \\
             \\  // ── CSS.supports("selector(...)") ──
             \\  if(typeof CSS!=='undefined'&&CSS.supports){
