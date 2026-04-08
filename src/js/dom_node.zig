@@ -1538,6 +1538,8 @@ pub fn nodeNormalize(
 }
 
 /// Internal normalize helper that works directly on DOM nodes (no JS context needed).
+/// Note: removed nodes are NOT destroyed because JS wrappers may still reference them.
+/// The DOM spec requires that removed text nodes retain their original data.
 pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
     var child: ?*lxb.lxb_dom_node_t = node.first_child;
     while (child) |ch| {
@@ -1548,7 +1550,7 @@ pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
             if (text_len == 0) {
                 const next_sib: ?*lxb.lxb_dom_node_t = ch.next;
                 lxb_dom_node_remove(ch);
-                _ = lxb_dom_node_destroy(ch);
+                // Don't destroy — JS may still reference this node
                 child = next_sib;
                 continue;
             }
@@ -1561,7 +1563,6 @@ pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
                 const after: ?*lxb.lxb_dom_node_t = next.next;
                 if (next_len == 0 or next_ptr == null) {
                     lxb_dom_node_remove(next);
-                    _ = lxb_dom_node_destroy(next);
                     next_node = after;
                     continue;
                 }
@@ -1576,7 +1577,7 @@ pub fn normalizeNode(node: *lxb.lxb_dom_node_t) void {
                     _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
                     text_len = total;
                     lxb_dom_node_remove(next);
-                    _ = lxb_dom_node_destroy(next);
+                    // Don't destroy — JS may still reference this node
                 } else {
                     break;
                 }
