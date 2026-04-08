@@ -692,7 +692,13 @@ pub fn initRangePrototype(c: *qjs.JSContext) void {
         \\    var s=this.startContainer,so=this.startOffset,e=this.endContainer,eo=this.endOffset;
         \\    if(s===e){
         \\      if(s.nodeType===3)return(s.data||'').substring(so,eo);
-        \\      return '';
+        \\      /* Same element container: collect text from children [so, eo) */
+        \\      var r='',cn=s.childNodes;
+        \\      for(var i=so;i<eo&&i<cn.length;i++){
+        \\        if(cn[i].nodeType===3)r+=cn[i].data||'';
+        \\        else if(cn[i].textContent!==undefined)r+=cn[i].textContent||'';
+        \\      }
+        \\      return r;
         \\    }
         \\    var result='';
         \\    /* Collect text within range using tree walker */
