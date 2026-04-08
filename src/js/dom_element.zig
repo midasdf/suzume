@@ -245,11 +245,29 @@ pub fn elementGetAttributeNS(
     if (argc < 2) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
     const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
-    // args[0] = namespace (ignored for now), args[1] = localName
+    // args[0] = namespace (nullable), args[1] = localName
+    var req_ns: ?[]const u8 = null;
+    var req_ns_ptr: ?[*]const u8 = null;
+    if (!quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
+        if (jsStringToSlice(c, args[0])) |ns_s| {
+            req_ns_ptr = ns_s.ptr;
+            req_ns = ns_s.ptr[0..ns_s.len];
+        }
+    }
+    defer if (req_ns_ptr) |p| qjs.JS_FreeCString(c, p);
+    // Treat empty namespace as null per DOM spec
+    if (req_ns) |ns| {
+        if (ns.len == 0) req_ns = null;
+    }
     const local = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, local.ptr);
-    // DOM spec: getAttributeNS is case-sensitive — iterate and match by local name
     const local_s = local.ptr[0..local.len];
+
+    // Get __attrNS namespace map
+    const attr_ns_obj = qjs.JS_GetPropertyStr(c, this_val, "__attrNS");
+    defer qjs.JS_FreeValue(c, attr_ns_obj);
+
+    // DOM spec: getAttributeNS matches by namespace AND local name (case-sensitive)
     var attr_it: ?*anyopaque = lxb_dom_element_first_attribute_noi(elem);
     while (attr_it) |attr| {
         var attr_name_len: usize = 0;
@@ -257,11 +275,38 @@ pub fn elementGetAttributeNS(
             const attr_qname = attr_name_ptr[0..attr_name_len];
             const attr_local = extractLocalName(attr_qname);
             if (std.mem.eql(u8, attr_local, local_s)) {
-                var val_len: usize = 0;
-                if (lxb_dom_attr_value_noi(attr, &val_len)) |val_ptr| {
-                    return qjs.JS_NewStringLen(c, val_ptr, val_len);
+                // Check namespace match
+                if (!quickjs.JS_IsUndefined(attr_ns_obj) and !quickjs.JS_IsNull(attr_ns_obj)) {
+                    const ns_val = qjs.JS_GetPropertyStr(c, attr_ns_obj, attr_name_ptr);
+                    defer qjs.JS_FreeValue(c, ns_val);
+                    if (!quickjs.JS_IsUndefined(ns_val) and !quickjs.JS_IsNull(ns_val)) {
+                        if (jsStringToSlice(c, ns_val)) |ns_s| {
+                            defer qjs.JS_FreeCString(c, ns_s.ptr);
+                            const ns_str = ns_s.ptr[0..ns_s.len];
+                            // Both must have matching namespace
+                            if (req_ns) |rns| {
+                                if (std.mem.eql(u8, ns_str, rns)) {
+                                    var val_len: usize = 0;
+                                    if (lxb_dom_attr_value_noi(attr, &val_len)) |val_ptr| {
+                                        return qjs.JS_NewStringLen(c, val_ptr, val_len);
+                                    }
+                                    return qjs.JS_NewStringLen(c, "", 0);
+                                }
+                            }
+                            // ns_str is non-empty but req_ns is null — no match
+                            attr_it = lxb_dom_element_next_attribute_noi(attr);
+                            continue;
+                        }
+                    }
                 }
-                return qjs.JS_NewStringLen(c, "", 0);
+                // Attribute has no stored namespace (null) — match if req_ns is also null
+                if (req_ns == null) {
+                    var val_len: usize = 0;
+                    if (lxb_dom_attr_value_noi(attr, &val_len)) |val_ptr| {
+                        return qjs.JS_NewStringLen(c, val_ptr, val_len);
+                    }
+                    return qjs.JS_NewStringLen(c, "", 0);
+                }
             }
         }
         attr_it = lxb_dom_element_next_attribute_noi(attr);
@@ -399,19 +444,52 @@ pub fn elementHasAttributeNS(
     if (argc < 2) return quickjs.JS_NewBool(false);
     const args = argv orelse return quickjs.JS_NewBool(false);
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+    // args[0] = namespace (nullable), args[1] = localName
+    var req_ns: ?[]const u8 = null;
+    var req_ns_ptr: ?[*]const u8 = null;
+    if (!quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
+        if (jsStringToSlice(c, args[0])) |ns_s| {
+            req_ns_ptr = ns_s.ptr;
+            req_ns = ns_s.ptr[0..ns_s.len];
+        }
+    }
+    defer if (req_ns_ptr) |p| qjs.JS_FreeCString(c, p);
+    if (req_ns) |ns| {
+        if (ns.len == 0) req_ns = null;
+    }
     const local = jsStringToSlice(c, args[1]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, local.ptr);
-    // DOM spec: hasAttributeNS is case-sensitive — iterate attributes manually
-    // Match by local name (extract from qualified name if it has a prefix)
     const local_s = local.ptr[0..local.len];
+
+    // Get __attrNS namespace map
+    const attr_ns_obj = qjs.JS_GetPropertyStr(c, this_val, "__attrNS");
+    defer qjs.JS_FreeValue(c, attr_ns_obj);
+
     var attr_it: ?*anyopaque = lxb_dom_element_first_attribute_noi(elem);
     while (attr_it) |attr| {
         var attr_name_len: usize = 0;
         if (lxb_dom_attr_qualified_name(attr, &attr_name_len)) |attr_name_ptr| {
             const attr_qname = attr_name_ptr[0..attr_name_len];
-            // Extract local name from qualified name
             const attr_local = extractLocalName(attr_qname);
-            if (std.mem.eql(u8, attr_local, local_s)) return quickjs.JS_NewBool(true);
+            if (std.mem.eql(u8, attr_local, local_s)) {
+                // Check namespace match via __attrNS
+                if (!quickjs.JS_IsUndefined(attr_ns_obj) and !quickjs.JS_IsNull(attr_ns_obj)) {
+                    const ns_val = qjs.JS_GetPropertyStr(c, attr_ns_obj, attr_name_ptr);
+                    defer qjs.JS_FreeValue(c, ns_val);
+                    if (!quickjs.JS_IsUndefined(ns_val) and !quickjs.JS_IsNull(ns_val)) {
+                        if (jsStringToSlice(c, ns_val)) |ns_s| {
+                            defer qjs.JS_FreeCString(c, ns_s.ptr);
+                            if (req_ns) |rns| {
+                                if (std.mem.eql(u8, ns_s.ptr[0..ns_s.len], rns)) return quickjs.JS_NewBool(true);
+                            }
+                            attr_it = lxb_dom_element_next_attribute_noi(attr);
+                            continue;
+                        }
+                    }
+                }
+                // No stored namespace — match if req_ns is also null
+                if (req_ns == null) return quickjs.JS_NewBool(true);
+            }
         }
         attr_it = lxb_dom_element_next_attribute_noi(attr);
     }

@@ -1221,7 +1221,6 @@ pub fn elementCloneNode(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
 
     // Determine deep flag (default: shallow clone per DOM spec)
     var deep = false;
@@ -1231,7 +1230,7 @@ pub fn elementCloneNode(
         }
     }
 
-    // Check if this is a DocumentFragment (JS nodeType override = 11)
+    // Check JS-level nodeType first (for JS-only objects like DocumentFragment, Document)
     const js_nt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
     var js_node_type: i32 = 0;
     _ = qjs.JS_ToInt32(c, &js_node_type, js_nt);
@@ -1252,6 +1251,33 @@ pub fn elementCloneNode(
         }
         qjs.JS_FreeValue(c, clone_fn);
     }
+
+    // JS-only Document (nodeType 9 without lxb node, e.g. createDocument/createHTMLDocument)
+    if (js_node_type == 9) {
+        const clone_doc_js =
+            \\(function(src, deep){
+            \\  var d=document.implementation.createHTMLDocument('');
+            \\  /* Remove default children for clean slate */
+            \\  while(d.firstChild)d.removeChild(d.firstChild);
+            \\  /* Deep clone: copy children from source */
+            \\  if(deep&&src.childNodes){for(var i=0;i<src.childNodes.length;i++)d.appendChild(src.childNodes[i].cloneNode(true));}
+            \\  d.contentType=src.contentType||'application/xml';
+            \\  d.URL=src.URL||'about:blank';
+            \\  d.documentURI=src.documentURI||'about:blank';
+            \\  return d;
+            \\})
+        ;
+        const clone_fn2 = qjs.JS_Eval(c, clone_doc_js, clone_doc_js.len, "<doc-clone>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(clone_fn2)) {
+            var clone_args2 = [2]qjs.JSValue{ this_val, quickjs.JS_NewBool(deep) };
+            const result = qjs.JS_Call(c, clone_fn2, quickjs.JS_UNDEFINED(), 2, &clone_args2);
+            qjs.JS_FreeValue(c, clone_fn2);
+            return result;
+        }
+        qjs.JS_FreeValue(c, clone_fn2);
+    }
+
+    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
 
     // Text/Comment/PI nodes: create new node with same data
     if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {

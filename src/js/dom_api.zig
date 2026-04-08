@@ -4548,8 +4548,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    hasChildNodes: function() { return _ch.length>0; },
             \\    contains: function(n) { if(n===doc)return true;for(var i=0;i<_ch.length;i++){if(_ch[i]===n)return true;if(_ch[i].contains&&_ch[i].contains(n))return true;}return false; },
             \\    cloneNode: function(deep) {
-            \\      var nd = document.implementation.createHTMLDocument(title);
-            \\      if(deep){var de=_elemCh(null);if(de&&de.innerHTML)nd.documentElement.innerHTML=de.innerHTML;}
+            \\      var nd = document.implementation.createHTMLDocument('');
+            \\      while(nd.firstChild)nd.removeChild(nd.firstChild);
+            \\      if(deep){for(var i=0;i<_ch.length;i++)nd.appendChild(_ch[i].cloneNode(true));}
+            \\      nd.contentType=doc.contentType;nd.URL=doc.URL;nd.documentURI=doc.documentURI;
             \\      return nd;
             \\    },
             \\    compareDocumentPosition: function(other){if(other===doc)return 0;for(var i=0;i<_ch.length;i++){if(_ch[i]===other)return 20;if(_ch[i].contains&&_ch[i].contains(other))return 20;}if(other.contains&&other.contains(doc))return 10;return 35;},
@@ -4680,6 +4682,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  DocumentFragment = function DocumentFragment() { return document.createDocumentFragment(); };
             \\  DocumentFragment.prototype = oldProto;
             \\  DocumentFragment.prototype.constructor = DocumentFragment;
+            \\  Object.defineProperty(DocumentFragment, Symbol.hasInstance, {
+            \\    value: function(inst) { return inst !== null && typeof inst === 'object' && inst.nodeType === 11; }
+            \\  });
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, df_ctor_js, df_ctor_js.len, "<df-ctor>", qjs.JS_EVAL_TYPE_GLOBAL);
