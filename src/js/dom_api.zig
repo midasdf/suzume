@@ -3419,6 +3419,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "getElementById", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementById, "getElementById", 1));
+        // ParentNode mixin: children, firstElementChild, lastElementChild, childElementCount
+        {
+            const ca = qjs.JS_NewAtom(ctx, "children");
+            _ = qjs.JS_DefinePropertyGetSet(ctx, dfp, ca, qjs.JS_NewCFunction(ctx, &dom_node.elementGetChildren, "get children", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+            qjs.JS_FreeAtom(ctx, ca);
+        }
         _ = qjs.JS_SetPropertyStr(ctx, doc_frag_ctor, "prototype", dfp);
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
