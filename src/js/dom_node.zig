@@ -782,7 +782,10 @@ pub fn elementAppendChild(
         var frag_count: usize = 0;
         {
             var fc_count: ?*lxb.lxb_dom_node_t = child.first_child;
-            while (fc_count) |f| { frag_count += 1; fc_count = f.next; }
+            while (fc_count) |f| {
+                frag_count += 1;
+                fc_count = f.next;
+            }
         }
         if (frag_count == 0) return qjs.JS_DupValue(c, args[0]);
         const frag_children = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, frag_count) catch return quickjs.JS_UNDEFINED();
@@ -790,7 +793,11 @@ pub fn elementAppendChild(
         {
             var fc_fill: ?*lxb.lxb_dom_node_t = child.first_child;
             var fi: usize = 0;
-            while (fc_fill) |f| { frag_children[fi] = f; fi += 1; fc_fill = f.next; }
+            while (fc_fill) |f| {
+                frag_children[fi] = f;
+                fi += 1;
+                fc_fill = f.next;
+            }
         }
         const ins_prev = lxb_dom_node_last_child_noi(parent.?);
         // Manually move each child from fragment to parent (lexbor doesn't auto-move fragment children)
@@ -1018,7 +1025,10 @@ pub fn elementInsertBefore(
         var fc_count: usize = 0;
         {
             var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
-            while (fc_cnt_iter) |f| { fc_count += 1; fc_cnt_iter = f.next; }
+            while (fc_cnt_iter) |f| {
+                fc_count += 1;
+                fc_cnt_iter = f.next;
+            }
         }
         if (fc_count == 0) return qjs.JS_DupValue(c, args[0]);
         const frag_ch = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_count) catch return quickjs.JS_UNDEFINED();
@@ -1026,7 +1036,11 @@ pub fn elementInsertBefore(
         {
             var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
             var fi: usize = 0;
-            while (fc_fill) |f| { frag_ch[fi] = f; fi += 1; fc_fill = f.next; }
+            while (fc_fill) |f| {
+                frag_ch[fi] = f;
+                fi += 1;
+                fc_fill = f.next;
+            }
         }
         const ref_is_null2 = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
         const eff_ref2: ?*lxb.lxb_dom_node_t = if (!ref_is_null2) api.getNode(c, args[1]) else null;
@@ -1190,7 +1204,10 @@ pub fn elementReplaceChild(
         var fc_cnt: usize = 0;
         {
             var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
-            while (fc_cnt_iter) |f| { fc_cnt += 1; fc_cnt_iter = f.next; }
+            while (fc_cnt_iter) |f| {
+                fc_cnt += 1;
+                fc_cnt_iter = f.next;
+            }
         }
         if (fc_cnt == 0) return qjs.JS_DupValue(c, args[1]);
         const frag_ch_rc = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_cnt) catch return quickjs.JS_UNDEFINED();
@@ -1198,7 +1215,11 @@ pub fn elementReplaceChild(
         {
             var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
             var fi: usize = 0;
-            while (fc_fill) |f| { frag_ch_rc[fi] = f; fi += 1; fc_fill = f.next; }
+            while (fc_fill) |f| {
+                frag_ch_rc[fi] = f;
+                fi += 1;
+                fc_fill = f.next;
+            }
         }
         const rep_prev_f = old_node.prev;
         const rep_next_f = old_node.next;

@@ -244,7 +244,7 @@ pub fn jsAddEventListener(
             if (!is_global) {
                 // JS-level node or standalone EventTarget: store listeners on the object
                 qjs.JS_FreeValue(c, record.callback);
-                const js_code = "(function(el,type,cb,cap,once,pas){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];for(var i=0;i<a.length;i++)if(a[i].fn===cb)return;a.push({fn:cb,once:once,passive:pas});el[k]=a;})";
+                const js_code = "(function(el,type,cb,cap,once,pas){var k='__el_'+type+(cap?'\\x00c':'');var a=el[k]||[];for(var i=0;i<a.length;i++)if(a[i].fn===cb)return;a.push({fn:cb,once:once,passive:pas});el[k]=a;})";
                 const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(fn_val)) {
                     var call_args = [6]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture), quickjs.JS_NewBool(once), quickjs.JS_NewBool(passive) };
@@ -320,7 +320,7 @@ pub fn jsRemoveEventListener(
                 break :blk (this_val.tag == gl.tag and this_val.u.ptr == gl.u.ptr);
             };
             if (!is_global and !isDocumentObject(c, this_val)) {
-                const rm_js = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k];if(!a)return;for(var i=0;i<a.length;i++){if(a[i].fn===cb){a.splice(i,1);return;}}})";
+                const rm_js = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'\\x00c':'');var a=el[k];if(!a)return;for(var i=0;i<a.length;i++){if(a[i].fn===cb){a.splice(i,1);return;}}})";
                 const rm_fn = qjs.JS_Eval(c, rm_js, rm_js.len, "<rel>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(rm_fn)) {
                     var rm_args = [4]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
@@ -435,16 +435,13 @@ fn jsInitEvent(ctx: ?*qjs.JSContext, this_val: qjs.JSValue, argc: c_int, argv: ?
 fn isComposedEvent(event_type: []const u8) bool {
     // UI Events that are always composed
     const composed_events = [_][]const u8{
-        "click", "dblclick", "mousedown", "mouseup", "mousemove", "mouseover", "mouseout",
-        "mouseenter", "mouseleave", "contextmenu", "wheel",
-        "keydown", "keyup", "keypress",
-        "input", "beforeinput", "compositionstart", "compositionupdate", "compositionend",
-        "focus", "blur", "focusin", "focusout",
-        "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout",
-        "pointerenter", "pointerleave", "pointercancel", "gotpointercapture", "lostpointercapture",
-        "touchstart", "touchmove", "touchend", "touchcancel",
-        "dragstart", "drag", "dragend", "dragenter", "dragleave", "dragover", "drop",
-        "select", "selectionchange",
+        "click",        "dblclick",     "mousedown",        "mouseup",           "mousemove",          "mouseover",   "mouseout",
+        "mouseenter",   "mouseleave",   "contextmenu",      "wheel",             "keydown",            "keyup",       "keypress",
+        "input",        "beforeinput",  "compositionstart", "compositionupdate", "compositionend",     "focus",       "blur",
+        "focusin",      "focusout",     "pointerdown",      "pointerup",         "pointermove",        "pointerover", "pointerout",
+        "pointerenter", "pointerleave", "pointercancel",    "gotpointercapture", "lostpointercapture", "touchstart",  "touchmove",
+        "touchend",     "touchcancel",  "dragstart",        "drag",              "dragend",            "dragenter",   "dragleave",
+        "dragover",     "drop",         "select",           "selectionchange",
     };
     for (composed_events) |e| {
         if (std.mem.eql(u8, event_type, e)) return true;
@@ -489,6 +486,7 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
         const getter_js = "(function(){return this._trusted||false;})";
         const getter = qjs.JS_Eval(ctx, getter_js, getter_js.len, "<isTrusted>", qjs.JS_EVAL_TYPE_GLOBAL);
         const atom = qjs.JS_NewAtom(ctx, "isTrusted");
+        // JS_DefinePropertyGetSet consumes getter/setter refs (calls JS_FreeValue internally)
         _ = qjs.JS_DefinePropertyGetSet(ctx, event, atom, getter, quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE);
         qjs.JS_FreeAtom(ctx, atom);
     }
@@ -1268,7 +1266,7 @@ fn dispatchToJsDocPhased(ctx: *qjs.JSContext, doc_obj: qjs.JSValue, event_obj: q
     if (quickjs.JS_IsUndefined(cached_js_doc_dispatch)) {
         const js_code =
             \\(function(doc,evt,type,isCap){
-            \\  var k='__el_'+type+(isCap?'_c':'');
+            \\  var k='__el_'+type+(isCap?'\x00c':'');
             \\  var a=doc[k];if(!a||!a.length)return;
             \\  var copy=a.slice();
             \\  for(var i=0;i<copy.length;i++){
@@ -2287,10 +2285,7 @@ fn recordMutationFull(
                 (t.subtree and isDescendant(target, t.node));
             if (!matches) continue;
 
-            const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list
-            else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes
-            else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data
-            else false;
+            const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data else false;
             if (!want) continue;
 
             // DOM spec: attributeFilter — skip if attr name not in filter
@@ -2365,34 +2360,28 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
         const records_arr = qjs.JS_NewArray(ctx);
         for (obs.pending_records.items, 0..) |*rec, idx| {
             const record_obj = qjs.JS_NewObject(ctx);
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "type",
-                qjs.JS_NewStringLen(ctx, rec.type_str.ptr, rec.type_str.len));
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "target",
-                dom_api.wrapNodePublic(ctx, rec.target));
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "type", qjs.JS_NewStringLen(ctx, rec.type_str.ptr, rec.type_str.len));
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "target", dom_api.wrapNodePublic(ctx, rec.target));
 
             const added_arr = qjs.JS_NewArray(ctx);
             for (rec.added_nodes.items, 0..) |node, ai| {
-                _ = qjs.JS_SetPropertyUint32(ctx, added_arr, @intCast(ai),
-                    dom_api.wrapNodePublic(ctx, node));
+                _ = qjs.JS_SetPropertyUint32(ctx, added_arr, @intCast(ai), dom_api.wrapNodePublic(ctx, node));
             }
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "addedNodes", added_arr);
 
             const removed_arr = qjs.JS_NewArray(ctx);
             for (rec.removed_nodes.items, 0..) |node, ri| {
-                _ = qjs.JS_SetPropertyUint32(ctx, removed_arr, @intCast(ri),
-                    dom_api.wrapNodePublic(ctx, node));
+                _ = qjs.JS_SetPropertyUint32(ctx, removed_arr, @intCast(ri), dom_api.wrapNodePublic(ctx, node));
             }
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "removedNodes", removed_arr);
 
             if (rec.attribute_name) |name| {
-                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName",
-                    qjs.JS_NewStringLen(ctx, name.ptr, name.len));
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", qjs.JS_NewStringLen(ctx, name.ptr, name.len));
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", quickjs.JS_NULL());
             }
             if (rec.attribute_namespace) |ns| {
-                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace",
-                    qjs.JS_NewStringLen(ctx, ns.ptr, ns.len));
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", qjs.JS_NewStringLen(ctx, ns.ptr, ns.len));
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
             }
@@ -2407,8 +2396,7 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
             }
             if (rec.old_value) |ov| {
-                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue",
-                    qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", quickjs.JS_NULL());
             }
@@ -2449,12 +2437,9 @@ pub fn jsMutationObserverConstructor(
         .disconnected = false,
     }) catch return quickjs.JS_UNDEFINED();
     _ = qjs.JS_SetPropertyStr(c, obj, "_idx", qjs.JS_NewInt32(c, @intCast(idx)));
-    _ = qjs.JS_SetPropertyStr(c, obj, "observe",
-        qjs.JS_NewCFunction(c, &jsMutationObserverObserve, "observe", 2));
-    _ = qjs.JS_SetPropertyStr(c, obj, "disconnect",
-        qjs.JS_NewCFunction(c, &jsMutationObserverDisconnect, "disconnect", 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "takeRecords",
-        qjs.JS_NewCFunction(c, &jsMutationObserverTakeRecords, "takeRecords", 0));
+    _ = qjs.JS_SetPropertyStr(c, obj, "observe", qjs.JS_NewCFunction(c, &jsMutationObserverObserve, "observe", 2));
+    _ = qjs.JS_SetPropertyStr(c, obj, "disconnect", qjs.JS_NewCFunction(c, &jsMutationObserverDisconnect, "disconnect", 0));
+    _ = qjs.JS_SetPropertyStr(c, obj, "takeRecords", qjs.JS_NewCFunction(c, &jsMutationObserverTakeRecords, "takeRecords", 0));
     return obj;
 }
 
@@ -2576,6 +2561,9 @@ fn jsMutationObserverDisconnect(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const idx = getObserverIdx(c, this_val) orelse return quickjs.JS_UNDEFINED();
     mutation_observers.items[idx].disconnected = true;
+    for (mutation_observers.items[idx].targets.items) |*t| {
+        t.deinit();
+    }
     mutation_observers.items[idx].targets.clearRetainingCapacity();
     return quickjs.JS_UNDEFINED();
 }

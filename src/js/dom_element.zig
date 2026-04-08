@@ -737,7 +737,11 @@ pub fn classListAdd(
     // Save old class value before modification (lexbor invalidates pointer on set)
     var _ocb: [4096]u8 = undefined;
     var old_class_copy: ?[]const u8 = null;
-    if (cur != null) { const cl = @min(cur_len, _ocb.len); @memcpy(_ocb[0..cl], cur.?[0..cl]); old_class_copy = _ocb[0..cl]; }
+    if (cur != null) {
+        const cl = @min(cur_len, _ocb.len);
+        @memcpy(_ocb[0..cl], cur.?[0..cl]);
+        old_class_copy = _ocb[0..cl];
+    }
     if (argc == 0 and (cur == null or cur_len == 0)) return quickjs.JS_UNDEFINED();
 
     var buf: [4096]u8 = undefined;
@@ -752,13 +756,22 @@ pub fn classListAdd(
             if (cls.len == 0) continue;
             var dup = false;
             for (seen_buf[0..seen_count]) |s| {
-                if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+                if (std.mem.eql(u8, s, cls)) {
+                    dup = true;
+                    break;
+                }
             }
             if (dup) continue;
-            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+            if (pos > 0 and pos < buf.len) {
+                buf[pos] = ' ';
+                pos += 1;
+            }
             const copy_len = @min(cls.len, buf.len - pos);
             @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
-            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+            if (seen_count < seen_buf.len) {
+                seen_buf[seen_count] = buf[pos..][0..copy_len];
+                seen_count += 1;
+            }
             pos += copy_len;
         }
     }
@@ -772,13 +785,22 @@ pub fn classListAdd(
             const token = token_s.ptr[0..token_s.len];
             var dup = false;
             for (seen_buf[0..seen_count]) |s| {
-                if (std.mem.eql(u8, s, token)) { dup = true; break; }
+                if (std.mem.eql(u8, s, token)) {
+                    dup = true;
+                    break;
+                }
             }
             if (dup) continue;
-            if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+            if (pos > 0 and pos < buf.len) {
+                buf[pos] = ' ';
+                pos += 1;
+            }
             const copy_len = @min(token.len, buf.len - pos);
             @memcpy(buf[pos..][0..copy_len], token[0..copy_len]);
-            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+            if (seen_count < seen_buf.len) {
+                seen_buf[seen_count] = buf[pos..][0..copy_len];
+                seen_count += 1;
+            }
             pos += copy_len;
         }
     }
@@ -819,7 +841,11 @@ pub fn classListRemove(
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     var _ocb: [4096]u8 = undefined;
     var old_class_copy: ?[]const u8 = null;
-    if (cur != null) { const cl = @min(cur_len, _ocb.len); @memcpy(_ocb[0..cl], cur.?[0..cl]); old_class_copy = _ocb[0..cl]; }
+    if (cur != null) {
+        const cl = @min(cur_len, _ocb.len);
+        @memcpy(_ocb[0..cl], cur.?[0..cl]);
+        old_class_copy = _ocb[0..cl];
+    }
     if (cur == null or cur_len == 0) return quickjs.JS_UNDEFINED();
 
     // Collect tokens to remove
@@ -848,19 +874,31 @@ pub fn classListRemove(
         // Skip if in remove list
         var should_remove = false;
         for (remove_strs[0..remove_count]) |rm| {
-            if (std.mem.eql(u8, cls, rm)) { should_remove = true; break; }
+            if (std.mem.eql(u8, cls, rm)) {
+                should_remove = true;
+                break;
+            }
         }
         if (should_remove) continue;
         // Dedup
         var dup = false;
         for (seen_buf[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+            if (std.mem.eql(u8, s, cls)) {
+                dup = true;
+                break;
+            }
         }
         if (dup) continue;
-        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (pos > 0 and pos < buf.len) {
+            buf[pos] = ' ';
+            pos += 1;
+        }
         const copy_len = @min(cls.len, buf.len - pos);
         @memcpy(buf[pos..][0..copy_len], cls[0..copy_len]);
-        if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..copy_len]; seen_count += 1; }
+        if (seen_count < seen_buf.len) {
+            seen_buf[seen_count] = buf[pos..][0..copy_len];
+            seen_count += 1;
+        }
         pos += copy_len;
     }
     _ = lxb_dom_element_set_attribute(elem, "class", 5, &buf, pos);
@@ -989,7 +1027,11 @@ pub fn classListReplace(
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     var _ocb: [4096]u8 = undefined;
     var old_class_copy: ?[]const u8 = null;
-    if (cur != null) { const cl = @min(cur_len, _ocb.len); @memcpy(_ocb[0..cl], cur.?[0..cl]); old_class_copy = _ocb[0..cl]; }
+    if (cur != null) {
+        const cl = @min(cur_len, _ocb.len);
+        @memcpy(_ocb[0..cl], cur.?[0..cl]);
+        old_class_copy = _ocb[0..cl];
+    }
     if (cur == null or cur_len == 0) return quickjs.JS_NewBool(false);
 
     const cur_str = cur.?[0..cur_len];
@@ -1022,13 +1064,22 @@ pub fn classListReplace(
         // Dedup: skip if already seen
         var dup = false;
         for (seen_buf[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, effective_tok)) { dup = true; break; }
+            if (std.mem.eql(u8, s, effective_tok)) {
+                dup = true;
+                break;
+            }
         }
         if (dup) continue;
-        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (pos > 0 and pos < buf.len) {
+            buf[pos] = ' ';
+            pos += 1;
+        }
         if (pos + effective_tok.len <= buf.len) {
             @memcpy(buf[pos..][0..effective_tok.len], effective_tok);
-            if (seen_count < seen_buf.len) { seen_buf[seen_count] = buf[pos..][0..effective_tok.len]; seen_count += 1; }
+            if (seen_count < seen_buf.len) {
+                seen_buf[seen_count] = buf[pos..][0..effective_tok.len];
+                seen_count += 1;
+            }
             pos += effective_tok.len;
         }
     }
@@ -1073,12 +1124,21 @@ pub fn normalizeClassAttribute(elem: *lxb.lxb_dom_element_t) void {
         // Deduplicate
         var dup = false;
         for (seen[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, tok)) { dup = true; break; }
+            if (std.mem.eql(u8, s, tok)) {
+                dup = true;
+                break;
+            }
         }
         if (dup) continue;
-        if (seen_count < 64) { seen[seen_count] = tok; seen_count += 1; }
+        if (seen_count < 64) {
+            seen[seen_count] = tok;
+            seen_count += 1;
+        }
 
-        if (pos > 0 and pos < buf.len) { buf[pos] = ' '; pos += 1; }
+        if (pos > 0 and pos < buf.len) {
+            buf[pos] = ' ';
+            pos += 1;
+        }
         if (pos + tok.len <= buf.len) {
             @memcpy(buf[pos..][0..tok.len], tok);
             pos += tok.len;
@@ -1117,10 +1177,16 @@ pub fn classListItem(
         if (cls.len == 0) continue;
         var dup = false;
         for (seen[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+            if (std.mem.eql(u8, s, cls)) {
+                dup = true;
+                break;
+            }
         }
         if (!dup) {
-            if (seen_count < 64) { seen[seen_count] = cls; seen_count += 1; }
+            if (seen_count < 64) {
+                seen[seen_count] = cls;
+                seen_count += 1;
+            }
             if (i == idx) return qjs.JS_NewStringLen(c, cls.ptr, cls.len);
             i += 1;
         }
@@ -1156,10 +1222,16 @@ pub fn classListForEach(
         if (cls.len == 0) continue;
         var dup_fe = false;
         for (seen_fe[0..seen_fe_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) { dup_fe = true; break; }
+            if (std.mem.eql(u8, s, cls)) {
+                dup_fe = true;
+                break;
+            }
         }
         if (dup_fe) continue;
-        if (seen_fe_count < 64) { seen_fe[seen_fe_count] = cls; seen_fe_count += 1; }
+        if (seen_fe_count < 64) {
+            seen_fe[seen_fe_count] = cls;
+            seen_fe_count += 1;
+        }
         var cb_args = [_]qjs.JSValue{
             qjs.JS_NewStringLen(c, cls.ptr, cls.len),
             qjs.JS_NewInt32(c, i),
@@ -1200,10 +1272,16 @@ pub fn classListGetLength(
         // Check for duplicate
         var dup = false;
         for (seen[0..seen_count]) |s| {
-            if (std.mem.eql(u8, s, cls)) { dup = true; break; }
+            if (std.mem.eql(u8, s, cls)) {
+                dup = true;
+                break;
+            }
         }
         if (!dup) {
-            if (seen_count < 64) { seen[seen_count] = cls; seen_count += 1; }
+            if (seen_count < 64) {
+                seen[seen_count] = cls;
+                seen_count += 1;
+            }
             count += 1;
         }
     }

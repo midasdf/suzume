@@ -176,8 +176,12 @@ pub fn setViewportSize(w: u32, h: u32) void {
     viewport_height = h;
 }
 
-pub fn getViewportWidth() u32 { return viewport_width; }
-pub fn getViewportHeight() u32 { return viewport_height; }
+pub fn getViewportWidth() u32 {
+    return viewport_width;
+}
+pub fn getViewportHeight() u32 {
+    return viewport_height;
+}
 
 // ── Timer system ────────────────────────────────────────────────────
 
@@ -481,7 +485,6 @@ pub fn tickTimers(ctx: *qjs.JSContext) bool {
 
     return any_active;
 }
-
 
 /// Check if any timers are pending.
 pub fn hasTimers() bool {
@@ -1474,17 +1477,14 @@ pub fn registerWebApis(js_rt: anytype) void {
 
     // -- Native MutationObserver (replaces polyfill) --
     const events = @import("events.zig");
-    _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver",
-        qjs.JS_NewCFunction2(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1, qjs.JS_CFUNC_constructor, 0));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver", qjs.JS_NewCFunction2(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1, qjs.JS_CFUNC_constructor, 0));
 
     // -- history.pushState URL bar sync --
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url",
-        qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url", qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
 
     // -- DOMParser native parse (for proper Document creation) --
     const dom_doc = @import("dom_document.zig");
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_dom_parse",
-        qjs.JS_NewCFunction(ctx, &dom_doc.suzumeDomParse, "__suzume_dom_parse", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_dom_parse", qjs.JS_NewCFunction(ctx, &dom_doc.suzumeDomParse, "__suzume_dom_parse", 1));
 
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
@@ -1585,8 +1585,7 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- navigator object --
     {
         const nav = qjs.JS_NewObject(ctx);
-        _ = qjs.JS_SetPropertyStr(ctx, nav, "userAgent", qjs.JS_NewString(ctx,
-            "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) suzume/0.4"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "userAgent", qjs.JS_NewString(ctx, "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) suzume/0.4"));
         _ = qjs.JS_SetPropertyStr(ctx, nav, "platform", qjs.JS_NewString(ctx, "Linux aarch64"));
         _ = qjs.JS_SetPropertyStr(ctx, nav, "language", qjs.JS_NewString(ctx, "ja"));
         _ = qjs.JS_SetPropertyStr(ctx, nav, "vendor", qjs.JS_NewString(ctx, ""));
@@ -1606,8 +1605,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         // geolocation stub
         {
             const geo = qjs.JS_NewObject(ctx);
-            _ = qjs.JS_SetPropertyStr(ctx, geo, "getCurrentPosition",
-                qjs.JS_NewCFunction(ctx, &jsNoOp, "getCurrentPosition", 1));
+            _ = qjs.JS_SetPropertyStr(ctx, geo, "getCurrentPosition", qjs.JS_NewCFunction(ctx, &jsNoOp, "getCurrentPosition", 1));
             _ = qjs.JS_SetPropertyStr(ctx, nav, "geolocation", geo);
         }
         _ = qjs.JS_SetPropertyStr(ctx, global, "navigator", nav);
@@ -1638,12 +1636,9 @@ pub fn registerWebApis(js_rt: anytype) void {
         _ = qjs.JS_SetPropertyStr(ctx, loc, "search", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "hash", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "origin", qjs.JS_NewString(ctx, ""));
-        _ = qjs.JS_SetPropertyStr(ctx, loc, "assign",
-            qjs.JS_NewCFunction(ctx, &jsLocationAssign, "assign", 1));
-        _ = qjs.JS_SetPropertyStr(ctx, loc, "replace",
-            qjs.JS_NewCFunction(ctx, &jsLocationAssign, "replace", 1));
-        _ = qjs.JS_SetPropertyStr(ctx, loc, "reload",
-            qjs.JS_NewCFunction(ctx, &jsNoOp, "reload", 0));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "assign", qjs.JS_NewCFunction(ctx, &jsLocationAssign, "assign", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "replace", qjs.JS_NewCFunction(ctx, &jsLocationAssign, "replace", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "reload", qjs.JS_NewCFunction(ctx, &jsNoOp, "reload", 0));
         _ = qjs.JS_SetPropertyStr(ctx, global, "location", loc);
     }
 
@@ -1846,8 +1841,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof sessionStorage==='undefined'){
         \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
         \\}
-
-
         \\if(typeof XMLHttpRequest==='undefined'){
         \\  globalThis.XMLHttpRequest=function(){
         \\    this.readyState=0;this.status=0;this.statusText='';this.responseText='';this.responseURL='';
@@ -2126,7 +2119,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  if(!document.getElementsByName)document.getElementsByName=function(n){return document.querySelectorAll('[name=\"'+n+'\"]');};
         \\}
         \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
-
         \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
         \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
         \\if(typeof Atomics!=='undefined'&&!Atomics.waitAsync){

@@ -2705,7 +2705,10 @@ fn elementSetInnerText(
     // Check if text contains any newlines — fast path if not
     var has_newline = false;
     for (text) |ch| {
-        if (ch == '\n' or ch == '\r') { has_newline = true; break; }
+        if (ch == '\n' or ch == '\r') {
+            has_newline = true;
+            break;
+        }
     }
     if (!has_newline) {
         _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
@@ -4519,13 +4522,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      if(typeof o==='boolean')cap=o;else if(o&&typeof o==='object'){cap=!!o.capture;once=!!o.once;pas=!!o.passive;}
             \\      if(typeof f!=='function'&&!(f&&typeof f==='object'))return;
             \\      if(f===null||f===undefined)return;
-            \\      var k='__el_'+t+(cap?'_c':'');var a=doc[k]||[];
+            \\      var k='__el_'+t+(cap?'\x00c':'');var a=doc[k]||[];
             \\      for(var i=0;i<a.length;i++)if(a[i].fn===f)return;
             \\      a.push({fn:f,once:once,passive:pas});doc[k]=a;
             \\    },
             \\    removeEventListener: function(t,f,o) {
             \\      var cap=false;if(typeof o==='boolean')cap=o;else if(o&&typeof o==='object')cap=!!o.capture;
-            \\      var k='__el_'+t+(cap?'_c':'');var a=doc[k];if(!a)return;
+            \\      var k='__el_'+t+(cap?'\x00c':'');var a=doc[k];if(!a)return;
             \\      for(var i=0;i<a.length;i++){if(a[i].fn===f){a.splice(i,1);return;}}
             \\    },
             \\    dispatchEvent: function(e) {
