@@ -284,6 +284,9 @@ fn setupIframe(
         }
     }
 
+    // Execute <script> tags in the iframe document before restoring parent globals
+    executeIframeScripts(iframe_ctx, iframe_doc.?.html_doc, allocator, iframe_url);
+
     // Restore parent globals (registerDomApis/registerWebApis overwrote them)
     api.g_document = saved_doc;
     api.g_top_frame.document = saved_doc;
@@ -299,66 +302,31 @@ fn setupIframe(
     const js_elem = api.wrapNode(parent_ctx, node);
     defer qjs.JS_FreeValue(parent_ctx, js_elem);
 
-    // Get the iframe context's document object
+    // Get the iframe context's document and global objects
     const iframe_global = qjs.JS_GetGlobalObject(iframe_ctx);
     const iframe_doc_obj = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global, "document");
 
-    // Set contentDocument (cross-context: we set it as a property on the parent element)
-    // Note: This is a simplified cross-context bridge — the document object
-    // was created in iframe_ctx but we reference it from parent_ctx.
-    // For same-origin iframes this works in QuickJS since they share the Runtime.
-    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", iframe_doc_obj);
+    // Use iframe's global directly as contentWindow (not a static proxy)
+    // This allows dynamically-set properties (from iframe scripts) to be visible
+    // Set parent/top/frameElement on the iframe global directly
+    {
+        const parent_global = qjs.JS_GetGlobalObject(parent_ctx);
+        // Set parent and top on iframe global
+        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "parent", parent_global);
+        const top_val = qjs.JS_GetPropertyStr(parent_ctx, parent_global, "top");
+        if (!quickjs.JS_IsUndefined(top_val) and !quickjs.JS_IsNull(top_val)) {
+            _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "top", top_val);
+        } else {
+            _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "top", qjs.JS_DupValue(parent_ctx, parent_global));
+            qjs.JS_FreeValue(parent_ctx, top_val);
+        }
+        qjs.JS_FreeValue(parent_ctx, parent_global);
+    }
 
-    // Create contentWindow proxy in parent context
-    // This is a bridge object that delegates to the iframe's global
-    const cw_js =
-        \\(function(iframeGlobal){
-        \\  var cw={
-        \\    document: iframeGlobal.document,
-        \\    parent: window,
-        \\    top: window.top || window,
-        \\    self: iframeGlobal,
-        \\    window: iframeGlobal,
-        \\    location: { href: iframeGlobal.location ? iframeGlobal.location.href : 'about:blank' },
-        \\    navigator: window.navigator,
-        \\    addEventListener: function(t,f,o){iframeGlobal.addEventListener(t,f,o);},
-        \\    removeEventListener: function(t,f,o){iframeGlobal.removeEventListener(t,f,o);},
-        \\    dispatchEvent: function(e){return iframeGlobal.dispatchEvent(e);},
-        \\    getComputedStyle: iframeGlobal.getComputedStyle,
-        \\    setTimeout: iframeGlobal.setTimeout,
-        \\    setInterval: iframeGlobal.setInterval,
-        \\    clearTimeout: iframeGlobal.clearTimeout,
-        \\    clearInterval: iframeGlobal.clearInterval
-        \\  };
-        \\  var names=['Element','Node','HTMLElement','Document','DocumentFragment','DocumentType',
-        \\    'Text','Comment','ProcessingInstruction','Event','CustomEvent','DOMException',
-        \\    'HTMLHtmlElement','HTMLHeadElement','HTMLBodyElement','HTMLDivElement','HTMLSpanElement',
-        \\    'HTMLParagraphElement','HTMLInputElement','HTMLFormElement','HTMLAnchorElement',
-        \\    'HTMLImageElement','HTMLScriptElement','HTMLStyleElement','HTMLLinkElement',
-        \\    'HTMLIFrameElement','HTMLUnknownElement','NodeList','HTMLCollection',
-        \\    'NodeFilter','DOMParser','XMLSerializer','CSS','MutationObserver',
-        \\    'HTMLTableElement','HTMLTableRowElement','HTMLTableCellElement',
-        \\    'HTMLUListElement','HTMLOListElement','HTMLLIElement','HTMLPreElement',
-        \\    'HTMLCanvasElement','HTMLVideoElement','HTMLAudioElement',
-        \\    'HTMLButtonElement','HTMLSelectElement','HTMLTextAreaElement',
-        \\    'HTMLBRElement','HTMLHRElement','HTMLOptionElement',
-        \\    'HTMLMetaElement','HTMLTitleElement','HTMLBaseElement',
-        \\    'HTMLHeadingElement','HTMLQuoteElement','HTMLLabelElement'];
-        \\  for(var i=0;i<names.length;i++){if(typeof iframeGlobal[names[i]]!=='undefined')cw[names[i]]=iframeGlobal[names[i]];}
-        \\  return cw;
-        \\})
-    ;
-
-    // We call this in the PARENT context but pass the iframe global
-    // Cross-context JSValue passing works within same Runtime in QuickJS
-    const cw_fn = qjs.JS_Eval(parent_ctx, cw_js, cw_js.len, "<iframe-cw>", qjs.JS_EVAL_TYPE_GLOBAL);
-    var cw_args = [1]qjs.JSValue{iframe_global};
-    const content_window = qjs.JS_Call(parent_ctx, cw_fn, quickjs.JS_UNDEFINED(), 1, &cw_args);
-    qjs.JS_FreeValue(parent_ctx, cw_fn);
-    qjs.JS_FreeValue(parent_ctx, iframe_global);
-
-    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", content_window);
-    _ = qjs.JS_SetPropertyStr(parent_ctx, content_window, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", qjs.JS_DupValue(iframe_ctx, iframe_global));
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", qjs.JS_DupValue(iframe_ctx, iframe_doc_obj));
+    _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+    qjs.JS_FreeValue(iframe_ctx, iframe_global);
 
     // Update window.frames (window[idx] = contentWindow, window.length++)
     {
@@ -368,7 +336,8 @@ fn setupIframe(
         var len: i32 = 0;
         _ = qjs.JS_ToInt32(parent_ctx, &len, len_val);
         qjs.JS_FreeValue(parent_ctx, len_val);
-        _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), qjs.JS_DupValue(parent_ctx, content_window));
+        const cw = qjs.JS_GetPropertyStr(parent_ctx, js_elem, "contentWindow");
+        _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), cw);
         _ = qjs.JS_SetPropertyStr(parent_ctx, parent_global, "length", qjs.JS_NewInt32(parent_ctx, len + 1));
     }
 
@@ -552,6 +521,9 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         qjs.JS_FreeValue(iframe_ctx, qs_r);
     }
 
+    // Execute <script> tags in iframe before restoring parent globals
+    executeIframeScripts(iframe_ctx, doc_ptr, allocator, iframe_url);
+
     // Restore parent globals
     api.g_document = saved_doc;
     api.g_top_frame.document = saved_doc;
@@ -566,32 +538,17 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
     const iframe_global = qjs.JS_GetGlobalObject(iframe_ctx);
     const iframe_doc_obj = qjs.JS_GetPropertyStr(iframe_ctx, iframe_global, "document");
 
+    // Use iframe global directly as contentWindow (dynamic property access works)
+    {
+        const parent_global = qjs.JS_GetGlobalObject(parent_ctx);
+        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "parent", parent_global);
+        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "top", qjs.JS_DupValue(parent_ctx, parent_global));
+        qjs.JS_FreeValue(parent_ctx, parent_global);
+    }
+
     _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", iframe_doc_obj);
-
-    // contentWindow bridge
-    const cw_js =
-        \\(function(ig){
-        \\  var cw={document:ig.document,parent:window,top:window,
-        \\    location:{href:ig.location?ig.location.href:'about:blank'},
-        \\    navigator:window.navigator,closed:false,
-        \\    addEventListener:function(t,f,o){ig.addEventListener(t,f,o);},
-        \\    removeEventListener:function(t,f,o){ig.removeEventListener(t,f,o);},
-        \\    dispatchEvent:function(e){return ig.dispatchEvent(e);},
-        \\    getComputedStyle:ig.getComputedStyle,
-        \\    setTimeout:ig.setTimeout,clearTimeout:ig.clearTimeout,
-        \\    postMessage:function(){},focus:function(){},blur:function(){},
-        \\    close:function(){this.closed=true;}};
-        \\  cw.window=cw;cw.self=cw;return cw;
-        \\})
-    ;
-    const cw_fn = qjs.JS_Eval(parent_ctx, cw_js, cw_js.len, "<dicw>", qjs.JS_EVAL_TYPE_GLOBAL);
-    var cw_args = [1]qjs.JSValue{iframe_global};
-    const cw = qjs.JS_Call(parent_ctx, cw_fn, quickjs.JS_UNDEFINED(), 1, &cw_args);
-    qjs.JS_FreeValue(parent_ctx, cw_fn);
-    qjs.JS_FreeValue(parent_ctx, iframe_global);
-
-    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", cw);
-    _ = qjs.JS_SetPropertyStr(parent_ctx, cw, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+    _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", qjs.JS_DupValue(iframe_ctx, iframe_global));
+    _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
 
     // Update window.frames (window[idx] = contentWindow, window.length++)
     {
@@ -601,10 +558,11 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         var len: i32 = 0;
         _ = qjs.JS_ToInt32(parent_ctx, &len, len_val);
         qjs.JS_FreeValue(parent_ctx, len_val);
-        _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), qjs.JS_DupValue(parent_ctx, cw));
+        _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), qjs.JS_DupValue(iframe_ctx, iframe_global));
         _ = qjs.JS_SetPropertyStr(parent_ctx, parent_global, "length", qjs.JS_NewInt32(parent_ctx, len + 1));
     }
 
+    qjs.JS_FreeValue(iframe_ctx, iframe_global);
     qjs.JS_FreeValue(parent_ctx, js_elem);
 }
 
@@ -738,4 +696,95 @@ fn extractOrigin(url: []const u8) []const u8 {
     }
     // Relative URL or about:blank — same origin as parent
     return "";
+}
+
+// ── iframe Script Execution ────────────────────────────────────────
+
+extern fn lxb_dom_node_text_content(node: *lxb.lxb_dom_node_t, len: *usize) ?[*]const u8;
+
+/// Execute all <script> tags in an iframe document.
+/// Walks the DOM tree, finds script elements, fetches/evals their content.
+fn executeIframeScripts(ctx: *qjs.JSContext, html_doc: *anyopaque, allocator: std.mem.Allocator, iframe_url: []const u8) void {
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(html_doc));
+    walkAndExecScripts(ctx, doc_node, allocator, iframe_url);
+}
+
+fn walkAndExecScripts(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t, allocator: std.mem.Allocator, base_url: []const u8) void {
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var name_len: usize = 0;
+            const name = lxb_dom_element_local_name(elem, &name_len);
+            if (name != null and name_len == 6 and std.mem.eql(u8, name.?[0..6], "script")) {
+                execOneScript(ctx, ch, elem, allocator, base_url);
+            } else {
+                walkAndExecScripts(ctx, ch, allocator, base_url);
+            }
+        }
+        child = ch.next;
+    }
+}
+
+fn execOneScript(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t, elem: *lxb.lxb_dom_element_t, allocator: std.mem.Allocator, base_url: []const u8) void {
+    // Check script type
+    var type_len: usize = 0;
+    const type_ptr = lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+    if (type_ptr != null and type_len > 0) {
+        const stype = type_ptr.?[0..type_len];
+        const is_js = stype.len == 0 or
+            std.mem.eql(u8, stype, "text/javascript") or
+            std.mem.eql(u8, stype, "application/javascript") or
+            std.mem.eql(u8, stype, "module");
+        if (!is_js) return;
+    }
+
+    // Check for src (external script)
+    var src_len: usize = 0;
+    const src_ptr = lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
+    if (src_ptr != null and src_len > 0) {
+        const src = src_ptr.?[0..src_len];
+        // Resolve URL relative to iframe
+        const resolved = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://")) blk: {
+            const buf = allocator.allocSentinel(u8, src.len, 0) catch return;
+            @memcpy(buf[0..src.len], src);
+            break :blk buf;
+        } else resolveUrl(allocator, base_url, src) catch return;
+        defer allocator.free(resolved);
+
+        // Fetch and execute
+        const loader = api.g_loader orelse return;
+        var response = loader.loadBytes(resolved) catch return;
+        defer response.deinit();
+        if (response.body.len > 0 and response.body.len <= 1024 * 1024) {
+            const result = qjs.JS_Eval(ctx, response.body.ptr, response.body.len, resolved.ptr, qjs.JS_EVAL_TYPE_GLOBAL);
+            if (quickjs.JS_IsException(result)) {
+                const exc = qjs.JS_GetException(ctx);
+                const exc_str = qjs.JS_ToCString(ctx, exc);
+                if (exc_str) |s| {
+                    std.debug.print("[JS:IFRAME] Script error: {s}\n", .{s});
+                    qjs.JS_FreeCString(ctx, s);
+                }
+                qjs.JS_FreeValue(ctx, exc);
+            }
+            qjs.JS_FreeValue(ctx, result);
+        }
+    } else {
+        // Inline script
+        var content_len: usize = 0;
+        const content_ptr = lxb_dom_node_text_content(node, &content_len);
+        if (content_ptr != null and content_len > 0 and content_len <= 512 * 1024) {
+            const result = qjs.JS_Eval(ctx, content_ptr.?, content_len, "<iframe-script>", qjs.JS_EVAL_TYPE_GLOBAL);
+            if (quickjs.JS_IsException(result)) {
+                const exc = qjs.JS_GetException(ctx);
+                const exc_str = qjs.JS_ToCString(ctx, exc);
+                if (exc_str) |s| {
+                    std.debug.print("[JS:IFRAME] Inline script error: {s}\n", .{s});
+                    qjs.JS_FreeCString(ctx, s);
+                }
+                qjs.JS_FreeValue(ctx, exc);
+            }
+            qjs.JS_FreeValue(ctx, result);
+        }
+    }
 }
