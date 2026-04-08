@@ -521,7 +521,7 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         qjs.JS_FreeValue(iframe_ctx, qs_r);
     }
 
-    // Set contentType based on URL extension
+    // Set contentType based on URL extension + override createElement for XML docs
     {
         const ig = qjs.JS_GetGlobalObject(iframe_ctx);
         defer qjs.JS_FreeValue(iframe_ctx, ig);
@@ -530,6 +530,30 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         if (!quickjs.JS_IsUndefined(idoc) and !quickjs.JS_IsNull(idoc)) {
             const ct = contentTypeFromUrl(iframe_url);
             _ = qjs.JS_SetPropertyStr(iframe_ctx, idoc, "contentType", qjs.JS_NewStringLen(iframe_ctx, ct.ptr, ct.len));
+            // For XML/SVG docs (not XHTML), createElement should produce null namespace
+            const is_xml_ct = !std.mem.eql(u8, ct, "text/html") and !std.mem.eql(u8, ct, "application/xhtml+xml");
+            if (is_xml_ct) {
+                const xml_ce_js =
+                    \\(function(doc){
+                    \\  var _origCE=doc.createElement;
+                    \\  doc.createElement=function(t){
+                    \\    var e=_origCE.call(doc,t);
+                    \\    Object.defineProperty(e,'namespaceURI',{value:null,configurable:true});
+                    \\    Object.defineProperty(e,'__origLocal',{value:String(t),writable:true});
+                    \\    e.__xmlCaseSensitive=true;
+                    \\    return e;
+                    \\  };
+                    \\})
+                ;
+                const xml_fn = qjs.JS_Eval(iframe_ctx, xml_ce_js, xml_ce_js.len, "<xml-ce>", qjs.JS_EVAL_TYPE_GLOBAL);
+                if (!quickjs.JS_IsException(xml_fn)) {
+                    var xml_args = [1]qjs.JSValue{qjs.JS_DupValue(iframe_ctx, idoc)};
+                    const xml_r = qjs.JS_Call(iframe_ctx, xml_fn, quickjs.JS_UNDEFINED(), 1, &xml_args);
+                    qjs.JS_FreeValue(iframe_ctx, xml_r);
+                    qjs.JS_FreeValue(iframe_ctx, xml_args[0]);
+                }
+                qjs.JS_FreeValue(iframe_ctx, xml_fn);
+            }
         }
     }
 
