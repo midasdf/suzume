@@ -829,11 +829,25 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     }
     if (op_pos == null) {
         // [attr] — existence check
-        var val_len: usize = 0;
-        _ = lxb_dom_element_get_attribute(elem, trimmed.ptr, trimmed.len, &val_len);
-        return lxb_dom_element_has_attribute(elem, trimmed.ptr, trimmed.len);
+        // Handle *|attr (any namespace) prefix — strip *| and match by local name
+        var check_name = trimmed;
+        if (check_name.len > 2 and check_name[0] == '*' and check_name[1] == '|') {
+            check_name = check_name[2..];
+        }
+        // Case-insensitive check for HTML attributes
+        var lower_buf: [128]u8 = undefined;
+        if (check_name.len <= lower_buf.len) {
+            for (check_name, 0..) |ch, ci| lower_buf[ci] = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+            const lower = lower_buf[0..check_name.len];
+            return lxb_dom_element_has_attribute(elem, lower.ptr, lower.len);
+        }
+        return lxb_dom_element_has_attribute(elem, check_name.ptr, check_name.len);
     }
-    const attr_name = std.mem.trim(u8, trimmed[0..op_pos.?], " \t");
+    var attr_name = std.mem.trim(u8, trimmed[0..op_pos.?], " \t");
+    // Handle *|attr prefix for namespace wildcard
+    if (attr_name.len > 2 and attr_name[0] == '*' and attr_name[1] == '|') {
+        attr_name = attr_name[2..];
+    }
     const val_start = if (op_type == '=') op_pos.? + 1 else op_pos.? + 2;
     var expected = std.mem.trim(u8, trimmed[val_start..], " \t");
     // Strip quotes
