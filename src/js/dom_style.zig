@@ -40,6 +40,8 @@ extern fn lxb_dom_element_set_attribute(element: *lxb.lxb_dom_element_t, qualifi
 // ── Style Property Access ────────────────────────────────────────────
 
 pub fn getStyleProperty(style_str: []const u8, css_prop: []const u8) ?[]const u8 {
+    // CSS spec: for duplicate properties, the last valid declaration wins
+    var result: ?[]const u8 = null;
     var pos: usize = 0;
     while (pos < style_str.len) {
         // Skip whitespace
@@ -57,9 +59,9 @@ pub fn getStyleProperty(style_str: []const u8, css_prop: []const u8) ?[]const u8
         const val = std.mem.trim(u8, style_str[val_start..pos], " \t\n");
         if (pos < style_str.len) pos += 1; // skip ';'
 
-        if (std.ascii.eqlIgnoreCase(prop_name, css_prop)) return val;
+        if (std.ascii.eqlIgnoreCase(prop_name, css_prop)) result = val;
     }
-    return null;
+    return result;
 }
 
 /// Set a property in a style string, returning a new string in the provided buffer.

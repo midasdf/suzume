@@ -991,35 +991,52 @@ fn collectInlineDecls(
     var p = parser_mod.Parser.init(wrapped, arena);
     const sheet = p.parse() catch return;
 
-    var inline_order: u32 = 0xFFF000; // high base, incrementing for last-wins
+    // CSS spec: for duplicate properties in the same declaration block,
+    // the last valid declaration wins. Collect all declarations first,
+    // then deduplicate keeping the last one for each property.
+    var all_decls: std.ArrayList(Declaration) = .empty;
     for (sheet.rules) |rule| {
         switch (rule) {
             .style => |sr| {
                 for (sr.declarations) |decl| {
-                    // Expand shorthands
                     if (properties.expandShorthand(decl.property_name, decl.value_raw, arena)) |exp| {
                         for (exp) |*ed| {
                             ed.important = decl.important;
-                            try entries.append(arena, .{
-                                .decl = ed.*,
-                                .specificity = 0, // inline style wins by origin, not specificity
-                                .source_order = inline_order,
-                                .origin = .inline_,
-                            });
-                            inline_order += 1;
+                            try all_decls.append(arena, ed.*);
                         }
                     } else {
-                        try entries.append(arena, .{
-                            .decl = decl,
-                            .specificity = 0,
-                            .source_order = inline_order,
-                            .origin = .inline_,
-                        });
-                        inline_order += 1;
+                        try all_decls.append(arena, decl);
                     }
                 }
             },
             else => {},
+        }
+    }
+
+    // Deduplicate inline declarations (last valid value wins per CSS spec)
+    // Deduplicate: for same property name, keep only the last declaration (CSS spec)
+    var i: usize = all_decls.items.len;
+    while (i > 0) {
+        i -= 1;
+        const decl = all_decls.items[i];
+        // Check if a later entry has the same property name (later = dominant)
+        var dominated = false;
+        var j: usize = i + 1;
+        while (j < all_decls.items.len) : (j += 1) {
+            if (std.ascii.eqlIgnoreCase(all_decls.items[j].property_name, decl.property_name)) {
+                if (!decl.important or all_decls.items[j].important) {
+                    dominated = true;
+                    break;
+                }
+            }
+        }
+        if (!dominated) {
+            try entries.append(arena, .{
+                .decl = decl,
+                .specificity = 0,
+                .source_order = 0xFFFFFF,
+                .origin = .inline_,
+            });
         }
     }
 }
