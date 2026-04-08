@@ -716,6 +716,44 @@ pub fn isRoot(node: *lxb.lxb_dom_node_t) bool {
     return parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
 }
 
+/// Find an option inside a select, descending into optgroup children.
+/// If check_selected is true, returns the first option with "selected" attribute.
+/// If false, returns the first option regardless.
+fn findOptionInSelect(select_node: *lxb.lxb_dom_node_t, comptime check_selected: bool) ?*lxb.lxb_dom_element_t {
+    var child: ?*lxb.lxb_dom_node_t = select_node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var ch_name_len: usize = 0;
+            const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+            if (ch_name != null) {
+                const name = ch_name.?[0..ch_name_len];
+                if (std.ascii.eqlIgnoreCase(name, "option")) {
+                    if (!check_selected or lxb_dom_element_has_attribute(ch_elem, "selected", 8))
+                        return ch_elem;
+                } else if (std.ascii.eqlIgnoreCase(name, "optgroup")) {
+                    // Descend into optgroup
+                    var gc: ?*lxb.lxb_dom_node_t = ch.first_child;
+                    while (gc) |g| {
+                        if (g.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                            const g_elem: *lxb.lxb_dom_element_t = @ptrCast(g);
+                            var g_name_len: usize = 0;
+                            const g_name = lxb_dom_element_local_name(g_elem, &g_name_len);
+                            if (g_name != null and std.ascii.eqlIgnoreCase(g_name.?[0..g_name_len], "option")) {
+                                if (!check_selected or lxb_dom_element_has_attribute(g_elem, "selected", 8))
+                                    return g_elem;
+                            }
+                        }
+                        gc = g.next;
+                    }
+                }
+            }
+        }
+        child = ch.next;
+    }
+    return null;
+}
+
 /// HTML spec §4.10.21 — constraint validation for :valid/:invalid
 /// Only applies to: input, select, textarea (barred: hidden, button types)
 /// fieldset is :invalid if any descendant form element is :invalid
@@ -747,51 +785,35 @@ fn isFormInvalid(elem: *lxb.lxb_dom_element_t) bool {
     if (std.ascii.eqlIgnoreCase(tag, "textarea")) {
         if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
         if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
-        // textarea uses textContent, but for simplicity check value attr
-        var val_len: usize = 0;
-        const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
-        return val == null or val_len == 0;
+        // textarea value is its textContent (no value attribute in HTML)
+        // Check if any text child nodes exist with content
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_TEXT) return false; // has text content
+            child = ch.next;
+        }
+        return true; // empty textarea = invalid when required
     }
     if (std.ascii.eqlIgnoreCase(tag, "select")) {
         if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
         if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
         // A required select is invalid only if its value is empty string.
-        // The value comes from the selected option, not from a value attribute.
-        // Check if selected option has an empty value (placeholder label option).
+        // Check options (including inside <optgroup>) for selected/first option value.
         const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-        var child: ?*lxb.lxb_dom_node_t = node.first_child;
-        while (child) |ch| {
-            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-                const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
-                var ch_name_len: usize = 0;
-                const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
-                if (ch_name != null and std.ascii.eqlIgnoreCase(ch_name.?[0..ch_name_len], "option")) {
-                    if (lxb_dom_element_has_attribute(ch_elem, "selected", 8)) {
-                        var ov_len: usize = 0;
-                        const ov = lxb_dom_element_get_attribute(ch_elem, "value", 5, &ov_len);
-                        if (ov != null and ov_len == 0) return true; // empty value = invalid
-                        return false; // non-empty value or no value attr (uses text) = valid
-                    }
-                }
-            }
-            child = ch.next;
+        // Pass 1: find explicitly selected option
+        if (findOptionInSelect(node, true)) |opt| {
+            var ov_len: usize = 0;
+            const ov = lxb_dom_element_get_attribute(opt, "value", 5, &ov_len);
+            if (ov != null and ov_len == 0) return true; // empty value = invalid
+            return false; // non-empty or no value attr = valid
         }
-        // No selected option → first option is selected by default
-        // Check first option's value
-        child = node.first_child;
-        while (child) |ch| {
-            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-                const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
-                var ch_name_len: usize = 0;
-                const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
-                if (ch_name != null and std.ascii.eqlIgnoreCase(ch_name.?[0..ch_name_len], "option")) {
-                    var ov_len: usize = 0;
-                    const ov = lxb_dom_element_get_attribute(ch_elem, "value", 5, &ov_len);
-                    if (ov != null and ov_len == 0) return true;
-                    return false;
-                }
-            }
-            child = ch.next;
+        // Pass 2: no selected option → first option is default
+        if (findOptionInSelect(node, false)) |opt| {
+            var ov_len: usize = 0;
+            const ov = lxb_dom_element_get_attribute(opt, "value", 5, &ov_len);
+            if (ov != null and ov_len == 0) return true;
+            return false;
         }
         return true; // no options at all = invalid
     }
@@ -1039,11 +1061,7 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     }
     const val_start = if (op_type == '=') op_pos.? + 1 else op_pos.? + 2;
     var expected = std.mem.trim(u8, trimmed[val_start..], " \t");
-    // Strip quotes
-    if (expected.len >= 2 and (expected[0] == '"' or expected[0] == '\'') and expected[expected.len - 1] == expected[0]) {
-        expected = expected[1 .. expected.len - 1];
-    }
-    // Check for case-sensitivity flag: [attr=val i] or [attr=val s]
+    // Check for case-sensitivity flag BEFORE stripping quotes: [attr="val" i]
     // The flag is after the closing quote/value, separated by space
     var case_insensitive = false;
     if (expected.len >= 2) {
@@ -1052,6 +1070,10 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
             if (last == 'i' or last == 'I') case_insensitive = true;
             expected = std.mem.trimRight(u8, expected[0 .. expected.len - 2], " \t");
         }
+    }
+    // Strip quotes
+    if (expected.len >= 2 and (expected[0] == '"' or expected[0] == '\'') and expected[expected.len - 1] == expected[0]) {
+        expected = expected[1 .. expected.len - 1];
     }
     // Decode CSS escapes in expected value
     var esc_buf: [512]u8 = undefined;
