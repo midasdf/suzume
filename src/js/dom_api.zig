@@ -574,11 +574,13 @@ fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
 /// Get the lxb_dom_node_t* from a JS Element/Text/Document value.
 /// Tries element class, text class, then main document fallback.
 pub fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
-    // Try element class first
-    const ptr1 = qjs.JS_GetOpaque2(ctx, val, element_class_id);
+    // Early return for null/undefined to avoid JS_GetPropertyStr errors
+    if (quickjs.JS_IsNull(val) or quickjs.JS_IsUndefined(val)) return null;
+    // Try element class first (use JS_GetOpaque to avoid throwing TypeError)
+    const ptr1 = qjs.JS_GetOpaque(val, element_class_id);
     if (ptr1) |p| return @ptrCast(@alignCast(p));
     // Try text class
-    const ptr2 = qjs.JS_GetOpaque2(ctx, val, text_class_id);
+    const ptr2 = qjs.JS_GetOpaque(val, text_class_id);
     if (ptr2) |p| return @ptrCast(@alignCast(p));
     // Try main document: check nodeType === 9 property and match against main document
     const nt_val = qjs.JS_GetPropertyStr(ctx, val, "nodeType");
@@ -4833,6 +4835,26 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, global, "Document", ctor);
     }
 
+    // Fix document prototype chain: Document was replaced above, so re-link
+    // HTMLDocument.prototype → new Document.prototype, and document → HTMLDocument.prototype
+    // Also init _childNodes/_children arrays needed by Document.prototype.appendChild etc.
+    {
+        const fix_proto_js =
+            \\Object.setPrototypeOf(HTMLDocument.prototype,Document.prototype);
+            \\Object.setPrototypeOf(document,HTMLDocument.prototype);
+            \\if(typeof document._childNodes==='undefined'){
+            \\  var _nativeChildNodes=document.childNodes;
+            \\  document._childNodes=_nativeChildNodes&&_nativeChildNodes.length?Array.from(_nativeChildNodes):[];
+            \\  document._childNodes.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  document._children=[];
+            \\  for(var _i=0;_i<document._childNodes.length;_i++){if(document._childNodes[_i]&&document._childNodes[_i].nodeType===1)document._children.push(document._childNodes[_i]);}
+            \\  document._children.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\}
+        ;
+        const fix_r = qjs.JS_Eval(ctx, fix_proto_js, fix_proto_js.len, "<fix-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, fix_r);
+    }
+
     // XMLDocument extends Document
     {
         const xml_doc_js =
@@ -5083,15 +5105,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    /* Strip CSS escape sequences before validation so \: etc. don't confuse checks */
             \\    var _sn=s.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\    if(s==='')throw new DOMException("Failed to execute '"+meth+"': '' is not a valid selector.","SyntaxError");
-            \\    function _splitTopCommas(str){var parts=[],start=0,d=0;for(var i=0;i<str.length;i++){var c=str[i];if(c==='('||c==='[')d++;else if((c===')'||c===']')&&d>0)d--;else if(c===','&&d===0){parts.push(str.substring(start,i));start=i+1;}}parts.push(str.substring(start));return parts;}
+            \\    function _splitTopCommas(str){var parts=[],start=0,d=0,inStr=false,q='';for(var i=0;i<str.length;i++){var c=str[i];if(c==='\\'&&i+1<str.length){i++;continue;}if(inStr){if(c===q)inStr=false;continue;}if(c==='"'||c==="'"){inStr=true;q=c;continue;}if(c==='('||c==='[')d++;else if((c===')'||c===']')&&d>0)d--;else if(c===','&&d===0){parts.push(str.substring(start,i));start=i+1;}}parts.push(str.substring(start));return parts;}
             \\    var parts=_splitTopCommas(s);
             \\    for(var p=0;p<parts.length;p++){
             \\      var t=parts[p].trim();
             \\      if(t==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var tn=t.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
-            \\      var sq=0,rn=0,cu=0;
-            \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
-            \\      if(sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      var sq=0,rn=0,cu=0,inStr=false,q='';
+            \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='\\'&&i+1<t.length){i++;continue;}if(inStr){if(c===q)inStr=false;continue;}if(c==='"'||c==="'"){inStr=true;q=c;continue;}if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
+            \\      if(inStr||sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^[<>{}()\[\]]$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^#$/.test(tn)||/^\.(\d|\.|\s*$)/.test(tn)||/\.\s*$/.test(tn)||/\.$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var _nb=tn.replace(/\[[^\]]*\]/g,'');if(/\.\./.test(_nb)||/#\./.test(_nb))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");

@@ -12,6 +12,31 @@ extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_n
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
+// ── Scope element for :scope pseudo-class (DOM spec §4.2.6) ────────
+// Stack-based to handle reentrancy (nested querySelector calls from getters,
+// MutationObserver callbacks, etc.)
+var g_scope_stack: [16]?*lxb.lxb_dom_node_t = .{null} ** 16;
+var g_scope_depth: usize = 0;
+
+pub fn setScopeElement(node: ?*lxb.lxb_dom_node_t) void {
+    if (g_scope_depth < g_scope_stack.len) {
+        g_scope_stack[g_scope_depth] = node;
+        g_scope_depth += 1;
+    }
+}
+
+pub fn clearScopeElement() void {
+    if (g_scope_depth > 0) {
+        g_scope_depth -= 1;
+        g_scope_stack[g_scope_depth] = null;
+    }
+}
+
+fn getCurrentScopeElement() ?*lxb.lxb_dom_node_t {
+    if (g_scope_depth > 0) return g_scope_stack[g_scope_depth - 1];
+    return null;
+}
+
 // ── CSS escape decoding (CSS Syntax §4.3.7) ────────────────────────
 fn isHexDigit(c: u8) bool {
     return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
@@ -89,8 +114,16 @@ fn decodeCssEscapes(input: []const u8, buf: []u8) []const u8 {
                     i += 1;
                     count += 1;
                 }
-                // Skip optional single whitespace after hex
-                if (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n' or input[i] == '\r')) i += 1;
+                // Skip optional single whitespace after hex (CSS Syntax §4.3.7)
+                // \r\n counts as a single whitespace; \f (form feed) is also whitespace
+                if (i < input.len) {
+                    if (input[i] == '\r') {
+                        i += 1;
+                        if (i < input.len and input[i] == '\n') i += 1; // consume \r\n as one
+                    } else if (input[i] == ' ' or input[i] == '\t' or input[i] == '\n' or input[i] == 0x0C) {
+                        i += 1;
+                    }
+                }
                 // Invalid code points → U+FFFD
                 if (code == 0 or code > 0x10FFFF or (code >= 0xD800 and code <= 0xDFFF)) {
                     if (out + 3 <= buf.len) {
@@ -135,15 +168,20 @@ pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) b
     if (sel.len == 0) return false;
 
     // Handle comma-separated selector list (any match = true)
+    // Must skip CSS escape sequences to avoid splitting on escaped commas
     var start: usize = 0;
     var depth: usize = 0;
-    for (sel, 0..) |ch, i| {
+    var i: usize = 0;
+    while (i < sel.len) {
+        const ch = sel[i];
+        if (ch == '\\' and i + 1 < sel.len) { i += 2; continue; } // skip CSS escape
         if (ch == '(' or ch == '[') depth += 1
         else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
         else if (ch == ',' and depth == 0) {
             if (matchSingleSelector(node, std.mem.trim(u8, sel[start..i], " \t"))) return true;
             start = i + 1;
         }
+        i += 1;
     }
     return matchSingleSelector(node, std.mem.trim(u8, sel[start..], " \t"));
 }
@@ -258,7 +296,12 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":first-child")) return isFirstChild(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":last-child")) return isLastChild(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":root")) return isRoot(@ptrCast(elem));
-        if (std.ascii.eqlIgnoreCase(sel, ":scope")) return true; // :scope matches the context element
+        if (std.ascii.eqlIgnoreCase(sel, ":scope")) {
+            // :scope matches only the context element set by querySelector/closest
+            if (getCurrentScopeElement()) |scope| return (@intFromPtr(elem) == @intFromPtr(scope));
+            // If no scope set, :scope matches the document element (:root)
+            return isRoot(@ptrCast(elem));
+        }
         if (std.ascii.eqlIgnoreCase(sel, ":empty")) {
             const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
             var child = node.first_child;
@@ -327,19 +370,12 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":optional")) {
             return !lxb_dom_element_has_attribute(elem, "required", 8);
         }
-        // :valid / :invalid — form validation pseudo-classes
-        // Simplified: elements with required but no value are :invalid
+        // :valid / :invalid — form constraint validation (HTML spec §4.10.21)
         if (std.ascii.eqlIgnoreCase(sel, ":valid")) {
-            if (!lxb_dom_element_has_attribute(elem, "required", 8)) return true;
-            var val_len: usize = 0;
-            const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
-            return val != null and val_len > 0;
+            return !isFormInvalid(elem);
         }
         if (std.ascii.eqlIgnoreCase(sel, ":invalid")) {
-            if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
-            var val_len: usize = 0;
-            const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
-            return val == null or val_len == 0;
+            return isFormInvalid(elem);
         }
         // :read-only / :read-write
         if (std.ascii.eqlIgnoreCase(sel, ":read-write")) {
@@ -616,11 +652,26 @@ pub fn findPseudoStart(sel: []const u8) ?usize {
     // Find ':' that's not inside [] or () and not CSS-escaped — marks start of pseudo-class
     var depth: u32 = 0;
     var i: usize = 0;
-    while (i < sel.len) : (i += 1) {
-        if (sel[i] == '\\' and i + 1 < sel.len) { i += 1; continue; } // skip CSS escape
+    while (i < sel.len) {
+        if (sel[i] == '\\' and i + 1 < sel.len) {
+            i += 1; // skip backslash
+            if (isHexDigit(sel[i])) {
+                // Skip hex digits (up to 6)
+                var hc: usize = 0;
+                while (i < sel.len and hc < 6 and isHexDigit(sel[i])) { i += 1; hc += 1; }
+                // Skip optional whitespace after hex
+                if (i < sel.len) {
+                    if (sel[i] == '\r') { i += 1; if (i < sel.len and sel[i] == '\n') i += 1; } else if (sel[i] == ' ' or sel[i] == '\t' or sel[i] == '\n' or sel[i] == 0x0C) i += 1;
+                }
+            } else {
+                i += 1; // skip escaped char
+            }
+            continue;
+        }
         if (sel[i] == '(' or sel[i] == '[') depth += 1
         else if ((sel[i] == ')' or sel[i] == ']') and depth > 0) depth -= 1
         else if (sel[i] == ':' and depth == 0) return i;
+        i += 1;
     }
     return null;
 }
@@ -663,6 +714,154 @@ pub fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
 pub fn isRoot(node: *lxb.lxb_dom_node_t) bool {
     const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     return parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+/// Find an option inside a select, descending into optgroup children.
+/// If check_selected is true, returns the first option with "selected" attribute.
+/// If false, returns the first option regardless.
+fn findOptionInSelect(select_node: *lxb.lxb_dom_node_t, comptime check_selected: bool) ?*lxb.lxb_dom_element_t {
+    var child: ?*lxb.lxb_dom_node_t = select_node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+            var ch_name_len: usize = 0;
+            const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+            if (ch_name != null) {
+                const name = ch_name.?[0..ch_name_len];
+                if (std.ascii.eqlIgnoreCase(name, "option")) {
+                    if (!check_selected or lxb_dom_element_has_attribute(ch_elem, "selected", 8))
+                        return ch_elem;
+                } else if (std.ascii.eqlIgnoreCase(name, "optgroup")) {
+                    // Descend into optgroup
+                    var gc: ?*lxb.lxb_dom_node_t = ch.first_child;
+                    while (gc) |g| {
+                        if (g.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                            const g_elem: *lxb.lxb_dom_element_t = @ptrCast(g);
+                            var g_name_len: usize = 0;
+                            const g_name = lxb_dom_element_local_name(g_elem, &g_name_len);
+                            if (g_name != null and std.ascii.eqlIgnoreCase(g_name.?[0..g_name_len], "option")) {
+                                if (!check_selected or lxb_dom_element_has_attribute(g_elem, "selected", 8))
+                                    return g_elem;
+                            }
+                        }
+                        gc = g.next;
+                    }
+                }
+            }
+        }
+        child = ch.next;
+    }
+    return null;
+}
+
+/// HTML spec §4.10.21 — constraint validation for :valid/:invalid
+/// Only applies to: input, select, textarea (barred: hidden, button types)
+/// fieldset is :invalid if any descendant form element is :invalid
+/// form is :invalid if any associated element is :invalid
+fn isFormInvalid(elem: *lxb.lxb_dom_element_t) bool {
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return false;
+    const tag = name_ptr.?[0..name_len];
+
+    if (std.ascii.eqlIgnoreCase(tag, "input")) {
+        // type=hidden, submit, reset, button, image are barred from validation
+        var type_len: usize = 0;
+        const type_ptr = lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+        if (type_ptr != null and type_len > 0) {
+            const itype = type_ptr.?[0..type_len];
+            if (std.ascii.eqlIgnoreCase(itype, "hidden") or
+                std.ascii.eqlIgnoreCase(itype, "submit") or
+                std.ascii.eqlIgnoreCase(itype, "reset") or
+                std.ascii.eqlIgnoreCase(itype, "button") or
+                std.ascii.eqlIgnoreCase(itype, "image")) return false;
+        }
+        if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
+        if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
+        return val == null or val_len == 0;
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "textarea")) {
+        if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
+        if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+        // textarea value is its textContent (no value attribute in HTML)
+        // Check if any text child nodes exist with content
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_TEXT) return false; // has text content
+            child = ch.next;
+        }
+        return true; // empty textarea = invalid when required
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "select")) {
+        if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
+        if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+        // A required select is invalid only if its value is empty string.
+        // Check options (including inside <optgroup>) for selected/first option value.
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        // Pass 1: find explicitly selected option
+        if (findOptionInSelect(node, true)) |opt| {
+            var ov_len: usize = 0;
+            const ov = lxb_dom_element_get_attribute(opt, "value", 5, &ov_len);
+            if (ov != null and ov_len == 0) return true; // empty value = invalid
+            return false; // non-empty or no value attr = valid
+        }
+        // Pass 2: no selected option → first option is default
+        if (findOptionInSelect(node, false)) |opt| {
+            var ov_len: usize = 0;
+            const ov = lxb_dom_element_get_attribute(opt, "value", 5, &ov_len);
+            if (ov != null and ov_len == 0) return true;
+            return false;
+        }
+        return true; // no options at all = invalid
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "fieldset")) {
+        // A fieldset is :invalid if any descendant form element is :invalid
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var current: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (current) |n| {
+            if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                if (isFormInvalid(@ptrCast(n))) return true;
+            }
+            // DFS: first_child → next → backtrack
+            if (n.first_child) |fc| {
+                current = fc;
+            } else {
+                var cur = n;
+                while (true) {
+                    if (cur.next) |nxt| { current = nxt; break; }
+                    cur = cur.parent orelse { current = null; break; };
+                    if (cur == node) { current = null; break; }
+                }
+            }
+        }
+        return false;
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "form")) {
+        // A form is :invalid if any associated element is :invalid (simplified: check descendants)
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var current: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (current) |n| {
+            if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                if (isFormInvalid(@ptrCast(n))) return true;
+            }
+            if (n.first_child) |fc| {
+                current = fc;
+            } else {
+                var cur = n;
+                while (true) {
+                    if (cur.next) |nxt| { current = nxt; break; }
+                    cur = cur.parent orelse { current = null; break; };
+                    if (cur == node) { current = null; break; }
+                }
+            }
+        }
+        return false;
+    }
+    // Other elements (option, optgroup, etc.) are never :invalid
+    return false;
 }
 
 pub fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
@@ -794,11 +993,21 @@ pub fn matchNthFormula(raw_arg: []const u8, idx: u32) bool {
             else if (a_str.len == 1 and a_str[0] == '+') { a = 1; }
             else if (a_str.len > 0) { a = std.fmt.parseInt(i32, a_str, 10) catch return false; }
         }
-        // Parse B (after n)
+        // Parse B (after n) — strip internal whitespace for "2n + 2" → "+2"
         var b: i32 = 0;
         if (n_pos + 1 < arg.len) {
-            const b_str = std.mem.trim(u8, arg[n_pos + 1 ..], ws);
-            if (b_str.len > 0) { b = std.fmt.parseInt(i32, b_str, 10) catch return false; }
+            const b_raw = std.mem.trim(u8, arg[n_pos + 1 ..], ws);
+            if (b_raw.len > 0) {
+                // Strip all internal whitespace: "+ 2" → "+2"
+                var b_compact: [64]u8 = undefined;
+                var bc: usize = 0;
+                for (b_raw) |ch| {
+                    if (ch != ' ' and ch != '\t' and ch != '\n' and ch != '\r' and ch != 0x0C) {
+                        if (bc < b_compact.len) { b_compact[bc] = ch; bc += 1; }
+                    }
+                }
+                if (bc > 0) { b = std.fmt.parseInt(i32, b_compact[0..bc], 10) catch return false; }
+            }
         }
         // Match: idx = An + B for some non-negative integer n
         const idx_i: i32 = @intCast(idx);
@@ -852,6 +1061,16 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     }
     const val_start = if (op_type == '=') op_pos.? + 1 else op_pos.? + 2;
     var expected = std.mem.trim(u8, trimmed[val_start..], " \t");
+    // Check for case-sensitivity flag BEFORE stripping quotes: [attr="val" i]
+    // The flag is after the closing quote/value, separated by space
+    var case_insensitive = false;
+    if (expected.len >= 2) {
+        const last = expected[expected.len - 1];
+        if ((last == 'i' or last == 'I' or last == 's' or last == 'S') and expected[expected.len - 2] == ' ') {
+            if (last == 'i' or last == 'I') case_insensitive = true;
+            expected = std.mem.trimRight(u8, expected[0 .. expected.len - 2], " \t");
+        }
+    }
     // Strip quotes
     if (expected.len >= 2 and (expected[0] == '"' or expected[0] == '\'') and expected[expected.len - 1] == expected[0]) {
         expected = expected[1 .. expected.len - 1];
@@ -863,6 +1082,38 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
     if (val == null) return false;
     const actual = val.?[0..val_len];
+
+    if (case_insensitive) {
+        // Case-insensitive comparison using lowercased copies
+        var lower_actual_buf: [1024]u8 = undefined;
+        var lower_exp_buf: [512]u8 = undefined;
+        const la_len = @min(actual.len, lower_actual_buf.len);
+        const le_len = @min(decoded_exp.len, lower_exp_buf.len);
+        for (0..la_len) |ci| lower_actual_buf[ci] = std.ascii.toLower(actual[ci]);
+        for (0..le_len) |ci| lower_exp_buf[ci] = std.ascii.toLower(decoded_exp[ci]);
+        const la = lower_actual_buf[0..la_len];
+        const le = lower_exp_buf[0..le_len];
+        return switch (op_type) {
+            '=' => std.mem.eql(u8, la, le),
+            '^' => la.len >= le.len and std.mem.eql(u8, la[0..le.len], le),
+            '$' => la.len >= le.len and std.mem.eql(u8, la[la.len - le.len ..], le),
+            '*' => std.mem.indexOf(u8, la, le) != null,
+            '~' => blk: {
+                // Word match case-insensitive
+                var rest = la;
+                while (rest.len > 0) {
+                    const sp = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+                    if (sp == le.len and std.mem.eql(u8, rest[0..sp], le)) break :blk true;
+                    if (sp >= rest.len) break;
+                    rest = rest[sp + 1 ..];
+                }
+                break :blk false;
+            },
+            '|' => std.mem.eql(u8, la, le) or
+                (la.len > le.len and std.mem.eql(u8, la[0..le.len], le) and la[le.len] == '-'),
+            else => false,
+        };
+    }
 
     return switch (op_type) {
         '=' => std.mem.eql(u8, actual, decoded_exp),
@@ -907,7 +1158,9 @@ pub fn elementClosest(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel = s.ptr[0..s.len];
 
-    // Walk up from this element
+    // Walk up from this element — :scope refers to this element
+    setScopeElement(node);
+    defer clearScopeElement();
     var cur: ?*lxb.lxb_dom_node_t = node;
     while (cur) |n| {
         if (elementMatchesSelector(n, sel)) return api.wrapNode(c, n);
@@ -931,6 +1184,8 @@ pub fn elementQuerySelector(
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
+    setScopeElement(node);
+    defer clearScopeElement();
     const found = walkTreeBySelector(node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
     return api.wrapNode(c, found);
 }
@@ -948,6 +1203,8 @@ pub fn elementQuerySelectorAll(
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
+    setScopeElement(node);
+    defer clearScopeElement();
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
     var idx: u32 = 0;
@@ -1001,27 +1258,38 @@ pub fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb
     if (trimmed.len == 0) return null;
 
     // Handle comma-separated selectors at top level (not inside :not(), :is() etc.)
+    // Must skip CSS escape sequences to avoid splitting on escaped commas
     {
         var depth: u32 = 0;
         var has_top_comma = false;
-        for (trimmed) |ch| {
-            if (ch == '(' or ch == '[') depth += 1
-            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-            else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+        {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
+                if (ch == '(' or ch == '[') depth += 1
+                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+                else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+                ci += 1;
+            }
         }
         if (has_top_comma) {
             var start: usize = 0;
             depth = 0;
-            for (trimmed, 0..) |ch, idx| {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
                 if (ch == '(' or ch == '[') depth += 1
                 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
                 else if (ch == ',' and depth == 0) {
-                    const sub = std.mem.trim(u8, trimmed[start..idx], " \t");
+                    const sub = std.mem.trim(u8, trimmed[start..ci], " \t");
                     if (sub.len > 0) {
                         if (walkTreeBySelector(node, sub)) |found| return found;
                     }
-                    start = idx + 1;
+                    start = ci + 1;
                 }
+                ci += 1;
             }
             const sub = std.mem.trim(u8, trimmed[start..], " \t");
             if (sub.len > 0) {
@@ -1309,7 +1577,15 @@ pub fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
                         hcount += 1;
                     }
                     // Skip optional whitespace after hex escape (it's part of the escape, not a combinator)
-                    if (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t' or trimmed[i] == '\n' or trimmed[i] == '\r' or trimmed[i] == 0x0C)) i += 1;
+                    // \r\n counts as single whitespace per CSS Syntax §4.3.7
+                    if (i < trimmed.len) {
+                        if (trimmed[i] == '\r') {
+                            i += 1;
+                            if (i < trimmed.len and trimmed[i] == '\n') i += 1;
+                        } else if (trimmed[i] == ' ' or trimmed[i] == '\t' or trimmed[i] == '\n' or trimmed[i] == 0x0C) {
+                            i += 1;
+                        }
+                    }
                 } else {
                     i += 1; // skip escaped character
                 }
@@ -1526,25 +1802,36 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
     if (trimmed.len == 0) return;
 
     // Handle comma-separated selectors (top-level only, not inside :not() etc.)
+    // Must skip CSS escape sequences to avoid splitting on escaped commas
     {
         var depth: u32 = 0;
         var has_top_comma = false;
-        for (trimmed) |ch| {
-            if (ch == '(' or ch == '[') depth += 1
-            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-            else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+        {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
+                if (ch == '(' or ch == '[') depth += 1
+                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+                else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+                ci += 1;
+            }
         }
         if (has_top_comma) {
             var start: usize = 0;
             depth = 0;
-            for (trimmed, 0..) |ch, i| {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
                 if (ch == '(' or ch == '[') depth += 1
                 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
                 else if (ch == ',' and depth == 0) {
-                    const sub = std.mem.trim(u8, trimmed[start..i], " \t");
+                    const sub = std.mem.trim(u8, trimmed[start..ci], " \t");
                     if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
-                    start = i + 1;
+                    start = ci + 1;
                 }
+                ci += 1;
             }
             const sub = std.mem.trim(u8, trimmed[start..], " \t");
             if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);

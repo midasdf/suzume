@@ -1863,10 +1863,11 @@ pub fn getBoxForThis(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?*const Box {
 }
 
 pub fn getNodeFromThis(ctx: *qjs.JSContext, this_val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
-    // Try element class first, then text class
-    const ptr1 = qjs.JS_GetOpaque2(ctx, this_val, api.element_class_id);
+    _ = ctx;
+    // Try element class first, then text class (use JS_GetOpaque to avoid TypeError)
+    const ptr1 = qjs.JS_GetOpaque(this_val, api.element_class_id);
     if (ptr1) |p| return @ptrCast(@alignCast(p));
-    const ptr2 = qjs.JS_GetOpaque2(ctx, this_val, api.text_class_id);
+    const ptr2 = qjs.JS_GetOpaque(this_val, api.text_class_id);
     if (ptr2) |p| return @ptrCast(@alignCast(p));
     return null;
 }
