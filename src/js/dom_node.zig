@@ -1082,6 +1082,23 @@ pub fn elementReplaceChild(
             return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
     };
+    // DOM spec step 1: parent must be Document(9), DocumentFragment(11), or Element(1)
+    {
+        const parent_type = parent.type;
+        if (parent_type != lxb.LXB_DOM_NODE_TYPE_ELEMENT and
+            parent_type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT and
+            parent_type != @as(u32, 11))
+        {
+            // Check JS-level nodeType override (e.g., DocumentFragment backed by div)
+            const js_nt2 = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+            defer qjs.JS_FreeValue(c, js_nt2);
+            var pt2: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &pt2, js_nt2);
+            if (pt2 != 1 and pt2 != 9 and pt2 != 11)
+                return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+        }
+    }
+
     // DOM spec: TypeError if node is null
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
