@@ -574,11 +574,11 @@ fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
 /// Get the lxb_dom_node_t* from a JS Element/Text/Document value.
 /// Tries element class, text class, then main document fallback.
 pub fn getNode(ctx: *qjs.JSContext, val: qjs.JSValue) ?*lxb.lxb_dom_node_t {
-    // Try element class first
-    const ptr1 = qjs.JS_GetOpaque2(ctx, val, element_class_id);
+    // Try element class first (use JS_GetOpaque to avoid throwing TypeError)
+    const ptr1 = qjs.JS_GetOpaque(val, element_class_id);
     if (ptr1) |p| return @ptrCast(@alignCast(p));
     // Try text class
-    const ptr2 = qjs.JS_GetOpaque2(ctx, val, text_class_id);
+    const ptr2 = qjs.JS_GetOpaque(val, text_class_id);
     if (ptr2) |p| return @ptrCast(@alignCast(p));
     // Try main document: check nodeType === 9 property and match against main document
     const nt_val = qjs.JS_GetPropertyStr(ctx, val, "nodeType");
@@ -4831,6 +4831,24 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         ;
         const ctor = qjs.JS_Eval(ctx, doc_ctor_js, doc_ctor_js.len, "<Document>", qjs.JS_EVAL_TYPE_GLOBAL);
         _ = qjs.JS_SetPropertyStr(ctx, global, "Document", ctor);
+    }
+
+    // Fix document prototype chain: Document was replaced above, so re-link
+    // HTMLDocument.prototype → new Document.prototype, and document → HTMLDocument.prototype
+    // Also init _childNodes/_children arrays needed by Document.prototype.appendChild etc.
+    {
+        const fix_proto_js =
+            \\Object.setPrototypeOf(HTMLDocument.prototype,Document.prototype);
+            \\Object.setPrototypeOf(document,HTMLDocument.prototype);
+            \\if(!document._childNodes){
+            \\  document._childNodes=[];document._childNodes.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  document._children=[];document._children.item=function(i){return i>=0&&i<this.length?this[i]:null;};
+            \\  Object.defineProperty(document,'childNodes',{get:function(){return this._childNodes;},configurable:true,enumerable:true});
+            \\  Object.defineProperty(document,'children',{get:function(){return this._children;},configurable:true,enumerable:true});
+            \\}
+        ;
+        const fix_r = qjs.JS_Eval(ctx, fix_proto_js, fix_proto_js.len, "<fix-proto>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, fix_r);
     }
 
     // XMLDocument extends Document
