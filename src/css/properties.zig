@@ -1154,7 +1154,7 @@ const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
     .{ "appworkspace", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },      // → Canvas
     .{ "background", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },        // → Canvas
     .{ "buttonhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },   // → ButtonFace
-    .{ "buttonshadow", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },      // → ButtonFace
+    .{ "buttonshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },      // → ButtonBorder
     .{ "captiontext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },            // → CanvasText
     .{ "inactiveborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },    // → ButtonBorder
     .{ "inactivecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },   // → Canvas

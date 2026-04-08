@@ -4603,10 +4603,16 @@ pub fn isValidBorderWidth(val: []const u8) bool {
 pub fn canonicalizeColorKeyword(val: []const u8, buf: []u8) ?[]const u8 {
     // System colors: canonicalize to lowercase
     const system_colors = [_][]const u8{
-        "activetext", "buttonborder", "buttonface", "buttontext", "canvas",
-        "canvastext", "field", "fieldtext", "graytext", "highlight",
-        "highlighttext", "linktext", "mark", "marktext", "selecteditem",
-        "selecteditemtext", "accentcolor", "accentcolortext", "visitedtext",
+        "activetext",     "buttonborder",   "buttonface",       "buttontext",    "canvas",
+        "canvastext",     "field",          "fieldtext",        "graytext",      "highlight",
+        "highlighttext",  "linktext",       "mark",             "marktext",      "selecteditem",
+        "selecteditemtext", "accentcolor",  "accentcolortext",  "visitedtext",
+        // Deprecated CSS2 system colors
+        "activeborder",   "activecaption",  "appworkspace",     "background",    "buttonhighlight",
+        "buttonshadow",   "captiontext",    "inactiveborder",   "inactivecaption",
+        "inactivecaptiontext", "infobackground", "infotext",    "menu",          "menutext",
+        "scrollbar",      "threeddarkshadow", "threedface",     "threedhighlight",
+        "threedlightshadow", "threedshadow", "window",          "windowframe",   "windowtext",
     };
     for (system_colors) |sc| {
         if (eqlIgnoreCase(val, sc)) {
