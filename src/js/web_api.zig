@@ -1968,7 +1968,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\      xmlDoc.querySelector=function(s){return xmlDocEl.querySelector(s);};
         \\      xmlDoc.querySelectorAll=function(s){return xmlDocEl.querySelectorAll(s);};
         \\      xmlDoc.getElementsByTagName=function(t){return xmlDocEl.getElementsByTagName?xmlDocEl.getElementsByTagName(t):xmlDocEl.querySelectorAll(t);};
-        \\      xmlDoc.createElement=function(t){return document.createElement(t);};
+        \\      xmlDoc.createElement=function(t){var e=document.createElement(t);Object.defineProperty(e,'namespaceURI',{value:null,configurable:true});Object.defineProperty(e,'__origLocal',{value:String(t),writable:true});e.__xmlCaseSensitive=true;return e;};
         \\      xmlDoc.createElementNS=function(ns,t){return document.createElementNS?document.createElementNS(ns,t):document.createElement(t);};
         \\      xmlDoc.createTextNode=function(t){return document.createTextNode(t);};
         \\      xmlDoc.createComment=function(t){return document.createComment(t);};
