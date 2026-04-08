@@ -363,6 +363,26 @@ pub fn elementSetAttributeNS(
     }
     // Store using the qualified name (prefix:localName) to preserve prefix
     _ = lxb_dom_element_set_attribute(elem, qname_s.ptr, qname_s.len, val.ptr, val.len);
+
+    // Store namespace metadata for isEqualNode attribute comparison
+    // __attrNS maps qualifiedName → namespaceURI
+    {
+        const attr_ns_obj = qjs.JS_GetPropertyStr(c, this_val, "__attrNS");
+        const ns_map = if (quickjs.JS_IsUndefined(attr_ns_obj) or quickjs.JS_IsNull(attr_ns_obj)) blk: {
+            qjs.JS_FreeValue(c, attr_ns_obj);
+            const new_map = qjs.JS_NewObject(c);
+            _ = qjs.JS_SetPropertyStr(c, this_val, "__attrNS", qjs.JS_DupValue(c, new_map));
+            break :blk new_map;
+        } else attr_ns_obj;
+        defer qjs.JS_FreeValue(c, ns_map);
+
+        if (namespace) |ns| {
+            _ = qjs.JS_SetPropertyStr(c, ns_map, qname_s.ptr, qjs.JS_NewStringLen(c, ns.ptr, ns.len));
+        } else {
+            _ = qjs.JS_SetPropertyStr(c, ns_map, qname_s.ptr, quickjs.JS_NULL());
+        }
+    }
+
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     events.recordMutationAttrNS(node, local_name, ns_slice, old_val);
     setDomDirty();

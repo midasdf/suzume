@@ -4474,7 +4474,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      if(deep){var de=_elemCh(null);if(de&&de.innerHTML)nd.documentElement.innerHTML=de.innerHTML;}
             \\      return nd;
             \\    },
-            \\    compareDocumentPosition: function(other){if(other===doc)return 0;for(var i=0;i<_ch.length;i++){if(_ch[i]===other)return 10;if(_ch[i].contains&&_ch[i].contains(other))return 20;}return 35;},
+            \\    compareDocumentPosition: function(other){if(other===doc)return 0;for(var i=0;i<_ch.length;i++){if(_ch[i]===other)return 20;if(_ch[i].contains&&_ch[i].contains(other))return 20;}if(other.contains&&other.contains(doc))return 10;return 35;},
             \\    isEqualNode: function(other){if(!other||other.nodeType!==9)return false;if(_ch.length!==(other.childNodes?other.childNodes.length:0))return false;return true;},
             \\    normalize: function(){for(var i=0;i<_ch.length;i++)if(_ch[i].normalize)_ch[i].normalize();},
             \\    prepend: function(){var f=_ch[0]||null;for(var i=arguments.length-1;i>=0;i--){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.insertBefore(n,f);f=n;}},

@@ -189,10 +189,62 @@ pub fn elementGetTextContent(
     if (node.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT or
         node.type == @as(u32, 10)) // LXB_DOM_NODE_TYPE_DOCUMENT_TYPE
         return quickjs.JS_NULL();
+
+    // Check for JS-only children (__jsChildren) — e.g. CDATASection (nodeType 4)
+    // These are not in the lexbor tree but need to be included in textContent
+    const js_children = qjs.JS_GetPropertyStr(c, this_val, "__jsChildren");
+    const has_js_children = !quickjs.JS_IsUndefined(js_children) and !quickjs.JS_IsNull(js_children);
+
     var len: usize = 0;
     const ptr = lxb_dom_node_text_content(node, &len);
-    if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
-    return qjs.JS_NewStringLen(c, ptr.?, len);
+
+    if (!has_js_children) {
+        qjs.JS_FreeValue(c, js_children);
+        if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, ptr.?, len);
+    }
+
+    // Has JS-only children — need to collect text from both native and JS children
+    // Walk native children and __jsChildren in insertion order
+    // __jsChildren are tracked with __jsChildPos (insertion index among all children)
+    // Fallback: prepend JS children text, then native text
+    var buf: [32768]u8 = undefined;
+    var buf_len: usize = 0;
+
+    // Collect JS children text first (they were inserted before native nodes in typical usage)
+    // Read each JS child's textContent/data
+    const jc_len_val = qjs.JS_GetPropertyStr(c, js_children, "length");
+    var jc_len: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &jc_len, jc_len_val);
+    qjs.JS_FreeValue(c, jc_len_val);
+
+    var ji: u32 = 0;
+    while (ji < @as(u32, @intCast(jc_len))) : (ji += 1) {
+        const jc_item = qjs.JS_GetPropertyUint32(c, js_children, ji);
+        defer qjs.JS_FreeValue(c, jc_item);
+        // Try textContent first, then data
+        const tc = qjs.JS_GetPropertyStr(c, jc_item, "data");
+        defer qjs.JS_FreeValue(c, tc);
+        if (!quickjs.JS_IsUndefined(tc) and !quickjs.JS_IsNull(tc)) {
+            if (api.jsStringToSlice(c, tc)) |s| {
+                defer qjs.JS_FreeCString(c, s.ptr);
+                const copy_len = @min(s.len, buf.len - buf_len);
+                @memcpy(buf[buf_len..][0..copy_len], s.ptr[0..copy_len]);
+                buf_len += copy_len;
+            }
+        }
+    }
+    qjs.JS_FreeValue(c, js_children);
+
+    // Append native text content
+    if (ptr != null and len > 0) {
+        const copy_len = @min(len, buf.len - buf_len);
+        @memcpy(buf[buf_len..][0..copy_len], ptr.?[0..copy_len]);
+        buf_len += copy_len;
+    }
+
+    if (buf_len == 0) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, &buf, buf_len);
 }
 
 pub fn elementSetTextContent(
@@ -641,6 +693,33 @@ pub fn elementAppendChild(
         _ = qjs.JS_ToInt32(c, &js_nt, nt);
         if (js_nt == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
             return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+
+        // CDATASection (nodeType 4): convert to native text node for proper textContent
+        // CDATASection inherits from Text in DOM spec, so it behaves like a text node
+        if (js_nt == 4) {
+            const data_val = qjs.JS_GetPropertyStr(c, args[0], "data");
+            defer qjs.JS_FreeValue(c, data_val);
+            var data_ptr: [*]const u8 = "";
+            var data_len: usize = 0;
+            if (api.jsStringToSlice(c, data_val)) |s| {
+                data_ptr = s.ptr;
+                data_len = s.len;
+            }
+            const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
+            const text_node = lxb_dom_document_create_text_node(doc, data_ptr, data_len) orelse {
+                if (data_len > 0) qjs.JS_FreeCString(c, data_ptr);
+                return quickjs.JS_NULL();
+            };
+            lxb_dom_node_insert_child(parent.?, text_node);
+            const result = api.wrapNode(c, text_node);
+            // Override nodeType to 4 (CDATASection) and nodeName to #cdata-section
+            _ = qjs.JS_SetPropertyStr(c, result, "__nodeTypeOverride", qjs.JS_NewInt32(c, 4));
+            _ = qjs.JS_SetPropertyStr(c, result, "__nodeNameOverride", qjs.JS_NewString(c, "#cdata-section"));
+            if (data_len > 0) qjs.JS_FreeCString(c, data_ptr);
+            api.setDomDirty();
+            return result;
+        }
+
         // JS-level node (PI, etc.) — delegate to JS parentNode/childNodes manipulation
         return appendJsNode(c, this_val, args[0]);
     };
@@ -1524,23 +1603,128 @@ pub fn nodeIsEqualNode(
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return quickjs.JS_NewBool(false);
 
-    // For elements, also compare namespaceURI and prefix via JS properties
-    const node_a = api.getNode(c, this_val) orelse blk: {
-        const doc = api.getDocument(c) orelse return quickjs.JS_NewBool(false);
-        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
-    };
-    const node_b = api.getNode(c, args[0]) orelse blk: {
-        const doc = api.getDocument(c) orelse return quickjs.JS_NewBool(false);
-        break :blk @as(*lxb.lxb_dom_node_t, @ptrCast(@alignCast(doc)));
-    };
+    // Check if either node is JS-level only (no lexbor backing)
+    const node_a_opt = api.getNode(c, this_val);
+    const node_b_opt = api.getNode(c, args[0]);
+
+    // If either node is JS-level (e.g. createHTMLDocument, createDocument)
+    if (node_a_opt == null or node_b_opt == null) {
+        // Compare nodeTypes
+        const nt_a = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+        defer qjs.JS_FreeValue(c, nt_a);
+        const nt_b = qjs.JS_GetPropertyStr(c, args[0], "nodeType");
+        defer qjs.JS_FreeValue(c, nt_b);
+        var nta: i32 = -1;
+        var ntb: i32 = -2;
+        _ = qjs.JS_ToInt32(c, &nta, nt_a);
+        _ = qjs.JS_ToInt32(c, &ntb, nt_b);
+        if (nta != ntb) return quickjs.JS_NewBool(false);
+
+        // For documents (nodeType 9), compare children count and recursively
+        if (nta == 9) {
+            const ch_a = qjs.JS_GetPropertyStr(c, this_val, "childNodes");
+            defer qjs.JS_FreeValue(c, ch_a);
+            const ch_b = qjs.JS_GetPropertyStr(c, args[0], "childNodes");
+            defer qjs.JS_FreeValue(c, ch_b);
+            const la = qjs.JS_GetPropertyStr(c, ch_a, "length");
+            defer qjs.JS_FreeValue(c, la);
+            const lb = qjs.JS_GetPropertyStr(c, ch_b, "length");
+            defer qjs.JS_FreeValue(c, lb);
+            var len_a: i32 = 0;
+            var len_b: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &len_a, la);
+            _ = qjs.JS_ToInt32(c, &len_b, lb);
+            if (len_a != len_b) return quickjs.JS_NewBool(false);
+            // Compare each child recursively
+            var i: u32 = 0;
+            while (i < @as(u32, @intCast(len_a))) : (i += 1) {
+                const ca = qjs.JS_GetPropertyUint32(c, ch_a, i);
+                defer qjs.JS_FreeValue(c, ca);
+                const cb = qjs.JS_GetPropertyUint32(c, ch_b, i);
+                defer qjs.JS_FreeValue(c, cb);
+                // Use native comparison if both have lexbor backing
+                const na = api.getNode(c, ca);
+                const nb = api.getNode(c, cb);
+                if (na != null and nb != null) {
+                    if (!nodesAreEqual(na.?, nb.?)) return quickjs.JS_NewBool(false);
+                } else {
+                    // JS-level child comparison by nodeType and key properties
+                    const cnt_a = qjs.JS_GetPropertyStr(c, ca, "nodeType");
+                    defer qjs.JS_FreeValue(c, cnt_a);
+                    const cnt_b = qjs.JS_GetPropertyStr(c, cb, "nodeType");
+                    defer qjs.JS_FreeValue(c, cnt_b);
+                    var cta: i32 = -1;
+                    var ctb: i32 = -2;
+                    _ = qjs.JS_ToInt32(c, &cta, cnt_a);
+                    _ = qjs.JS_ToInt32(c, &ctb, cnt_b);
+                    if (cta != ctb) return quickjs.JS_NewBool(false);
+                    if (!jsPropsEqual(c, ca, cb, "nodeName")) return quickjs.JS_NewBool(false);
+                    if (!jsPropsEqual(c, ca, cb, "nodeValue")) return quickjs.JS_NewBool(false);
+                }
+            }
+            return quickjs.JS_NewBool(true);
+        }
+        // Non-document JS nodes: compare nodeName and nodeValue
+        if (!jsPropsEqual(c, this_val, args[0], "nodeName")) return quickjs.JS_NewBool(false);
+        if (!jsPropsEqual(c, this_val, args[0], "nodeValue")) return quickjs.JS_NewBool(false);
+        return quickjs.JS_NewBool(true);
+    }
+
+    const node_a = node_a_opt.?;
+    const node_b = node_b_opt.?;
     if (!nodesAreEqual(node_a, node_b)) return quickjs.JS_NewBool(false);
 
     // Additional JS-level checks for elements: namespaceURI and prefix
     if (node_a.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
         if (!jsPropsEqual(c, this_val, args[0], "namespaceURI")) return quickjs.JS_NewBool(false);
         if (!jsPropsEqual(c, this_val, args[0], "prefix")) return quickjs.JS_NewBool(false);
+        // Compare attributes by namespace + localName using JS-level __attrNS map
+        if (!attrsEqualByNS(c, this_val, args[0])) return quickjs.JS_NewBool(false);
     }
     return quickjs.JS_NewBool(true);
+}
+
+/// Compare attributes by namespace+localName+value using JS-level __attrNS map.
+/// Implemented in JS for reliable string handling.
+fn attrsEqualByNS(c: *qjs.JSContext, a: qjs.JSValue, b: qjs.JSValue) bool {
+    // Use a JS-level comparison function for reliable property access
+    const js_code =
+        \\(function(a,b){
+        \\  var nsA=a.__attrNS, nsB=b.__attrNS;
+        \\  if(!nsA && !nsB) return true;
+        \\  // Build map of namespace+localName+value for each element's attributes
+        \\  function attrMap(el, nsMap) {
+        \\    var m={};
+        \\    for(var i=0;i<el.attributes.length;i++){
+        \\      var attr=el.attributes[i];
+        \\      var qn=attr.name;
+        \\      var ns=null;
+        \\      if(nsMap){ns=nsMap[qn]||null;if(!ns){for(var k in nsMap){if(k.toLowerCase()===qn.toLowerCase()){ns=nsMap[k];break;}}}}
+        \\      var ln=qn.indexOf(':')>=0?qn.slice(qn.indexOf(':')+1):qn;
+        \\      var key=(ns||'')+'|'+ln;
+        \\      m[key]=attr.value;
+        \\    }
+        \\    return m;
+        \\  }
+        \\  var mA=attrMap(a,nsA), mB=attrMap(b,nsB);
+        \\  var keysA=Object.keys(mA), keysB=Object.keys(mB);
+        \\  if(keysA.length!==keysB.length) return false;
+        \\  for(var i=0;i<keysA.length;i++){
+        \\    if(mA[keysA[i]]!==mB[keysA[i]]) return false;
+        \\  }
+        \\  return true;
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL);
+    defer qjs.JS_FreeValue(c, fn_val);
+    if (quickjs.JS_IsException(fn_val)) return true; // Fallback: assume equal
+    var fn_args = [2]qjs.JSValue{ qjs.JS_DupValue(c, a), qjs.JS_DupValue(c, b) };
+    const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 2, &fn_args);
+    qjs.JS_FreeValue(c, fn_args[0]);
+    qjs.JS_FreeValue(c, fn_args[1]);
+    defer qjs.JS_FreeValue(c, result);
+    if (quickjs.JS_IsException(result)) return true;
+    return qjs.JS_ToBool(c, result) != 0;
 }
 
 /// Compare a JS string property on two objects for equality (including both null/undefined).
@@ -1584,7 +1768,7 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
         if (la != null and lb != null) {
             if (!std.mem.eql(u8, la.?[0..la_len], lb.?[0..lb_len])) return false;
         }
-        // Compare attributes: count and values (case-sensitive, namespace-aware)
+        // Attribute count must match
         {
             var count_a: usize = 0;
             var count_b: usize = 0;
@@ -1599,40 +1783,9 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
                 ab = lxb_dom_element_next_attribute_noi(b_attr);
             }
             if (count_a != count_b) return false;
-            // Verify each attribute of a exists with same qualified name and value in b
-            aa = lxb_dom_element_first_attribute_noi(ea);
-            while (aa) |a_attr| {
-                var an_len: usize = 0;
-                const an = lxb_dom_attr_qualified_name(a_attr, &an_len);
-                var av_len: usize = 0;
-                const av = lxb_dom_attr_value_noi(a_attr, &av_len);
-                if (an) |a_name| {
-                    const a_qname = a_name[0..an_len];
-                    // Find matching attribute in b by exact (case-sensitive) qualified name
-                    var found = false;
-                    var bb: ?*anyopaque = lxb_dom_element_first_attribute_noi(eb);
-                    while (bb) |b_attr| {
-                        var bn_len: usize = 0;
-                        if (lxb_dom_attr_qualified_name(b_attr, &bn_len)) |b_name| {
-                            if (std.mem.eql(u8, a_qname, b_name[0..bn_len])) {
-                                // Name matches, compare values
-                                var bv_len: usize = 0;
-                                const bv = lxb_dom_attr_value_noi(b_attr, &bv_len);
-                                if (av_len != bv_len) return false;
-                                if (av != null and bv != null) {
-                                    if (!std.mem.eql(u8, av.?[0..av_len], bv.?[0..bv_len])) return false;
-                                }
-                                found = true;
-                                break;
-                            }
-                        }
-                        bb = lxb_dom_element_next_attribute_noi(b_attr);
-                    }
-                    if (!found) return false;
-                }
-                aa = lxb_dom_element_next_attribute_noi(a_attr);
-            }
         }
+        // Note: detailed attribute comparison (namespace+localName+value) is done
+        // in attrsEqualByNS at the JS level in nodeIsEqualNode
     } else if (a.type == lxb.LXB_DOM_NODE_TYPE_TEXT or a.type == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
         // Compare text content
         var ta_len: usize = 0;
@@ -1659,6 +1812,56 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
     return child_a == null and child_b == null;
 }
 
+/// JS-level compareDocumentPosition for when one or both nodes lack lexbor backing.
+/// Walks JS parentNode chains to determine document position.
+fn jsCompareDocumentPosition(c: *qjs.JSContext, a: qjs.JSValue, b: qjs.JSValue) qjs.JSValue {
+
+    // Use a JS function to walk parentNode chains — handles mixed native/JS trees
+    const js_code =
+        \\(function(a,b){
+        \\  if(a===b) return 0;
+        \\  // Build ancestor chains
+        \\  function chain(n){var c=[];var x=n;while(x){c.unshift(x);x=x.parentNode;}return c;}
+        \\  var ca=chain(a), cb=chain(b);
+        \\  // Check if roots are the same
+        \\  if(ca[0]!==cb[0]) return 35;
+        \\  // Find divergence point
+        \\  var i=0;
+        \\  while(i<ca.length&&i<cb.length&&ca[i]===cb[i]) i++;
+        \\  // One is ancestor of the other
+        \\  if(i===ca.length) return 20;
+        \\  if(i===cb.length) return 10;
+        \\  // Same parent: compare sibling order
+        \\  var parent=ca[i-1];
+        \\  var sa=ca[i], sb=cb[i];
+        \\  // Walk children of parent to find order
+        \\  var cn=parent.childNodes||[];
+        \\  if(cn.length){
+        \\    for(var j=0;j<cn.length;j++){
+        \\      if(cn[j]===sa) return 4;
+        \\      if(cn[j]===sb) return 2;
+        \\    }
+        \\  }
+        \\  // Walk native siblings
+        \\  var n=parent.firstChild;
+        \\  while(n){if(n===sa)return 4;if(n===sb)return 2;n=n.nextSibling;}
+        \\  return 35;
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<cdp>", qjs.JS_EVAL_TYPE_GLOBAL);
+    defer qjs.JS_FreeValue(c, fn_val);
+    if (quickjs.JS_IsException(fn_val)) return qjs.JS_NewInt32(c, 35);
+    var fn_args = [2]qjs.JSValue{ qjs.JS_DupValue(c, a), qjs.JS_DupValue(c, b) };
+    const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 2, &fn_args);
+    qjs.JS_FreeValue(c, fn_args[0]);
+    qjs.JS_FreeValue(c, fn_args[1]);
+    defer qjs.JS_FreeValue(c, result);
+    if (quickjs.JS_IsException(result)) return qjs.JS_NewInt32(c, 35);
+    var val: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &val, result);
+    return qjs.JS_NewInt32(c, val);
+}
+
 pub fn nodeCompareDocumentPosition(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -1668,18 +1871,24 @@ pub fn nodeCompareDocumentPosition(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (argc < 1) return qjs.JS_NewInt32(c, 0);
     const args = argv orelse return qjs.JS_NewInt32(c, 0);
-    const DISCONNECTED: i32 = 1;
     const PRECEDING: i32 = 2;
     const FOLLOWING: i32 = 4;
     const CONTAINS: i32 = 8;
     const CONTAINED_BY: i32 = 16;
-    const IMPL_SPECIFIC: i32 = 32;
 
     // JS-level identity check first (handles JS-only nodes like new Document(), PI, etc.)
     if (this_val.tag == args[0].tag and this_val.u.ptr == args[0].u.ptr) return qjs.JS_NewInt32(c, 0);
 
-    const node_a = api.getNode(c, this_val) orelse return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | PRECEDING);
-    const node_b = api.getNode(c, args[0]) orelse return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | PRECEDING);
+    const node_a = api.getNode(c, this_val) orelse {
+        // JS-only node (doctype, foreignDoc, PI, etc.) — use JS-level comparison
+        return jsCompareDocumentPosition(c, this_val, args[0]);
+    };
+    const node_b_opt = api.getNode(c, args[0]);
+    if (node_b_opt == null) {
+        // B is JS-only — use JS-level comparison
+        return jsCompareDocumentPosition(c, this_val, args[0]);
+    }
+    const node_b = node_b_opt.?;
     if (node_a == node_b) return qjs.JS_NewInt32(c, 0);
 
     // Check if b is descendant of a (a contains b)
@@ -1705,8 +1914,8 @@ pub fn nodeCompareDocumentPosition(
     var root_b: *lxb.lxb_dom_node_t = node_b;
     while (root_b.parent) |p| root_b = p;
 
-    // Different trees → disconnected
-    if (root_a != root_b) return qjs.JS_NewInt32(c, DISCONNECTED | IMPL_SPECIFIC | FOLLOWING);
+    // Different lexbor trees → check if connected via JS parentNode chains
+    if (root_a != root_b) return jsCompareDocumentPosition(c, this_val, args[0]);
 
     // Same tree, neither is ancestor: determine document order
     // Walk both ancestor chains to find common ancestor, then compare sibling order
@@ -1822,6 +2031,11 @@ pub fn elementGetNodeType(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Check for nodeType override (e.g. CDATASection backed by native text node)
+    const override = qjs.JS_GetPropertyStr(c, this_val, "__nodeTypeOverride");
+    if (!quickjs.JS_IsUndefined(override)) {
+        return override;
+    }
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
     return switch (node.type) {
         lxb.LXB_DOM_NODE_TYPE_ELEMENT => qjs.JS_NewInt32(c, 1),
@@ -1840,6 +2054,12 @@ pub fn elementGetNodeName(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Check for nodeName override (e.g. CDATASection backed by native text node)
+    const override = qjs.JS_GetPropertyStr(c, this_val, "__nodeNameOverride");
+    if (!quickjs.JS_IsUndefined(override) and !quickjs.JS_IsNull(override)) {
+        return override;
+    }
+    qjs.JS_FreeValue(c, override);
     const node = api.getNode(c, this_val) orelse return qjs.JS_NewStringLen(c, "", 0);
     if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT) return qjs.JS_NewStringLen(c, "#text", 5);
     if (node.type == lxb.LXB_DOM_NODE_TYPE_COMMENT) return qjs.JS_NewStringLen(c, "#comment", 8);
