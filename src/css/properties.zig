@@ -1147,6 +1147,31 @@ const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
     .{ "graytext", values.Color{ .r = 109, .g = 109, .b = 109, .a = 255 } },
     .{ "accentcolor", values.Color{ .r = 0, .g = 120, .b = 215, .a = 255 } },
     .{ "accentcolortext", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    // Deprecated CSS2 system colors — mapped to CSS4 aliases per spec Appendix A
+    // https://drafts.csswg.org/css-color-4/#deprecated-system-colors
+    .{ "activeborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },     // → ButtonBorder
+    .{ "activecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },     // → Canvas
+    .{ "appworkspace", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },      // → Canvas
+    .{ "background", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },        // → Canvas
+    .{ "buttonhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },   // → ButtonFace
+    .{ "buttonshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },      // → ButtonBorder
+    .{ "captiontext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },            // → CanvasText
+    .{ "inactiveborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },    // → ButtonBorder
+    .{ "inactivecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },   // → Canvas
+    .{ "inactivecaptiontext", values.Color{ .r = 109, .g = 109, .b = 109, .a = 255 } }, // → GrayText
+    .{ "infobackground", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },    // → Canvas
+    .{ "infotext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },               // → CanvasText
+    .{ "menu", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },              // → Canvas
+    .{ "menutext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },               // → CanvasText
+    .{ "scrollbar", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },         // → Canvas
+    .{ "threeddarkshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },  // → ButtonBorder
+    .{ "threedface", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },        // → ButtonFace
+    .{ "threedhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },   // → ButtonFace
+    .{ "threedlightshadow", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } }, // → ButtonFace
+    .{ "threedshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },      // → ButtonBorder
+    .{ "window", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },            // → Canvas
+    .{ "windowframe", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },       // → ButtonBorder
+    .{ "windowtext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },              // → CanvasText
 });
 
 fn namedColor(name: []const u8) ?values.Color {

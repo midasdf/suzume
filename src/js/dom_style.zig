@@ -4603,10 +4603,16 @@ pub fn isValidBorderWidth(val: []const u8) bool {
 pub fn canonicalizeColorKeyword(val: []const u8, buf: []u8) ?[]const u8 {
     // System colors: canonicalize to lowercase
     const system_colors = [_][]const u8{
-        "activetext", "buttonborder", "buttonface", "buttontext", "canvas",
-        "canvastext", "field", "fieldtext", "graytext", "highlight",
-        "highlighttext", "linktext", "mark", "marktext", "selecteditem",
-        "selecteditemtext", "accentcolor", "accentcolortext", "visitedtext",
+        "activetext",     "buttonborder",   "buttonface",       "buttontext",    "canvas",
+        "canvastext",     "field",          "fieldtext",        "graytext",      "highlight",
+        "highlighttext",  "linktext",       "mark",             "marktext",      "selecteditem",
+        "selecteditemtext", "accentcolor",  "accentcolortext",  "visitedtext",
+        // Deprecated CSS2 system colors
+        "activeborder",   "activecaption",  "appworkspace",     "background",    "buttonhighlight",
+        "buttonshadow",   "captiontext",    "inactiveborder",   "inactivecaption",
+        "inactivecaptiontext", "infobackground", "infotext",    "menu",          "menutext",
+        "scrollbar",      "threeddarkshadow", "threedface",     "threedhighlight",
+        "threedlightshadow", "threedshadow", "window",          "windowframe",   "windowtext",
     };
     for (system_colors) |sc| {
         if (eqlIgnoreCase(val, sc)) {
@@ -4764,10 +4770,16 @@ pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
     // CSS system colors
     const system_colors = [_][]const u8{
-        "ActiveText", "ButtonBorder", "ButtonFace", "ButtonText", "Canvas",
-        "CanvasText", "Field", "FieldText", "GrayText", "Highlight",
-        "HighlightText", "LinkText", "Mark", "MarkText", "SelectedItem",
-        "SelectedItemText", "AccentColor", "AccentColorText", "VisitedText",
+        "ActiveText",     "ButtonBorder",   "ButtonFace",       "ButtonText",    "Canvas",
+        "CanvasText",     "Field",          "FieldText",        "GrayText",      "Highlight",
+        "HighlightText",  "LinkText",       "Mark",             "MarkText",      "SelectedItem",
+        "SelectedItemText", "AccentColor",  "AccentColorText",  "VisitedText",
+        // Deprecated CSS2 system colors (mapped to CSS4 equivalents)
+        "ActiveBorder",   "ActiveCaption",  "AppWorkspace",     "Background",    "ButtonHighlight",
+        "ButtonShadow",   "CaptionText",    "InactiveBorder",   "InactiveCaption",
+        "InactiveCaptionText", "InfoBackground", "InfoText",    "Menu",          "MenuText",
+        "Scrollbar",      "ThreeDDarkShadow", "ThreeDFace",    "ThreeDHighlight",
+        "ThreeDLightShadow", "ThreeDShadow", "Window",         "WindowFrame",   "WindowText",
     };
     for (system_colors) |sc| {
         if (eqlIgnoreCase(val, sc)) return true;
