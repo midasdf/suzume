@@ -1008,17 +1008,111 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
     defer qjs.JS_FreeValue(ctx, doc_obj);
 
-    // Phase 1: Capture (Window → Document → root → ... → parent of target)
-    // 1a: Window capture listeners
-    if (!current_event_flags.stop_propagation) {
-        updateEventPhase(ctx, event_obj, 1); // CAPTURING_PHASE
-        setEventCurrentTarget(ctx, event_obj, global);
-        callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, true);
+    // Check for JS-only Document parent (new Document(), createHTMLDocument())
+    // If the root of the lxb path has a JS parentNode that's a Document (nodeType=9),
+    // we need to include it in capture/bubble dispatch.
+    var js_doc_parent: qjs.JSValue = quickjs.JS_UNDEFINED();
+    var has_js_doc: bool = false;
+    if (path_len > 0) {
+        const root_js = dom_api.wrapNodePublic(ctx, path[path_len - 1]);
+        const pn = qjs.JS_GetPropertyStr(ctx, root_js, "parentNode");
+        qjs.JS_FreeValue(ctx, root_js);
+        if (!quickjs.JS_IsNull(pn) and !quickjs.JS_IsUndefined(pn)) {
+            const pn_nt = qjs.JS_GetPropertyStr(ctx, pn, "nodeType");
+            var pn_nt_v: i32 = 0;
+            _ = qjs.JS_ToInt32(ctx, &pn_nt_v, pn_nt);
+            qjs.JS_FreeValue(ctx, pn_nt);
+            if (pn_nt_v == 9) {
+                // Check it's NOT the main document (already handled separately)
+                if (!(pn.tag == doc_obj.tag and pn.u.ptr == doc_obj.u.ptr)) {
+                    js_doc_parent = pn;
+                    has_js_doc = true;
+                } else {
+                    qjs.JS_FreeValue(ctx, pn);
+                }
+            } else {
+                qjs.JS_FreeValue(ctx, pn);
+            }
+        } else {
+            qjs.JS_FreeValue(ctx, pn);
+        }
     }
-    // 1b: Document capture listeners
-    if (!current_event_flags.stop_propagation) {
-        setEventCurrentTarget(ctx, event_obj, doc_obj);
-        callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, true);
+    defer if (has_js_doc) qjs.JS_FreeValue(ctx, js_doc_parent);
+
+    // Add JS-only Document to composedPath (_path)
+    if (has_js_doc) {
+        const path_arr = qjs.JS_GetPropertyStr(ctx, event_obj, "_path");
+        if (path_arr.tag == qjs.JS_TAG_OBJECT) {
+            // Append document at the end of the path
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), qjs.JS_DupValue(ctx, js_doc_parent));
+        }
+        qjs.JS_FreeValue(ctx, path_arr);
+    }
+
+    // --- Click activation behavior: pre-activation step (DOM spec §3.7) ---
+    // For click events with MouseEvent or element.click(), find the first element
+    // with activation behavior in the path and pre-activate (toggle checkbox/radio).
+    var activation_target: ?*lxb.lxb_dom_node_t = null;
+    var pre_activation_checked: bool = false;
+    var has_pre_activation: bool = false;
+
+    if (std.mem.eql(u8, event_type, "click")) {
+        const is_activating = if (existing_event) |ev| blk: {
+            // External dispatch: only MouseEvent (has 'button' property) triggers activation
+            const has_button = qjs.JS_GetPropertyStr(ctx, ev, "button");
+            const is_mouse = has_button.tag != qjs.JS_TAG_UNDEFINED;
+            qjs.JS_FreeValue(ctx, has_button);
+            break :blk is_mouse;
+        } else true; // Internal dispatch (element.click()) always triggers
+
+        if (is_activating) {
+            // For non-bubbling events, only the target itself can be the activation target.
+            // For bubbling events (or internal click()), search the full path.
+            const search_len = if (existing_event) |ev| blk: {
+                const bub = qjs.JS_GetPropertyStr(ctx, ev, "bubbles");
+                defer qjs.JS_FreeValue(ctx, bub);
+                break :blk if (qjs.JS_ToBool(ctx, bub) > 0) path_len else @min(path_len, 1);
+            } else path_len;
+
+            // Find first element with activation behavior in path (target → root)
+            for (path[0..search_len]) |node| {
+                if (isCheckboxOrRadio(ctx, node)) {
+                    activation_target = node;
+                    // Legacy pre-activation: save state and toggle
+                    const at_js = dom_api.wrapNodePublic(ctx, node);
+                    defer qjs.JS_FreeValue(ctx, at_js);
+                    const cv = qjs.JS_GetPropertyStr(ctx, at_js, "checked");
+                    pre_activation_checked = qjs.JS_ToBool(ctx, cv) > 0;
+                    qjs.JS_FreeValue(ctx, cv);
+                    _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(!pre_activation_checked));
+                    has_pre_activation = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Phase 1: Capture (Window → Document → root → ... → parent of target)
+    if (has_js_doc) {
+        // JS-only Document (new Document, createHTMLDocument): capture on that doc
+        if (!current_event_flags.stop_propagation) {
+            updateEventPhase(ctx, event_obj, 1); // CAPTURING_PHASE
+            setEventCurrentTarget(ctx, event_obj, js_doc_parent);
+            dispatchToJsDocPhased(ctx, js_doc_parent, event_obj, event_type, true);
+            callOnEventHandler(ctx, js_doc_parent, event_type, event_obj);
+        }
+    } else {
+        // 1a: Window capture listeners
+        if (!current_event_flags.stop_propagation) {
+            updateEventPhase(ctx, event_obj, 1); // CAPTURING_PHASE
+            setEventCurrentTarget(ctx, event_obj, global);
+            callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, true);
+        }
+        // 1b: Document capture listeners
+        if (!current_event_flags.stop_propagation) {
+            setEventCurrentTarget(ctx, event_obj, doc_obj);
+            callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, true);
+        }
     }
     // 1c: DOM node capture (root -> parent of target)
     if (path_len > 1) {
@@ -1082,45 +1176,42 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                 }
             }
         }
-        // 3b: Document bubble listeners + on{event} handler
-        if (!current_event_flags.stop_propagation) {
-            updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
-            setEventCurrentTarget(ctx, event_obj, doc_obj);
-            callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, false);
-            callOnEventHandler(ctx, doc_obj, event_type, event_obj);
-        }
-        // 3c: Window bubble listeners + on{event} handler
-        if (!current_event_flags.stop_propagation) {
-            setEventCurrentTarget(ctx, event_obj, global);
-            callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
-            callOnEventHandler(ctx, global, event_type, event_obj);
-        }
-    }
-
-    const ev_result = !current_event_flags.prevent_default;
-
-    // HTML spec: activation behavior for click events on checkbox/radio
-    // Only activates for element.click() (internal, no existing_event) or MouseEvent dispatch
-    if (std.mem.eql(u8, event_type, "click") and ev_result) {
-        if (existing_event) |ev| {
-            // External dispatch — only activate for MouseEvent (has 'button' property)
-            const has_button = qjs.JS_GetPropertyStr(ctx, ev, "button");
-            const is_mouse_event = has_button.tag != qjs.JS_TAG_UNDEFINED;
-            qjs.JS_FreeValue(ctx, has_button);
-            if (is_mouse_event) {
-                activateCheckboxRadio(ctx, target);
+        if (has_js_doc) {
+            // 3b-alt: JS-only Document bubble listeners
+            if (!current_event_flags.stop_propagation) {
+                updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
+                setEventCurrentTarget(ctx, event_obj, js_doc_parent);
+                dispatchToJsDocPhased(ctx, js_doc_parent, event_obj, event_type, false);
+                callOnEventHandler(ctx, js_doc_parent, event_type, event_obj);
             }
         } else {
-            // Internal dispatch (element.click()) — always activate
-            activateCheckboxRadio(ctx, target);
+            // 3b: Document bubble listeners + on{event} handler
+            if (!current_event_flags.stop_propagation) {
+                updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
+                setEventCurrentTarget(ctx, event_obj, doc_obj);
+                callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, false);
+                callOnEventHandler(ctx, doc_obj, event_type, event_obj);
+            }
+            // 3c: Window bubble listeners + on{event} handler
+            if (!current_event_flags.stop_propagation) {
+                setEventCurrentTarget(ctx, event_obj, global);
+                callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
+                callOnEventHandler(ctx, global, event_type, event_obj);
+            }
         }
     }
 
-    // DOM spec: clear dispatch flag
-    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
+    var ev_result = !current_event_flags.prevent_default;
+    // Also check JS-side defaultPrevented (may have been set before dispatch started)
+    if (ev_result) {
+        const dp_check = qjs.JS_GetPropertyStr(ctx, event_obj, "defaultPrevented");
+        defer qjs.JS_FreeValue(ctx, dp_check);
+        if (qjs.JS_ToBool(ctx, dp_check) > 0) ev_result = false;
+    }
 
-    // DOM spec: dispatch resets stop propagation flag on the event
-    // Also reset eventPhase to NONE after dispatch completes
+    // DOM spec: clear dispatch flag and reset event state BEFORE post-activation
+    // (tests expect eventPhase=0, currentTarget=null during post-activation handlers)
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
     if (existing_event) |ev| {
         _ = qjs.JS_SetPropertyStr(ctx, ev, "_stopped", quickjs.JS_NewBool(false));
         _ = qjs.JS_SetPropertyStr(ctx, ev, "_cancelBubble", quickjs.JS_NewBool(false));
@@ -1129,50 +1220,80 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     setEventCurrentTarget(ctx, event_obj, quickjs.JS_NULL());
 
     current_event_flags = saved_flags;
+
+    // --- Click activation behavior: post-activation step ---
+    if (has_pre_activation) {
+        if (activation_target) |at| {
+            if (!ev_result) {
+                // Legacy-canceled-activation: revert checked state
+                const at_js = dom_api.wrapNodePublic(ctx, at);
+                _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(pre_activation_checked));
+                qjs.JS_FreeValue(ctx, at_js);
+            } else {
+                // Post-activation: fire input/change events
+                _ = dispatchEvent(ctx, at, "input");
+                _ = dispatchEvent(ctx, at, "change");
+            }
+        }
+    }
+
     return ev_result;
 }
 
-/// HTML spec: activation behavior for checkbox/radio on click
-/// Toggles checked state and fires input/change events if connected to a document.
-fn activateCheckboxRadio(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t) void {
-    const target_js = dom_api.wrapNodePublic(ctx, target);
-    defer qjs.JS_FreeValue(ctx, target_js);
-
-    // Check if target is an INPUT element with type checkbox or radio
-    const tagName_val = qjs.JS_GetPropertyStr(ctx, target_js, "tagName");
-    defer qjs.JS_FreeValue(ctx, tagName_val);
-    const tag_s = dom_api.jsStringToSlice(ctx, tagName_val) orelse return;
-    defer qjs.JS_FreeCString(ctx, tag_s.ptr);
-    if (!std.ascii.eqlIgnoreCase(tag_s.ptr[0..tag_s.len], "INPUT")) return;
-
-    const type_val = qjs.JS_GetPropertyStr(ctx, target_js, "type");
-    defer qjs.JS_FreeValue(ctx, type_val);
-    const type_s = dom_api.jsStringToSlice(ctx, type_val) orelse return;
-    defer qjs.JS_FreeCString(ctx, type_s.ptr);
-    const t = type_s.ptr[0..type_s.len];
-    if (!std.ascii.eqlIgnoreCase(t, "checkbox") and !std.ascii.eqlIgnoreCase(t, "radio")) return;
-
-    // Check if connected to a document
-    var cur: ?*lxb.lxb_dom_node_t = target;
-    var connected = false;
-    while (cur) |n| {
-        if (n.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
-            connected = true;
-            break;
-        }
-        cur = n.parent;
+/// Dispatch to JS-level event listeners (__el_ properties) on a JS object,
+/// filtered by capture/bubble phase. Used for JS-only Document nodes.
+fn dispatchToJsDocPhased(ctx: *qjs.JSContext, doc_obj: qjs.JSValue, event_obj: qjs.JSValue, event_type: []const u8, capture: bool) void {
+    const js_code =
+        \\(function(doc,evt,type,isCap){
+        \\  var k='__el_'+type+(isCap?'_c':'');
+        \\  var a=doc[k];if(!a||!a.length)return;
+        \\  var copy=a.slice();
+        \\  for(var i=0;i<copy.length;i++){
+        \\    if(evt._stopImmediate)break;if(evt._stopped)break;
+        \\    var h=copy[i],fn=h.fn||h;
+        \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+        \\    if(typeof fn==='function')fn.call(doc,evt);
+        \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+        \\  }
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(ctx, js_code, js_code.len, "<jsdp>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        const type_js = qjs.JS_NewStringLen(ctx, event_type.ptr, event_type.len);
+        var args = [4]qjs.JSValue{ doc_obj, event_obj, type_js, quickjs.JS_NewBool(capture) };
+        const r = qjs.JS_Call(ctx, fn_val, quickjs.JS_UNDEFINED(), 4, &args);
+        qjs.JS_FreeValue(ctx, r);
+        qjs.JS_FreeValue(ctx, type_js);
+        qjs.JS_FreeValue(ctx, fn_val);
     }
-    if (!connected) return;
+    syncStopFlags(ctx, event_obj);
+}
 
-    // Toggle checked state
-    const checked_val = qjs.JS_GetPropertyStr(ctx, target_js, "checked");
-    const was_checked = qjs.JS_ToBool(ctx, checked_val) > 0;
-    qjs.JS_FreeValue(ctx, checked_val);
-    _ = qjs.JS_SetPropertyStr(ctx, target_js, "checked", quickjs.JS_NewBool(!was_checked));
+/// Check if a DOM node is an <input type="checkbox"> or <input type="radio">.
+fn isCheckboxOrRadio(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    var name_len: usize = 0;
+    const name_ptr = dom_api.lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name_ptr == null or name_len != 5) return false;
+    if (!std.mem.eql(u8, name_ptr.?[0..5], "input")) return false;
+    const js = dom_api.wrapNodePublic(ctx, node);
+    defer qjs.JS_FreeValue(ctx, js);
+    const type_val = qjs.JS_GetPropertyStr(ctx, js, "type");
+    defer qjs.JS_FreeValue(ctx, type_val);
+    const ts = dom_api.jsStringToSlice(ctx, type_val) orelse return false;
+    defer qjs.JS_FreeCString(ctx, ts.ptr);
+    const t = ts.ptr[0..ts.len];
+    return std.ascii.eqlIgnoreCase(t, "checkbox") or std.ascii.eqlIgnoreCase(t, "radio");
+}
 
-    // Fire input and change events
-    _ = dispatchEvent(ctx, target, "input");
-    _ = dispatchEvent(ctx, target, "change");
+/// Check if a DOM node is a disabled form element (has disabled=true).
+fn isDisabledFormElement(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const js = dom_api.wrapNodePublic(ctx, node);
+    defer qjs.JS_FreeValue(ctx, js);
+    const disabled = qjs.JS_GetPropertyStr(ctx, js, "disabled");
+    defer qjs.JS_FreeValue(ctx, disabled);
+    return qjs.JS_ToBool(ctx, disabled) > 0;
 }
 
 /// Helper: set eventPhase on event object.
@@ -1222,8 +1343,40 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     defer qjs.JS_FreeValue(ctx, global);
     const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
     defer qjs.JS_FreeValue(ctx, doc_obj);
+
+    // Set target/currentTarget to document
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "target", qjs.JS_DupValue(ctx, doc_obj));
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, doc_obj));
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "eventPhase", qjs.JS_NewInt32(ctx, 2)); // AT_TARGET
+
+    // Fire listeners stored on the lxb document node (via document.addEventListener)
+    if (dom_api.getDocument(ctx)) |doc_ptr| {
+        const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(doc_ptr));
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == doc_node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                // Call listeners with doc_obj as `this` (not wrapNode on lxb doc)
+                // Dup callbacks first to protect against mutation/GC during invocation
+                var dup_buf: [32]qjs.JSValue = undefined;
+                const count = @min(entry.callbacks.items.len, dup_buf.len);
+                for (0..count) |di| {
+                    dup_buf[di] = qjs.JS_DupValue(ctx, entry.callbacks.items[di].callback);
+                }
+                for (0..count) |di| {
+                    invokeListener(ctx, dup_buf[di], doc_obj, event_obj);
+                    qjs.JS_FreeValue(ctx, dup_buf[di]);
+                }
+                break;
+            }
+        }
+    }
+    // Also fire from document_listener_entries (legacy path)
     callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, true, false);
+    // Call on{event} handler on document
+    callOnEventHandler(ctx, doc_obj, event_type, event_obj);
+    // Bubble to window
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, global));
     callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, true, false);
+    callOnEventHandler(ctx, global, event_type, event_obj);
 }
 
 // ── Registration ────────────────────────────────────────────────────
@@ -1288,7 +1441,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\  Event.prototype.preventDefault = function() { if (this.cancelable) { this.defaultPrevented = true; this.returnValue = false; } };
         \\  Event.prototype.stopPropagation = function() { this._stopped = true; this._cancelBubble = true; };
         \\  Event.prototype.stopImmediatePropagation = function() { this._stopped = true; this._stopImmediate = true; this._cancelBubble = true; };
-        \\  Event.prototype.composedPath = function() { return this._path ? this._path.slice() : []; };
+        \\  Event.prototype.composedPath = function() { return (this._dispatching && this._path) ? this._path.slice() : []; };
         \\  Event.prototype.initEvent = function(t, b, c) {
         \\    if(arguments.length<1)throw new TypeError("Failed to execute 'initEvent': 1 argument required, but only 0 present.");
         \\    if(this._dispatching)return;
@@ -1741,6 +1894,7 @@ fn jsElementBlur(
 }
 
 /// element.click() — programmatically fire a click event on the element
+/// HTML spec: click() does nothing on disabled form elements.
 /// Activation behavior (checkbox/radio toggle + input/change) handled in dispatchEventWithObj.
 fn jsElementClick(
     ctx: ?*qjs.JSContext,
@@ -1750,6 +1904,8 @@ fn jsElementClick(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // HTML spec: click() is a no-op on disabled form elements
+    if (isDisabledFormElement(c, node)) return quickjs.JS_UNDEFINED();
     _ = dispatchEvent(c, node, "click");
     return quickjs.JS_UNDEFINED();
 }

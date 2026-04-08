@@ -1385,7 +1385,6 @@ const url_class_js =
 ;
 
 const utility_apis_js =
-    \\globalThis.queueMicrotask = function(cb) { cb(); };
     \\globalThis.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
 ;
 

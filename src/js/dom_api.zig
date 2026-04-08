@@ -4506,8 +4506,20 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    get title(){var de=_elemCh(null);if(!de)return'';var h=de.querySelector('head');if(!h)return'';var t=h.querySelector('title');if(!t)return'';var s=t.textContent;return s.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');},
             \\    set title(v){var de=_elemCh(null);if(!de)return;var h=de.querySelector('head');if(!h)return;var t=h.querySelector('title');if(!t){t=document.createElement('title');h.appendChild(t);}t.textContent=String(v);},
             \\    implementation: document.implementation,
-            \\    addEventListener: function(t,f,o) { var de=_elemCh(null);if(de)de.addEventListener(t,f,o); },
-            \\    removeEventListener: function(t,f,o) { var de=_elemCh(null);if(de)de.removeEventListener(t,f,o); },
+            \\    addEventListener: function(t,f,o) {
+            \\      var cap=false,once=false,pas=false;
+            \\      if(typeof o==='boolean')cap=o;else if(o&&typeof o==='object'){cap=!!o.capture;once=!!o.once;pas=!!o.passive;}
+            \\      if(typeof f!=='function'&&!(f&&typeof f==='object'))return;
+            \\      if(f===null||f===undefined)return;
+            \\      var k='__el_'+t+(cap?'_c':'');var a=doc[k]||[];
+            \\      for(var i=0;i<a.length;i++)if(a[i].fn===f)return;
+            \\      a.push({fn:f,once:once,passive:pas});doc[k]=a;
+            \\    },
+            \\    removeEventListener: function(t,f,o) {
+            \\      var cap=false;if(typeof o==='boolean')cap=o;else if(o&&typeof o==='object')cap=!!o.capture;
+            \\      var k='__el_'+t+(cap?'_c':'');var a=doc[k];if(!a)return;
+            \\      for(var i=0;i<a.length;i++){if(a[i].fn===f){a.splice(i,1);return;}}
+            \\    },
             \\    dispatchEvent: function(e) { var de=_elemCh(null);return de?de.dispatchEvent(e):false; },
             \\    createAttribute: function(n) { return document.createAttribute(n); },
             \\    createAttributeNS: function(ns,qn) { return document.createAttributeNS(ns,qn); },
