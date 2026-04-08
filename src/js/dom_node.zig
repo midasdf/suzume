@@ -222,7 +222,13 @@ pub fn elementGetTextContent(
     while (ji < @as(u32, @intCast(jc_len))) : (ji += 1) {
         const jc_item = qjs.JS_GetPropertyUint32(c, js_children, ji);
         defer qjs.JS_FreeValue(c, jc_item);
-        // Try textContent first, then data
+        // DOM spec: textContent only includes Text (3) and CDATASection (4) descendants
+        // Skip PI (7), Comment (8), etc.
+        const nt_val = qjs.JS_GetPropertyStr(c, jc_item, "nodeType");
+        defer qjs.JS_FreeValue(c, nt_val);
+        var nt: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &nt, nt_val);
+        if (nt != 3 and nt != 4) continue;
         const tc = qjs.JS_GetPropertyStr(c, jc_item, "data");
         defer qjs.JS_FreeValue(c, tc);
         if (!quickjs.JS_IsUndefined(tc) and !quickjs.JS_IsNull(tc)) {
