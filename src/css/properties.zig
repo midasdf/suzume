@@ -1127,6 +1127,26 @@ const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
     .{ "whitesmoke", values.Color{ .r = 245, .g = 245, .b = 245, .a = 255 } },
     .{ "yellow", values.Color{ .r = 255, .g = 255, .b = 0, .a = 255 } },
     .{ "yellowgreen", values.Color{ .r = 154, .g = 205, .b = 50, .a = 255 } },
+    // CSS system colors (light mode defaults)
+    .{ "canvas", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    .{ "canvastext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
+    .{ "linktext", values.Color{ .r = 0, .g = 0, .b = 238, .a = 255 } },
+    .{ "visitedtext", values.Color{ .r = 85, .g = 26, .b = 139, .a = 255 } },
+    .{ "activetext", values.Color{ .r = 255, .g = 0, .b = 0, .a = 255 } },
+    .{ "buttonface", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },
+    .{ "buttontext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
+    .{ "buttonborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },
+    .{ "field", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    .{ "fieldtext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
+    .{ "highlight", values.Color{ .r = 0, .g = 120, .b = 215, .a = 255 } },
+    .{ "highlighttext", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    .{ "selecteditem", values.Color{ .r = 0, .g = 120, .b = 215, .a = 255 } },
+    .{ "selecteditemtext", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
+    .{ "mark", values.Color{ .r = 255, .g = 255, .b = 0, .a = 255 } },
+    .{ "marktext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },
+    .{ "graytext", values.Color{ .r = 109, .g = 109, .b = 109, .a = 255 } },
+    .{ "accentcolor", values.Color{ .r = 0, .g = 120, .b = 215, .a = 255 } },
+    .{ "accentcolortext", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
 });
 
 fn namedColor(name: []const u8) ?values.Color {
