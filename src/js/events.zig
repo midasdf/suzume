@@ -1240,9 +1240,17 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                 _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(pre_activation_checked));
                 qjs.JS_FreeValue(ctx, at_js);
             } else {
-                // Post-activation: fire input/change events
-                _ = dispatchEvent(ctx, at, "input");
-                _ = dispatchEvent(ctx, at, "change");
+                // Post-activation: fire input/change events only if connected
+                // Per HTML spec, detached elements should not fire input/change
+                const at_js2 = dom_api.wrapNodePublic(ctx, at);
+                const conn_val = qjs.JS_GetPropertyStr(ctx, at_js2, "isConnected");
+                const is_connected = qjs.JS_ToBool(ctx, conn_val) > 0;
+                qjs.JS_FreeValue(ctx, conn_val);
+                qjs.JS_FreeValue(ctx, at_js2);
+                if (is_connected) {
+                    _ = dispatchEvent(ctx, at, "input");
+                    _ = dispatchEvent(ctx, at, "change");
+                }
             }
         }
     }
