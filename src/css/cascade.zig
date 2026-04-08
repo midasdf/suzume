@@ -991,6 +991,7 @@ fn collectInlineDecls(
     var p = parser_mod.Parser.init(wrapped, arena);
     const sheet = p.parse() catch return;
 
+    var inline_order: u32 = 0xFFF000; // high base, incrementing for last-wins
     for (sheet.rules) |rule| {
         switch (rule) {
             .style => |sr| {
@@ -1002,17 +1003,19 @@ fn collectInlineDecls(
                             try entries.append(arena, .{
                                 .decl = ed.*,
                                 .specificity = 0, // inline style wins by origin, not specificity
-                                .source_order = 0xFFFFFF, // high source order
+                                .source_order = inline_order,
                                 .origin = .inline_,
                             });
+                            inline_order += 1;
                         }
                     } else {
                         try entries.append(arena, .{
                             .decl = decl,
                             .specificity = 0,
-                            .source_order = 0xFFFFFF,
+                            .source_order = inline_order,
                             .origin = .inline_,
                         });
+                        inline_order += 1;
                     }
                 }
             },
