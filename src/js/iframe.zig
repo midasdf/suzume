@@ -284,9 +284,6 @@ fn setupIframe(
         }
     }
 
-    // Execute <script> tags in the iframe document before restoring parent globals
-    executeIframeScripts(iframe_ctx, iframe_doc.?.html_doc, allocator, iframe_url);
-
     // Restore parent globals (registerDomApis/registerWebApis overwrote them)
     api.g_document = saved_doc;
     api.g_top_frame.document = saved_doc;
@@ -312,7 +309,7 @@ fn setupIframe(
     {
         const parent_global = qjs.JS_GetGlobalObject(parent_ctx);
         // Set parent and top on iframe global
-        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "parent", parent_global);
+        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "parent", qjs.JS_DupValue(parent_ctx, parent_global));
         const top_val = qjs.JS_GetPropertyStr(parent_ctx, parent_global, "top");
         if (!quickjs.JS_IsUndefined(top_val) and !quickjs.JS_IsNull(top_val)) {
             _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "top", top_val);
@@ -326,6 +323,10 @@ fn setupIframe(
     _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentWindow", qjs.JS_DupValue(iframe_ctx, iframe_global));
     _ = qjs.JS_SetPropertyStr(parent_ctx, js_elem, "contentDocument", qjs.JS_DupValue(iframe_ctx, iframe_doc_obj));
     _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "frameElement", qjs.JS_DupValue(parent_ctx, js_elem));
+
+    // Execute <script> tags in the iframe AFTER parent/top/frameElement are set
+    executeIframeScripts(iframe_ctx, iframe_doc.?.html_doc, allocator, iframe_url);
+
     qjs.JS_FreeValue(iframe_ctx, iframe_global);
 
     // Update window.frames (window[idx] = contentWindow, window.length++)
@@ -557,9 +558,6 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         }
     }
 
-    // Execute <script> tags in iframe before restoring parent globals
-    executeIframeScripts(iframe_ctx, doc_ptr, allocator, iframe_url);
-
     // Restore parent globals
     api.g_document = saved_doc;
     api.g_top_frame.document = saved_doc;
@@ -577,7 +575,7 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
     // Use iframe global directly as contentWindow (dynamic property access works)
     {
         const parent_global = qjs.JS_GetGlobalObject(parent_ctx);
-        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "parent", parent_global);
+        _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "parent", qjs.JS_DupValue(parent_ctx, parent_global));
         _ = qjs.JS_SetPropertyStr(iframe_ctx, iframe_global, "top", qjs.JS_DupValue(parent_ctx, parent_global));
         qjs.JS_FreeValue(parent_ctx, parent_global);
     }
@@ -597,6 +595,9 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         _ = qjs.JS_SetPropertyUint32(parent_ctx, parent_global, @intCast(len), qjs.JS_DupValue(iframe_ctx, iframe_global));
         _ = qjs.JS_SetPropertyStr(parent_ctx, parent_global, "length", qjs.JS_NewInt32(parent_ctx, len + 1));
     }
+
+    // Execute <script> tags in iframe AFTER parent/top/frameElement are set
+    executeIframeScripts(iframe_ctx, doc_ptr, allocator, iframe_url);
 
     qjs.JS_FreeValue(iframe_ctx, iframe_global);
     qjs.JS_FreeValue(parent_ctx, js_elem);

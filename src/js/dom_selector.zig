@@ -271,14 +271,15 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             return true;
         }
         if (std.ascii.eqlIgnoreCase(sel, ":enabled")) {
-            // Per spec: only form elements (input, button, select, textarea, fieldset) match :enabled/:disabled
+            // Per spec: form elements + optgroup/option match :enabled/:disabled
             var name_len_e: usize = 0;
             const name_ptr_e = lxb_dom_element_local_name(elem, &name_len_e);
             if (name_ptr_e == null) return false;
             const tag_e = name_ptr_e.?[0..name_len_e];
             if (std.ascii.eqlIgnoreCase(tag_e, "input") or std.ascii.eqlIgnoreCase(tag_e, "button") or
                 std.ascii.eqlIgnoreCase(tag_e, "select") or std.ascii.eqlIgnoreCase(tag_e, "textarea") or
-                std.ascii.eqlIgnoreCase(tag_e, "fieldset"))
+                std.ascii.eqlIgnoreCase(tag_e, "fieldset") or std.ascii.eqlIgnoreCase(tag_e, "optgroup") or
+                std.ascii.eqlIgnoreCase(tag_e, "option"))
                 return !lxb_dom_element_has_attribute(elem, "disabled", 8);
             return false;
         }
@@ -289,7 +290,8 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             const tag_d = name_ptr_d.?[0..name_len_d];
             if (std.ascii.eqlIgnoreCase(tag_d, "input") or std.ascii.eqlIgnoreCase(tag_d, "button") or
                 std.ascii.eqlIgnoreCase(tag_d, "select") or std.ascii.eqlIgnoreCase(tag_d, "textarea") or
-                std.ascii.eqlIgnoreCase(tag_d, "fieldset"))
+                std.ascii.eqlIgnoreCase(tag_d, "fieldset") or std.ascii.eqlIgnoreCase(tag_d, "optgroup") or
+                std.ascii.eqlIgnoreCase(tag_d, "option"))
                 return lxb_dom_element_has_attribute(elem, "disabled", 8);
             return false;
         }

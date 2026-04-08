@@ -707,13 +707,15 @@ pub fn elementAppendChild(
             defer qjs.JS_FreeValue(c, data_val);
             var data_ptr: [*]const u8 = "";
             var data_len: usize = 0;
+            var data_cstr: ?[*]const u8 = null;
             if (api.jsStringToSlice(c, data_val)) |s| {
                 data_ptr = s.ptr;
                 data_len = s.len;
+                data_cstr = s.ptr;
             }
             const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
             const text_node = lxb_dom_document_create_text_node(doc, data_ptr, data_len) orelse {
-                if (data_len > 0) qjs.JS_FreeCString(c, data_ptr);
+                if (data_cstr) |p| qjs.JS_FreeCString(c, p);
                 return quickjs.JS_NULL();
             };
             lxb_dom_node_insert_child(parent.?, text_node);
@@ -721,7 +723,7 @@ pub fn elementAppendChild(
             // Override nodeType to 4 (CDATASection) and nodeName to #cdata-section
             _ = qjs.JS_SetPropertyStr(c, result, "__nodeTypeOverride", qjs.JS_NewInt32(c, 4));
             _ = qjs.JS_SetPropertyStr(c, result, "__nodeNameOverride", qjs.JS_NewString(c, "#cdata-section"));
-            if (data_len > 0) qjs.JS_FreeCString(c, data_ptr);
+            if (data_cstr) |p| qjs.JS_FreeCString(c, p);
             api.setDomDirty();
             return result;
         }
@@ -1779,13 +1781,13 @@ fn attrsEqualByNS(c: *qjs.JSContext, a: qjs.JSValue, b: qjs.JSValue) bool {
     ;
     const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL);
     defer qjs.JS_FreeValue(c, fn_val);
-    if (quickjs.JS_IsException(fn_val)) return true; // Fallback: assume equal
+    if (quickjs.JS_IsException(fn_val)) return false;
     var fn_args = [2]qjs.JSValue{ qjs.JS_DupValue(c, a), qjs.JS_DupValue(c, b) };
     const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 2, &fn_args);
     qjs.JS_FreeValue(c, fn_args[0]);
     qjs.JS_FreeValue(c, fn_args[1]);
     defer qjs.JS_FreeValue(c, result);
-    if (quickjs.JS_IsException(result)) return true;
+    if (quickjs.JS_IsException(result)) return false;
     return qjs.JS_ToBool(c, result) != 0;
 }
 
@@ -1846,8 +1848,44 @@ pub fn nodesAreEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
             }
             if (count_a != count_b) return false;
         }
-        // Note: detailed attribute comparison (namespace+localName+value) is done
-        // in attrsEqualByNS at the JS level in nodeIsEqualNode
+        // Compare attribute values by local name
+        // (namespace-aware comparison done separately in attrsEqualByNS)
+        {
+            var aa2: ?*anyopaque = lxb_dom_element_first_attribute_noi(ea);
+            while (aa2) |a_attr| {
+                var an_len2: usize = 0;
+                const an2 = lxb_dom_attr_qualified_name(a_attr, &an_len2);
+                var av_len2: usize = 0;
+                const av2 = lxb_dom_attr_value_noi(a_attr, &av_len2);
+                if (an2) |a_name| {
+                    // Extract local name (after ':')
+                    const a_qn = a_name[0..an_len2];
+                    const a_local2 = if (std.mem.indexOfScalar(u8, a_qn, ':')) |colon| a_qn[colon + 1 ..] else a_qn;
+                    var found2 = false;
+                    var bb2: ?*anyopaque = lxb_dom_element_first_attribute_noi(eb);
+                    while (bb2) |b_attr| {
+                        var bn_len2: usize = 0;
+                        if (lxb_dom_attr_qualified_name(b_attr, &bn_len2)) |b_name| {
+                            const b_qn = b_name[0..bn_len2];
+                            const b_local2 = if (std.mem.indexOfScalar(u8, b_qn, ':')) |colon| b_qn[colon + 1 ..] else b_qn;
+                            if (std.mem.eql(u8, a_local2, b_local2)) {
+                                var bv_len2: usize = 0;
+                                const bv2 = lxb_dom_attr_value_noi(b_attr, &bv_len2);
+                                if (av_len2 != bv_len2) return false;
+                                if (av2 != null and bv2 != null) {
+                                    if (!std.mem.eql(u8, av2.?[0..av_len2], bv2.?[0..bv_len2])) return false;
+                                }
+                                found2 = true;
+                                break;
+                            }
+                        }
+                        bb2 = lxb_dom_element_next_attribute_noi(b_attr);
+                    }
+                    if (!found2) return false;
+                }
+                aa2 = lxb_dom_element_next_attribute_noi(a_attr);
+            }
+        }
     } else if (a.type == lxb.LXB_DOM_NODE_TYPE_TEXT or a.type == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
         // Compare text content
         var ta_len: usize = 0;
