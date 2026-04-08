@@ -73,25 +73,44 @@ pub fn elementGetTagName(
         return quickjs.JS_NULL();
     }
 
-    // Check namespace: only uppercase for HTML namespace elements in HTML documents.
-    // If __xmlCaseSensitive is set, the element is from an XML/XHTML document where
-    // tagName must preserve original case regardless of namespace.
-    const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
-    const xml_cs_val = qjs.JS_GetPropertyStr(c, this_val, "__xmlCaseSensitive");
-    defer qjs.JS_FreeValue(c, xml_cs_val);
-    const is_xml_cs = !quickjs.JS_IsUndefined(xml_cs_val) and !quickjs.JS_IsNull(xml_cs_val);
-    var is_html = if (is_xml_cs) false else true;
-    if (!is_xml_cs) {
-        if (quickjs.JS_IsNull(ns_val)) {
-            is_html = false;
-        } else if (!quickjs.JS_IsUndefined(ns_val)) {
-            if (api.jsStringToSlice(c, ns_val)) |ns_s| {
-                defer qjs.JS_FreeCString(c, ns_s.ptr);
-                if (!std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml")) is_html = false;
+    // Per DOM spec: tagName is uppercase only in HTML documents.
+    // In XML/XHTML documents (contentType != "text/html"), preserve original case.
+    // Check ownerDocument's type, not element namespace.
+    var is_html = true;
+    {
+        // Check ownerDocument.contentType
+        const owner_doc = qjs.JS_GetPropertyStr(c, this_val, "ownerDocument");
+        defer qjs.JS_FreeValue(c, owner_doc);
+        if (!quickjs.JS_IsUndefined(owner_doc) and !quickjs.JS_IsNull(owner_doc)) {
+            const ct_val = qjs.JS_GetPropertyStr(c, owner_doc, "contentType");
+            defer qjs.JS_FreeValue(c, ct_val);
+            if (!quickjs.JS_IsUndefined(ct_val) and !quickjs.JS_IsNull(ct_val)) {
+                if (api.jsStringToSlice(c, ct_val)) |ct_s| {
+                    defer qjs.JS_FreeCString(c, ct_s.ptr);
+                    // Only "text/html" documents use uppercase tagName
+                    if (!std.mem.eql(u8, ct_s.ptr[0..ct_s.len], "text/html")) is_html = false;
+                }
+            }
+        }
+        // Also check __xmlCaseSensitive flag and namespaceURI as fallback
+        if (is_html) {
+            const xml_cs_val = qjs.JS_GetPropertyStr(c, this_val, "__xmlCaseSensitive");
+            defer qjs.JS_FreeValue(c, xml_cs_val);
+            if (!quickjs.JS_IsUndefined(xml_cs_val) and !quickjs.JS_IsNull(xml_cs_val)) is_html = false;
+        }
+        if (is_html) {
+            const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
+            defer qjs.JS_FreeValue(c, ns_val);
+            if (quickjs.JS_IsNull(ns_val)) {
+                is_html = false;
+            } else if (!quickjs.JS_IsUndefined(ns_val)) {
+                if (api.jsStringToSlice(c, ns_val)) |ns_s| {
+                    defer qjs.JS_FreeCString(c, ns_s.ptr);
+                    if (!std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml")) is_html = false;
+                }
             }
         }
     }
-    qjs.JS_FreeValue(c, ns_val);
 
     // Get prefix (if any) for qualifiedName
     const prefix_val = qjs.JS_GetPropertyStr(c, this_val, "prefix");

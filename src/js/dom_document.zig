@@ -559,7 +559,23 @@ pub fn documentImportNode(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    return qjs.JS_DupValue(c, args[0]);
+    // DOM spec: importNode(node, deep) = clone node, adopt into this document
+    const deep_val = if (argc >= 2) args[1] else quickjs.JS_NewBool(false);
+    const clone_fn = qjs.JS_GetPropertyStr(c, args[0], "cloneNode");
+    defer qjs.JS_FreeValue(c, clone_fn);
+    if (quickjs.JS_IsUndefined(clone_fn) or quickjs.JS_IsNull(clone_fn)) {
+        return qjs.JS_DupValue(c, args[0]);
+    }
+    var clone_args = [1]qjs.JSValue{deep_val};
+    const cloned = qjs.JS_Call(c, clone_fn, args[0], 1, &clone_args);
+    if (quickjs.JS_IsException(cloned)) return cloned;
+    // Set ownerDocument to the importing document (main document)
+    const global = qjs.JS_GetGlobalObject(c);
+    defer qjs.JS_FreeValue(c, global);
+    const doc_obj = qjs.JS_GetPropertyStr(c, global, "document");
+    defer qjs.JS_FreeValue(c, doc_obj);
+    _ = qjs.JS_SetPropertyStr(c, cloned, "ownerDocument", qjs.JS_DupValue(c, doc_obj));
+    return cloned;
 }
 
 pub fn documentCreateRange(
