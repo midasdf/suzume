@@ -242,6 +242,30 @@ pub fn isValidXmlQName(name: []const u8) bool {
     return true;
 }
 
+/// Validate QName production per DOM spec "validate" step.
+/// Matches browser behavior: for prefixed names (prefix:local), only the
+/// local name's start char is strictly validated. The prefix is lenient.
+/// For unprefixed names, start char is strictly validated.
+pub fn isValidQName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    // Check for invalid characters anywhere in the name
+    for (name) |ch| {
+        if (isInvalidNameChar(ch)) return false;
+    }
+    // Find colon to split prefix:localName
+    if (std.mem.indexOfScalar(u8, name, ':')) |colon| {
+        // Prefixed name: validate local name start char
+        const local = name[colon + 1 ..];
+        if (local.len == 0) return false; // trailing colon
+        if (isInvalidNameStartChar(local[0])) return false;
+        // Check for double colon (e.g., "a::b" is still valid per browsers)
+        return true;
+    }
+    // Unprefixed name: validate start char strictly
+    if (isInvalidNameStartChar(name[0])) return false;
+    return true;
+}
+
 /// document.implementation.createDocumentType(qualifiedName, publicId, systemId)
 pub fn implCreateDocumentType(
     ctx: ?*qjs.JSContext,
@@ -391,6 +415,25 @@ pub fn implCreateDocument(
     const c = ctx orelse return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
 
+    // WebIDL: createDocument requires at least 2 arguments
+    if (argc < 2) {
+        _ = qjs.JS_ThrowTypeError(c, "Failed to execute 'createDocument': 2 arguments required.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Validate 3rd argument (doctype): must be DocumentType (nodeType 10), null, or undefined
+    if (argc >= 3 and !quickjs.JS_IsNull(args[2]) and !quickjs.JS_IsUndefined(args[2])) {
+        // Must be an object with nodeType === 10
+        const nt_check = qjs.JS_GetPropertyStr(c, args[2], "nodeType");
+        var nt_v: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &nt_v, nt_check);
+        qjs.JS_FreeValue(c, nt_check);
+        if (nt_v != 10) {
+            _ = qjs.JS_ThrowTypeError(c, "Failed to execute 'createDocument': parameter 3 is not of type 'DocumentType'.");
+            return quickjs.JS_EXCEPTION();
+        }
+    }
+
     // Get namespace and qualifiedName
     // Per WebIDL: namespace is DOMString? (nullable), qualifiedName is [LegacyNullToEmptyString] DOMString
     var ns: ?[]const u8 = null;
@@ -424,9 +467,9 @@ pub fn implCreateDocument(
         if (qname_ptr) |p| qjs.JS_FreeCString(c, p);
     }
 
-    // Validate qualifiedName per DOM spec
+    // Validate qualifiedName per DOM spec (QName production)
     if (qname) |qn| {
-        if (qn.len > 0 and !isValidXmlName(qn)) {
+        if (qn.len > 0 and !isValidQName(qn)) {
             return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         }
         // Check namespace constraints per DOM spec:
@@ -1319,9 +1362,9 @@ fn validateAndExtract(c: *qjs.JSContext, ns_arg: qjs.JSValue, qn_arg: qjs.JSValu
     defer qjs.JS_FreeCString(c, qn_s.ptr);
     const qn = qn_s.ptr[0..qn_s.len];
 
-    // Step 1: validate qualifiedName against XML Name production
+    // Step 1: validate qualifiedName against QName production (matching browser behavior)
     // Empty qualifiedName is always invalid
-    if (qn.len == 0 or !isValidXmlName(qn)) {
+    if (qn.len == 0 or !isValidQName(qn)) {
         _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         return @as(qjs.JSValue, quickjs.JS_EXCEPTION());
     }

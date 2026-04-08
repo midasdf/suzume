@@ -330,8 +330,8 @@ pub fn elementSetAttributeNS(
     defer qjs.JS_FreeCString(c, qname.ptr);
     const qname_s = qname.ptr[0..qname.len];
 
-    // DOM spec: validate qualifiedName per XML Name + QName productions
-    if (!dom_doc.isValidXmlName(qname_s)) {
+    // DOM spec: validate qualifiedName per QName production (matching browser behavior)
+    if (!dom_doc.isValidQName(qname_s)) {
         return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
     }
     if (!dom_doc.isValidXmlQName(qname_s)) {
