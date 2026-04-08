@@ -3832,6 +3832,52 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, ob);
     }
 
+    // Body/FrameSet event handler forwarding to Window + content attribute → function compilation
+    {
+        const body_evt_js =
+            \\(function(){
+            \\  var fwdEvents=['blur','error','focus','load','resize','scroll',
+            \\    'afterprint','beforeprint','beforeunload','hashchange','languagechange',
+            \\    'message','offline','online','pagehide','pageshow','popstate','storage','unload'];
+            \\  function setupForward(Proto){
+            \\    fwdEvents.forEach(function(evt){
+            \\      var attr='on'+evt;
+            \\      Object.defineProperty(Proto.prototype,attr,{
+            \\        get:function(){
+            \\          var s=this.getAttribute(attr);
+            \\          if(s!==null&&s!==undefined&&s!==''){
+            \\            try{var fn=new Function('event',s);window[attr]=fn;return fn;}catch(e){return null;}
+            \\          }
+            \\          return window['_eh_'+evt]||null;
+            \\        },
+            \\        set:function(v){
+            \\          if(typeof v==='function'){window['_eh_'+evt]=v;window[attr]=v;}
+            \\          else{window['_eh_'+evt]=null;window[attr]=null;if(v!==null&&v!==undefined)this.setAttribute(attr,String(v));}
+            \\        },
+            \\        configurable:true,enumerable:true
+            \\      });
+            \\    });
+            \\  }
+            \\  function hookSetAttribute(Proto){
+            \\    var orig=Proto.prototype.setAttribute;
+            \\    Proto.prototype.setAttribute=function(name,val){
+            \\      orig.call(this,name,val);
+            \\      if(name.length>2&&name[0]==='o'&&name[1]==='n'){
+            \\        var evt=name.slice(2).toLowerCase();
+            \\        if(fwdEvents.indexOf(evt)>=0){
+            \\          try{var fn=new Function('event',val);window[name]=fn;}catch(e){}
+            \\        }
+            \\      }
+            \\    };
+            \\  }
+            \\  if(typeof HTMLBodyElement!=='undefined'){setupForward(HTMLBodyElement);hookSetAttribute(HTMLBodyElement);}
+            \\  if(typeof HTMLFrameSetElement!=='undefined'){setupForward(HTMLFrameSetElement);hookSetAttribute(HTMLFrameSetElement);}
+            \\})()
+        ;
+        const be = qjs.JS_Eval(ctx, body_evt_js, body_evt_js.len, "<body-evt>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, be);
+    }
+
     // ARIA attribute reflection per ARIA in HTML spec (with enumerated support)
     {
         const aria_js =
