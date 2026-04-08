@@ -12,6 +12,19 @@ extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_n
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
+// ── Scope element for :scope pseudo-class (DOM spec §4.2.6) ────────
+// Set by querySelector/querySelectorAll/closest before matching, cleared after.
+// :scope matches only this element (or the document root if null).
+var g_scope_element: ?*lxb.lxb_dom_node_t = null;
+
+pub fn setScopeElement(node: ?*lxb.lxb_dom_node_t) void {
+    g_scope_element = node;
+}
+
+pub fn clearScopeElement() void {
+    g_scope_element = null;
+}
+
 // ── CSS escape decoding (CSS Syntax §4.3.7) ────────────────────────
 fn isHexDigit(c: u8) bool {
     return (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F');
@@ -258,7 +271,12 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":first-child")) return isFirstChild(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":last-child")) return isLastChild(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":root")) return isRoot(@ptrCast(elem));
-        if (std.ascii.eqlIgnoreCase(sel, ":scope")) return true; // :scope matches the context element
+        if (std.ascii.eqlIgnoreCase(sel, ":scope")) {
+            // :scope matches only the context element set by querySelector/closest
+            if (g_scope_element) |scope| return (@intFromPtr(elem) == @intFromPtr(scope));
+            // If no scope set, :scope matches the document element (:root)
+            return isRoot(@ptrCast(elem));
+        }
         if (std.ascii.eqlIgnoreCase(sel, ":empty")) {
             const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
             var child = node.first_child;
@@ -907,7 +925,9 @@ pub fn elementClosest(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel = s.ptr[0..s.len];
 
-    // Walk up from this element
+    // Walk up from this element — :scope refers to this element
+    setScopeElement(node);
+    defer clearScopeElement();
     var cur: ?*lxb.lxb_dom_node_t = node;
     while (cur) |n| {
         if (elementMatchesSelector(n, sel)) return api.wrapNode(c, n);
@@ -931,6 +951,8 @@ pub fn elementQuerySelector(
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
+    setScopeElement(node);
+    defer clearScopeElement();
     const found = walkTreeBySelector(node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
     return api.wrapNode(c, found);
 }
@@ -948,6 +970,8 @@ pub fn elementQuerySelectorAll(
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
+    setScopeElement(node);
+    defer clearScopeElement();
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
     var idx: u32 = 0;
