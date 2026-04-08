@@ -3414,6 +3414,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     {
         const dfp = qjs.JS_NewObject(ctx);
+        // DocumentFragment.prototype inherits from Node.prototype (not Element)
+        _ = qjs.JS_SetPrototype(ctx, dfp, node_proto);
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "getElementById", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementById, "getElementById", 1));

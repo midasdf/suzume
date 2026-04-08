@@ -1855,6 +1855,10 @@ pub fn documentCreateDocumentFragment(
             \\  Object.defineProperty(f,'ownerDocument',{value:document,writable:true,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3)t+=n.data||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);this.__jsChildren=[];if(v!==null&&v!==undefined&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
             \\  f.getElementById=function(id){if(!id||id==='')return null;return this.querySelector('#'+CSS.escape(id));};
+            \\  /* Set prototype to DocumentFragment.prototype (inherits Node, not Element) */
+            \\  if(typeof DocumentFragment!=='undefined'){
+            \\    Object.setPrototypeOf(f,DocumentFragment.prototype);
+            \\  }
             \\})
         ;
         const fix_fn = qjs.JS_Eval(c, fix_js, fix_js.len, "<frag-fix>", qjs.JS_EVAL_TYPE_GLOBAL);
