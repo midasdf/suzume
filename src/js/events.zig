@@ -1250,31 +1250,36 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     return ev_result;
 }
 
+/// Cached JS function for dispatching to JS-level event listeners.
+var cached_js_doc_dispatch: qjs.JSValue = quickjs.JS_UNDEFINED();
+
 /// Dispatch to JS-level event listeners (__el_ properties) on a JS object,
 /// filtered by capture/bubble phase. Used for JS-only Document nodes.
 fn dispatchToJsDocPhased(ctx: *qjs.JSContext, doc_obj: qjs.JSValue, event_obj: qjs.JSValue, event_type: []const u8, capture: bool) void {
-    const js_code =
-        \\(function(doc,evt,type,isCap){
-        \\  var k='__el_'+type+(isCap?'_c':'');
-        \\  var a=doc[k];if(!a||!a.length)return;
-        \\  var copy=a.slice();
-        \\  for(var i=0;i<copy.length;i++){
-        \\    if(evt._stopImmediate)break;if(evt._stopped)break;
-        \\    var h=copy[i],fn=h.fn||h;
-        \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
-        \\    if(typeof fn==='function')fn.call(doc,evt);
-        \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
-        \\  }
-        \\})
-    ;
-    const fn_val = qjs.JS_Eval(ctx, js_code, js_code.len, "<jsdp>", qjs.JS_EVAL_TYPE_GLOBAL);
-    if (!quickjs.JS_IsException(fn_val)) {
+    // Lazily compile and cache the dispatch helper
+    if (quickjs.JS_IsUndefined(cached_js_doc_dispatch)) {
+        const js_code =
+            \\(function(doc,evt,type,isCap){
+            \\  var k='__el_'+type+(isCap?'_c':'');
+            \\  var a=doc[k];if(!a||!a.length)return;
+            \\  var copy=a.slice();
+            \\  for(var i=0;i<copy.length;i++){
+            \\    if(evt._stopImmediate)break;if(evt._stopped)break;
+            \\    var h=copy[i],fn=h.fn||h;
+            \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+            \\    if(typeof fn==='function')fn.call(doc,evt);
+            \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+            \\  }
+            \\})
+        ;
+        cached_js_doc_dispatch = qjs.JS_Eval(ctx, js_code, js_code.len, "<jsdp>", qjs.JS_EVAL_TYPE_GLOBAL);
+    }
+    if (!quickjs.JS_IsException(cached_js_doc_dispatch)) {
         const type_js = qjs.JS_NewStringLen(ctx, event_type.ptr, event_type.len);
         var args = [4]qjs.JSValue{ doc_obj, event_obj, type_js, quickjs.JS_NewBool(capture) };
-        const r = qjs.JS_Call(ctx, fn_val, quickjs.JS_UNDEFINED(), 4, &args);
+        const r = qjs.JS_Call(ctx, cached_js_doc_dispatch, quickjs.JS_UNDEFINED(), 4, &args);
         qjs.JS_FreeValue(ctx, r);
         qjs.JS_FreeValue(ctx, type_js);
-        qjs.JS_FreeValue(ctx, fn_val);
     }
     syncStopFlags(ctx, event_obj);
 }
@@ -1366,14 +1371,15 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
             if (entry.key.node == doc_node and std.mem.eql(u8, entry.key.event_type, event_type)) {
                 // Call listeners with doc_obj as `this` (not wrapNode on lxb doc)
                 // Dup callbacks first to protect against mutation/GC during invocation
-                var dup_buf: [32]qjs.JSValue = undefined;
-                const count = @min(entry.callbacks.items.len, dup_buf.len);
+                const count = entry.callbacks.items.len;
+                const dup_cbs = allocator.alloc(qjs.JSValue, count) catch break;
+                defer allocator.free(dup_cbs);
                 for (0..count) |di| {
-                    dup_buf[di] = qjs.JS_DupValue(ctx, entry.callbacks.items[di].callback);
+                    dup_cbs[di] = qjs.JS_DupValue(ctx, entry.callbacks.items[di].callback);
                 }
                 for (0..count) |di| {
-                    invokeListener(ctx, dup_buf[di], doc_obj, event_obj);
-                    qjs.JS_FreeValue(ctx, dup_buf[di]);
+                    invokeListener(ctx, dup_cbs[di], doc_obj, event_obj);
+                    qjs.JS_FreeValue(ctx, dup_cbs[di]);
                 }
                 break;
             }
@@ -2517,8 +2523,9 @@ fn jsMutationObserverObserve(
             defer qjs.JS_FreeValue(c, len_val);
             var len: i32 = 0;
             _ = qjs.JS_ToInt32(c, &len, len_val);
+            const ulen: u32 = if (len > 0) @intCast(len) else 0;
             var fi: u32 = 0;
-            while (fi < @as(u32, @intCast(len))) : (fi += 1) {
+            while (fi < ulen) : (fi += 1) {
                 const item = qjs.JS_GetPropertyUint32(c, af, fi);
                 defer qjs.JS_FreeValue(c, item);
                 const s = dom_api.jsStringToSlice(c, item) orelse continue;

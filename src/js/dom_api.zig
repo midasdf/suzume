@@ -4520,7 +4520,12 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var k='__el_'+t+(cap?'_c':'');var a=doc[k];if(!a)return;
             \\      for(var i=0;i<a.length;i++){if(a[i].fn===f){a.splice(i,1);return;}}
             \\    },
-            \\    dispatchEvent: function(e) { var de=_elemCh(null);return de?de.dispatchEvent(e):false; },
+            \\    dispatchEvent: function(e) {
+            \\      var de=_elemCh(null);if(!de)return false;
+            \\      var r=de.dispatchEvent(e);
+            \\      var k='__el_'+(e.type||'');var a=doc[k];if(a){var c=a.slice();for(var i=0;i<c.length;i++){var fn=c[i].fn||c[i];if(typeof fn==='function')fn.call(doc,e);}}
+            \\      return r;
+            \\    },
             \\    createAttribute: function(n) { return document.createAttribute(n); },
             \\    createAttributeNS: function(ns,qn) { return document.createAttributeNS(ns,qn); },
             \\    createTreeWalker: function(r,w,f) { return document.createTreeWalker(r,w,f); },
