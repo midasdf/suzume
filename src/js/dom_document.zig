@@ -1481,6 +1481,58 @@ pub fn documentCreateElementNS(
     const elem = lxb_dom_document_create_element(doc, create_name.ptr, create_name.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const obj = wrapNode(c, node);
+
+    // For non-HTML namespace elements, reset prototype to Element.prototype
+    // (wrapNode sets HTML-specific prototypes based on tag name, but non-HTML
+    // namespace elements should not be instances of HTMLElement)
+    {
+        const is_html_ns = blk: {
+            if (quickjs.JS_IsNull(ns_js) or quickjs.JS_IsUndefined(ns_js)) break :blk false;
+            if (jsStringToSlice(c, ns_js)) |ns_s| {
+                defer qjs.JS_FreeCString(c, ns_s.ptr);
+                break :blk std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml");
+            }
+            break :blk false;
+        };
+        if (!is_html_ns) {
+            // Non-HTML namespace → Element.prototype
+            const global = qjs.JS_GetGlobalObject(c);
+            defer qjs.JS_FreeValue(c, global);
+            const elem_ctor = qjs.JS_GetPropertyStr(c, global, "Element");
+            defer qjs.JS_FreeValue(c, elem_ctor);
+            if (!quickjs.JS_IsUndefined(elem_ctor)) {
+                const elem_proto = qjs.JS_GetPropertyStr(c, elem_ctor, "prototype");
+                defer qjs.JS_FreeValue(c, elem_proto);
+                if (!quickjs.JS_IsUndefined(elem_proto)) {
+                    _ = qjs.JS_SetPrototype(c, obj, elem_proto);
+                }
+            }
+        } else {
+            // HTML namespace but upper-case local name → HTMLUnknownElement
+            // Per spec, only lowercase names map to known HTML element interfaces
+            var has_upper = false;
+            for (create_name) |ch| {
+                if (ch >= 'A' and ch <= 'Z') {
+                    has_upper = true;
+                    break;
+                }
+            }
+            if (has_upper) {
+                const global = qjs.JS_GetGlobalObject(c);
+                defer qjs.JS_FreeValue(c, global);
+                const proto_map = qjs.JS_GetPropertyStr(c, global, "__elProtos");
+                defer qjs.JS_FreeValue(c, proto_map);
+                if (!quickjs.JS_IsUndefined(proto_map)) {
+                    const unk_proto = qjs.JS_GetPropertyStr(c, proto_map, "__unknown");
+                    defer qjs.JS_FreeValue(c, unk_proto);
+                    if (!quickjs.JS_IsUndefined(unk_proto) and !quickjs.JS_IsNull(unk_proto)) {
+                        _ = qjs.JS_SetPrototype(c, obj, unk_proto);
+                    }
+                }
+            }
+        }
+    }
+
     // Set namespace-related properties on the JS object
     _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", ns_js);
     if (colon_pos) |cp| {
