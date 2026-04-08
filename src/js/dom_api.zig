@@ -3832,6 +3832,65 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeValue(ctx, ob);
     }
 
+    // Body/FrameSet event handler forwarding to Window + content attribute → function compilation
+    {
+        const body_evt_js =
+            \\(function(){
+            \\  var fwdEvents=['blur','error','focus','load','resize','scroll',
+            \\    'afterprint','beforeprint','beforeunload','hashchange','languagechange',
+            \\    'message','offline','online','pagehide','pageshow','popstate','storage','unload'];
+            \\  function setupForward(Proto){
+            \\    fwdEvents.forEach(function(evt){
+            \\      var attr='on'+evt;
+            \\      var cacheKey='__cache_'+evt;
+            \\      Object.defineProperty(Proto.prototype,attr,{
+            \\        get:function(){
+            \\          var s=this.getAttribute(attr);
+            \\          if(s!==null&&s!==undefined&&s!==''){
+            \\            if(this[cacheKey]!==s){
+            \\              this[cacheKey]=s;
+            \\              try{window[attr]=new Function('event',s);}catch(e){window[attr]=null;}
+            \\            }
+            \\          }
+            \\          return window[attr]||null;
+            \\        },
+            \\        set:function(v){
+            \\          if(typeof v==='function'){window[attr]=v;delete this[cacheKey];}
+            \\          else{window[attr]=null;delete this[cacheKey];this.removeAttribute(attr);}
+            \\        },
+            \\        configurable:true,enumerable:true
+            \\      });
+            \\    });
+            \\    var origSA=Proto.prototype.setAttribute;
+            \\    Proto.prototype.setAttribute=function(name,val){
+            \\      origSA.call(this,name,val);
+            \\      var ln=name.toLowerCase();
+            \\      if(ln.length>2&&ln[0]==='o'&&ln[1]==='n'){
+            \\        var evt=ln.slice(2);
+            \\        if(fwdEvents.indexOf(evt)>=0&&val!==''){
+            \\          try{window[ln]=new Function('event',val);}catch(e){}
+            \\          this['__cache_'+evt]=val;
+            \\        }
+            \\      }
+            \\    };
+            \\    var origRA=Proto.prototype.removeAttribute;
+            \\    if(origRA)Proto.prototype.removeAttribute=function(name){
+            \\      origRA.call(this,name);
+            \\      var ln=name.toLowerCase();
+            \\      if(ln.length>2&&ln[0]==='o'&&ln[1]==='n'){
+            \\        var evt=ln.slice(2);
+            \\        if(fwdEvents.indexOf(evt)>=0){window[ln]=null;delete this['__cache_'+evt];}
+            \\      }
+            \\    };
+            \\  }
+            \\  if(typeof HTMLBodyElement!=='undefined')setupForward(HTMLBodyElement);
+            \\  if(typeof HTMLFrameSetElement!=='undefined')setupForward(HTMLFrameSetElement);
+            \\})()
+        ;
+        const be = qjs.JS_Eval(ctx, body_evt_js, body_evt_js.len, "<body-evt>", qjs.JS_EVAL_TYPE_GLOBAL);
+        qjs.JS_FreeValue(ctx, be);
+    }
+
     // ARIA attribute reflection per ARIA in HTML spec (with enumerated support)
     {
         const aria_js =
