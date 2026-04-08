@@ -3842,36 +3842,49 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function setupForward(Proto){
             \\    fwdEvents.forEach(function(evt){
             \\      var attr='on'+evt;
+            \\      var cacheKey='__cache_'+evt;
             \\      Object.defineProperty(Proto.prototype,attr,{
             \\        get:function(){
             \\          var s=this.getAttribute(attr);
             \\          if(s!==null&&s!==undefined&&s!==''){
-            \\            try{var fn=new Function('event',s);window[attr]=fn;return fn;}catch(e){return null;}
+            \\            if(this[cacheKey]!==s){
+            \\              this[cacheKey]=s;
+            \\              try{window[attr]=new Function('event',s);}catch(e){window[attr]=null;}
+            \\            }
             \\          }
-            \\          return window['_eh_'+evt]||null;
+            \\          return window[attr]||null;
             \\        },
             \\        set:function(v){
-            \\          if(typeof v==='function'){window['_eh_'+evt]=v;window[attr]=v;}
-            \\          else{window['_eh_'+evt]=null;window[attr]=null;if(v!==null&&v!==undefined)this.setAttribute(attr,String(v));}
+            \\          if(typeof v==='function'){window[attr]=v;delete this[cacheKey];}
+            \\          else{window[attr]=null;delete this[cacheKey];this.removeAttribute(attr);}
             \\        },
             \\        configurable:true,enumerable:true
             \\      });
             \\    });
-            \\  }
-            \\  function hookSetAttribute(Proto){
-            \\    var orig=Proto.prototype.setAttribute;
+            \\    var origSA=Proto.prototype.setAttribute;
             \\    Proto.prototype.setAttribute=function(name,val){
-            \\      orig.call(this,name,val);
-            \\      if(name.length>2&&name[0]==='o'&&name[1]==='n'){
-            \\        var evt=name.slice(2).toLowerCase();
-            \\        if(fwdEvents.indexOf(evt)>=0){
-            \\          try{var fn=new Function('event',val);window[name]=fn;}catch(e){}
+            \\      origSA.call(this,name,val);
+            \\      var ln=name.toLowerCase();
+            \\      if(ln.length>2&&ln[0]==='o'&&ln[1]==='n'){
+            \\        var evt=ln.slice(2);
+            \\        if(fwdEvents.indexOf(evt)>=0&&val!==''){
+            \\          try{window[ln]=new Function('event',val);}catch(e){}
+            \\          this['__cache_'+evt]=val;
             \\        }
             \\      }
             \\    };
+            \\    var origRA=Proto.prototype.removeAttribute;
+            \\    if(origRA)Proto.prototype.removeAttribute=function(name){
+            \\      origRA.call(this,name);
+            \\      var ln=name.toLowerCase();
+            \\      if(ln.length>2&&ln[0]==='o'&&ln[1]==='n'){
+            \\        var evt=ln.slice(2);
+            \\        if(fwdEvents.indexOf(evt)>=0){window[ln]=null;delete this['__cache_'+evt];}
+            \\      }
+            \\    };
             \\  }
-            \\  if(typeof HTMLBodyElement!=='undefined'){setupForward(HTMLBodyElement);hookSetAttribute(HTMLBodyElement);}
-            \\  if(typeof HTMLFrameSetElement!=='undefined'){setupForward(HTMLFrameSetElement);hookSetAttribute(HTMLFrameSetElement);}
+            \\  if(typeof HTMLBodyElement!=='undefined')setupForward(HTMLBodyElement);
+            \\  if(typeof HTMLFrameSetElement!=='undefined')setupForward(HTMLFrameSetElement);
             \\})()
         ;
         const be = qjs.JS_Eval(ctx, body_evt_js, body_evt_js.len, "<body-evt>", qjs.JS_EVAL_TYPE_GLOBAL);
