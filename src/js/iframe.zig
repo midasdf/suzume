@@ -521,6 +521,18 @@ pub fn setupDynamicIframe(parent_ctx: *qjs.JSContext, elem: *lxb.lxb_dom_element
         qjs.JS_FreeValue(iframe_ctx, qs_r);
     }
 
+    // Set contentType based on URL extension
+    {
+        const ig = qjs.JS_GetGlobalObject(iframe_ctx);
+        defer qjs.JS_FreeValue(iframe_ctx, ig);
+        const idoc = qjs.JS_GetPropertyStr(iframe_ctx, ig, "document");
+        defer qjs.JS_FreeValue(iframe_ctx, idoc);
+        if (!quickjs.JS_IsUndefined(idoc) and !quickjs.JS_IsNull(idoc)) {
+            const ct = contentTypeFromUrl(iframe_url);
+            _ = qjs.JS_SetPropertyStr(iframe_ctx, idoc, "contentType", qjs.JS_NewStringLen(iframe_ctx, ct.ptr, ct.len));
+        }
+    }
+
     // Execute <script> tags in iframe before restoring parent globals
     executeIframeScripts(iframe_ctx, doc_ptr, allocator, iframe_url);
 
@@ -658,6 +670,19 @@ pub fn fireIframeLoadEvents(parent_ctx: *qjs.JSContext) void {
     ;
     const r = qjs.JS_Eval(parent_ctx, js, js.len, "<iframe-load-events>", qjs.JS_EVAL_TYPE_GLOBAL);
     qjs.JS_FreeValue(parent_ctx, r);
+}
+
+/// Determine content type from URL extension.
+fn contentTypeFromUrl(url: []const u8) []const u8 {
+    var path = url;
+    if (std.mem.indexOfScalar(u8, path, '?')) |q| path = path[0..q];
+    if (std.mem.indexOfScalar(u8, path, '#')) |h| path = path[0..h];
+    if (std.mem.endsWith(u8, path, ".xhtml")) return "application/xhtml+xml";
+    if (std.mem.endsWith(u8, path, ".xml")) return "application/xml";
+    if (std.mem.endsWith(u8, path, ".svg")) return "image/svg+xml";
+    if (std.mem.endsWith(u8, path, ".xsl") or std.mem.endsWith(u8, path, ".xslt")) return "application/xslt+xml";
+    if (std.mem.endsWith(u8, path, ".mathml")) return "application/mathml+xml";
+    return "text/html";
 }
 
 /// Check if a URL points to XML content (by extension)

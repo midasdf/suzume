@@ -9,7 +9,7 @@ const Box = @import("../layout/box.zig").Box;
 const cascade_mod = @import("../css/cascade.zig");
 
 pub const MAX_IFRAME_DEPTH: u32 = 5;
-pub const MAX_IFRAME_COUNT: u32 = 10;
+pub const MAX_IFRAME_COUNT: u32 = 32;
 
 pub const ReadyState = enum { loading, interactive, complete };
 
