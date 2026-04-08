@@ -1532,9 +1532,64 @@ pub fn nodeNormalize(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
 
-    normalizeNode(node);
+    normalizeNodeWithMutations(node);
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
+}
+
+/// Normalize with mutation recording for MutationObserver spec compliance.
+fn normalizeNodeWithMutations(node: *lxb.lxb_dom_node_t) void {
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        if (ch.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
+            var text_len: usize = 0;
+            _ = lxb_dom_node_text_content(ch, &text_len);
+
+            if (text_len == 0) {
+                const next_sib: ?*lxb.lxb_dom_node_t = ch.next;
+                const prev_sib: ?*lxb.lxb_dom_node_t = ch.prev;
+                lxb_dom_node_remove(ch);
+                events.recordMutationChildList(node, null, ch, prev_sib, next_sib);
+                child = next_sib;
+                continue;
+            }
+
+            var next_node: ?*lxb.lxb_dom_node_t = ch.next;
+            while (next_node) |next| {
+                if (next.type != lxb.LXB_DOM_NODE_TYPE_TEXT) break;
+                var next_len: usize = 0;
+                const next_ptr = lxb_dom_node_text_content(next, &next_len);
+                const after: ?*lxb.lxb_dom_node_t = next.next;
+                if (next_len == 0 or next_ptr == null) {
+                    const prev_s: ?*lxb.lxb_dom_node_t = next.prev;
+                    lxb_dom_node_remove(next);
+                    events.recordMutationChildList(node, null, next, prev_s, after);
+                    next_node = after;
+                    continue;
+                }
+                var cur_len: usize = 0;
+                const cur_ptr = lxb_dom_node_text_content(ch, &cur_len);
+                var merge_buf: [16384]u8 = undefined;
+                const total = cur_len + next_len;
+                if (total <= merge_buf.len and cur_ptr != null) {
+                    @memcpy(merge_buf[0..cur_len], cur_ptr.?[0..cur_len]);
+                    @memcpy(merge_buf[cur_len..][0..next_len], next_ptr.?[0..next_len]);
+                    _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
+                    text_len = total;
+                    const prev_s: ?*lxb.lxb_dom_node_t = next.prev;
+                    lxb_dom_node_remove(next);
+                    events.recordMutationChildList(node, null, next, prev_s, after);
+                } else {
+                    break;
+                }
+                next_node = after;
+            }
+            child = ch.next;
+        } else {
+            if (ch.first_child != null) normalizeNodeWithMutations(ch);
+            child = ch.next;
+        }
+    }
 }
 
 /// Internal normalize helper that works directly on DOM nodes (no JS context needed).
