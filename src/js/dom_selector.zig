@@ -345,19 +345,12 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":optional")) {
             return !lxb_dom_element_has_attribute(elem, "required", 8);
         }
-        // :valid / :invalid — form validation pseudo-classes
-        // Simplified: elements with required but no value are :invalid
+        // :valid / :invalid — form constraint validation (HTML spec §4.10.21)
         if (std.ascii.eqlIgnoreCase(sel, ":valid")) {
-            if (!lxb_dom_element_has_attribute(elem, "required", 8)) return true;
-            var val_len: usize = 0;
-            const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
-            return val != null and val_len > 0;
+            return !isFormInvalid(elem);
         }
         if (std.ascii.eqlIgnoreCase(sel, ":invalid")) {
-            if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
-            var val_len: usize = 0;
-            const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
-            return val == null or val_len == 0;
+            return isFormInvalid(elem);
         }
         // :read-only / :read-write
         if (std.ascii.eqlIgnoreCase(sel, ":read-write")) {
@@ -681,6 +674,132 @@ pub fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
 pub fn isRoot(node: *lxb.lxb_dom_node_t) bool {
     const parent: *lxb.lxb_dom_node_t = node.parent orelse return false;
     return parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
+}
+
+/// HTML spec §4.10.21 — constraint validation for :valid/:invalid
+/// Only applies to: input, select, textarea (barred: hidden, button types)
+/// fieldset is :invalid if any descendant form element is :invalid
+/// form is :invalid if any associated element is :invalid
+fn isFormInvalid(elem: *lxb.lxb_dom_element_t) bool {
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return false;
+    const tag = name_ptr.?[0..name_len];
+
+    if (std.ascii.eqlIgnoreCase(tag, "input")) {
+        // type=hidden, submit, reset, button, image are barred from validation
+        var type_len: usize = 0;
+        const type_ptr = lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+        if (type_ptr != null and type_len > 0) {
+            const itype = type_ptr.?[0..type_len];
+            if (std.ascii.eqlIgnoreCase(itype, "hidden") or
+                std.ascii.eqlIgnoreCase(itype, "submit") or
+                std.ascii.eqlIgnoreCase(itype, "reset") or
+                std.ascii.eqlIgnoreCase(itype, "button") or
+                std.ascii.eqlIgnoreCase(itype, "image")) return false;
+        }
+        if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
+        if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
+        return val == null or val_len == 0;
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "textarea")) {
+        if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
+        if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+        // textarea uses textContent, but for simplicity check value attr
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
+        return val == null or val_len == 0;
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "select")) {
+        if (lxb_dom_element_has_attribute(elem, "disabled", 8)) return false;
+        if (!lxb_dom_element_has_attribute(elem, "required", 8)) return false;
+        // A required select is invalid only if its value is empty string.
+        // The value comes from the selected option, not from a value attribute.
+        // Check if selected option has an empty value (placeholder label option).
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var child: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+                var ch_name_len: usize = 0;
+                const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+                if (ch_name != null and std.ascii.eqlIgnoreCase(ch_name.?[0..ch_name_len], "option")) {
+                    if (lxb_dom_element_has_attribute(ch_elem, "selected", 8)) {
+                        var ov_len: usize = 0;
+                        const ov = lxb_dom_element_get_attribute(ch_elem, "value", 5, &ov_len);
+                        if (ov != null and ov_len == 0) return true; // empty value = invalid
+                        return false; // non-empty value or no value attr (uses text) = valid
+                    }
+                }
+            }
+            child = ch.next;
+        }
+        // No selected option → first option is selected by default
+        // Check first option's value
+        child = node.first_child;
+        while (child) |ch| {
+            if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+                var ch_name_len: usize = 0;
+                const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+                if (ch_name != null and std.ascii.eqlIgnoreCase(ch_name.?[0..ch_name_len], "option")) {
+                    var ov_len: usize = 0;
+                    const ov = lxb_dom_element_get_attribute(ch_elem, "value", 5, &ov_len);
+                    if (ov != null and ov_len == 0) return true;
+                    return false;
+                }
+            }
+            child = ch.next;
+        }
+        return true; // no options at all = invalid
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "fieldset")) {
+        // A fieldset is :invalid if any descendant form element is :invalid
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var current: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (current) |n| {
+            if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                if (isFormInvalid(@ptrCast(n))) return true;
+            }
+            // DFS: first_child → next → backtrack
+            if (n.first_child) |fc| {
+                current = fc;
+            } else {
+                var cur = n;
+                while (true) {
+                    if (cur.next) |nxt| { current = nxt; break; }
+                    cur = cur.parent orelse { current = null; break; };
+                    if (cur == node) { current = null; break; }
+                }
+            }
+        }
+        return false;
+    }
+    if (std.ascii.eqlIgnoreCase(tag, "form")) {
+        // A form is :invalid if any associated element is :invalid (simplified: check descendants)
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var current: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (current) |n| {
+            if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                if (isFormInvalid(@ptrCast(n))) return true;
+            }
+            if (n.first_child) |fc| {
+                current = fc;
+            } else {
+                var cur = n;
+                while (true) {
+                    if (cur.next) |nxt| { current = nxt; break; }
+                    cur = cur.parent orelse { current = null; break; };
+                    if (cur == node) { current = null; break; }
+                }
+            }
+        }
+        return false;
+    }
+    // Other elements (option, optgroup, etc.) are never :invalid
+    return false;
 }
 
 pub fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
