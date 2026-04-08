@@ -959,11 +959,21 @@ pub fn matchNthFormula(raw_arg: []const u8, idx: u32) bool {
             else if (a_str.len == 1 and a_str[0] == '+') { a = 1; }
             else if (a_str.len > 0) { a = std.fmt.parseInt(i32, a_str, 10) catch return false; }
         }
-        // Parse B (after n)
+        // Parse B (after n) — strip internal whitespace for "2n + 2" → "+2"
         var b: i32 = 0;
         if (n_pos + 1 < arg.len) {
-            const b_str = std.mem.trim(u8, arg[n_pos + 1 ..], ws);
-            if (b_str.len > 0) { b = std.fmt.parseInt(i32, b_str, 10) catch return false; }
+            const b_raw = std.mem.trim(u8, arg[n_pos + 1 ..], ws);
+            if (b_raw.len > 0) {
+                // Strip all internal whitespace: "+ 2" → "+2"
+                var b_compact: [64]u8 = undefined;
+                var bc: usize = 0;
+                for (b_raw) |ch| {
+                    if (ch != ' ' and ch != '\t' and ch != '\n' and ch != '\r' and ch != 0x0C) {
+                        if (bc < b_compact.len) { b_compact[bc] = ch; bc += 1; }
+                    }
+                }
+                if (bc > 0) { b = std.fmt.parseInt(i32, b_compact[0..bc], 10) catch return false; }
+            }
         }
         // Match: idx = An + B for some non-negative integer n
         const idx_i: i32 = @intCast(idx);
