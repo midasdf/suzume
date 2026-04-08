@@ -483,7 +483,15 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
     // Per spec: UI events (click, input, focus, etc.) are composed by default
     const is_composed = isComposedEvent(event_type);
     _ = qjs.JS_SetPropertyStr(ctx, event, "composed", quickjs.JS_NewBool(is_composed));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "isTrusted", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "_trusted", quickjs.JS_NewBool(false));
+    {
+        // Define isTrusted as a getter reading _trusted (matches Event.prototype behavior)
+        const getter_js = "(function(){return this._trusted||false;})";
+        const getter = qjs.JS_Eval(ctx, getter_js, getter_js.len, "<isTrusted>", qjs.JS_EVAL_TYPE_GLOBAL);
+        const atom = qjs.JS_NewAtom(ctx, "isTrusted");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, event, atom, getter, quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE);
+        qjs.JS_FreeAtom(ctx, atom);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, event, "timeStamp", qjs.JS_NewFloat64(ctx, @import("web_api.zig").getPerformanceNow()));
     _ = qjs.JS_SetPropertyStr(ctx, event, "srcElement", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(ctx, event, "composedPath", qjs.JS_NewCFunction(ctx, &jsComposedPath, "composedPath", 0));
@@ -961,6 +969,8 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
 
     const event_obj = if (existing_event) |ev| blk: {
         ensureEventMethods(ctx, ev);
+        // DOM spec: script-dispatched events are not trusted
+        _ = qjs.JS_SetPropertyStr(ctx, ev, "_trusted", quickjs.JS_NewBool(false));
         break :blk ev;
     } else blk: {
         owns_event = true;
