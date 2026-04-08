@@ -4764,10 +4764,16 @@ pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
     // CSS system colors
     const system_colors = [_][]const u8{
-        "ActiveText", "ButtonBorder", "ButtonFace", "ButtonText", "Canvas",
-        "CanvasText", "Field", "FieldText", "GrayText", "Highlight",
-        "HighlightText", "LinkText", "Mark", "MarkText", "SelectedItem",
-        "SelectedItemText", "AccentColor", "AccentColorText", "VisitedText",
+        "ActiveText",     "ButtonBorder",   "ButtonFace",       "ButtonText",    "Canvas",
+        "CanvasText",     "Field",          "FieldText",        "GrayText",      "Highlight",
+        "HighlightText",  "LinkText",       "Mark",             "MarkText",      "SelectedItem",
+        "SelectedItemText", "AccentColor",  "AccentColorText",  "VisitedText",
+        // Deprecated CSS2 system colors (mapped to CSS4 equivalents)
+        "ActiveBorder",   "ActiveCaption",  "AppWorkspace",     "Background",    "ButtonHighlight",
+        "ButtonShadow",   "CaptionText",    "InactiveBorder",   "InactiveCaption",
+        "InactiveCaptionText", "InfoBackground", "InfoText",    "Menu",          "MenuText",
+        "Scrollbar",      "ThreeDDarkShadow", "ThreeDFace",    "ThreeDHighlight",
+        "ThreeDLightShadow", "ThreeDShadow", "Window",         "WindowFrame",   "WindowText",
     };
     for (system_colors) |sc| {
         if (eqlIgnoreCase(val, sc)) return true;
