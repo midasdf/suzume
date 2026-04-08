@@ -3546,7 +3546,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var a=Object.create(typeof Attr!=='undefined'?Attr.prototype:null);
             \\    a.nodeType=2;a.name=name;a.specified=true;a.namespaceURI=ns||null;
             \\    a.prefix=prefix||null;a.localName=prefix?name.substring(prefix.length+1):name;
-            \\    a.value=value;a.nodeName=name;a.nodeValue=value;a.textContent=value;
+            \\    a._val=value;a.nodeName=name;
+            \\    Object.defineProperty(a,'value',{get:function(){return this._val;},set:function(v){this._val=v;this.nodeValue=v;this.textContent=v;if(this.ownerElement){if(this.namespaceURI)this.ownerElement.setAttributeNS(this.namespaceURI,this.name,v);else this.ownerElement.setAttribute(this.name,v);}},configurable:true,enumerable:true});
+            \\    a.nodeValue=value;a.textContent=value;
             \\    a.ownerElement=owner;a.ownerDocument=(owner&&owner.ownerDocument)||document;
             \\    a.childNodes=[];a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
             \\    a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};
@@ -3563,10 +3565,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var lc=n.toLowerCase(),store=_getAttrStore(this);
             \\    if(store[lc]){store[lc].value=this.getAttribute(n)||'';store[lc].nodeValue=store[lc].value;store[lc].textContent=store[lc].value;return store[lc];}
             \\    if(!this.hasAttribute(n))return null;
-            \\    var a=_makeAttr(lc,this.getAttribute(n)||'',null,null,this);store[lc]=a;return a;
+            \\    var ns=null,pfx=null,nm=lc,nsm=this.__attrNS;
+            \\    if(nsm){var k=n;if(nsm[k]!==undefined)ns=nsm[k];else if(nsm[lc]!==undefined)ns=nsm[lc];}
+            \\    var ci=n.indexOf(':');if(ci>0){pfx=n.substring(0,ci);nm=n;lc=n.toLowerCase();}
+            \\    var a=_makeAttr(nm,this.getAttribute(n)||'',ns,pfx,this);store[lc]=a;return a;
             \\  };
             \\  EP.getAttributeNodeNS=function(ns,ln){
-            \\    var key=(ns||'')+'\0'+ln,store=_getAttrStore(this);
+            \\    if(!ns||ns==='')return EP.getAttributeNode.call(this,ln);
+            \\    var key=ns+'\0'+ln,store=_getAttrStore(this);
             \\    if(store[key]){store[key].value=this.getAttributeNS(ns,ln)||'';store[key].nodeValue=store[key].value;store[key].textContent=store[key].value;return store[key];}
             \\    if(!this.hasAttributeNS(ns,ln))return null;
             \\    var v=this.getAttributeNS(ns,ln)||'',pfx=null,qn=ln;
@@ -3620,9 +3626,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var oldKeys=Object.getOwnPropertyNames(t);
             \\      for(var k=0;k<oldKeys.length;k++){var ok=oldKeys[k];if(ok==='_self'||ok==='_len')continue;delete t[ok];}
             \\      t._len=len;
+            \\      var nsm=self.__attrNS;
             \\      for(var i=0;i<len;i++){var ra=raw[i],key=ra.name;var cached=store[key.toLowerCase()];
             \\        if(cached){cached.value=ra.value;cached.nodeValue=ra.value;cached.textContent=ra.value;t[i]=cached;}
-            \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
+            \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);
+            \\          var ans=null,apfx=null,aln=key;if(nsm&&nsm[key]!==undefined)ans=nsm[key];
+            \\          if(ans){var aci=key.indexOf(':');if(aci>0){apfx=key.substring(0,aci);aln=key.substring(aci+1);}}
+            \\          ra.namespaceURI=ans;ra.prefix=apfx;ra.localName=aln;
+            \\          ra._val=ra.value;Object.defineProperty(ra,'value',{get:function(){return this._val;},set:function(v){this._val=v;this.nodeValue=v;this.textContent=v;if(this.ownerElement){if(this.namespaceURI)this.ownerElement.setAttributeNS(this.namespaceURI,this.name,v);else this.ownerElement.setAttribute(this.name,v);}},configurable:true,enumerable:true});
+            \\          store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
             \\        Object.defineProperty(t,key,{value:t[i],writable:true,enumerable:false,configurable:true});}
             \\    }
             \\    var _handler={
