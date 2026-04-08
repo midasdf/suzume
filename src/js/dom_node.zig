@@ -697,6 +697,9 @@ pub fn elementAppendChild(
         // DOM spec: DocType in non-Document parent → HierarchyRequestError
         var js_nt: i32 = 0;
         _ = qjs.JS_ToInt32(c, &js_nt, nt);
+        // DOM spec: Document node cannot be a child of anything
+        if (js_nt == 9)
+            return api.throwDOMException(c, "HierarchyRequestError", "The new child element is a Document node, which may not be inserted here.");
         if (js_nt == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
             return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
 

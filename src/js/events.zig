@@ -2136,6 +2136,22 @@ const ObserveTarget = struct {
     character_data: bool = false,
     character_data_old_value: bool = false,
     subtree: bool,
+    /// Optional attribute filter: if non-empty, only attributes in this list generate records.
+    attribute_filter: std.ArrayListUnmanaged([]const u8) = .empty,
+
+    fn deinit(self: *ObserveTarget) void {
+        for (self.attribute_filter.items) |f| allocator.free(@constCast(f));
+        self.attribute_filter.deinit(allocator);
+    }
+
+    fn matchesAttributeFilter(self: *const ObserveTarget, attr_name: ?[]const u8) bool {
+        if (self.attribute_filter.items.len == 0) return true; // no filter = match all
+        const name = attr_name orelse return true;
+        for (self.attribute_filter.items) |f| {
+            if (std.mem.eql(u8, f, name)) return true;
+        }
+        return false;
+    }
 };
 
 const MutationObserverEntry = struct {
@@ -2252,6 +2268,9 @@ fn recordMutationFull(
             else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data
             else false;
             if (!want) continue;
+
+            // DOM spec: attributeFilter — skip if attr name not in filter
+            if (std.mem.eql(u8, mutation_type, "attributes") and !t.matchesAttributeFilter(attr_name)) continue;
 
             var record = MutationRecord{
                 .type_str = mutation_type,
@@ -2477,6 +2496,32 @@ fn jsMutationObserverObserve(
 
     const attr_old_val = if (argc >= 2) jsBoolProp(c, args[1], "attributeOldValue") else false;
     const char_data_old = if (argc >= 2) jsBoolProp(c, args[1], "characterDataOldValue") else false;
+
+    // Parse attributeFilter array
+    var attr_filter_list: std.ArrayListUnmanaged([]const u8) = .empty;
+    if (argc >= 2) {
+        const af = qjs.JS_GetPropertyStr(c, args[1], "attributeFilter");
+        defer qjs.JS_FreeValue(c, af);
+        if (!quickjs.JS_IsUndefined(af) and af.tag == qjs.JS_TAG_OBJECT) {
+            const len_val = qjs.JS_GetPropertyStr(c, af, "length");
+            defer qjs.JS_FreeValue(c, len_val);
+            var len: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &len, len_val);
+            var fi: u32 = 0;
+            while (fi < @as(u32, @intCast(len))) : (fi += 1) {
+                const item = qjs.JS_GetPropertyUint32(c, af, fi);
+                defer qjs.JS_FreeValue(c, item);
+                const s = dom_api.jsStringToSlice(c, item) orelse continue;
+                defer qjs.JS_FreeCString(c, s.ptr);
+                const copy = allocator.alloc(u8, s.len) catch continue;
+                @memcpy(copy, s.ptr[0..s.len]);
+                attr_filter_list.append(allocator, copy) catch {
+                    allocator.free(copy);
+                };
+            }
+        }
+    }
+
     mutation_observers.items[idx].targets.append(allocator, .{
         .node = target,
         .child_list = child_list,
@@ -2485,6 +2530,7 @@ fn jsMutationObserverObserve(
         .character_data = character_data,
         .character_data_old_value = char_data_old,
         .subtree = subtree,
+        .attribute_filter = attr_filter_list,
     }) catch {};
     mutation_observers.items[idx].disconnected = false;
     return quickjs.JS_UNDEFINED();
