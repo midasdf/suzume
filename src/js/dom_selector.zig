@@ -13,16 +13,28 @@ extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
 // ── Scope element for :scope pseudo-class (DOM spec §4.2.6) ────────
-// Set by querySelector/querySelectorAll/closest before matching, cleared after.
-// :scope matches only this element (or the document root if null).
-var g_scope_element: ?*lxb.lxb_dom_node_t = null;
+// Stack-based to handle reentrancy (nested querySelector calls from getters,
+// MutationObserver callbacks, etc.)
+var g_scope_stack: [16]?*lxb.lxb_dom_node_t = .{null} ** 16;
+var g_scope_depth: usize = 0;
 
 pub fn setScopeElement(node: ?*lxb.lxb_dom_node_t) void {
-    g_scope_element = node;
+    if (g_scope_depth < g_scope_stack.len) {
+        g_scope_stack[g_scope_depth] = node;
+        g_scope_depth += 1;
+    }
 }
 
 pub fn clearScopeElement() void {
-    g_scope_element = null;
+    if (g_scope_depth > 0) {
+        g_scope_depth -= 1;
+        g_scope_stack[g_scope_depth] = null;
+    }
+}
+
+fn getCurrentScopeElement() ?*lxb.lxb_dom_node_t {
+    if (g_scope_depth > 0) return g_scope_stack[g_scope_depth - 1];
+    return null;
 }
 
 // ── CSS escape decoding (CSS Syntax §4.3.7) ────────────────────────
@@ -286,7 +298,7 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         if (std.ascii.eqlIgnoreCase(sel, ":root")) return isRoot(@ptrCast(elem));
         if (std.ascii.eqlIgnoreCase(sel, ":scope")) {
             // :scope matches only the context element set by querySelector/closest
-            if (g_scope_element) |scope| return (@intFromPtr(elem) == @intFromPtr(scope));
+            if (getCurrentScopeElement()) |scope| return (@intFromPtr(elem) == @intFromPtr(scope));
             // If no scope set, :scope matches the document element (:root)
             return isRoot(@ptrCast(elem));
         }
