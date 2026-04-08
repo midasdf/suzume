@@ -102,8 +102,16 @@ fn decodeCssEscapes(input: []const u8, buf: []u8) []const u8 {
                     i += 1;
                     count += 1;
                 }
-                // Skip optional single whitespace after hex
-                if (i < input.len and (input[i] == ' ' or input[i] == '\t' or input[i] == '\n' or input[i] == '\r')) i += 1;
+                // Skip optional single whitespace after hex (CSS Syntax §4.3.7)
+                // \r\n counts as a single whitespace; \f (form feed) is also whitespace
+                if (i < input.len) {
+                    if (input[i] == '\r') {
+                        i += 1;
+                        if (i < input.len and input[i] == '\n') i += 1; // consume \r\n as one
+                    } else if (input[i] == ' ' or input[i] == '\t' or input[i] == '\n' or input[i] == 0x0C) {
+                        i += 1;
+                    }
+                }
                 // Invalid code points → U+FFFD
                 if (code == 0 or code > 0x10FFFF or (code >= 0xD800 and code <= 0xDFFF)) {
                     if (out + 3 <= buf.len) {
@@ -148,15 +156,20 @@ pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) b
     if (sel.len == 0) return false;
 
     // Handle comma-separated selector list (any match = true)
+    // Must skip CSS escape sequences to avoid splitting on escaped commas
     var start: usize = 0;
     var depth: usize = 0;
-    for (sel, 0..) |ch, i| {
+    var i: usize = 0;
+    while (i < sel.len) {
+        const ch = sel[i];
+        if (ch == '\\' and i + 1 < sel.len) { i += 2; continue; } // skip CSS escape
         if (ch == '(' or ch == '[') depth += 1
         else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
         else if (ch == ',' and depth == 0) {
             if (matchSingleSelector(node, std.mem.trim(u8, sel[start..i], " \t"))) return true;
             start = i + 1;
         }
+        i += 1;
     }
     return matchSingleSelector(node, std.mem.trim(u8, sel[start..], " \t"));
 }
@@ -627,11 +640,26 @@ pub fn findPseudoStart(sel: []const u8) ?usize {
     // Find ':' that's not inside [] or () and not CSS-escaped — marks start of pseudo-class
     var depth: u32 = 0;
     var i: usize = 0;
-    while (i < sel.len) : (i += 1) {
-        if (sel[i] == '\\' and i + 1 < sel.len) { i += 1; continue; } // skip CSS escape
+    while (i < sel.len) {
+        if (sel[i] == '\\' and i + 1 < sel.len) {
+            i += 1; // skip backslash
+            if (isHexDigit(sel[i])) {
+                // Skip hex digits (up to 6)
+                var hc: usize = 0;
+                while (i < sel.len and hc < 6 and isHexDigit(sel[i])) { i += 1; hc += 1; }
+                // Skip optional whitespace after hex
+                if (i < sel.len) {
+                    if (sel[i] == '\r') { i += 1; if (i < sel.len and sel[i] == '\n') i += 1; } else if (sel[i] == ' ' or sel[i] == '\t' or sel[i] == '\n' or sel[i] == 0x0C) i += 1;
+                }
+            } else {
+                i += 1; // skip escaped char
+            }
+            continue;
+        }
         if (sel[i] == '(' or sel[i] == '[') depth += 1
         else if ((sel[i] == ')' or sel[i] == ']') and depth > 0) depth -= 1
         else if (sel[i] == ':' and depth == 0) return i;
+        i += 1;
     }
     return null;
 }
@@ -993,6 +1021,16 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     if (expected.len >= 2 and (expected[0] == '"' or expected[0] == '\'') and expected[expected.len - 1] == expected[0]) {
         expected = expected[1 .. expected.len - 1];
     }
+    // Check for case-sensitivity flag: [attr=val i] or [attr=val s]
+    // The flag is after the closing quote/value, separated by space
+    var case_insensitive = false;
+    if (expected.len >= 2) {
+        const last = expected[expected.len - 1];
+        if ((last == 'i' or last == 'I' or last == 's' or last == 'S') and expected[expected.len - 2] == ' ') {
+            if (last == 'i' or last == 'I') case_insensitive = true;
+            expected = std.mem.trimRight(u8, expected[0 .. expected.len - 2], " \t");
+        }
+    }
     // Decode CSS escapes in expected value
     var esc_buf: [512]u8 = undefined;
     const decoded_exp = decodeCssEscapes(expected, &esc_buf);
@@ -1000,6 +1038,38 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
     if (val == null) return false;
     const actual = val.?[0..val_len];
+
+    if (case_insensitive) {
+        // Case-insensitive comparison using lowercased copies
+        var lower_actual_buf: [1024]u8 = undefined;
+        var lower_exp_buf: [512]u8 = undefined;
+        const la_len = @min(actual.len, lower_actual_buf.len);
+        const le_len = @min(decoded_exp.len, lower_exp_buf.len);
+        for (0..la_len) |ci| lower_actual_buf[ci] = std.ascii.toLower(actual[ci]);
+        for (0..le_len) |ci| lower_exp_buf[ci] = std.ascii.toLower(decoded_exp[ci]);
+        const la = lower_actual_buf[0..la_len];
+        const le = lower_exp_buf[0..le_len];
+        return switch (op_type) {
+            '=' => std.mem.eql(u8, la, le),
+            '^' => la.len >= le.len and std.mem.eql(u8, la[0..le.len], le),
+            '$' => la.len >= le.len and std.mem.eql(u8, la[la.len - le.len ..], le),
+            '*' => std.mem.indexOf(u8, la, le) != null,
+            '~' => blk: {
+                // Word match case-insensitive
+                var rest = la;
+                while (rest.len > 0) {
+                    const sp = std.mem.indexOfScalar(u8, rest, ' ') orelse rest.len;
+                    if (sp == le.len and std.mem.eql(u8, rest[0..sp], le)) break :blk true;
+                    if (sp >= rest.len) break;
+                    rest = rest[sp + 1 ..];
+                }
+                break :blk false;
+            },
+            '|' => std.mem.eql(u8, la, le) or
+                (la.len > le.len and std.mem.eql(u8, la[0..le.len], le) and la[le.len] == '-'),
+            else => false,
+        };
+    }
 
     return switch (op_type) {
         '=' => std.mem.eql(u8, actual, decoded_exp),
@@ -1144,27 +1214,38 @@ pub fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb
     if (trimmed.len == 0) return null;
 
     // Handle comma-separated selectors at top level (not inside :not(), :is() etc.)
+    // Must skip CSS escape sequences to avoid splitting on escaped commas
     {
         var depth: u32 = 0;
         var has_top_comma = false;
-        for (trimmed) |ch| {
-            if (ch == '(' or ch == '[') depth += 1
-            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-            else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+        {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
+                if (ch == '(' or ch == '[') depth += 1
+                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+                else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+                ci += 1;
+            }
         }
         if (has_top_comma) {
             var start: usize = 0;
             depth = 0;
-            for (trimmed, 0..) |ch, idx| {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
                 if (ch == '(' or ch == '[') depth += 1
                 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
                 else if (ch == ',' and depth == 0) {
-                    const sub = std.mem.trim(u8, trimmed[start..idx], " \t");
+                    const sub = std.mem.trim(u8, trimmed[start..ci], " \t");
                     if (sub.len > 0) {
                         if (walkTreeBySelector(node, sub)) |found| return found;
                     }
-                    start = idx + 1;
+                    start = ci + 1;
                 }
+                ci += 1;
             }
             const sub = std.mem.trim(u8, trimmed[start..], " \t");
             if (sub.len > 0) {
@@ -1452,7 +1533,15 @@ pub fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
                         hcount += 1;
                     }
                     // Skip optional whitespace after hex escape (it's part of the escape, not a combinator)
-                    if (i < trimmed.len and (trimmed[i] == ' ' or trimmed[i] == '\t' or trimmed[i] == '\n' or trimmed[i] == '\r' or trimmed[i] == 0x0C)) i += 1;
+                    // \r\n counts as single whitespace per CSS Syntax §4.3.7
+                    if (i < trimmed.len) {
+                        if (trimmed[i] == '\r') {
+                            i += 1;
+                            if (i < trimmed.len and trimmed[i] == '\n') i += 1;
+                        } else if (trimmed[i] == ' ' or trimmed[i] == '\t' or trimmed[i] == '\n' or trimmed[i] == 0x0C) {
+                            i += 1;
+                        }
+                    }
                 } else {
                     i += 1; // skip escaped character
                 }
@@ -1669,25 +1758,36 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
     if (trimmed.len == 0) return;
 
     // Handle comma-separated selectors (top-level only, not inside :not() etc.)
+    // Must skip CSS escape sequences to avoid splitting on escaped commas
     {
         var depth: u32 = 0;
         var has_top_comma = false;
-        for (trimmed) |ch| {
-            if (ch == '(' or ch == '[') depth += 1
-            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-            else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+        {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
+                if (ch == '(' or ch == '[') depth += 1
+                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+                else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+                ci += 1;
+            }
         }
         if (has_top_comma) {
             var start: usize = 0;
             depth = 0;
-            for (trimmed, 0..) |ch, i| {
+            var ci: usize = 0;
+            while (ci < trimmed.len) {
+                const ch = trimmed[ci];
+                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
                 if (ch == '(' or ch == '[') depth += 1
                 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
                 else if (ch == ',' and depth == 0) {
-                    const sub = std.mem.trim(u8, trimmed[start..i], " \t");
+                    const sub = std.mem.trim(u8, trimmed[start..ci], " \t");
                     if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
-                    start = i + 1;
+                    start = ci + 1;
                 }
+                ci += 1;
             }
             const sub = std.mem.trim(u8, trimmed[start..], " \t");
             if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);

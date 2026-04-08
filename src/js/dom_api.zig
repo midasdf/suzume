@@ -5083,14 +5083,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    /* Strip CSS escape sequences before validation so \: etc. don't confuse checks */
             \\    var _sn=s.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\    if(s==='')throw new DOMException("Failed to execute '"+meth+"': '' is not a valid selector.","SyntaxError");
-            \\    function _splitTopCommas(str){var parts=[],start=0,d=0;for(var i=0;i<str.length;i++){var c=str[i];if(c==='('||c==='[')d++;else if((c===')'||c===']')&&d>0)d--;else if(c===','&&d===0){parts.push(str.substring(start,i));start=i+1;}}parts.push(str.substring(start));return parts;}
+            \\    function _splitTopCommas(str){var parts=[],start=0,d=0;for(var i=0;i<str.length;i++){var c=str[i];if(c==='\\'&&i+1<str.length){i++;continue;}if(c==='('||c==='[')d++;else if((c===')'||c===']')&&d>0)d--;else if(c===','&&d===0){parts.push(str.substring(start,i));start=i+1;}}parts.push(str.substring(start));return parts;}
             \\    var parts=_splitTopCommas(s);
             \\    for(var p=0;p<parts.length;p++){
             \\      var t=parts[p].trim();
             \\      if(t==='')throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var tn=t.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\      var sq=0,rn=0,cu=0;
-            \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
+            \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='\\'&&i+1<t.length){i++;continue;}if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
             \\      if(sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^[<>{}()\[\]]$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^#$/.test(tn)||/^\.(\d|\.|\s*$)/.test(tn)||/\.\s*$/.test(tn)||/\.$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
