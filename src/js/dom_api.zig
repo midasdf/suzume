@@ -4544,9 +4544,11 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      for(var i=0;i<a.length;i++){if(a[i].fn===f){a.splice(i,1);return;}}
             \\    },
             \\    dispatchEvent: function(e) {
-            \\      var de=_elemCh(null);if(!de)return false;
-            \\      var r=de.dispatchEvent(e);
-            \\      var k='__el_'+(e.type||'');var a=doc[k];if(a){var c=a.slice();for(var i=0;i<c.length;i++){var fn=c[i].fn||c[i];if(typeof fn==='function')fn.call(doc,e);}}
+            \\      var t=e.type||'';
+            \\      function _fire(k){var a=doc[k];if(!a||!a.length)return;var c=a.slice();for(var i=0;i<c.length;i++){if(e._stopImmediate)break;var h=c[i],fn=h.fn||h;if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}if(typeof fn==='function')fn.call(doc,e);else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(e);}}
+            \\      _fire('__el_'+t+'\x00c');
+            \\      var de=_elemCh(null);var r=de?de.dispatchEvent(e):!e.defaultPrevented;
+            \\      _fire('__el_'+t);
             \\      return r;
             \\    },
             \\    createAttribute: function(n) { return document.createAttribute(n); },
