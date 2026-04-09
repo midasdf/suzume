@@ -122,3 +122,6 @@ The CSS engine is fully self-implemented in Zig with no external CSS library dep
 ## License
 
 MIT
+
+## Disclaimer
+This project uses AI-generated code (LLM). I do my best to review and test it, but I can't guarantee it's perfect. Please use it at your own risk.\n
