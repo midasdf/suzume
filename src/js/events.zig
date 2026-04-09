@@ -2059,22 +2059,25 @@ fn dispatchToNativeEntries(c: *qjs.JSContext, entries: *std.ArrayListUnmanaged(W
 fn dispatchToJsEntries(c: *qjs.JSContext, target: qjs.JSValue, event_obj: qjs.JSValue, type_val: qjs.JSValue) void {
     const js_dispatch =
         \\(function(el,evt,type){
-        \\  var k='__el_'+type;var a=el[k];if(!a)return;
-        \\  var copy=a.slice();
-        \\  var origPD=evt.preventDefault;
-        \\  for(var i=0;i<copy.length;i++){
-        \\    if(evt._stopImmediate)break;if(evt._stopped)break;
-        \\    var h=copy[i];
-        \\    if(a.indexOf(h)<0)continue;
-        \\    var fn=h.fn||h;
-        \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
-        \\    var wasPD=evt.defaultPrevented;
-        \\    if(h.passive)evt.preventDefault=function(){};
-        \\    else evt.preventDefault=origPD;
-        \\    if(typeof fn==='function')fn.call(el,evt);
-        \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
-        \\    if(h.passive){evt.defaultPrevented=wasPD;evt.returnValue=true;}
+        \\  function _run(k){var a=el[k];if(!a||!a.length)return;
+        \\    var copy=a.slice();
+        \\    for(var i=0;i<copy.length;i++){
+        \\      if(evt._stopImmediate)break;if(evt._stopped)break;
+        \\      var h=copy[i];
+        \\      if(a.indexOf(h)<0)continue;
+        \\      var fn=h.fn||h;
+        \\      if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+        \\      var wasPD=evt.defaultPrevented,origRV=evt.returnValue;
+        \\      if(h.passive){evt.preventDefault=function(){};var _rvDesc=Object.getOwnPropertyDescriptor(evt,'returnValue');Object.defineProperty(evt,'returnValue',{set:function(){},get:function(){return origRV;},configurable:true});}
+        \\      else evt.preventDefault=origPD;
+        \\      if(typeof fn==='function')fn.call(el,evt);
+        \\      else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+        \\      if(h.passive){evt.defaultPrevented=wasPD;if(_rvDesc)Object.defineProperty(evt,'returnValue',_rvDesc);else evt.returnValue=origRV;}
+        \\    }
         \\  }
+        \\  var origPD=evt.preventDefault;
+        \\  _run('__el_'+type+'\x00c');
+        \\  _run('__el_'+type);
         \\  evt.preventDefault=origPD;
         \\})
     ;
