@@ -5178,7 +5178,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var tn=t.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\      var sq=0,rn=0,cu=0,inStr=false,q='';
             \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='\\'&&i+1<t.length){i++;continue;}if(inStr){if(c===q)inStr=false;continue;}if(c==='"'||c==="'"){inStr=true;q=c;continue;}if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
-            \\      if(inStr||sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(inStr)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^[<>{}()\[\]]$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^#$/.test(tn)||/^\.(\d|\.|\s*$)/.test(tn)||/\.\s*$/.test(tn)||/\.$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var _nb=tn.replace(/\[[^\]]*\]/g,'');if(/\.\./.test(_nb)||/#\./.test(_nb))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
@@ -5207,16 +5207,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var _pcRe=/:([a-z-]+(\()?)/g,_pcM;while((_pcM=_pcRe.exec(tn))!==null){if(_pcM.index>0&&tn[_pcM.index-1]===':')continue;if(!_knownPseudo.test(_pcM[0]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
             \\    }
             \\  }
+            \\  function _autoClose(s){var sq=0,rn=0,inStr=false,q='';for(var i=0;i<s.length;i++){var c=s[i];if(c==='\\'&&i+1<s.length){i++;continue;}if(inStr){if(c===q)inStr=false;continue;}if(c==='"'||c==="'"){inStr=true;q=c;continue;}if(c==='[')sq++;else if(c===']'&&sq>0)sq--;else if(c==='(')rn++;else if(c===')'&&rn>0)rn--;}while(sq-->0)s+=']';while(rn-->0)s+=')';return s;}
             \\  var _nm=Element.prototype.matches,_nc=Element.prototype.closest;
             \\  var _nqs=Element.prototype.querySelector,_nqsa=Element.prototype.querySelectorAll;
-            \\  Element.prototype.matches=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'matches': 1 argument required, but only 0 present.");_vSel(s,'matches');return _nm.call(this,s);};
+            \\  Element.prototype.matches=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'matches': 1 argument required, but only 0 present.");_vSel(s,'matches');return _nm.call(this,_autoClose(String(s)));};
             \\  Element.prototype.webkitMatchesSelector=Element.prototype.matches;
-            \\  Element.prototype.closest=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'closest': 1 argument required, but only 0 present.");_vSel(s,'closest');return _nc.call(this,s);};
-            \\  Element.prototype.querySelector=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelector': 1 argument required, but only 0 present.");_vSel(s,'querySelector');return _nqs.call(this,s);};
-            \\  Element.prototype.querySelectorAll=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelectorAll': 1 argument required, but only 0 present.");_vSel(s,'querySelectorAll');return _nqsa.call(this,s);};
+            \\  Element.prototype.closest=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'closest': 1 argument required, but only 0 present.");_vSel(s,'closest');return _nc.call(this,_autoClose(String(s)));};
+            \\  Element.prototype.querySelector=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelector': 1 argument required, but only 0 present.");_vSel(s,'querySelector');return _nqs.call(this,_autoClose(String(s)));};
+            \\  Element.prototype.querySelectorAll=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelectorAll': 1 argument required, but only 0 present.");_vSel(s,'querySelectorAll');return _nqsa.call(this,_autoClose(String(s)));};
             \\  var _dqs=document.querySelector,_dqsa=document.querySelectorAll;
-            \\  document.querySelector=function(s){_vSel(s,'querySelector');return _dqs.call(document,s);};
-            \\  document.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _dqsa.call(document,s);};
+            \\  document.querySelector=function(s){_vSel(s,'querySelector');return _dqs.call(document,_autoClose(String(s)));};
+            \\  document.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _dqsa.call(document,_autoClose(String(s)));};
             \\})()
         ;
         const sv_r = qjs.JS_Eval(ctx, sel_valid_js, sel_valid_js.len, "<sel-valid>", qjs.JS_EVAL_TYPE_GLOBAL);
