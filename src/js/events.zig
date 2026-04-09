@@ -2063,7 +2063,10 @@ fn dispatchToJsEntries(c: *qjs.JSContext, target: qjs.JSValue, event_obj: qjs.JS
         \\  var copy=a.slice();
         \\  var origPD=evt.preventDefault;
         \\  for(var i=0;i<copy.length;i++){
-        \\    var h=copy[i],fn=h.fn||h;
+        \\    if(evt._stopImmediate)break;if(evt._stopped)break;
+        \\    var h=copy[i];
+        \\    if(a.indexOf(h)<0)continue;
+        \\    var fn=h.fn||h;
         \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
         \\    var wasPD=evt.defaultPrevented;
         \\    if(h.passive)evt.preventDefault=function(){};

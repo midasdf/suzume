@@ -3459,8 +3459,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const hcp_js =
             \\(function(){
             \\  var p={};
-            \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
-            \\  p.namedItem=function(n){if(!n)return null;for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
+            \\  p.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
+            \\  p.namedItem=function(n){n=String(n);if(n==='')return null;for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
             \\  Object.defineProperty(p,'length',{get:function(){return 0;},enumerable:true,configurable:true});
             \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
             \\  p.map=function(cb,t){var r=[];for(var i=0;i<this.length;i++)r.push(cb.call(t,this[i],i,this));return r;};
@@ -5065,23 +5065,43 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function createLiveHTMLColl(queryFn){
             \\    var expandos=Object.create(null),cache=null,cacheVer=-1;
             \\    function q(){var v=__domVer();if(cacheVer!==v){var r=queryFn();cache=[];for(var i=0;i<r.length;i++)cache.push(r[i]);cacheVer=v;}return cache;}
-            \\    function ni(name){if(!name)return null;var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
+            \\    function isIdx(p){if(typeof p!=='string')return false;var n=p>>>0;return String(n)===p&&n<4294967295;}
+            \\    function ni(name){if(typeof name!=='string'||name==='')return null;var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
             \\    var t=Object.create(HTMLCollection.prototype);
-            \\    return new Proxy(t,{
-            \\      get:function(t,p){
-            \\        if(p in expandos)return expandos[p];
-            \\        if(p==='length')return q().length;
-            \\        if(typeof p==='string'&&/^\d+$/.test(p)){var items=q(),idx=+p;return idx<items.length?items[idx]:void 0;}
-            \\        if(p===Symbol.iterator){var items=q();return function(){var i=0,a=items;return{next:function(){return i<a.length?{value:a[i++],done:false}:{done:true};}};}}
+            \\    var proxy=new Proxy(t,{
+            \\      get:function(t,p,receiver){
+            \\        if(p==='length'){if(receiver!==proxy)throw new TypeError('Illegal invocation');return q().length;}
+            \\        if(typeof p==='string'&&isIdx(p)){var items=q(),idx=p>>>0;return idx<items.length?items[idx]:void 0;}
+            \\        if(p===Symbol.iterator){var items2=q();return function(){var i=0,a=items2;return{next:function(){return i<a.length?{value:a[i++],done:false}:{done:true};}};};}
             \\        if(p===Symbol.toStringTag)return'HTMLCollection';
+            \\        if(typeof p==='string'&&p in expandos)return expandos[p];
             \\        if(typeof p==='string'&&p!=='item'&&p!=='namedItem'&&p!=='constructor'&&p!=='toString'&&p!=='toLocaleString'&&p!=='valueOf'&&p!=='hasOwnProperty'&&p!=='isPrototypeOf'&&p!=='propertyIsEnumerable'){var f=ni(p);if(f)return f;}
             \\        return t[p];
             \\      },
-            \\      set:function(t,p,v){if(typeof p==='string'&&/^\d+$/.test(p))return false;expandos[p]=v;return true;},
-            \\      has:function(t,p){if(p in expandos)return true;if(p==='length'||p==='item'||p==='namedItem')return true;if(typeof p==='string'){if(/^\d+$/.test(p))return+p<q().length;if(ni(p))return true;}return p in t;},
-            \\      ownKeys:function(){var items=q(),keys=[],seen={};for(var i=0;i<items.length;i++)keys.push(String(i));for(var i=0;i<items.length;i++){var el=items[i];var id=el.getAttribute?el.getAttribute('id'):null;if(id&&!seen[id]){keys.push(id);seen[id]=1;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=el.getAttribute?el.getAttribute('name'):null;if(nm&&!seen[nm]){keys.push(nm);seen[nm]=1;}}}return keys;},
-            \\      getOwnPropertyDescriptor:function(t,p){if(typeof p==='string'){if(/^\d+$/.test(p)){var items=q(),idx=+p;if(idx<items.length)return{value:items[idx],writable:false,enumerable:true,configurable:true};return void 0;}var f=ni(p);if(f)return{value:f,writable:false,enumerable:false,configurable:true};}return void 0;}
+            \\      set:function(t,p,v,receiver){
+            \\        if(receiver!==proxy){Object.defineProperty(receiver,p,{value:v,writable:true,enumerable:true,configurable:true});return true;}
+            \\        if(typeof p==='string'&&isIdx(p))return false;
+            \\        if(typeof p==='string'){var f=ni(p);if(f)return false;}
+            \\        expandos[p]=v;return true;
+            \\      },
+            \\      deleteProperty:function(t,p){
+            \\        if(typeof p==='string'&&isIdx(p)){var items=q();return(p>>>0)>=items.length;}
+            \\        if(p in expandos){var d=Object.getOwnPropertyDescriptor(expandos,p);if(d&&!d.configurable)return false;delete expandos[p];return true;}
+            \\        if(typeof p==='string'){var f=ni(p);if(f)return false;}
+            \\        return true;
+            \\      },
+            \\      defineProperty:function(t,p,desc){
+            \\        if(typeof p==='string'&&isIdx(p))return false;
+            \\        if(typeof p==='string'){var f=ni(p);if(f)return false;}
+            \\        Object.defineProperty(expandos,p,desc);
+            \\        if(desc&&desc.configurable===false)Object.defineProperty(t,p,desc);
+            \\        return true;
+            \\      },
+            \\      has:function(t,p){if(p in expandos)return true;if(p==='length'||p==='item'||p==='namedItem')return true;if(typeof p==='string'){if(isIdx(p))return(p>>>0)<q().length;if(ni(p))return true;}return p in t;},
+            \\      ownKeys:function(){var items=q(),keys=[],seen={};for(var i=0;i<items.length;i++){keys.push(String(i));seen[String(i)]=1;}var ek=Object.getOwnPropertyNames(expandos);for(var j=0;j<ek.length;j++){if(!seen[ek[j]]){keys.push(ek[j]);seen[ek[j]]=1;}}for(var i=0;i<items.length;i++){var el=items[i];var id=el.getAttribute?el.getAttribute('id'):null;if(id&&id!==''&&!seen[id]){keys.push(id);seen[id]=1;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=el.getAttribute?el.getAttribute('name'):null;if(nm&&nm!==''&&!seen[nm]){keys.push(nm);seen[nm]=1;}}}return keys;},
+            \\      getOwnPropertyDescriptor:function(t,p){if(typeof p==='string'){if(isIdx(p)){var items=q(),idx=p>>>0;if(idx<items.length)return{value:items[idx],writable:false,enumerable:true,configurable:true};return void 0;}if(p in expandos)return Object.getOwnPropertyDescriptor(expandos,p);var f=ni(p);if(f)return{value:f,writable:false,enumerable:false,configurable:true};}return void 0;}
             \\    });
+            \\    return proxy;
             \\  }
             \\  function asciiLower(s){return s.replace(/[A-Z]/g,function(c){return String.fromCharCode(c.charCodeAt(0)+32);});}
             \\  function matchQName(el,tag,lcTag){var qn;var ol=el.__origLocal||el.localName;var pfx=el.prefix;if(pfx&&pfx!==null){qn=pfx+':'+ol;}else{qn=ol;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){return qn===lcTag;}else{return qn===tag;}}

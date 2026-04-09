@@ -873,6 +873,11 @@ pub fn elementRemoveChild(
         defer qjs.JS_FreeValue(c, nt);
         if (nt.tag == qjs.JS_TAG_UNDEFINED)
             return qjs.JS_ThrowTypeError(c, "Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
+        // Verify child's parentNode matches this parent (DOM spec: NotFoundError)
+        const pn = qjs.JS_GetPropertyStr(c, args[0], "parentNode");
+        defer qjs.JS_FreeValue(c, pn);
+        const is_child = pn.tag == this_val.tag and pn.u.ptr == this_val.u.ptr;
+        if (!is_child) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
         // Remove from __jsChildren tracking on parent
         removeJsChildFromParent(c, this_val, args[0]);
         // Remove parentNode reference on JS-level node

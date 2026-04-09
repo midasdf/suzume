@@ -1353,19 +1353,16 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toggle", qjs.JS_NewCFunction(ctx, &classListToggle, "toggle", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "replace", qjs.JS_NewCFunction(ctx, &classListReplace, "replace", 2));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "item", qjs.JS_NewCFunction(ctx, &classListItem, "item", 1));
-    _ = qjs.JS_SetPropertyStr(ctx, obj, "forEach", qjs.JS_NewCFunction(ctx, &classListForEach, "forEach", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "toString", qjs.JS_NewCFunction(ctx, &classListGetValue, "toString", 0));
-    // keys/values/entries return iterators (not Arrays) per DOMTokenList spec
+    // DOMTokenList spec: inherit keys/values/entries/forEach/Symbol.iterator from Array.prototype
     {
         const iter_js =
             \\(function(cl){
-            \\  cl.keys=function(){var i=0,l=this.length;return{next:function(){return i<l?{value:i++,done:false}:{done:true};},
-            \\    [Symbol.iterator]:function(){return this;}}};
-            \\  cl.values=function(){var i=0,l=this.length,t=this;return{next:function(){return i<l?{value:t.item(i++),done:false}:{done:true};},
-            \\    [Symbol.iterator]:function(){return this;}}};
-            \\  cl.entries=function(){var i=0,l=this.length,t=this;return{next:function(){return i<l?{value:[i,t.item(i++)],done:false}:{done:true};},
-            \\    [Symbol.iterator]:function(){return this;}}};
-            \\  cl[Symbol.iterator]=cl.values;
+            \\  cl.keys=Array.prototype.keys;
+            \\  cl.values=Array.prototype.values||Array.prototype[Symbol.iterator];
+            \\  cl.entries=Array.prototype.entries;
+            \\  cl.forEach=Array.prototype.forEach;
+            \\  cl[Symbol.iterator]=Array.prototype[Symbol.iterator];
             \\})
         ;
         const iter_fn = qjs.JS_Eval(ctx, iter_js, iter_js.len, "<cl-iter>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -1393,10 +1390,9 @@ pub fn createClassList(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValu
     // Wrap classList in a Proxy for dynamic indexed access and Symbol.iterator
     const iter_js =
         \\(function(cl){
-        \\  cl[Symbol.iterator]=function(){var idx=0,self=this;return{next:function(){var v=self.item(idx++);return v===null?{done:true}:{done:false,value:v};}};};
         \\  cl[Symbol.toStringTag]='DOMTokenList';
         \\  cl._tokens=function(){var e=this.__element;if(!e)return[];var c=e.getAttribute('class');if(!c)return[];var seen={},r=[];c.split(/[\x20\t\n\r\f]+/).forEach(function(s){if(s&&!seen[s]){seen[s]=1;r.push(s);}});return r;};
-        \\  return new Proxy(cl,{get:function(t,p,r){if(typeof p==='string'&&/^\d+$/.test(p)){var toks=t._tokens();var i=parseInt(p);return i<toks.length?toks[i]:undefined;}if(p===Symbol.toStringTag)return'DOMTokenList';return Reflect.get(t,p,r);},set:function(t,p,v,r){return Reflect.set(t,p,v,r);}});
+        \\  return new Proxy(cl,{get:function(t,p,r){if(p==='length'){return t._tokens().length;}if(typeof p==='string'&&/^\d+$/.test(p)){var toks=t._tokens();var i=parseInt(p);return i<toks.length?toks[i]:undefined;}if(p===Symbol.toStringTag)return'DOMTokenList';return Reflect.get(t,p,r);},set:function(t,p,v,r){return Reflect.set(t,p,v,r);},has:function(t,p){if(typeof p==='string'&&/^\d+$/.test(p)){return parseInt(p)<t._tokens().length;}return p in t;}});
         \\})
     ;
     const iter_fn = qjs.JS_Eval(ctx, iter_js, iter_js.len, "<classList>", qjs.JS_EVAL_TYPE_GLOBAL);
