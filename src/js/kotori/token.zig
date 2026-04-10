@@ -82,12 +82,15 @@ pub const TokenType = enum(u8) {
     eq_gt,
     plus,
     plus_eq,
+    plus_assign, // alias for plus_eq
     plus_plus,
     minus,
     minus_eq,
+    minus_assign, // alias for minus_eq
     minus_minus,
     star,
     star_eq,
+    star_assign, // alias for star_eq
     star_star,
     star_star_eq,
     slash,
@@ -98,6 +101,7 @@ pub const TokenType = enum(u8) {
     amp_eq,
     amp_amp,
     amp_amp_eq,
+    amp_amp_assign, // alias for amp_amp_eq (&&=)
     pipe,
     pipe_eq,
     pipe_pipe,
@@ -114,6 +118,11 @@ pub const TokenType = enum(u8) {
     gt_gt_eq,
     gt_gt_gt,
     gt_gt_gt_eq,
+
+    // Aliases used by tests / alternate names
+    ne_eq, // !== (same as bang_eq_eq semantically, separate tag for clarity)
+    arrow, // => (same as eq_gt semantically)
+    ellipsis, // ... (same as dot_dot_dot semantically)
 
     // Control
     eof,

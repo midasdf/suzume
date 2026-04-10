@@ -24,3 +24,27 @@ fn expectTokens(source: []const u8, expected_types: []const TokenType) !void {
 test "empty source" {
     try expectTokens("", &.{});
 }
+
+test "whitespace is skipped" {
+    try expectTokens("   \t\n  ", &.{});
+}
+
+test "single-line comment" {
+    try expectTokens("// comment\n42", &.{.number});
+}
+
+test "multi-line comment" {
+    try expectTokens("/* comment */42", &.{.number});
+}
+
+test "punctuators" {
+    try expectTokens("(){};,", &.{ .lparen, .rparen, .lbrace, .rbrace, .semicolon, .comma });
+}
+
+test "multi-char punctuators" {
+    try expectTokens("=== !== => ...", &.{ .eq_eq_eq, .ne_eq, .arrow, .ellipsis });
+}
+
+test "assignment operators" {
+    try expectTokens("+= -= *= &&=", &.{ .plus_assign, .minus_assign, .star_assign, .amp_amp_assign });
+}
