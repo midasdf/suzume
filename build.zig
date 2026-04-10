@@ -346,6 +346,8 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("xcb-keysyms");
     exe.linkSystemLibrary("xcb-util");
     exe.linkSystemLibrary("X11");
+    exe.linkSystemLibrary("xcb-shm");
+    exe.linkSystemLibrary("xcb-cursor");
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("sqlite3");
     exe.linkSystemLibrary("webp");
