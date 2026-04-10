@@ -3,6 +3,51 @@ const std = @import("std");
 // const build_libcss = @import("build_libcss.zig");
 const build_libnsfb = @import("build_libnsfb.zig");
 
+fn linkWoff2(exe: *std.Build.Step.Compile) void {
+    // Some environments ship only the versioned shared objects (e.g. libwoff2dec.so.1.0.2)
+    // without the devel symlinks (libwoff2dec.so). Zig's linkSystemLibrary expects the latter.
+    // Fall back to explicit `-l:filename` when the symlink is missing.
+    const candidates = [_][]const u8{
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib64",
+        "/usr/lib",
+        "/lib/x86_64-linux-gnu",
+        "/lib64",
+        "/lib",
+    };
+
+    const woff2dec = findFirstExistingFile(exe.step.owner, &candidates, &.{
+        // Prefer devel symlink when available.
+        "libwoff2dec.so",
+        // Fallbacks for runtime-only installs.
+        "libwoff2dec.so.1.0.2",
+        "libwoff2dec.so.1",
+    }) orelse null;
+    const woff2common = findFirstExistingFile(exe.step.owner, &candidates, &.{
+        "libwoff2common.so",
+        "libwoff2common.so.1.0.2",
+        "libwoff2common.so.1",
+    }) orelse null;
+
+    // If both are present, link them. If neither are present, leave WOFF2 wrapper
+    // compilation in place and let the build fail with a clear missing symbol error
+    // at link-time if WOFF2 is actually required by the platform.
+    if (woff2dec) |path| exe.root_module.addObjectFile(path);
+    if (woff2common) |path| exe.root_module.addObjectFile(path);
+}
+
+fn findFirstExistingFile(b: *std.Build, dirs: []const []const u8, names: []const []const u8) ?std.Build.LazyPath {
+    for (dirs) |dir| {
+        for (names) |name| {
+            var buf: [256]u8 = undefined;
+            const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir, name }) catch continue;
+            std.fs.accessAbsolute(path, .{}) catch continue;
+            return .{ .cwd_relative = b.dupe(path) };
+        }
+    }
+    return null;
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -86,6 +131,13 @@ pub fn build(b: *std.Build) void {
     // XIM (X Input Method) helper for fcitx5/mozc Japanese input
     exe.addCSourceFile(.{
         .file = b.path("src/xim_helper.c"),
+        .flags = &.{"-fno-sanitize=undefined"},
+    });
+
+    // Optional shim for nsfb_x_* helpers referenced by Zig code.
+    // Upstream libnsfb does not provide these symbols; keep the build working.
+    exe.addCSourceFile(.{
+        .file = b.path("src/nsfb_x_shim.c"),
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
@@ -215,10 +267,10 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("sqlite3");
     exe.linkSystemLibrary("webp");
-    exe.linkSystemLibrary("woff2dec");
-    exe.linkSystemLibrary("woff2common");
     exe.linkSystemLibrary("brotlidec");
     exe.linkSystemLibrary("fontconfig");
+
+    linkWoff2(exe);
 
     // C++ standard library (needed by HarfBuzz + woff2)
     exe.linkLibCpp();
