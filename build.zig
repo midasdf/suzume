@@ -470,4 +470,39 @@ pub fn build(b: *std.Build) void {
     const run_css_tests = b.addRunArtifact(css_tests);
     const test_css_step = b.step("test-css", "Run CSS engine tests");
     test_css_step.dependOn(&run_css_tests.step);
+
+    // ── kotori JS engine tests ─────────────────────────────────
+    const kotori_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori/kotori.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const test_kotori_lexer_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_kotori_lexer.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_kotori_lexer_mod.addImport("kotori", kotori_mod);
+
+    const test_kotori_parser_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_kotori_parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const kotori_all_test_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_kotori.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kotori_all_test_mod.addImport("test_kotori_lexer", test_kotori_lexer_mod);
+    kotori_all_test_mod.addImport("test_kotori_parser", test_kotori_parser_mod);
+
+    const kotori_tests = b.addTest(.{
+        .root_module = kotori_all_test_mod,
+    });
+    const run_kotori_tests = b.addRunArtifact(kotori_tests);
+    const test_kotori_step = b.step("test-kotori", "Run kotori JS engine tests");
+    test_kotori_step.dependOn(&run_kotori_tests.step);
 }
