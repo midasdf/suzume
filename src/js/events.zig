@@ -1349,6 +1349,7 @@ pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
         if (std.mem.eql(u8, entry.event_type, event_type)) {
             const event_obj = createEventObject(ctx, event_type, null, null);
             _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_trusted", quickjs.JS_NewBool(true));
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(true));
             defer qjs.JS_FreeValue(ctx, event_obj);
             var i: usize = 0;
             while (i < entry.callbacks.items.len) {
@@ -1365,6 +1366,7 @@ pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
                     i += 1;
                 }
             }
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
             break;
         }
     }
@@ -1385,6 +1387,8 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "target", qjs.JS_DupValue(ctx, doc_obj));
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, doc_obj));
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "eventPhase", qjs.JS_NewInt32(ctx, 2)); // AT_TARGET
+    // DOM spec: set dispatch flag — dispatchEvent must throw InvalidStateError while dispatching
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(true));
 
     // Fire listeners stored on the lxb document node (via document.addEventListener)
     // AT_TARGET: dispatch capture listeners first, then bubble (DOM spec ordering)
@@ -1427,6 +1431,8 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, global));
     callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
     callOnEventHandler(ctx, global, event_type, event_obj);
+    // DOM spec: clear dispatch flag after dispatch completes
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
 }
 
 // ── Registration ────────────────────────────────────────────────────
@@ -2129,6 +2135,17 @@ pub fn getTextClassId() qjs.JSClassID {
 }
 
 /// Clean up all event listeners. Called when navigating to a new page.
+/// Reset event state without freeing JS values (for leak-safe navigation teardown).
+/// Use when the JS runtime is being leaked intentionally to avoid heap corruption.
+pub fn resetEventsLeaky() void {
+    listener_entries = .empty;
+    window_listener_entries = .empty;
+    document_listener_entries = .empty;
+    cached_js_doc_dispatch = quickjs.JS_UNDEFINED();
+    mutation_observers = .empty;
+    g_ctx = null;
+}
+
 pub fn deinitEvents(ctx: *qjs.JSContext) void {
     for (listener_entries.items) |*entry| {
         for (entry.callbacks.items) |rec| {
@@ -2252,6 +2269,43 @@ pub fn recordMutationChildList(
     next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
     recordMutationFull(target, "childList", added, removed, null, null, null, prev_sib, next_sib);
+}
+
+/// Record a childList mutation with multiple added AND removed nodes (for innerHTML/replaceChildren).
+pub fn recordMutationChildListBulk(
+    target: *lxb.lxb_dom_node_t,
+    added_nodes: []const *lxb.lxb_dom_node_t,
+    removed_nodes: []const *lxb.lxb_dom_node_t,
+    prev_sib: ?*lxb.lxb_dom_node_t,
+    next_sib: ?*lxb.lxb_dom_node_t,
+) void {
+    for (mutation_observers.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            const matches = (t.node == target) or
+                (t.subtree and isDescendant(target, t.node));
+            if (!matches) continue;
+            if (!t.child_list) continue;
+
+            var record = MutationRecord{
+                .type_str = "childList",
+                .target = target,
+                .attribute_name = null,
+                .added_nodes = .empty,
+                .removed_nodes = .empty,
+                .previous_sibling = prev_sib,
+                .next_sibling = next_sib,
+            };
+            for (added_nodes) |n| {
+                record.added_nodes.append(allocator, n) catch {};
+            }
+            for (removed_nodes) |n| {
+                record.removed_nodes.append(allocator, n) catch {};
+            }
+            obs.pending_records.append(allocator, record) catch {};
+            break;
+        }
+    }
 }
 
 /// Record a childList mutation with multiple added nodes (for DocumentFragment insertion).

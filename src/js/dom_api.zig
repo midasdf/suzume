@@ -52,6 +52,14 @@ extern fn lxb_html_document_parse_fragment(document: *anyopaque, element: *lxb.l
 pub var element_class_id: qjs.JSClassID = 0;
 pub var text_class_id: qjs.JSClassID = 0;
 
+// Per-type prototypes for correct prototype chain:
+// Text.prototype → CharacterData.prototype → Node.prototype
+// Comment.prototype → CharacterData.prototype → Node.prototype
+// ProcessingInstruction.prototype → CharacterData.prototype → Node.prototype
+var text_proto_val: qjs.JSValue = quickjs.JS_UNDEFINED();
+var comment_proto_val: qjs.JSValue = quickjs.JS_UNDEFINED();
+var pi_proto_val: qjs.JSValue = quickjs.JS_UNDEFINED();
+
 // ── Global state ────────────────────────────────────────────────────
 /// The lxb_dom_document_t pointer (cast to *anyopaque because of cImport limitations).
 /// Set once during registerDomApis.
@@ -493,6 +501,16 @@ pub fn cacheDocumentNode(ctx: *qjs.JSContext, doc_ptr: *anyopaque, doc_js: qjs.J
     node_cache.?.put(key, qjs.JS_DupValue(ctx, doc_js)) catch {};
 }
 
+/// Reset node cache without freeing JS values (for leak-safe navigation teardown).
+pub fn resetNodeCacheLeaky() void {
+    if (node_cache) |*cache| {
+        cache.clearRetainingCapacity();
+    }
+    text_proto_val = quickjs.JS_UNDEFINED();
+    comment_proto_val = quickjs.JS_UNDEFINED();
+    pi_proto_val = quickjs.JS_UNDEFINED();
+}
+
 /// Clear the node identity cache (called on page navigation).
 pub fn clearNodeCache(ctx: *qjs.JSContext) void {
     if (node_cache) |*cache| {
@@ -501,6 +519,19 @@ pub fn clearNodeCache(ctx: *qjs.JSContext) void {
             qjs.JS_FreeValue(ctx, entry.value_ptr.*);
         }
         cache.clearRetainingCapacity();
+    }
+    // Free per-type prototype globals to avoid GC list assertion in JS_FreeRuntime
+    if (!quickjs.JS_IsUndefined(text_proto_val)) {
+        qjs.JS_FreeValue(ctx, text_proto_val);
+        text_proto_val = quickjs.JS_UNDEFINED();
+    }
+    if (!quickjs.JS_IsUndefined(comment_proto_val)) {
+        qjs.JS_FreeValue(ctx, comment_proto_val);
+        comment_proto_val = quickjs.JS_UNDEFINED();
+    }
+    if (!quickjs.JS_IsUndefined(pi_proto_val)) {
+        qjs.JS_FreeValue(ctx, pi_proto_val);
+        pi_proto_val = quickjs.JS_UNDEFINED();
     }
 }
 
@@ -568,6 +599,15 @@ fn wrapTextNew(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JSValue {
     const obj = qjs.JS_NewObjectClass(ctx, @intCast(text_class_id));
     if (quickjs.JS_IsException(obj)) return obj;
     _ = qjs.JS_SetOpaque(obj, @ptrCast(node));
+    // Set per-type prototype for correct prototype chain
+    const node_type = node.type;
+    if (node_type == lxb.LXB_DOM_NODE_TYPE_TEXT) {
+        _ = qjs.JS_SetPrototype(ctx, obj, text_proto_val);
+    } else if (node_type == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
+        _ = qjs.JS_SetPrototype(ctx, obj, comment_proto_val);
+    } else if (node_type == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+        _ = qjs.JS_SetPrototype(ctx, obj, pi_proto_val);
+    }
     return obj;
 }
 
@@ -2960,7 +3000,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Object.defineProperty(NP,'baseURI',{get:function(){var d=this.ownerDocument||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});
             \\  delete globalThis.__np;
             \\  function _toNode(a){return(a&&typeof a==='object'&&a.nodeType)?a:document.createTextNode(String(a));}
-            \\  NP.replaceChildren=function(){while(this.firstChild)this.removeChild(this.firstChild);for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
+            \\  NP.replaceChildren=function(){var node=null;if(arguments.length>0){var d=this.ownerDocument||this;if(arguments.length===1){node=_toNode(arguments[0]);}else{node=d.createDocumentFragment();for(var i=0;i<arguments.length;i++)node.appendChild(_toNode(arguments[i]));}}if(this.nodeType===9&&node){var nt=node.nodeType;if(nt!==1&&nt!==3&&nt!==7&&nt!==8&&nt!==10&&nt!==11)throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(nt===3)throw new DOMException('HierarchyRequestError','HierarchyRequestError');var p=this;while(p){if(p===node)throw new DOMException('HierarchyRequestError','HierarchyRequestError');p=p.parentNode;}if(nt===1){for(var c=this.firstChild;c;c=c.nextSibling)if(c.nodeType===1)throw new DOMException('Already has element.','HierarchyRequestError');}else if(nt===10){for(var c=this.firstChild;c;c=c.nextSibling){if(c.nodeType===10)throw new DOMException('Already has doctype.','HierarchyRequestError');if(c.nodeType===1)throw new DOMException('Element before doctype.','HierarchyRequestError');}}else if(nt===11){var ec=0,ht=false;for(var fc=node.firstChild;fc;fc=fc.nextSibling){if(fc.nodeType===1)ec++;if(fc.nodeType===3)ht=true;}if(ec>1||ht)throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(ec===1){for(var c=this.firstChild;c;c=c.nextSibling)if(c.nodeType===1)throw new DOMException('Already has element.','HierarchyRequestError');}}}else if(this.nodeType!==9&&node&&node.nodeType===10){throw new DOMException('HierarchyRequestError','HierarchyRequestError');}while(this.firstChild)this.removeChild(this.firstChild);if(node)this.appendChild(node);};
             \\  NP.prepend=function(){var f=this.firstChild;for(var i=0;i<arguments.length;i++){var a=_toNode(arguments[i]);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
             \\  NP.append=function(){for(var i=0;i<arguments.length;i++)this.appendChild(_toNode(arguments[i]));};
             \\})()
@@ -4067,23 +4107,46 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     qjs.JS_SetClassProto(ctx, text_class_id, text_proto);
 
-    // Text/CharacterData/Comment/PI constructors with prototype for instanceof
+    // Text/CharacterData/Comment/PI constructors with proper prototype chain:
+    // Text.prototype → CharacterData.prototype → Node.prototype → EventTarget.prototype
+    // Comment.prototype → CharacterData.prototype → Node.prototype → EventTarget.prototype
     {
         const tp = qjs.JS_GetClassProto(ctx, text_class_id);
-        // Text constructor: new Text(data?) creates a real text node
-        const text_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsTextConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
-        _ = qjs.JS_SetPropertyStr(ctx, text_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
-        _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
+        // tp is the class proto with all CharacterData methods — use as CharacterData.prototype
         const chardata_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "CharacterData", 0, qjs.JS_CFUNC_constructor, 0);
         _ = qjs.JS_SetPropertyStr(ctx, chardata_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
         _ = qjs.JS_SetPropertyStr(ctx, global, "CharacterData", chardata_ctor);
-        // Comment constructor: new Comment(data?) creates a real comment node
+
+        // Text.prototype: new object inheriting from CharacterData.prototype (tp)
+        const t_proto = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPrototype(ctx, t_proto, tp);
+        text_proto_val = qjs.JS_DupValue(ctx, t_proto);
+        const text_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsTextConstructor, "Text", 0, qjs.JS_CFUNC_constructor, 0);
+        _ = qjs.JS_SetPropertyStr(ctx, text_ctor, "prototype", qjs.JS_DupValue(ctx, t_proto));
+        _ = qjs.JS_SetPropertyStr(ctx, t_proto, "constructor", qjs.JS_DupValue(ctx, text_ctor));
+        _ = qjs.JS_SetPropertyStr(ctx, global, "Text", text_ctor);
+        qjs.JS_FreeValue(ctx, t_proto);
+
+        // Comment.prototype: new object inheriting from CharacterData.prototype (tp)
+        const c_proto = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPrototype(ctx, c_proto, tp);
+        comment_proto_val = qjs.JS_DupValue(ctx, c_proto);
         const comment_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsCommentConstructor, "Comment", 0, qjs.JS_CFUNC_constructor, 0);
-        _ = qjs.JS_SetPropertyStr(ctx, comment_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
+        _ = qjs.JS_SetPropertyStr(ctx, comment_ctor, "prototype", qjs.JS_DupValue(ctx, c_proto));
+        _ = qjs.JS_SetPropertyStr(ctx, c_proto, "constructor", qjs.JS_DupValue(ctx, comment_ctor));
         _ = qjs.JS_SetPropertyStr(ctx, global, "Comment", comment_ctor);
+        qjs.JS_FreeValue(ctx, c_proto);
+
+        // ProcessingInstruction.prototype: new object inheriting from CharacterData.prototype (tp)
+        const p_proto = qjs.JS_NewObject(ctx);
+        _ = qjs.JS_SetPrototype(ctx, p_proto, tp);
+        pi_proto_val = qjs.JS_DupValue(ctx, p_proto);
         const pi_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "ProcessingInstruction", 0, qjs.JS_CFUNC_constructor, 0);
-        _ = qjs.JS_SetPropertyStr(ctx, pi_ctor, "prototype", qjs.JS_DupValue(ctx, tp));
+        _ = qjs.JS_SetPropertyStr(ctx, pi_ctor, "prototype", qjs.JS_DupValue(ctx, p_proto));
+        _ = qjs.JS_SetPropertyStr(ctx, p_proto, "constructor", qjs.JS_DupValue(ctx, pi_ctor));
         _ = qjs.JS_SetPropertyStr(ctx, global, "ProcessingInstruction", pi_ctor);
+        qjs.JS_FreeValue(ctx, p_proto);
+
         qjs.JS_FreeValue(ctx, tp);
     }
 
@@ -4619,7 +4682,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    normalize: function(){for(var i=0;i<_ch.length;i++)if(_ch[i].normalize)_ch[i].normalize();},
             \\    prepend: function(){var f=_ch[0]||null;for(var i=arguments.length-1;i>=0;i--){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.insertBefore(n,f);f=n;}},
             \\    append: function(){for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
-            \\    replaceChildren: function(){while(_ch.length>0)doc.removeChild(_ch[0]);for(var i=0;i<arguments.length;i++){var n=arguments[i];if(typeof n==='string')n=document.createTextNode(n);doc.appendChild(n);}},
+            \\    replaceChildren: function(){var node=null;if(arguments.length>0){if(arguments.length===1){node=(typeof arguments[0]==='string')?document.createTextNode(arguments[0]):arguments[0];}else{node=document.createDocumentFragment();for(var j=0;j<arguments.length;j++){var a=arguments[j];if(typeof a==='string')a=document.createTextNode(a);node.appendChild(a);}}}if(node){var nt=node.nodeType;if(nt!==1&&nt!==3&&nt!==7&&nt!==8&&nt!==10&&nt!==11)throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(nt===3)throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(nt===1&&_elemCh(null))throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(nt===10){if(_dtCh(null))throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(_elemCh(null))throw new DOMException('HierarchyRequestError','HierarchyRequestError');}if(nt===11){var ec=0,ht=false;for(var fc=node.firstChild;fc;fc=fc.nextSibling){if(fc.nodeType===1)ec++;if(fc.nodeType===3)ht=true;}if(ec>1||ht)throw new DOMException('HierarchyRequestError','HierarchyRequestError');if(ec===1&&_elemCh(null))throw new DOMException('HierarchyRequestError','HierarchyRequestError');}}while(_ch.length>0)doc.removeChild(_ch[0]);if(node)doc.appendChild(node);},
             \\    nodeValue: null,
             \\  };
             \\  Object.defineProperty(doc,'textContent',{get:function(){return null;},set:function(){},configurable:true,enumerable:true});
@@ -4879,7 +4942,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  };
             \\  Document.prototype.prepend = function(){var f=this._childNodes[0]||null;for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};_docPreInsert(this,a);if(f)this.insertBefore(a,f);else this.appendChild(a);}};
             \\  Document.prototype.append = function(){for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
-            \\  Document.prototype.replaceChildren = function(){while(this._childNodes.length>0)this.removeChild(this._childNodes[this._childNodes.length-1]);for(var i=0;i<arguments.length;i++){var a=arguments[i];if(typeof a==='string')a={nodeType:3,nodeName:'#text',data:a,textContent:a,nodeValue:a,childNodes:[],parentNode:null};this.appendChild(a);}};
+            \\  Document.prototype.replaceChildren = function(){var node=null;if(arguments.length>0){if(arguments.length===1){var a0=arguments[0];node=(typeof a0==='string')?{nodeType:3,nodeName:'#text',data:a0,textContent:a0,nodeValue:a0,childNodes:[],parentNode:null}:a0;}else{node=document.createDocumentFragment();for(var j=0;j<arguments.length;j++){var a=arguments[j];if(typeof a==='string')a=document.createTextNode(a);node.appendChild(a);}}}if(node)_docPreInsert(this,node);while(this._childNodes.length>0)this.removeChild(this._childNodes[this._childNodes.length-1]);if(node)this.appendChild(node);};
             \\  Document.prototype.importNode = function(n,d) { return n.cloneNode(d); };
             \\  Document.prototype.adoptNode = function(n) { if(!n||n.nodeType===9)throw new DOMException('Cannot adopt a document node.','NotSupportedError');if(n.parentNode)n.parentNode.removeChild(n);_setOwnerDoc(n,this);n.parentNode=null;return n; };
             \\  Document.prototype.createAttribute = function(n) { if(n===undefined)n='undefined';if(n===null)n='null';n=''+n;if(n.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ct=this.contentType||'';var isHTML=(ct==='text/html'||ct==='application/xhtml+xml');var ln=isHTML?n.toLowerCase():n;var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:this,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});return a; };

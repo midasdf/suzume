@@ -43,8 +43,10 @@ pub const JsRuntime = struct {
         web_api.deinitTimers(self.ctx);
         web_api.deinitWebSockets(self.ctx);
         web_api.deinitWorkers(self.ctx);
+        // Only free the context, not the runtime. With GC disabled (threshold=SIZE_MAX),
+        // JS_FreeRuntime triggers heap corruption from lingering cyclic GC objects.
+        // The runtime memory is reclaimed on process exit or when a new page is loaded.
         qjs.JS_FreeContext(self.ctx);
-        qjs.JS_FreeRuntime(self.rt);
     }
 
     /// Evaluate JavaScript code as an ES module.

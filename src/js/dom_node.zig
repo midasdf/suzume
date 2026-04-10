@@ -479,7 +479,7 @@ pub fn elementGetChildren(
         \\  for(var i=0;i<a.length;i++){var e=a[i];
         \\    var eid=e.getAttribute&&e.getAttribute('id');
         \\    if(eid&&!names[eid])names[eid]=e;
-        \\    var ns=e.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===null||ns===undefined){
+        \\    var ns=e.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'){
         \\      var ename=e.getAttribute&&e.getAttribute('name');
         \\      if(ename&&!names[ename])names[ename]=e;
         \\    }
