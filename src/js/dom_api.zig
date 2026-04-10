@@ -56,9 +56,9 @@ pub var text_class_id: qjs.JSClassID = 0;
 // Text.prototype → CharacterData.prototype → Node.prototype
 // Comment.prototype → CharacterData.prototype → Node.prototype
 // ProcessingInstruction.prototype → CharacterData.prototype → Node.prototype
-var text_proto_val: qjs.JSValue = undefined;
-var comment_proto_val: qjs.JSValue = undefined;
-var pi_proto_val: qjs.JSValue = undefined;
+var text_proto_val: qjs.JSValue = quickjs.JS_UNDEFINED();
+var comment_proto_val: qjs.JSValue = quickjs.JS_UNDEFINED();
+var pi_proto_val: qjs.JSValue = quickjs.JS_UNDEFINED();
 
 // ── Global state ────────────────────────────────────────────────────
 /// The lxb_dom_document_t pointer (cast to *anyopaque because of cImport limitations).
@@ -509,6 +509,19 @@ pub fn clearNodeCache(ctx: *qjs.JSContext) void {
             qjs.JS_FreeValue(ctx, entry.value_ptr.*);
         }
         cache.clearRetainingCapacity();
+    }
+    // Free per-type prototype globals to avoid GC list assertion in JS_FreeRuntime
+    if (!quickjs.JS_IsUndefined(text_proto_val)) {
+        qjs.JS_FreeValue(ctx, text_proto_val);
+        text_proto_val = quickjs.JS_UNDEFINED();
+    }
+    if (!quickjs.JS_IsUndefined(comment_proto_val)) {
+        qjs.JS_FreeValue(ctx, comment_proto_val);
+        comment_proto_val = quickjs.JS_UNDEFINED();
+    }
+    if (!quickjs.JS_IsUndefined(pi_proto_val)) {
+        qjs.JS_FreeValue(ctx, pi_proto_val);
+        pi_proto_val = quickjs.JS_UNDEFINED();
     }
 }
 
