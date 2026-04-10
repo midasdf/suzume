@@ -3,48 +3,87 @@ const std = @import("std");
 // const build_libcss = @import("build_libcss.zig");
 const build_libnsfb = @import("build_libnsfb.zig");
 
-fn linkWoff2(exe: *std.Build.Step.Compile) void {
-    // Some environments ship only the versioned shared objects (e.g. libwoff2dec.so.1.0.2)
-    // without the devel symlinks (libwoff2dec.so). Zig's linkSystemLibrary expects the latter.
-    // Fall back to explicit `-l:filename` when the symlink is missing.
-    const candidates = [_][]const u8{
-        "/usr/lib/x86_64-linux-gnu",
-        "/usr/lib64",
-        "/usr/lib",
-        "/lib/x86_64-linux-gnu",
-        "/lib64",
-        "/lib",
-    };
-
-    linkOptionalSharedObject(exe, &candidates, &.{
-        // Prefer devel symlink when available.
-        "libwoff2dec.so",
-        // Fallbacks for runtime-only installs.
-        "libwoff2dec.so.1.0.2",
-        "libwoff2dec.so.1",
-    });
-    linkOptionalSharedObject(exe, &candidates, &.{
-        "libwoff2common.so",
-        "libwoff2common.so.1.0.2",
-        "libwoff2common.so.1",
-    });
+fn collectWoffLibSearchDirs(b: *std.Build, list: *std.ArrayList([]const u8), resolved: std.Target) !void {
+    const push = struct {
+        fn pushInner(alloc: std.mem.Allocator, lst: *std.ArrayList([]const u8), s: []const u8) !void {
+            try lst.append(alloc, try alloc.dupe(u8, s));
+        }
+    }.pushInner;
+    if (resolved.os.tag == .linux) {
+        switch (resolved.cpu.arch) {
+            .x86_64 => {
+                try push(b.allocator, list, "/usr/lib/x86_64-linux-gnu");
+                try push(b.allocator, list, "/lib/x86_64-linux-gnu");
+            },
+            .aarch64 => {
+                try push(b.allocator, list, "/usr/lib/aarch64-linux-gnu");
+                try push(b.allocator, list, "/lib/aarch64-linux-gnu");
+            },
+            else => {
+                const triple = try resolved.linuxTriple(b.allocator);
+                defer b.allocator.free(triple);
+                const u = try std.fmt.allocPrint(b.allocator, "/usr/lib/{s}", .{triple});
+                defer b.allocator.free(u);
+                const l = try std.fmt.allocPrint(b.allocator, "/lib/{s}", .{triple});
+                defer b.allocator.free(l);
+                try list.append(b.allocator, try b.allocator.dupe(u8, u));
+                try list.append(b.allocator, try b.allocator.dupe(u8, l));
+            },
+        }
+    }
+    try push(b.allocator, list, "/usr/lib64");
+    try push(b.allocator, list, "/usr/lib");
+    try push(b.allocator, list, "/lib64");
+    try push(b.allocator, list, "/lib");
 }
 
-fn findFirstExistingFile(b: *std.Build, dirs: []const []const u8, names: []const []const u8) ?std.Build.LazyPath {
+/// Prefer `stem.so`, else any `stem.so*` (longest basename wins as a rough "newest" heuristic).
+fn findWoffSharedObject(b: *std.Build, dirs: []const []const u8, stem: []const u8) ?std.Build.LazyPath {
+    var buf: [512]u8 = undefined;
     for (dirs) |dir| {
-        for (names) |name| {
-            var buf: [256]u8 = undefined;
-            const path = std.fmt.bufPrint(&buf, "{s}/{s}", .{ dir, name }) catch continue;
-            std.fs.accessAbsolute(path, .{}) catch continue;
-            return .{ .cwd_relative = b.dupe(path) };
+        const unversioned = std.fmt.bufPrint(&buf, "{s}/{s}.so", .{ dir, stem }) catch continue;
+        std.fs.accessAbsolute(unversioned, .{}) catch continue;
+        return .{ .cwd_relative = b.dupe(unversioned) };
+    }
+    var best_name_len: usize = 0;
+    var best_path: ?[]const u8 = null;
+    defer if (best_path) |p| b.allocator.free(p);
+    for (dirs) |dir| {
+        var d = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch continue;
+        defer d.close();
+        var it = d.iterate();
+        while (it.next() catch break) |ent| {
+            if (ent.kind != .file) continue;
+            if (!std.mem.startsWith(u8, ent.name, stem)) continue;
+            const after = ent.name[stem.len..];
+            if (!std.mem.eql(u8, after, ".so") and !std.mem.startsWith(u8, after, ".so.")) continue;
+            if (ent.name.len <= best_name_len) continue;
+            best_name_len = ent.name.len;
+            if (best_path) |old| b.allocator.free(old);
+            best_path = std.fmt.allocPrint(b.allocator, "{s}/{s}", .{ dir, ent.name }) catch continue;
         }
+    }
+    if (best_path) |full| {
+        return .{ .cwd_relative = b.dupe(full) };
     }
     return null;
 }
 
-fn linkOptionalSharedObject(exe: *std.Build.Step.Compile, dirs: []const []const u8, names: []const []const u8) void {
-    if (findFirstExistingFile(exe.step.owner, dirs, names)) |path| {
-        exe.root_module.addObjectFile(path);
+fn linkWoff2(exe: *std.Build.Step.Compile) void {
+    const b = exe.step.owner;
+    const resolved = exe.root_module.resolved_target orelse return;
+    var dirs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (dirs.items) |p| b.allocator.free(p);
+        dirs.deinit(b.allocator);
+    }
+    collectWoffLibSearchDirs(b, &dirs, resolved.result) catch return;
+
+    if (findWoffSharedObject(b, dirs.items, "libwoff2dec")) |p| {
+        exe.root_module.addObjectFile(p);
+    }
+    if (findWoffSharedObject(b, dirs.items, "libwoff2common")) |p| {
+        exe.root_module.addObjectFile(p);
     }
 }
 

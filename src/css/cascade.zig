@@ -570,6 +570,7 @@ fn makeDomAdapter(node: DomNode) selectors.ElementAdapter {
     };
 }
 
+// ElementAdapter.ptr must be a lexbor element node pointer; only makeDomAdapter stores into this vtable.
 const dom_vtable = selectors.ElementAdapter.VTable{
     .tagName = domTagName,
     .getAttribute = domGetAttribute,

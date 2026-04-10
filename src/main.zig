@@ -60,14 +60,22 @@ const session = @import("core/session.zig");
 const url_utils = @import("core/url_utils.zig");
 const http_status = @import("net/http_status.zig");
 
-/// After `tab_mgr` switches the active tab, restore scroll and URL bar from that tab.
+/// After `tab_mgr` switches the active tab, restore scroll/URL bar and lazy-load an empty page if needed.
 fn applyActiveTabToUi(
     allocator: std.mem.Allocator,
     tab_mgr: *TabManager,
+    page_states: *std.ArrayListUnmanaged(PageState),
     url_input: *TextInput,
     current_url: *?[]u8,
     scroll_y: *f32,
     scroll_x: *f32,
+    loader: *Loader,
+    fonts: *painter_mod.FontCache,
+    storage: ?*Storage,
+    surface_width: i32,
+    surface_height: i32,
+    status_text: *[]const u8,
+    needs_repaint: *bool,
 ) void {
     if (tab_mgr.getActiveTab()) |tab| {
         scroll_y.* = tab.scroll_y;
@@ -76,6 +84,24 @@ fn applyActiveTabToUi(
         url_input.focused = false;
         if (current_url.*) |old| allocator.free(old);
         current_url.* = allocator.dupe(u8, tab.url) catch null;
+
+        if (tab_mgr.active_index < page_states.items.len) {
+            const pg = &page_states.items[tab_mgr.active_index];
+            if (pg.root_box == null and pg.error_message == null and tab.url.len > 0) {
+                const url_z = allocator.allocSentinel(u8, tab.url.len, 0) catch return;
+                defer allocator.free(url_z);
+                @memcpy(url_z, tab.url);
+                status_text.* = "Loading...";
+                needs_repaint.* = true;
+                if (navigateTo(allocator, loader, url_z, fonts, pg, storage, surface_width, surface_height)) {
+                    status_text.* = "Done";
+                    scroll_y.* = 0;
+                    scroll_x.* = 0;
+                } else {
+                    status_text.* = "Failed";
+                }
+            }
+        }
     }
 }
 
@@ -1677,7 +1703,7 @@ pub fn main() !void {
                         tab_mgr.closeTab(close_idx);
 
                         // Restore state from new active tab
-                        applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
+                        applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &needs_repaint);
                         status_text = "Tab closed";
                         needs_repaint = true;
                         std.debug.print("[Tabs] Closed tab, now {d} tabs\n", .{tab_mgr.tabCount()});
@@ -1688,7 +1714,7 @@ pub fn main() !void {
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and !shift_held) {
                         tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         if (tab_mgr.nextTab()) {
-                            applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
+                            applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &needs_repaint);
                             needs_repaint = true;
                         }
                         continue;
@@ -1698,7 +1724,7 @@ pub fn main() !void {
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and shift_held) {
                         tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         if (tab_mgr.prevTab()) {
-                            applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
+                            applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &needs_repaint);
                             needs_repaint = true;
                         }
                         continue;
@@ -1710,7 +1736,7 @@ pub fn main() !void {
                         if (tab_idx < tab_mgr.tabCount()) {
                             tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                             if (tab_mgr.switchTo(tab_idx)) {
-                                applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
+                                applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &needs_repaint);
                                 needs_repaint = true;
                             }
                         }
@@ -1931,35 +1957,14 @@ pub fn main() !void {
                                     _ = page_states.orderedRemove(ci);
                                 }
                                 tab_mgr.closeTab(ci);
-                                applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
+                                applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &needs_repaint);
                                 needs_repaint = true;
                                 continue;
                             },
                             .switch_tab => {
                                 tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                                 if (tab_mgr.switchTo(tab_hit.index)) {
-                                    applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
-                                    // Lazy load: if this tab has no loaded page, navigate to its URL
-                                    if (tab_mgr.getActiveTab()) |tab| {
-                                        if (tab_hit.index < page_states.items.len) {
-                                            const pg = &page_states.items[tab_hit.index];
-                                            if (pg.root_box == null and pg.error_message == null and tab.url.len > 0) {
-                                                const url_z = allocator.allocSentinel(u8, tab.url.len, 0) catch null;
-                                                if (url_z) |uz| {
-                                                    defer allocator.free(uz);
-                                                    @memcpy(uz, tab.url);
-                                                    status_text = "Loading...";
-                                                    if (navigateTo(allocator, &loader, uz, &fonts, pg, storage_ptr, surface.width, surface.height)) {
-                                                        status_text = "Done";
-                                                        scroll_y = 0;
-                                                        scroll_x = 0;
-                                                    } else {
-                                                        status_text = "Failed";
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
+                                    applyActiveTabToUi(allocator, &tab_mgr, &page_states, &url_input, &current_url, &scroll_y, &scroll_x, &loader, &fonts, storage_ptr, surface.width, surface.height, &status_text, &needs_repaint);
                                     needs_repaint = true;
                                 }
                                 continue;
@@ -1971,7 +1976,7 @@ pub fn main() !void {
                         const active_pg = activePageState(&tab_mgr, &page_states);
                         if (active_pg) |page| {
                             prev_focused_input_node = focused_input_node;
-                            handleClick(
+                            const click_navigated = handleClick(
                                 allocator,
                                 mouse_x,
                                 mouse_y,
@@ -2006,13 +2011,15 @@ pub fn main() !void {
                                     }
                                 }
                             }
-                            // Update tab with new URL and page title
+                            // Update tab title; record history only on real navigation (link/form submit)
                             if (current_url) |cu| {
                                 tab_mgr.updateActiveUrl(cu);
                                 const active_pg_title = activePageState(&tab_mgr, &page_states);
                                 const click_title = if (active_pg_title) |pgt| (if (pgt.doc) |*d| extractTitle(d) else null) else null;
                                 tab_mgr.updateActiveTitle(click_title orelse cu);
-                                recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, cu, click_title orelse cu);
+                                if (click_navigated) {
+                                    recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, cu, click_title orelse cu);
+                                }
                             }
                         }
                         continue;
@@ -2635,17 +2642,17 @@ fn handleClick(
     win_h: i32,
     focused_input_node: *?*lxb.lxb_dom_node_t,
     form_input: *TextInput,
-) void {
+) bool {
     // Click in URL bar?
     if (my < chrome.url_bar_height) {
         url_input.focused = true;
         focused_input_node.* = null; // unfocus form input
         needs_repaint.* = true;
-        return;
+        return false;
     }
 
     // Click in status bar? (ignore)
-    if (my >= win_h - chrome.status_bar_height) return;
+    if (my >= win_h - chrome.status_bar_height) return false;
 
     // Click in content area — unfocus URL bar
     url_input.focused = false;
@@ -2680,10 +2687,10 @@ fn handleClick(
         };
 
         // If JS called preventDefault() on click, skip default actions
-        if (click_prevented) return;
+        if (click_prevented) return false;
 
         // Re-read root_box in case restylePage replaced it
-        const current_root = page.root_box orelse return;
+        const current_root = page.root_box orelse return false;
         const hit_link = painter_mod.hitTestLink(current_root, layout_x, layout_y);
         const hit_node = painter_mod.hitTestNode(current_root, layout_x, layout_y);
         if (hit_node) |np| {
@@ -2732,11 +2739,11 @@ fn handleClick(
                         form_input.setText(current_value);
                         std.debug.print("[form] Focused input type={s} value=\"{s}\"\n", .{ input_type, current_value });
                         needs_repaint.* = true;
-                        return;
+                        return false;
                     } else if (is_button_input) {
                         // Submit button clicked — submit the form
                         std.debug.print("[form] Submit button clicked\n", .{});
-                        const btn_form = findParentForm(fnode) orelse return;
+                        const btn_form = findParentForm(fnode) orelse return false;
                         if (submitForm(allocator, btn_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w, win_h)) |nav_url| {
                             defer allocator.free(nav_url);
                             url_input.setText(nav_url);
@@ -2747,12 +2754,14 @@ fn handleClick(
                             scroll_x.* = 0;
 
                             truncateForwardHistory(allocator, history, history_pos.*);
-                            if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return;
+                            if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return false;
                             if (current_url.*) |old| allocator.free(old);
                             current_url.* = allocator.dupe(u8, nav_url) catch null;
+                            needs_repaint.* = true;
+                            return true;
                         }
                         needs_repaint.* = true;
-                        return;
+                        return false;
                     }
                 } else if (std.mem.eql(u8, ftag, "textarea")) {
                     // <textarea> — focus for text input (Google search uses textarea)
@@ -2761,11 +2770,11 @@ fn handleClick(
                     form_input.setText(current_value);
                     std.debug.print("[form] Focused textarea\n", .{});
                     needs_repaint.* = true;
-                    return;
+                    return false;
                 } else if (std.mem.eql(u8, ftag, "button")) {
                     // <button> click — submit the form
                     std.debug.print("[form] <button> clicked\n", .{});
-                    const button_form = findParentForm(fnode) orelse return;
+                    const button_form = findParentForm(fnode) orelse return false;
                     if (submitForm(allocator, button_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w, win_h)) |nav_url| {
                         defer allocator.free(nav_url);
                         url_input.setText(nav_url);
@@ -2776,12 +2785,14 @@ fn handleClick(
                         scroll_x.* = 0;
 
                         truncateForwardHistory(allocator, history, history_pos.*);
-                        if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return;
+                        if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return false;
                         if (current_url.*) |old| allocator.free(old);
                         current_url.* = allocator.dupe(u8, nav_url) catch null;
+                        needs_repaint.* = true;
+                        return true;
                     }
                     needs_repaint.* = true;
-                    return;
+                    return false;
                 }
             }
 
@@ -2795,7 +2806,7 @@ fn handleClick(
         if (hit_link) |link_href| {
             // Resolve URL
             const base = if (current_url.*) |u| u else "";
-            const resolved = resolveUrl(allocator, base, link_href) catch return;
+            const resolved = resolveUrl(allocator, base, link_href) catch return false;
             defer allocator.free(resolved);
 
             std.debug.print("Navigating to: {s}\n", .{resolved});
@@ -2810,7 +2821,7 @@ fn handleClick(
                 scroll_x.* = 0;
 
                 truncateForwardHistory(allocator, history, history_pos.*);
-                if (!pushHistoryNavigationUrl(allocator, history, history_pos, resolved)) return;
+                if (!pushHistoryNavigationUrl(allocator, history, history_pos, resolved)) return false;
 
                 if (current_url.*) |old| allocator.free(old);
                 const cu = allocator.alloc(u8, resolved.len) catch null;
@@ -2818,15 +2829,20 @@ fn handleClick(
                     @memcpy(c, resolved);
                     current_url.* = c;
                 }
+                needs_repaint.* = true;
+                return true;
             } else {
                 status_text.* = "Failed";
             }
             needs_repaint.* = true;
+            return false;
         } else {
             needs_repaint.* = true; // repaint to show unfocused URL bar
+            return false;
         }
     } else {
         needs_repaint.* = true;
+        return false;
     }
 }
 
