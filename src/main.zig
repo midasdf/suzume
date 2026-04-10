@@ -2581,6 +2581,40 @@ fn paintFocusedInput(
     surface.fillRect(cursor_x, content_y + 2, 1, content_h - 4, cursor_color);
 }
 
+/// Dispatch mousedown → mouseup → click at the hit target; restyle if DOM dirty.
+/// Returns true if the click default action was prevented.
+fn clickJsMouseSequencePrevented(
+    allocator: std.mem.Allocator,
+    page: *PageState,
+    js_rt: *JsRuntime,
+    root_box: *const Box,
+    layout_x: f32,
+    layout_y: f32,
+    mouse_x: i32,
+    mouse_y_content: i32,
+    fonts: *painter_mod.FontCache,
+    win_w: i32,
+    win_h: i32,
+    needs_repaint: *bool,
+) bool {
+    if (painter_mod.hitTestNode(root_box, layout_x, layout_y)) |node_ptr| {
+        const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
+        _ = events.dispatchMouseEvent(js_rt.ctx, node, "mousedown", mouse_x, mouse_y_content, 0);
+        js_rt.executePending();
+        _ = events.dispatchMouseEvent(js_rt.ctx, node, "mouseup", mouse_x, mouse_y_content, 0);
+        js_rt.executePending();
+        const click_allowed = events.dispatchMouseEvent(js_rt.ctx, node, "click", mouse_x, mouse_y_content, 0);
+        js_rt.executePending();
+        if (dom_api.dom_dirty) {
+            dom_api.dom_dirty = false;
+            restylePage(page, allocator, fonts, win_w, win_h);
+            needs_repaint.* = true;
+        }
+        return !click_allowed;
+    }
+    return false;
+}
+
 fn handleClick(
     allocator: std.mem.Allocator,
     mx: i32,
@@ -2625,25 +2659,25 @@ fn handleClick(
         std.debug.print("[click] screen=({d},{d}) layout=({d:.0},{d:.0}) scroll=({d:.0},{d:.0}) content_y={d}\n", .{ mx, my, layout_x, layout_y, scroll_x.*, scroll_y.*, chrome.content_y });
 
         // Dispatch mouse events to JavaScript: mousedown → mouseup → click
-        var click_prevented = false;
-        if (page.js_rt) |*js_rt| {
-            if (painter_mod.hitTestNode(root_box, layout_x, layout_y)) |node_ptr| {
-                const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
-                _ = events.dispatchMouseEvent(js_rt.ctx, node, "mousedown", mx, my - chrome.content_y, 0);
-                js_rt.executePending();
-                _ = events.dispatchMouseEvent(js_rt.ctx, node, "mouseup", mx, my - chrome.content_y, 0);
-                js_rt.executePending();
-                const click_allowed = events.dispatchMouseEvent(js_rt.ctx, node, "click", mx, my - chrome.content_y, 0);
-                js_rt.executePending();
-                if (!click_allowed) click_prevented = true;
-                // Re-style and re-layout if DOM was mutated by the event handler
-                if (dom_api.dom_dirty) {
-                    dom_api.dom_dirty = false;
-                    restylePage(page, allocator, fonts, win_w, win_h);
-                    needs_repaint.* = true;
-                }
+        const click_prevented = blk: {
+            if (page.js_rt) |*js_rt| {
+                break :blk clickJsMouseSequencePrevented(
+                    allocator,
+                    page,
+                    js_rt,
+                    root_box,
+                    layout_x,
+                    layout_y,
+                    mx,
+                    my - chrome.content_y,
+                    fonts,
+                    win_w,
+                    win_h,
+                    needs_repaint,
+                );
             }
-        }
+            break :blk false;
+        };
 
         // If JS called preventDefault() on click, skip default actions
         if (click_prevented) return;
