@@ -16,24 +16,18 @@ fn linkWoff2(exe: *std.Build.Step.Compile) void {
         "/lib",
     };
 
-    const woff2dec = findFirstExistingFile(exe.step.owner, &candidates, &.{
+    linkOptionalSharedObject(exe, &candidates, &.{
         // Prefer devel symlink when available.
         "libwoff2dec.so",
         // Fallbacks for runtime-only installs.
         "libwoff2dec.so.1.0.2",
         "libwoff2dec.so.1",
-    }) orelse null;
-    const woff2common = findFirstExistingFile(exe.step.owner, &candidates, &.{
+    });
+    linkOptionalSharedObject(exe, &candidates, &.{
         "libwoff2common.so",
         "libwoff2common.so.1.0.2",
         "libwoff2common.so.1",
-    }) orelse null;
-
-    // If both are present, link them. If neither are present, leave WOFF2 wrapper
-    // compilation in place and let the build fail with a clear missing symbol error
-    // at link-time if WOFF2 is actually required by the platform.
-    if (woff2dec) |path| exe.root_module.addObjectFile(path);
-    if (woff2common) |path| exe.root_module.addObjectFile(path);
+    });
 }
 
 fn findFirstExistingFile(b: *std.Build, dirs: []const []const u8, names: []const []const u8) ?std.Build.LazyPath {
@@ -46,6 +40,12 @@ fn findFirstExistingFile(b: *std.Build, dirs: []const []const u8, names: []const
         }
     }
     return null;
+}
+
+fn linkOptionalSharedObject(exe: *std.Build.Step.Compile, dirs: []const []const u8, names: []const []const u8) void {
+    if (findFirstExistingFile(exe.step.owner, dirs, names)) |path| {
+        exe.root_module.addObjectFile(path);
+    }
 }
 
 pub fn build(b: *std.Build) void {
@@ -211,7 +211,7 @@ pub fn build(b: *std.Build) void {
         });
     }
 
-    const plutovg_c_flags: []const []const u8 = &.{ "-fno-sanitize=undefined" };
+    const plutovg_c_flags: []const []const u8 = &.{"-fno-sanitize=undefined"};
     const plutovg_c_sources: []const []const u8 = &.{
         lunasvg_dir ++ "/3rdparty/plutovg/plutovg.c",
         lunasvg_dir ++ "/3rdparty/plutovg/plutovg-paint.c",
