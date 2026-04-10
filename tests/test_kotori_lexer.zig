@@ -94,3 +94,40 @@ test "template with expression" {
 test "template with multiple expressions" {
     try expectTokens("`a${x}b${y}c`", &.{ .template_head, .identifier, .template_middle, .identifier, .template_tail });
 }
+
+test "jQuery-like pattern" {
+    const source =
+        \\(function(global, factory) {
+        \\  "use strict";
+        \\  if (typeof module === "object" && typeof module.exports === "object") {
+        \\    module.exports = factory(global, true);
+        \\  } else {
+        \\    factory(global);
+        \\  }
+        \\})(typeof window !== "undefined" ? window : this, function(window, noGlobal) {
+        \\  var arr = [];
+        \\  var document = window.document;
+        \\  var getProto = Object.getPrototypeOf;
+        \\  var slice = arr.slice;
+        \\  return {};
+        \\});
+    ;
+    var lexer = @import("kotori").Lexer.init(source);
+    var count: usize = 0;
+    while (true) {
+        const tok = lexer.next();
+        if (tok.type == .eof) break;
+        count += 1;
+    }
+    try @import("std").testing.expect(count > 50);
+}
+
+test "arrow function and destructuring" {
+    try expectTokens("const {a, b} = obj;", &.{
+        .kw_const, .lbrace, .identifier, .comma, .identifier, .rbrace, .assign, .identifier, .semicolon,
+    });
+}
+
+test "optional chaining and nullish" {
+    try expectTokens("a?.b ?? c", &.{ .identifier, .optional_chain, .identifier, .nullish, .identifier });
+}

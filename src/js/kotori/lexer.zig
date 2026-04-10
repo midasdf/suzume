@@ -323,11 +323,11 @@ pub const Lexer = struct {
             // ?  ?.  ??  ??=
             '?' => {
                 _ = self.advance();
-                if (self.match('.')) return self.makeToken(.question_dot, start);
+                if (self.match('.')) return self.makeToken(.optional_chain, start);
                 if (self.match('?')) {
-                    // ??= — no dedicated token, emit question_question for now
-                    if (self.match('=')) return self.makeToken(.question_question, start);
-                    return self.makeToken(.question_question, start);
+                    // ??= — no dedicated token, emit nullish for now
+                    if (self.match('=')) return self.makeToken(.nullish, start);
+                    return self.makeToken(.nullish, start);
                 }
                 return self.makeToken(.question, start);
             },

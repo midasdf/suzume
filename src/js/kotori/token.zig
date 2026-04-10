@@ -124,6 +124,8 @@ pub const TokenType = enum(u8) {
     arrow, // => (same as eq_gt semantically)
     ellipsis, // ... (same as dot_dot_dot semantically)
     assign, // = (alias for eq)
+    optional_chain, // ?. (alias for question_dot)
+    nullish, // ?? (alias for question_question)
 
     // Control
     eof,
