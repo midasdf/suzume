@@ -27,6 +27,10 @@ pub const JsRuntime = struct {
         // Register ES module loader (must be done before creating context APIs)
         qjs.JS_SetModuleLoaderFunc(rt, null, &moduleLoader, null);
 
+        // Reset script timer so a stale timer from a previous runtime
+        // doesn't cause immediate timeouts during init script evaluation.
+        resetScriptTimer();
+
         var self = JsRuntime{
             .rt = rt,
             .ctx = ctx,
