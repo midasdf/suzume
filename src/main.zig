@@ -2160,8 +2160,18 @@ pub fn main() !void {
                             }
                         }
                         if (key == nsfb_c.NSFB_KEY_TAB) {
-                            // Tab: unfocus form input (TODO: focus next input)
-                            focused_input_node = null;
+                            const active_pg_for_tab = activePageState(&tab_mgr, &page_states);
+                            if (active_pg_for_tab) |pg_tab| {
+                                focused_input_node = focusNextTextInput(pg_tab, focused_input_node, shift_held);
+                                if (focused_input_node) |next_node| {
+                                    const next_dn = DomNode{ .lxb_node = next_node };
+                                    const current_value = next_dn.getAttribute("value") orelse "";
+                                    form_input.setText(current_value);
+                                    url_input.focused = false;
+                                }
+                            } else {
+                                focused_input_node = null;
+                            }
                             needs_repaint = true;
                             continue;
                         }
@@ -2487,6 +2497,47 @@ fn findBoxForNode(box: *const Box, target_node: *lxb.lxb_dom_node_t) ?*const Box
         if (findBoxForNode(child, target_node)) |found| return found;
     }
     return null;
+}
+
+fn collectFocusableNodes(box: *const Box, out: *std.ArrayListUnmanaged(*lxb.lxb_dom_node_t)) void {
+    if (box.dom_node) |dn| {
+        const node = dn.lxb_node;
+        if (isTextFormElement(node)) {
+            out.append(std.heap.c_allocator, node) catch {};
+        }
+    }
+    for (box.children.items) |child| {
+        collectFocusableNodes(child, out);
+    }
+}
+
+fn focusNextTextInput(page: *PageState, current: ?*lxb.lxb_dom_node_t, reverse: bool) ?*lxb.lxb_dom_node_t {
+    const root = page.root_box orelse return null;
+    var nodes: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t) = .empty;
+    defer nodes.deinit(std.heap.c_allocator);
+    collectFocusableNodes(root, &nodes);
+    if (nodes.items.len == 0) return null;
+
+    const idx_opt: ?usize = if (current) |cur| blk: {
+        for (nodes.items, 0..) |n, i| {
+            if (n == cur) break :blk i;
+        }
+        break :blk null;
+    } else null;
+
+    if (reverse) {
+        if (idx_opt) |idx| {
+            const next_idx = if (idx == 0) nodes.items.len - 1 else idx - 1;
+            return nodes.items[next_idx];
+        }
+        return nodes.items[nodes.items.len - 1];
+    } else {
+        if (idx_opt) |idx| {
+            const next_idx = if (idx + 1 >= nodes.items.len) 0 else idx + 1;
+            return nodes.items[next_idx];
+        }
+        return nodes.items[0];
+    }
 }
 
 /// Paint the focused form input: highlight border + render typed text with cursor.

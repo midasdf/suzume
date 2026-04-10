@@ -2481,7 +2481,13 @@ fn windowLocationReload(
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Stub — actual reload requires main loop integration
+    // Reload current page by requesting navigation to the same URL.
+    if (g_current_url) |url| {
+        if (url.len > 0) {
+            const web_api = @import("web_api.zig");
+            web_api.requestNavigation(url);
+        }
+    }
     return quickjs.JS_UNDEFINED();
 }
 
@@ -2496,9 +2502,29 @@ fn windowLocationAssign(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const url_s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, url_s.ptr);
+
+    var nav_url: []const u8 = url_s.ptr[0..url_s.len];
+    var resolved_url: ?[:0]const u8 = null;
+    defer if (resolved_url) |ru| std.heap.c_allocator.free(ru);
+
+    // Resolve relative paths against the current page URL so JS-initiated
+    // navigation behaves like link clicks.
+    if (g_current_url) |base_url| {
+        const raw = url_s.ptr[0..url_s.len];
+        if (!std.mem.startsWith(u8, raw, "http://") and
+            !std.mem.startsWith(u8, raw, "https://") and
+            !std.mem.startsWith(u8, raw, "data:") and
+            !std.mem.startsWith(u8, raw, "about:") and
+            !std.mem.startsWith(u8, raw, "suzume://"))
+        {
+            resolved_url = resolveUrl(std.heap.c_allocator, base_url, raw) catch null;
+            if (resolved_url) |ru| nav_url = ru;
+        }
+    }
+
     // Delegate to web_api for actual navigation
     const web_api = @import("web_api.zig");
-    web_api.requestNavigation(url_s.ptr[0..url_s.len]);
+    web_api.requestNavigation(nav_url);
     return quickjs.JS_UNDEFINED();
 }
 
