@@ -60,6 +60,25 @@ const session = @import("core/session.zig");
 const url_utils = @import("core/url_utils.zig");
 const http_status = @import("net/http_status.zig");
 
+/// After `tab_mgr` switches the active tab, restore scroll and URL bar from that tab.
+fn applyActiveTabToUi(
+    allocator: std.mem.Allocator,
+    tab_mgr: *TabManager,
+    url_input: *TextInput,
+    current_url: *?[]u8,
+    scroll_y: *f32,
+    scroll_x: *f32,
+) void {
+    if (tab_mgr.getActiveTab()) |tab| {
+        scroll_y.* = tab.scroll_y;
+        scroll_x.* = tab.scroll_x;
+        url_input.setText(tab.url);
+        url_input.focused = false;
+        if (current_url.*) |old| allocator.free(old);
+        current_url.* = allocator.dupe(u8, tab.url) catch null;
+    }
+}
+
 const ErrBlitCtx = struct {
     surface: *Surface,
     colour: u32,
@@ -1635,14 +1654,7 @@ pub fn main() !void {
                         tab_mgr.closeTab(close_idx);
 
                         // Restore state from new active tab
-                        if (tab_mgr.getActiveTab()) |tab| {
-                            scroll_y = tab.scroll_y;
-                            scroll_x = tab.scroll_x;
-                            url_input.setText(tab.url);
-                            url_input.focused = false;
-                            if (current_url) |old| allocator.free(old);
-                            current_url = allocator.dupe(u8, tab.url) catch null;
-                        }
+                        applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
                         status_text = "Tab closed";
                         needs_repaint = true;
                         std.debug.print("[Tabs] Closed tab, now {d} tabs\n", .{tab_mgr.tabCount()});
@@ -1653,14 +1665,7 @@ pub fn main() !void {
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and !shift_held) {
                         tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         if (tab_mgr.nextTab()) {
-                            if (tab_mgr.getActiveTab()) |tab| {
-                                scroll_y = tab.scroll_y;
-                                scroll_x = tab.scroll_x;
-                                url_input.setText(tab.url);
-                                url_input.focused = false;
-                                if (current_url) |old| allocator.free(old);
-                                current_url = allocator.dupe(u8, tab.url) catch null;
-                            }
+                            applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
                             needs_repaint = true;
                         }
                         continue;
@@ -1670,14 +1675,7 @@ pub fn main() !void {
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_TAB and shift_held) {
                         tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                         if (tab_mgr.prevTab()) {
-                            if (tab_mgr.getActiveTab()) |tab| {
-                                scroll_y = tab.scroll_y;
-                                scroll_x = tab.scroll_x;
-                                url_input.setText(tab.url);
-                                url_input.focused = false;
-                                if (current_url) |old| allocator.free(old);
-                                current_url = allocator.dupe(u8, tab.url) catch null;
-                            }
+                            applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
                             needs_repaint = true;
                         }
                         continue;
@@ -1689,14 +1687,7 @@ pub fn main() !void {
                         if (tab_idx < tab_mgr.tabCount()) {
                             tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                             if (tab_mgr.switchTo(tab_idx)) {
-                                if (tab_mgr.getActiveTab()) |tab| {
-                                    scroll_y = tab.scroll_y;
-                                    scroll_x = tab.scroll_x;
-                                    url_input.setText(tab.url);
-                                    url_input.focused = false;
-                                    if (current_url) |old| allocator.free(old);
-                                    current_url = allocator.dupe(u8, tab.url) catch null;
-                                }
+                                applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
                                 needs_repaint = true;
                             }
                         }
@@ -1917,29 +1908,16 @@ pub fn main() !void {
                                     _ = page_states.orderedRemove(ci);
                                 }
                                 tab_mgr.closeTab(ci);
-                                if (tab_mgr.getActiveTab()) |tab| {
-                                    scroll_y = tab.scroll_y;
-                                    scroll_x = tab.scroll_x;
-                                    url_input.setText(tab.url);
-                                    url_input.focused = false;
-                                    if (current_url) |old| allocator.free(old);
-                                    current_url = allocator.dupe(u8, tab.url) catch null;
-                                }
+                                applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
                                 needs_repaint = true;
                                 continue;
                             },
                             .switch_tab => {
                                 tab_mgr.saveScrollPosition(scroll_y, scroll_x);
                                 if (tab_mgr.switchTo(tab_hit.index)) {
+                                    applyActiveTabToUi(allocator, &tab_mgr, &url_input, &current_url, &scroll_y, &scroll_x);
+                                    // Lazy load: if this tab has no loaded page, navigate to its URL
                                     if (tab_mgr.getActiveTab()) |tab| {
-                                        scroll_y = tab.scroll_y;
-                                        scroll_x = tab.scroll_x;
-                                        url_input.setText(tab.url);
-                                        url_input.focused = false;
-                                        if (current_url) |old| allocator.free(old);
-                                        current_url = allocator.dupe(u8, tab.url) catch null;
-
-                                        // Lazy load: if this tab has no loaded page, navigate to its URL
                                         if (tab_hit.index < page_states.items.len) {
                                             const pg = &page_states.items[tab_hit.index];
                                             if (pg.root_box == null and pg.error_message == null and tab.url.len > 0) {
