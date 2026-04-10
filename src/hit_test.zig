@@ -21,37 +21,25 @@ pub fn hitTest(box: *const Box, pos: LayoutPos) HitResult {
 
 fn hitTestBox(box: *const Box, pos: LayoutPos) HitResult {
     switch (box.box_type) {
-        .block, .inline_box => {
-            // Bounds pre-check (perf critical on RPi Zero 2W)
-            const mbox = box.marginBox();
-            const tolerance: f32 = if (box.style.text_align == .center or box.style.text_align == .right)
-                box.content.width
-            else
-                0;
-            if (pos.x < mbox.x - tolerance or pos.x > mbox.x + mbox.width + tolerance or
-                pos.y < mbox.y or pos.y > mbox.y + mbox.height)
-                return .{};
-
+        .block, .inline_box, .anonymous_block => {
+            // Recurse into children first (reverse z-order) WITHOUT bounds pre-check.
+            // Children can overflow parent's margin box, so pre-checking the parent
+            // would incorrectly prune valid hits. This matches the old hitTestNode
+            // approach which worked correctly.
             var i = box.children.items.len;
             while (i > 0) {
                 i -= 1;
                 const child_result = hitTestBox(box.children.items[i], pos);
                 if (child_result.dom_node != null) return child_result;
             }
+            // No child hit — check self bounds before returning own node
+            const mbox = box.marginBox();
             if (pos.x >= mbox.x and pos.x <= mbox.x + mbox.width and
                 pos.y >= mbox.y and pos.y <= mbox.y + mbox.height)
             {
                 if (box.dom_node) |dn| {
                     return .{ .dom_node = dn, .box = box };
                 }
-            }
-        },
-        .anonymous_block => {
-            var i = box.children.items.len;
-            while (i > 0) {
-                i -= 1;
-                const child_result = hitTestBox(box.children.items[i], pos);
-                if (child_result.dom_node != null) return child_result;
             }
         },
         .inline_text => {
