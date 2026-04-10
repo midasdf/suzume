@@ -134,12 +134,7 @@ pub fn build(b: *std.Build) void {
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
-    // Optional shim for nsfb_x_* helpers referenced by Zig code.
-    // Upstream libnsfb does not provide these symbols; keep the build working.
-    exe.addCSourceFile(.{
-        .file = b.path("src/nsfb_x_shim.c"),
-        .flags = &.{"-fno-sanitize=undefined"},
-    });
+    // nsfb_x_* helpers used by XIM/cursor live in deps/libnsfb's XCB backend.
 
     // ── QuickJS-ng ──────────────────────────────────────────────────
     const quickjs_dir = "deps/quickjs-ng";
