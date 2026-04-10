@@ -82,3 +82,15 @@ test "mixed expression" {
         .kw_var, .identifier, .assign, .number, .plus, .identifier, .semicolon,
     });
 }
+
+test "simple template literal" {
+    try expectTokens("`hello`", &.{.template});
+}
+
+test "template with expression" {
+    try expectTokens("`a${x}b`", &.{ .template_head, .identifier, .template_tail });
+}
+
+test "template with multiple expressions" {
+    try expectTokens("`a${x}b${y}c`", &.{ .template_head, .identifier, .template_middle, .identifier, .template_tail });
+}

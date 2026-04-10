@@ -6,6 +6,7 @@ pub const Lexer = struct {
     source: []const u8,
     pos: u32,
     line: u32,
+    template_depth: u8 = 0,
 
     pub fn init(source: []const u8) Lexer {
         return .{ .source = source, .pos = 0, .line = 1 };
@@ -239,12 +240,38 @@ pub const Lexer = struct {
             if (c == '\\') {
                 if (self.pos < self.source.len) _ = self.advance();
             } else if (c == '`') {
-                break;
+                return self.makeToken(.template, start);
+            } else if (c == '$' and self.pos < self.source.len and self.source[self.pos] == '{') {
+                self.pos += 1; // consume '{'
+                self.template_depth += 1;
+                return self.makeToken(.template_head, start);
             } else if (c == '\n') {
                 self.line += 1;
             }
         }
         return self.makeToken(.template, start);
+    }
+
+    fn readTemplateContinuation(self: *Lexer) Token {
+        const start = self.pos;
+        _ = self.advance(); // consume '}'
+        while (self.pos < self.source.len) {
+            const c = self.advance();
+            if (c == '\\') {
+                if (self.pos < self.source.len) _ = self.advance();
+            } else if (c == '`') {
+                self.template_depth -= 1;
+                return self.makeToken(.template_tail, start);
+            } else if (c == '$' and self.pos < self.source.len and self.source[self.pos] == '{') {
+                self.pos += 1; // consume '{'
+                return self.makeToken(.template_middle, start);
+            } else if (c == '\n') {
+                self.line += 1;
+            }
+        }
+        // unterminated — return template_tail anyway
+        self.template_depth -= 1;
+        return self.makeToken(.template_tail, start);
     }
 
     fn readIdentifier(self: *Lexer) Token {
@@ -282,7 +309,10 @@ pub const Lexer = struct {
             '(' => return self.single(.lparen),
             ')' => return self.single(.rparen),
             '{' => return self.single(.lbrace),
-            '}' => return self.single(.rbrace),
+            '}' => {
+                if (self.template_depth > 0) return self.readTemplateContinuation();
+                return self.single(.rbrace);
+            },
             '[' => return self.single(.lbracket),
             ']' => return self.single(.rbracket),
             ';' => return self.single(.semicolon),
