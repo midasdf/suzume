@@ -102,12 +102,39 @@ pub fn elementSetInnerHTML(
 
     const s = api.jsStringToSlice(c, args[0]) orelse {
         // null/undefined → clear children
+        // Collect removed nodes for MutationObserver
+        var removed_buf: [64]*lxb.lxb_dom_node_t = undefined;
+        var removed_count: usize = 0;
+        {
+            var ch: ?*lxb.lxb_dom_node_t = node.first_child;
+            while (ch) |child| {
+                if (removed_count < removed_buf.len) {
+                    removed_buf[removed_count] = child;
+                    removed_count += 1;
+                }
+                ch = child.next;
+            }
+        }
         removeAllChildren(node);
-        events.recordMutation(node, "childList", null, null, null);
+        events.recordMutationChildListBulk(node, &.{}, removed_buf[0..removed_count], null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
+
+    // Collect removed nodes for MutationObserver
+    var removed_buf: [64]*lxb.lxb_dom_node_t = undefined;
+    var removed_count: usize = 0;
+    {
+        var ch: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (ch) |child| {
+            if (removed_count < removed_buf.len) {
+                removed_buf[removed_count] = child;
+                removed_count += 1;
+            }
+            ch = child.next;
+        }
+    }
 
     // Remove existing children
     removeAllChildren(node);
@@ -120,7 +147,21 @@ pub fn elementSetInnerHTML(
         moveChildren(frag, node);
         _ = lxb_dom_node_destroy(frag);
     }
-    events.recordMutation(node, "childList", null, null, null);
+
+    // Collect added nodes for MutationObserver
+    var added_buf: [64]*lxb.lxb_dom_node_t = undefined;
+    var added_count: usize = 0;
+    {
+        var ch: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (ch) |child| {
+            if (added_count < added_buf.len) {
+                added_buf[added_count] = child;
+                added_count += 1;
+            }
+            ch = child.next;
+        }
+    }
+    events.recordMutationChildListBulk(node, added_buf[0..added_count], removed_buf[0..removed_count], null, null);
     api.setDomDirty();
     // Execute scripts in new content
     maybeExecuteScriptsInSubtree(c, node);

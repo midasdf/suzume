@@ -2044,7 +2044,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof CustomEvent==='undefined'){globalThis.CustomEvent=function(type,opts){Event.call(this,type,opts);this.detail=(opts&&opts.detail!==undefined)?opts.detail:null;};CustomEvent.prototype=Object.create(Event.prototype);CustomEvent.prototype.constructor=CustomEvent;}
         \\if(typeof Headers==='undefined'){globalThis.Headers=function(init){this._h={};if(init)for(var k in init)this._h[k.toLowerCase()]=init[k];};Headers.prototype.get=function(n){return this._h[n.toLowerCase()]||null;};Headers.prototype.set=function(n,v){this._h[n.toLowerCase()]=v;};Headers.prototype.has=function(n){return n.toLowerCase() in this._h;};Headers.prototype.forEach=function(cb){for(var k in this._h)cb(this._h[k],k);};}
         \\if(typeof Response==='undefined'){globalThis.Response=function(body,opts){this.body=body;this.status=(opts&&opts.status)||200;this.ok=this.status>=200&&this.status<300;this.headers=new Headers((opts&&opts.headers)||{});this.text=function(){return Promise.resolve(String(body||''));};this.json=function(){return Promise.resolve(JSON.parse(body||'null'));};};}
-        \\if(typeof window!=='undefined'&&!window.onerror){window.onerror=function(){};}
         \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
         \\if(typeof matchMedia==='undefined'){
         \\  globalThis.matchMedia=function(q){
