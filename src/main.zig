@@ -904,6 +904,7 @@ pub fn main() !void {
         break :blk null;
     };
     defer if (storage_inst) |*s| s.deinit();
+    const storage_ptr: ?*Storage = if (storage_inst) |*s| s else null;
 
     // Init HTTP client
     var http_client = HttpClient.init() catch |err| {
@@ -1076,7 +1077,7 @@ pub fn main() !void {
                                 url_input.setText(tab.url);
                                 url_input.focused = false;
                                 status_text = "Loading...";
-                                if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width, surface.height)) {
+                                if (navigateTo(allocator, &loader, uz, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                     status_text = "Done";
                                     scroll_y = 0;
                                     scroll_x = 0;
@@ -1115,7 +1116,7 @@ pub fn main() !void {
             status_text = "Loading...";
 
             if (page_states.items.len > 0) {
-                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                if (navigateTo(allocator, &loader, uz, &fonts, &page_states.items[0], storage_ptr, surface.width, surface.height)) {
                     status_text = "Done";
                     scroll_y = 0;
                     scroll_x = 0;
@@ -1213,7 +1214,7 @@ pub fn main() !void {
                     &needs_repaint,
                     &scroll_y,
                     &scroll_x,
-                    if (storage_inst) |*si| si else null,
+                    storage_ptr,
                     &window_mgr,
                 );
                 wd_slot.respond(wd_resp);
@@ -1389,7 +1390,7 @@ pub fn main() !void {
                 const nav_pg = activePageState(&tab_mgr, &page_states);
                 if (nav_pg) |pg| {
                     status_text = "Loading...";
-                    if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                    if (navigateTo(allocator, &loader, uz, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                         status_text = "Done";
                         scroll_y = 0;
                         scroll_x = 0;
@@ -1701,7 +1702,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = activePageState(&tab_mgr, &page_states) orelse continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1723,7 +1724,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = activePageState(&tab_mgr, &page_states) orelse continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1746,7 +1747,7 @@ pub fn main() !void {
                         defer allocator.free(url_z);
                         @memcpy(url_z, hist_url);
                         const pg = activePageState(&tab_mgr, &page_states) orelse continue;
-                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                        if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                             status_text = "Done";
                             scroll_y = 0;
                             scroll_x = 0;
@@ -1820,7 +1821,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = activePageState(&tab_mgr, &page_states) orelse continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1852,7 +1853,7 @@ pub fn main() !void {
                             status_text = "Loading...";
                             needs_repaint = true;
                             const pg = activePageState(&tab_mgr, &page_states) orelse continue;
-                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                            if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
                                 scroll_x = 0;
@@ -1923,7 +1924,7 @@ pub fn main() !void {
                                                     defer allocator.free(uz);
                                                     @memcpy(uz, tab.url);
                                                     status_text = "Loading...";
-                                                    if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                                                    if (navigateTo(allocator, &loader, uz, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                                         status_text = "Done";
                                                         scroll_y = 0;
                                                         scroll_x = 0;
@@ -1960,7 +1961,7 @@ pub fn main() !void {
                                 &current_url,
                                 &status_text,
                                 &needs_repaint,
-                                if (storage_inst) |*s| s else null,
+                                storage_ptr,
                                 surface.width,
                                 surface.height,
                                 &focused_input_node,
@@ -2143,7 +2144,7 @@ pub fn main() !void {
                                 const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                                 const fi_node = focused_input_node.?;
                                 const fi_form = findParentForm(fi_node) orelse continue;
-                                if (submitForm(allocator, fi_form, fi_node, &form_input, current_url, &loader, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) |nav_url| {
+                                if (submitForm(allocator, fi_form, fi_node, &form_input, current_url, &loader, &fonts, pg, storage_ptr, surface.width, surface.height)) |nav_url| {
                                     defer allocator.free(nav_url);
                                     url_input.setText(nav_url);
                                     url_input.focused = false;
@@ -2228,7 +2229,7 @@ pub fn main() !void {
                                     needs_repaint = true;
 
                                     const pg = activePageState(&tab_mgr, &page_states) orelse continue;
-                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
+                                    if (navigateTo(allocator, &loader, url_z, &fonts, pg, storage_ptr, surface.width, surface.height)) {
                                         status_text = "Done";
                                         scroll_y = 0;
                                         scroll_x = 0;
