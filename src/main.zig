@@ -223,6 +223,10 @@ fn testHttp(_: std.mem.Allocator) noreturn {
     std.process.exit(1);
 }
 
+/// Timestamp of last restyle (ms), used to throttle to ~60fps.
+var last_restyle_time: i64 = 0;
+const min_restyle_interval_ms: i64 = 16; // ~60fps
+
 /// Re-style and re-layout a page after JS DOM mutation.
 /// Rebuilds the style cascade, box tree, and layout from the current DOM state.
 fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_mod.FontCache, layout_width: i32, layout_height: i32) void {
@@ -1396,9 +1400,13 @@ pub fn main() !void {
                     // Tick timers for all active iframe contexts
                     dom_api.iframe.tickAllIframeTimers();
                     if (dom_api.dom_dirty) {
-                        dom_api.dom_dirty = false;
-                        restylePage(pg, allocator, &fonts, surface.width, surface.height);
-                        needs_repaint = true;
+                        const now_ms = std.time.milliTimestamp();
+                        if (now_ms - last_restyle_time >= min_restyle_interval_ms) {
+                            dom_api.dom_dirty = false;
+                            restylePage(pg, allocator, &fonts, surface.width, surface.height);
+                            last_restyle_time = now_ms;
+                            needs_repaint = true;
+                        }
                     }
                     // Apply pending scroll requests from JS (clamp to content bounds)
                     if (dom_api.pending_scroll_y) |sy| {
@@ -1591,8 +1599,9 @@ pub fn main() !void {
             }
         }
 
-        // Use shorter poll timeout when timers are active, repaint pending, or WebDriver mode
-        const poll_timeout: i32 = if (needs_repaint or web_api.hasTimers() or wd_server != null) 0 else 50;
+        // Use shorter poll timeout when repaint pending or WebDriver active;
+        // timers use 4ms (avoid busy-spin while staying responsive)
+        const poll_timeout: i32 = if (needs_repaint or wd_server != null) 0 else if (web_api.hasTimers()) 4 else 50;
         if (surface.pollEvent(poll_timeout)) |event| {
             switch (event.type) {
                 nsfb_c.NSFB_EVENT_CONTROL => {
