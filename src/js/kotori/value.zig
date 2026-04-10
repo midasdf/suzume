@@ -1,3 +1,5 @@
+const std = @import("std");
+
 // NaN-boxing stub for JS values.
 // All values are packed into 64 bits using IEEE 754 NaN space.
 //
@@ -45,5 +47,183 @@ pub const JsValue = packed struct {
 
     pub fn asNumber(self: JsValue) f64 {
         return @bitCast(self.bits);
+    }
+
+    // ── Type checks ──────────────────────────────────────────────────
+
+    pub fn isNumber(self: JsValue) bool {
+        // A tagged value always has exponent bits all-ones (top 13 bits set).
+        // A normal f64 (including real NaN) may also match TAG_NAN, so we check
+        // that the top 16 bits are NOT one of our tag values.
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag < TAG_NAN;
+    }
+
+    pub fn isInt(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_INT;
+    }
+
+    pub fn isBool(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_BOOL;
+    }
+
+    pub fn isNull(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_NULL;
+    }
+
+    pub fn isUndefined(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_UNDEFINED;
+    }
+
+    // ── Extraction ───────────────────────────────────────────────────
+
+    pub fn asInt(self: JsValue) i32 {
+        return @truncate(@as(i64, @bitCast(self.bits & 0xFFFFFFFF)));
+    }
+
+    pub fn asBool(self: JsValue) bool {
+        return (self.bits & 1) != 0;
+    }
+
+    pub fn toNumber(self: JsValue) f64 {
+        if (self.isNumber()) return self.asNumber();
+        if (self.isInt()) return @floatFromInt(self.asInt());
+        if (self.isBool()) return if (self.asBool()) 1.0 else 0.0;
+        if (self.isNull()) return 0.0;
+        // undefined → NaN
+        return std.math.nan(f64);
+    }
+
+    // ── Truthiness ───────────────────────────────────────────────────
+
+    pub fn isTruthy(self: JsValue) bool {
+        if (self.isNull() or self.isUndefined()) return false;
+        if (self.isBool()) return self.asBool();
+        if (self.isInt()) return self.asInt() != 0;
+        if (self.isNumber()) {
+            const n = self.asNumber();
+            return n != 0.0 and !std.math.isNan(n);
+        }
+        // Objects, strings, symbols are truthy
+        return true;
+    }
+
+    // ── Arithmetic ───────────────────────────────────────────────────
+
+    pub fn jsAdd(a: JsValue, b: JsValue) JsValue {
+        return initNumber(a.toNumber() + b.toNumber());
+    }
+
+    pub fn jsSub(a: JsValue, b: JsValue) JsValue {
+        return initNumber(a.toNumber() - b.toNumber());
+    }
+
+    pub fn jsMul(a: JsValue, b: JsValue) JsValue {
+        return initNumber(a.toNumber() * b.toNumber());
+    }
+
+    pub fn jsDiv(a: JsValue, b: JsValue) JsValue {
+        return initNumber(a.toNumber() / b.toNumber());
+    }
+
+    pub fn jsMod(a: JsValue, b: JsValue) JsValue {
+        return initNumber(@mod(a.toNumber(), b.toNumber()));
+    }
+
+    pub fn jsPow(a: JsValue, b: JsValue) JsValue {
+        return initNumber(std.math.pow(f64, a.toNumber(), b.toNumber()));
+    }
+
+    pub fn jsNeg(a: JsValue) JsValue {
+        return initNumber(-a.toNumber());
+    }
+
+    // ── Comparison ───────────────────────────────────────────────────
+
+    pub fn jsLt(a: JsValue, b: JsValue) JsValue {
+        return initBool(a.toNumber() < b.toNumber());
+    }
+
+    pub fn jsLe(a: JsValue, b: JsValue) JsValue {
+        return initBool(a.toNumber() <= b.toNumber());
+    }
+
+    pub fn jsGt(a: JsValue, b: JsValue) JsValue {
+        return initBool(a.toNumber() > b.toNumber());
+    }
+
+    pub fn jsGe(a: JsValue, b: JsValue) JsValue {
+        return initBool(a.toNumber() >= b.toNumber());
+    }
+
+    pub fn jsStrictEq(a: JsValue, b: JsValue) JsValue {
+        // Same bits → always equal (handles null==null, undefined==undefined, bool, int)
+        if (a.bits == b.bits) return initBool(true);
+        // Both numbers: compare as f64 (NaN != NaN)
+        if (a.isNumber() and b.isNumber()) {
+            return initBool(a.asNumber() == b.asNumber());
+        }
+        return initBool(false);
+    }
+
+    pub fn jsEq(a: JsValue, b: JsValue) JsValue {
+        // Abstract equality: for now same as strict for primitive types
+        return jsStrictEq(a, b);
+    }
+
+    pub fn jsNe(a: JsValue, b: JsValue) JsValue {
+        return initBool(!jsEq(a, b).asBool());
+    }
+
+    pub fn jsStrictNe(a: JsValue, b: JsValue) JsValue {
+        return initBool(!jsStrictEq(a, b).asBool());
+    }
+
+    // ── Logical ──────────────────────────────────────────────────────
+
+    pub fn jsNot(a: JsValue) JsValue {
+        return initBool(!a.isTruthy());
+    }
+
+    // ── Bitwise ──────────────────────────────────────────────────────
+
+    fn toInt32(a: JsValue) i32 {
+        return @as(i32, @intFromFloat(a.toNumber()));
+    }
+
+    pub fn jsBitNot(a: JsValue) JsValue {
+        return initInt(~toInt32(a));
+    }
+
+    pub fn jsBitAnd(a: JsValue, b: JsValue) JsValue {
+        return initInt(toInt32(a) & toInt32(b));
+    }
+
+    pub fn jsBitOr(a: JsValue, b: JsValue) JsValue {
+        return initInt(toInt32(a) | toInt32(b));
+    }
+
+    pub fn jsBitXor(a: JsValue, b: JsValue) JsValue {
+        return initInt(toInt32(a) ^ toInt32(b));
+    }
+
+    pub fn jsShl(a: JsValue, b: JsValue) JsValue {
+        const shift: u5 = @truncate(@as(u32, @bitCast(toInt32(b))));
+        return initInt(toInt32(a) << shift);
+    }
+
+    pub fn jsShr(a: JsValue, b: JsValue) JsValue {
+        const shift: u5 = @truncate(@as(u32, @bitCast(toInt32(b))));
+        return initInt(toInt32(a) >> shift);
+    }
+
+    pub fn jsUshr(a: JsValue, b: JsValue) JsValue {
+        const ua: u32 = @bitCast(toInt32(a));
+        const shift: u5 = @truncate(@as(u32, @bitCast(toInt32(b))));
+        return initInt(@bitCast(ua >> shift));
     }
 };

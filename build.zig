@@ -490,6 +490,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    test_kotori_parser_mod.addImport("kotori", kotori_mod);
+
+    const test_kotori_vm_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_kotori_vm.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_kotori_vm_mod.addImport("kotori", kotori_mod);
 
     const kotori_all_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_kotori.zig"),
@@ -498,6 +506,8 @@ pub fn build(b: *std.Build) void {
     });
     kotori_all_test_mod.addImport("test_kotori_lexer", test_kotori_lexer_mod);
     kotori_all_test_mod.addImport("test_kotori_parser", test_kotori_parser_mod);
+    kotori_all_test_mod.addImport("test_kotori_vm", test_kotori_vm_mod);
+    kotori_all_test_mod.addImport("kotori", kotori_mod);
 
     const kotori_tests = b.addTest(.{
         .root_module = kotori_all_test_mod,
