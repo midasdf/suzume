@@ -3,38 +3,74 @@ const std = @import("std");
 // const build_libcss = @import("build_libcss.zig");
 const build_libnsfb = @import("build_libnsfb.zig");
 
-fn collectWoffLibSearchDirs(b: *std.Build, list: *std.ArrayList([]const u8), resolved: std.Target) !void {
-    const push = struct {
-        fn pushInner(alloc: std.mem.Allocator, lst: *std.ArrayList([]const u8), s: []const u8) !void {
+/// Append typical Linux multilib / generic library dirs under `root` (sysroot or "").
+/// When `root` is empty, use absolute host paths (`/usr/lib/...`).
+fn appendWoffLibSearchDirs(b: *std.Build, list: *std.ArrayList([]const u8), resolved: std.Target, root: []const u8) !void {
+    const push_abs = struct {
+        fn f(alloc: std.mem.Allocator, lst: *std.ArrayList([]const u8), s: []const u8) !void {
             try lst.append(alloc, try alloc.dupe(u8, s));
         }
-    }.pushInner;
+    }.f;
+    const push_under_root = struct {
+        fn f(bb: *std.Build, lst: *std.ArrayList([]const u8), sysroot_prefix: []const u8, tail: []const []const u8) !void {
+            const base_owned: ?[]u8 = if (std.fs.path.isAbsolute(sysroot_prefix)) null else bb.pathFromRoot(sysroot_prefix);
+            defer if (base_owned) |p| bb.allocator.free(p);
+            const base: []const u8 = base_owned orelse sysroot_prefix;
+
+            var parts = try bb.allocator.alloc([]const u8, 1 + tail.len);
+            defer bb.allocator.free(parts);
+            parts[0] = base;
+            @memcpy(parts[1..], tail);
+            const abs = bb.pathResolve(parts);
+            try lst.append(bb.allocator, abs);
+        }
+    }.f;
+
     if (resolved.os.tag == .linux) {
-        switch (resolved.cpu.arch) {
-            .x86_64 => {
-                try push(b.allocator, list, "/usr/lib/x86_64-linux-gnu");
-                try push(b.allocator, list, "/lib/x86_64-linux-gnu");
-            },
-            .aarch64 => {
-                try push(b.allocator, list, "/usr/lib/aarch64-linux-gnu");
-                try push(b.allocator, list, "/lib/aarch64-linux-gnu");
-            },
-            else => {
+        if (root.len == 0) {
+            if (resolved.cpu.arch == .x86_64) {
+                try push_abs(b.allocator, list, "/usr/lib/x86_64-linux-gnu");
+                try push_abs(b.allocator, list, "/lib/x86_64-linux-gnu");
+            } else if (resolved.cpu.arch == .aarch64) {
+                try push_abs(b.allocator, list, "/usr/lib/aarch64-linux-gnu");
+                try push_abs(b.allocator, list, "/lib/aarch64-linux-gnu");
+            } else {
                 const triple = try resolved.linuxTriple(b.allocator);
                 defer b.allocator.free(triple);
                 const u = try std.fmt.allocPrint(b.allocator, "/usr/lib/{s}", .{triple});
                 defer b.allocator.free(u);
                 const l = try std.fmt.allocPrint(b.allocator, "/lib/{s}", .{triple});
                 defer b.allocator.free(l);
-                try list.append(b.allocator, try b.allocator.dupe(u8, u));
-                try list.append(b.allocator, try b.allocator.dupe(u8, l));
-            },
+                try push_abs(b.allocator, list, u);
+                try push_abs(b.allocator, list, l);
+            }
+        } else {
+            if (resolved.cpu.arch == .x86_64) {
+                try push_under_root(b, list, root, &.{ "usr", "lib", "x86_64-linux-gnu" });
+                try push_under_root(b, list, root, &.{ "lib", "x86_64-linux-gnu" });
+            } else if (resolved.cpu.arch == .aarch64) {
+                try push_under_root(b, list, root, &.{ "usr", "lib", "aarch64-linux-gnu" });
+                try push_under_root(b, list, root, &.{ "lib", "aarch64-linux-gnu" });
+            } else {
+                const triple = try resolved.linuxTriple(b.allocator);
+                defer b.allocator.free(triple);
+                try push_under_root(b, list, root, &.{ "usr", "lib", triple });
+                try push_under_root(b, list, root, &.{ "lib", triple });
+            }
         }
     }
-    try push(b.allocator, list, "/usr/lib64");
-    try push(b.allocator, list, "/usr/lib");
-    try push(b.allocator, list, "/lib64");
-    try push(b.allocator, list, "/lib");
+
+    if (root.len == 0) {
+        try push_abs(b.allocator, list, "/usr/lib64");
+        try push_abs(b.allocator, list, "/usr/lib");
+        try push_abs(b.allocator, list, "/lib64");
+        try push_abs(b.allocator, list, "/lib");
+    } else {
+        try push_under_root(b, list, root, &.{ "usr", "lib64" });
+        try push_under_root(b, list, root, &.{ "usr", "lib" });
+        try push_under_root(b, list, root, &.{"lib64"});
+        try push_under_root(b, list, root, &.{"lib"});
+    }
 }
 
 /// Prefer `stem.so`, else any `stem.so*` (longest basename wins as a rough "newest" heuristic).
@@ -71,13 +107,25 @@ fn findWoffSharedObject(b: *std.Build, dirs: []const []const u8, stem: []const u
 
 fn linkWoff2(exe: *std.Build.Step.Compile) void {
     const b = exe.step.owner;
-    const resolved = exe.root_module.resolved_target orelse return;
+    const rt = exe.root_module.resolved_target orelse return;
+    const resolved = rt.result;
+    const cross_linux = resolved.os.tag == .linux and
+        !(rt.query.isNativeCpu() and rt.query.isNativeOs() and rt.query.isNativeAbi());
+
     var dirs: std.ArrayList([]const u8) = .empty;
     defer {
         for (dirs.items) |p| b.allocator.free(p);
         dirs.deinit(b.allocator);
     }
-    collectWoffLibSearchDirs(b, &dirs, resolved.result) catch return;
+
+    if (cross_linux) {
+        if (b.sysroot) |sr| {
+            appendWoffLibSearchDirs(b, &dirs, resolved, sr) catch return;
+        }
+        appendWoffLibSearchDirs(b, &dirs, resolved, "sysroot") catch return;
+    } else {
+        appendWoffLibSearchDirs(b, &dirs, resolved, "") catch return;
+    }
 
     if (findWoffSharedObject(b, dirs.items, "libwoff2dec")) |p| {
         exe.root_module.addObjectFile(p);
@@ -284,11 +332,11 @@ pub fn build(b: *std.Build) void {
     });
     exe.addIncludePath(b.path("src/font"));
 
-    // Cross-compile: add sysroot library/include paths for aarch64 target
+    // Cross-compile: add repo-local sysroot paths for aarch64-linux (see README / packaging notes).
     const resolved = target.result;
     if (resolved.cpu.arch == .aarch64 and resolved.os.tag == .linux) {
-        exe.addLibraryPath(.{ .cwd_relative = "sysroot/usr/lib" });
-        exe.addIncludePath(.{ .cwd_relative = "sysroot/usr/include" });
+        exe.addLibraryPath(b.path("sysroot/usr/lib"));
+        exe.addIncludePath(b.path("sysroot/usr/include"));
     }
 
     // System libraries
