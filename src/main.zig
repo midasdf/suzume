@@ -85,6 +85,12 @@ fn centerScrollOnMatchY(scroll_y: *f32, surface_height: i32, match_y: f32) void 
     scroll_y.* = @max(0, match_y - ch / 2.0);
 }
 
+fn recordHistoryIfNotPrivate(storage: ?*Storage, tab_mgr: *TabManager, url: []const u8, title: []const u8) void {
+    const s = storage orelse return;
+    const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
+    if (!is_priv) s.addHistory(url, title);
+}
+
 const ErrBlitCtx = struct {
     surface: *Surface,
     colour: u32,
@@ -1059,7 +1065,7 @@ pub fn main() !void {
 
     // Restore session if no initial URL provided (skip in WebDriver mode)
     if (initial_url == null and webdriver_port == null) {
-        if (storage_inst) |*s| {
+        if (storage_ptr) |s| {
             if (s.loadSession()) |session_json| {
                 defer allocator.free(session_json);
                 session.restoreSession(allocator, session_json, &tab_mgr, &page_states.items.len, &struct {
@@ -1137,13 +1143,7 @@ pub fn main() !void {
                             current_url = cc;
                         }
                     }
-                    // Record in storage (skip for private tabs)
-                    if (storage_inst) |*s| {
-                        const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
-                        if (!is_priv) {
-                            s.addHistory(url, init_title orelse url);
-                        }
-                    }
+                    recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, url, init_title orelse url);
                 } else {
                     status_text = "Failed";
                 }
@@ -1442,7 +1442,7 @@ pub fn main() !void {
         session_timer += 1;
         if (session_timer >= session_save_interval) {
             session_timer = 0;
-            if (storage_inst) |*s| {
+            if (storage_ptr) |s| {
                 if (serializeSession(allocator, &tab_mgr)) |json| {
                     defer allocator.free(json);
                     s.saveSession(json);
@@ -1762,7 +1762,7 @@ pub fn main() !void {
 
                     // Ctrl+D: toggle bookmark for current URL
                     if (ctrl_held and key == nsfb_c.NSFB_KEY_d) {
-                        if (storage_inst) |*s| {
+                        if (storage_ptr) |s| {
                             if (current_url) |url| {
                                 if (s.isBookmarked(url)) {
                                     s.removeBookmark(url);
@@ -1987,11 +1987,7 @@ pub fn main() !void {
                                 const active_pg_title = activePageState(&tab_mgr, &page_states);
                                 const click_title = if (active_pg_title) |pgt| (if (pgt.doc) |*d| extractTitle(d) else null) else null;
                                 tab_mgr.updateActiveTitle(click_title orelse cu);
-                                // Record in storage with title
-                                if (storage_inst) |*s| {
-                                    const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
-                                    if (!is_priv) s.addHistory(cu, click_title orelse cu);
-                                }
+                                recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, cu, click_title orelse cu);
                             }
                         }
                         continue;
@@ -2170,10 +2166,7 @@ pub fn main() !void {
                                     current_url = allocator.dupe(u8, nav_url) catch null;
                                     tab_mgr.updateActiveUrl(nav_url);
                                     tab_mgr.updateActiveTitle(nav_url);
-                                    if (storage_inst) |*s| {
-                                        const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
-                                        if (!is_priv) s.addHistory(nav_url, nav_url);
-                                    }
+                                    recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, nav_url, nav_url);
                                     scroll_y = 0;
                                     scroll_x = 0;
                                     status_text = "Done";
@@ -2257,13 +2250,7 @@ pub fn main() !void {
                                         const page_title = if (pg.doc) |*d| extractTitle(d) else null;
                                         tab_mgr.updateActiveTitle(page_title orelse nav_target);
 
-                                        // Record in storage (skip for private tabs)
-                                        if (storage_inst) |*s| {
-                                            const is_priv = if (tab_mgr.getActiveTab()) |t| t.is_private else false;
-                                            if (!is_priv) {
-                                                s.addHistory(nav_target, page_title orelse nav_target);
-                                            }
-                                        }
+                                        recordHistoryIfNotPrivate(storage_ptr, &tab_mgr, nav_target, page_title orelse nav_target);
                                     } else {
                                         status_text = "Failed";
                                     }
@@ -2472,7 +2459,7 @@ pub fn main() !void {
     }
 
     // Save session on exit
-    if (storage_inst) |*s| {
+    if (storage_ptr) |s| {
         if (serializeSession(allocator, &tab_mgr)) |json| {
             defer allocator.free(json);
             s.saveSession(json);
