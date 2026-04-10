@@ -91,6 +91,31 @@ fn recordHistoryIfNotPrivate(storage: ?*Storage, tab_mgr: *TabManager, url: []co
     if (!is_priv) s.addHistory(url, title);
 }
 
+/// Drop forward history entries after `history_pos` (frees their strings).
+fn truncateForwardHistory(allocator: std.mem.Allocator, history: *std.ArrayListUnmanaged([]u8), history_pos: usize) void {
+    if (history_pos + 1 >= history.items.len) return;
+    for (history.items[history_pos + 1 ..]) |item| {
+        allocator.free(item);
+    }
+    history.shrinkRetainingCapacity(history_pos + 1);
+}
+
+/// Append a copy of `url` to history and move `history_pos` to the new tail. Returns false on OOM.
+fn pushHistoryNavigationUrl(
+    allocator: std.mem.Allocator,
+    history: *std.ArrayListUnmanaged([]u8),
+    history_pos: *usize,
+    url: []const u8,
+) bool {
+    const owned = allocator.dupe(u8, url) catch return false;
+    history.append(allocator, owned) catch {
+        allocator.free(owned);
+        return false;
+    };
+    history_pos.* = history.items.len - 1;
+    return true;
+}
+
 const ErrBlitCtx = struct {
     surface: *Surface,
     colour: u32,
@@ -2148,20 +2173,8 @@ pub fn main() !void {
                                     status_text = "Loading...";
                                     needs_repaint = true;
 
-                                    // Truncate forward history
-                                    if (history_pos + 1 < history.items.len) {
-                                        for (history.items[history_pos + 1 ..]) |item| {
-                                            allocator.free(item);
-                                        }
-                                        history.shrinkRetainingCapacity(history_pos + 1);
-                                    }
-                                    // Add to history
-                                    const owned = allocator.alloc(u8, nav_url.len) catch null;
-                                    if (owned) |o| {
-                                        @memcpy(o, nav_url);
-                                        history.append(allocator, o) catch {};
-                                        history_pos = history.items.len - 1;
-                                    }
+                                    truncateForwardHistory(allocator, &history, history_pos);
+                                    _ = pushHistoryNavigationUrl(allocator, &history, &history_pos, nav_url);
                                     if (current_url) |old| allocator.free(old);
                                     current_url = allocator.dupe(u8, nav_url) catch null;
                                     tab_mgr.updateActiveUrl(nav_url);
@@ -2228,20 +2241,8 @@ pub fn main() !void {
                                         scroll_x = 0;
                                         url_input.focused = false;
 
-                                        // Truncate forward history if we navigated from middle
-                                        if (history_pos + 1 < history.items.len) {
-                                            for (history.items[history_pos + 1 ..]) |item| {
-                                                allocator.free(item);
-                                            }
-                                            history.shrinkRetainingCapacity(history_pos + 1);
-                                        }
-
-                                        // Add to history (use nav_target since url_text may be stale)
-                                        const owned = allocator.dupe(u8, nav_target) catch null;
-                                        if (owned) |o| {
-                                            history.append(allocator, o) catch {};
-                                            history_pos = history.items.len - 1;
-                                        }
+                                        truncateForwardHistory(allocator, &history, history_pos);
+                                        _ = pushHistoryNavigationUrl(allocator, &history, &history_pos, nav_target);
                                         if (current_url) |old| allocator.free(old);
                                         current_url = allocator.dupe(u8, nav_target) catch null;
 
@@ -2711,20 +2712,8 @@ fn handleClick(
                             scroll_y.* = 0;
                             scroll_x.* = 0;
 
-                            // Truncate forward history
-                            if (history_pos.* + 1 < history.items.len) {
-                                for (history.items[history_pos.* + 1 ..]) |item| {
-                                    allocator.free(item);
-                                }
-                                history.shrinkRetainingCapacity(history_pos.* + 1);
-                            }
-                            const owned = allocator.alloc(u8, nav_url.len) catch return;
-                            @memcpy(owned, nav_url);
-                            history.append(allocator, owned) catch {
-                                allocator.free(owned);
-                                return;
-                            };
-                            history_pos.* = history.items.len - 1;
+                            truncateForwardHistory(allocator, history, history_pos.*);
+                            if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return;
                             if (current_url.*) |old| allocator.free(old);
                             current_url.* = allocator.dupe(u8, nav_url) catch null;
                         }
@@ -2752,19 +2741,8 @@ fn handleClick(
                         scroll_y.* = 0;
                         scroll_x.* = 0;
 
-                        if (history_pos.* + 1 < history.items.len) {
-                            for (history.items[history_pos.* + 1 ..]) |item| {
-                                allocator.free(item);
-                            }
-                            history.shrinkRetainingCapacity(history_pos.* + 1);
-                        }
-                        const owned = allocator.alloc(u8, nav_url.len) catch return;
-                        @memcpy(owned, nav_url);
-                        history.append(allocator, owned) catch {
-                            allocator.free(owned);
-                            return;
-                        };
-                        history_pos.* = history.items.len - 1;
+                        truncateForwardHistory(allocator, history, history_pos.*);
+                        if (!pushHistoryNavigationUrl(allocator, history, history_pos, nav_url)) return;
                         if (current_url.*) |old| allocator.free(old);
                         current_url.* = allocator.dupe(u8, nav_url) catch null;
                     }
@@ -2797,22 +2775,8 @@ fn handleClick(
                 scroll_y.* = 0;
                 scroll_x.* = 0;
 
-                // Truncate forward history
-                if (history_pos.* + 1 < history.items.len) {
-                    for (history.items[history_pos.* + 1 ..]) |item| {
-                        allocator.free(item);
-                    }
-                    history.shrinkRetainingCapacity(history_pos.* + 1);
-                }
-
-                // Add to history
-                const owned = allocator.alloc(u8, resolved.len) catch return;
-                @memcpy(owned, resolved);
-                history.append(allocator, owned) catch {
-                    allocator.free(owned);
-                    return;
-                };
-                history_pos.* = history.items.len - 1;
+                truncateForwardHistory(allocator, history, history_pos.*);
+                if (!pushHistoryNavigationUrl(allocator, history, history_pos, resolved)) return;
 
                 if (current_url.*) |old| allocator.free(old);
                 const cu = allocator.alloc(u8, resolved.len) catch null;
