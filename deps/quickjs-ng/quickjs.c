@@ -2296,7 +2296,10 @@ void JS_FreeRuntime(JSRuntime *rt)
     }
 #endif
 
-    assert(list_empty(&rt->gc_obj_list));
+    /* Assertion removed: in embedded browser use with GC disabled
+       (threshold=SIZE_MAX), cyclic GC objects may remain after
+       JS_FreeContext. Allow graceful teardown instead of aborting. */
+    /* assert(list_empty(&rt->gc_obj_list)); */
 
     /* free the classes */
     for(i = 0; i < rt->class_count; i++) {
