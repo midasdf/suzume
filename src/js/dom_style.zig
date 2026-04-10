@@ -588,8 +588,18 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
         return dimensionToString(c, style.left, &buf);
     } else if (std.mem.eql(u8, prop, "overflow")) {
         // Shorthand: if both axes are the same, return one value
-        const x = switch (style.overflow_x) { .visible => "visible", .hidden => "hidden", .scroll => "scroll", .auto_ => "auto" };
-        const y = switch (style.overflow_y) { .visible => "visible", .hidden => "hidden", .scroll => "scroll", .auto_ => "auto" };
+        const x = switch (style.overflow_x) {
+            .visible => "visible",
+            .hidden => "hidden",
+            .scroll => "scroll",
+            .auto_ => "auto",
+        };
+        const y = switch (style.overflow_y) {
+            .visible => "visible",
+            .hidden => "hidden",
+            .scroll => "scroll",
+            .auto_ => "auto",
+        };
         if (std.mem.eql(u8, x, y)) {
             return qjs.JS_NewStringLen(c, x.ptr, x.len);
         }
@@ -614,44 +624,66 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
         };
     } else if (std.mem.eql(u8, prop, "white-space")) {
         const s = switch (style.white_space) {
-            .normal => "normal", .pre => "pre", .nowrap => "nowrap",
-            .pre_wrap => "pre-wrap", .pre_line => "pre-line", .break_spaces => "break-spaces",
+            .normal => "normal",
+            .pre => "pre",
+            .nowrap => "nowrap",
+            .pre_wrap => "pre-wrap",
+            .pre_line => "pre-line",
+            .break_spaces => "break-spaces",
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "word-break")) {
-        const s = switch (style.word_break) { .normal => "normal", .break_all => "break-all", .keep_all => "keep-all" };
+        const s = switch (style.word_break) {
+            .normal => "normal",
+            .break_all => "break-all",
+            .keep_all => "keep-all",
+        };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "text-overflow")) {
-        const s = switch (style.text_overflow) { .clip => "clip", .ellipsis => "ellipsis" };
+        const s = switch (style.text_overflow) {
+            .clip => "clip",
+            .ellipsis => "ellipsis",
+        };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "font-style")) {
-        const s = switch (style.font_style) { .normal => "normal", .italic => "italic", .oblique => "oblique" };
+        const s = switch (style.font_style) {
+            .normal => "normal",
+            .italic => "italic",
+            .oblique => "oblique",
+        };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "vertical-align")) {
         const s = switch (style.vertical_align) {
-            .baseline => "baseline", .top => "top", .middle => "middle", .bottom => "bottom",
-            .text_top => "text-top", .text_bottom => "text-bottom", .sub => "sub", .super => "super",
+            .baseline => "baseline",
+            .top => "top",
+            .middle => "middle",
+            .bottom => "bottom",
+            .text_top => "text-top",
+            .text_bottom => "text-bottom",
+            .sub => "sub",
+            .super => "super",
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "border-top-color") or std.mem.eql(u8, prop, "border-right-color") or
         std.mem.eql(u8, prop, "border-bottom-color") or std.mem.eql(u8, prop, "border-left-color"))
     {
-        const color = if (std.mem.eql(u8, prop, "border-top-color")) style.border_top_color
-            else if (std.mem.eql(u8, prop, "border-right-color")) style.border_right_color
-            else if (std.mem.eql(u8, prop, "border-bottom-color")) style.border_bottom_color
-            else style.border_left_color;
+        const color = if (std.mem.eql(u8, prop, "border-top-color")) style.border_top_color else if (std.mem.eql(u8, prop, "border-right-color")) style.border_right_color else if (std.mem.eql(u8, prop, "border-bottom-color")) style.border_bottom_color else style.border_left_color;
         return argbToCssColor(c, color, &buf);
     } else if (std.mem.eql(u8, prop, "border-top-style") or std.mem.eql(u8, prop, "border-right-style") or
         std.mem.eql(u8, prop, "border-bottom-style") or std.mem.eql(u8, prop, "border-left-style"))
     {
-        const bs = if (std.mem.eql(u8, prop, "border-top-style")) style.border_top_style
-            else if (std.mem.eql(u8, prop, "border-right-style")) style.border_right_style
-            else if (std.mem.eql(u8, prop, "border-bottom-style")) style.border_bottom_style
-            else style.border_left_style;
+        const bs = if (std.mem.eql(u8, prop, "border-top-style")) style.border_top_style else if (std.mem.eql(u8, prop, "border-right-style")) style.border_right_style else if (std.mem.eql(u8, prop, "border-bottom-style")) style.border_bottom_style else style.border_left_style;
         const s = switch (bs) {
-            .none => "none", .hidden => "hidden", .solid => "solid", .dashed => "dashed",
-            .dotted => "dotted", .double_ => "double", .groove => "groove", .ridge => "ridge",
-            .inset => "inset", .outset => "outset",
+            .none => "none",
+            .hidden => "hidden",
+            .solid => "solid",
+            .dashed => "dashed",
+            .dotted => "dotted",
+            .double_ => "double",
+            .groove => "groove",
+            .ridge => "ridge",
+            .inset => "inset",
+            .outset => "outset",
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "aspect-ratio")) {
@@ -659,7 +691,12 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
         const result = std.fmt.bufPrint(&buf, "{d}", .{style.aspect_ratio}) catch return qjs.JS_NewStringLen(c, "auto", 4);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
     } else if (std.mem.eql(u8, prop, "text-transform")) {
-        const s = switch (style.text_transform) { .none => "none", .capitalize => "capitalize", .uppercase => "uppercase", .lowercase => "lowercase" };
+        const s = switch (style.text_transform) {
+            .none => "none",
+            .capitalize => "capitalize",
+            .uppercase => "uppercase",
+            .lowercase => "lowercase",
+        };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "letter-spacing")) {
         if (style.letter_spacing == 0) return qjs.JS_NewStringLen(c, "normal", 6);
@@ -797,7 +834,10 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
                 if (inner.len > 0 and inner[inner.len - 1] == '%') {
                     var simple = true;
                     for (inner[0 .. inner.len - 1]) |ch| {
-                        if (ch == '+' or ch == '*' or ch == '/' or ch == '(') { simple = false; break; }
+                        if (ch == '+' or ch == '*' or ch == '/' or ch == '(') {
+                            simple = false;
+                            break;
+                        }
                     }
                     if (simple) return qjs.JS_NewStringLen(c, inner.ptr, inner.len);
                 }
@@ -851,7 +891,10 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
             // Single value with no operators (no spaces, +, -)
             var has_op = false;
             for (inner) |ch| {
-                if (ch == '+' or ch == '-' or ch == '*' or ch == '/') { has_op = true; break; }
+                if (ch == '+' or ch == '-' or ch == '*' or ch == '/') {
+                    has_op = true;
+                    break;
+                }
             }
             if (!has_op and inner.len > 0)
                 return qjs.JS_NewStringLen(c, inner.ptr, inner.len);
@@ -1086,26 +1129,11 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
                 if (needs_blockify) {
                     const tv = std.mem.trim(u8, val, " \t\r\n");
                     // CSS Display L3 §2.7: Blockification rules
-                    const blockified: ?[]const u8 = if (eqlIgnoreCase(tv, "inline")) "block"
-                    else if (eqlIgnoreCase(tv, "inline-block")) "block"
-                    else if (eqlIgnoreCase(tv, "inline-table")) "table"
-                    else if (eqlIgnoreCase(tv, "inline-flex")) "flex"
-                    else if (eqlIgnoreCase(tv, "inline-grid")) "grid"
-                    // Internal table display types blockify to "block"
-                    else if (eqlIgnoreCase(tv, "table-row-group")) "block"
-                    else if (eqlIgnoreCase(tv, "table-header-group")) "block"
-                    else if (eqlIgnoreCase(tv, "table-footer-group")) "block"
-                    else if (eqlIgnoreCase(tv, "table-row")) "block"
-                    else if (eqlIgnoreCase(tv, "table-cell")) "block"
-                    else if (eqlIgnoreCase(tv, "table-column")) "block"
-                    else if (eqlIgnoreCase(tv, "table-column-group")) "block"
-                    else if (eqlIgnoreCase(tv, "table-caption")) "block"
-                    // Ruby internal display types blockify to "block"
-                    else if (eqlIgnoreCase(tv, "ruby-base")) "block"
-                    else if (eqlIgnoreCase(tv, "ruby-text")) "block"
-                    else if (eqlIgnoreCase(tv, "ruby-base-container")) "block"
-                    else if (eqlIgnoreCase(tv, "ruby-text-container")) "block"
-                    else null;
+                    const blockified: ?[]const u8 = if (eqlIgnoreCase(tv, "inline")) "block" else if (eqlIgnoreCase(tv, "inline-block")) "block" else if (eqlIgnoreCase(tv, "inline-table")) "table" else if (eqlIgnoreCase(tv, "inline-flex")) "flex" else if (eqlIgnoreCase(tv, "inline-grid")) "grid"
+                        // Internal table display types blockify to "block"
+                        else if (eqlIgnoreCase(tv, "table-row-group")) "block" else if (eqlIgnoreCase(tv, "table-header-group")) "block" else if (eqlIgnoreCase(tv, "table-footer-group")) "block" else if (eqlIgnoreCase(tv, "table-row")) "block" else if (eqlIgnoreCase(tv, "table-cell")) "block" else if (eqlIgnoreCase(tv, "table-column")) "block" else if (eqlIgnoreCase(tv, "table-column-group")) "block" else if (eqlIgnoreCase(tv, "table-caption")) "block"
+                        // Ruby internal display types blockify to "block"
+                        else if (eqlIgnoreCase(tv, "ruby-base")) "block" else if (eqlIgnoreCase(tv, "ruby-text")) "block" else if (eqlIgnoreCase(tv, "ruby-base-container")) "block" else if (eqlIgnoreCase(tv, "ruby-text-container")) "block" else null;
                     if (blockified) |b| return qjs.JS_NewStringLen(c, b.ptr, b.len);
                 }
             }
@@ -1418,9 +1446,9 @@ pub fn extractOriginalAlpha(color_str: []const u8) ?f64 {
     var slash_pos: ?usize = null;
     var depth: usize = 0;
     for (color_str, 0..) |ch, i| {
-        if (ch == '(') depth += 1
-        else if (ch == ')') { if (depth > 0) depth -= 1; }
-        else if (depth == 1) {
+        if (ch == '(') depth += 1 else if (ch == ')') {
+            if (depth > 0) depth -= 1;
+        } else if (depth == 1) {
             if (ch == ',') last_comma = i;
             if (ch == '/') slash_pos = i;
         }
@@ -1480,10 +1508,16 @@ fn tokenizeRespectingParens(input: []const u8, out: *[8][]const u8) usize {
     for (input, 0..) |ch, i| {
         if (ch == '(') {
             depth += 1;
-            if (!in_tok) { start = i; in_tok = true; }
+            if (!in_tok) {
+                start = i;
+                in_tok = true;
+            }
         } else if (ch == ')') {
             if (depth > 0) depth -= 1;
-            if (!in_tok) { start = i; in_tok = true; }
+            if (!in_tok) {
+                start = i;
+                in_tok = true;
+            }
         } else if ((ch == ' ' or ch == '\t') and depth == 0) {
             if (in_tok and count < 8) {
                 out[count] = input[start..i];
@@ -1689,10 +1723,7 @@ fn formatModernColorImpl(c: *qjs.JSContext, input: []const u8, resolve_calc: boo
             is_none[count] = true;
         } else if (resolve_calc and isCssMathFunc(tok)) {
             // Choose pct_base based on component context:
-            const pct_base: f32 = if (count == 0) (if (is_ok) @as(f32, 1.0) else @as(f32, 100.0))
-            else if (count == 1 and is_hue_func) (if (is_ok) @as(f32, 0.4) else @as(f32, 150.0))
-            else if (is_ok) @as(f32, 0.4)
-            else @as(f32, 125.0);
+            const pct_base: f32 = if (count == 0) (if (is_ok) @as(f32, 1.0) else @as(f32, 100.0)) else if (count == 1 and is_hue_func) (if (is_ok) @as(f32, 0.4) else @as(f32, 150.0)) else if (is_ok) @as(f32, 0.4) else @as(f32, 125.0);
             if (resolveCalcComponentWithBase(tok, pct_base)) |resolved| {
                 vals[count] = @floatCast(resolved);
             } else return qjs.JS_NewStringLen(c, input.ptr, input.len);
@@ -1983,10 +2014,24 @@ pub fn resolveBoxShorthandForComputed(c: *qjs.JSContext, val: []const u8, elem_v
     var start: usize = 0;
     while (pos <= val.len) {
         if (pos < val.len) {
-            if (val[pos] == '(') { paren_depth += 1; pos += 1; continue; }
-            if (val[pos] == ')') { if (paren_depth > 0) paren_depth -= 1; pos += 1; continue; }
-            if (val[pos] != ' ' and val[pos] != '\t') { pos += 1; continue; }
-            if (paren_depth > 0) { pos += 1; continue; }
+            if (val[pos] == '(') {
+                paren_depth += 1;
+                pos += 1;
+                continue;
+            }
+            if (val[pos] == ')') {
+                if (paren_depth > 0) paren_depth -= 1;
+                pos += 1;
+                continue;
+            }
+            if (val[pos] != ' ' and val[pos] != '\t') {
+                pos += 1;
+                continue;
+            }
+            if (paren_depth > 0) {
+                pos += 1;
+                continue;
+            }
         }
         // End of token
         if (pos > start) {
@@ -2422,13 +2467,13 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
 /// Check if a CSS property is inherited by default (CSS spec).
 pub fn isCssInheritedProperty(prop: []const u8) bool {
     const inherited = [_][]const u8{
-        "color",          "font-size",       "font-weight",      "font-style",
-        "font-family",    "font-variant",    "text-align",       "text-indent",
-        "text-transform", "line-height",     "letter-spacing",   "word-spacing",
-        "word-break",     "white-space",     "visibility",       "direction",
-        "cursor",         "list-style-type", "list-style-position", "list-style-image",
-        "border-collapse", "border-spacing", "caption-side",     "empty-cells",
-        "quotes",         "orphans",         "widows",           "tab-size",
+        "color",           "font-size",       "font-weight",         "font-style",
+        "font-family",     "font-variant",    "text-align",          "text-indent",
+        "text-transform",  "line-height",     "letter-spacing",      "word-spacing",
+        "word-break",      "white-space",     "visibility",          "direction",
+        "cursor",          "list-style-type", "list-style-position", "list-style-image",
+        "border-collapse", "border-spacing",  "caption-side",        "empty-cells",
+        "quotes",          "orphans",         "widows",              "tab-size",
     };
     for (inherited) |p| {
         if (eqlIgnoreCase(prop, p)) return true;
@@ -3136,9 +3181,7 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         // Display: all CSS display values (single and two-value syntax)
         .display => isValidDisplayValue(trimmed),
         // Color properties
-        .color, .background_color, .border_top_color, .border_right_color,
-        .border_bottom_color, .border_left_color,
-        .outline_color => isValidColorValue(trimmed, false),
+        .color, .background_color, .border_top_color, .border_right_color, .border_bottom_color, .border_left_color, .outline_color => isValidColorValue(trimmed, false),
         .caret_color, .accent_color => isValidColorValue(trimmed, true),
         // Numeric properties
         .opacity => blk: {
@@ -3202,38 +3245,76 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         // Grid template areas: none or string
         .grid_template_areas, .grid_template_columns, .grid_template_rows => true,
         // Animation/Transition properties: accept any valid value
-        .animation_delay, .animation_direction, .animation_duration,
-        .animation_fill_mode, .animation_iteration_count, .animation_name,
-        .animation_play_state, .animation_timing_function,
-        .transition_property, .transition_duration, .transition_timing_function,
-        .transition_delay => true,
+        .animation_delay, .animation_direction, .animation_duration, .animation_fill_mode, .animation_iteration_count, .animation_name, .animation_play_state, .animation_timing_function, .transition_property, .transition_duration, .transition_timing_function, .transition_delay => true,
         // Other properties that accept complex values
-        .filter, .backdrop_filter, .box_shadow, .text_shadow,
-        .content, .counter_reset, .counter_increment, .will_change,
-        .background_image, .background_repeat, .background_position,
+        .filter,
+        .backdrop_filter,
+        .box_shadow,
+        .text_shadow,
+        .content,
+        .counter_reset,
+        .counter_increment,
+        .will_change,
+        .background_image,
+        .background_repeat,
+        .background_position,
         .background_size,
-        .border_radius_top_left, .border_radius_top_right,
-        .border_radius_bottom_left, .border_radius_bottom_right,
-        .border_spacing, .grid_area, .transform,
-        .letter_spacing, .word_spacing, .text_indent,
-        .row_gap, .column_gap,
+        .border_radius_top_left,
+        .border_radius_top_right,
+        .border_radius_bottom_left,
+        .border_radius_bottom_right,
+        .border_spacing,
+        .grid_area,
+        .transform,
+        .letter_spacing,
+        .word_spacing,
+        .text_indent,
+        .row_gap,
+        .column_gap,
         .aspect_ratio,
-        .object_fit, .contain,
-        .font_family, .font_style,
+        .object_fit,
+        .contain,
+        .font_family,
+        .font_style,
         .vertical_align,
-        .align_content, .align_items, .align_self,
-        .justify_content, .justify_items, .justify_self,
+        .align_content,
+        .align_items,
+        .align_self,
+        .justify_content,
+        .justify_items,
+        .justify_self,
         .color_scheme,
         // All remaining PropertyId variants that take complex/keyword values
-        .position, .box_sizing,
-        .border_top_style, .border_right_style, .border_bottom_style, .border_left_style,
-        .text_align, .text_decoration, .text_transform, .white_space, .word_break,
-        .overflow_wrap, .text_overflow, .list_style_type,
-        .flex_direction, .flex_basis, .gap, .grid_column_end, .grid_row_end,
-        .border_collapse, .table_layout,
-        .text_decoration_color, .text_decoration_style, .text_decoration_thickness,
-        .text_underline_offset, .appearance, .user_select, .pointer_events,
-        .touch_action => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
+        .position,
+        .box_sizing,
+        .border_top_style,
+        .border_right_style,
+        .border_bottom_style,
+        .border_left_style,
+        .text_align,
+        .text_decoration,
+        .text_transform,
+        .white_space,
+        .word_break,
+        .overflow_wrap,
+        .text_overflow,
+        .list_style_type,
+        .flex_direction,
+        .flex_basis,
+        .gap,
+        .grid_column_end,
+        .grid_row_end,
+        .border_collapse,
+        .table_layout,
+        .text_decoration_color,
+        .text_decoration_style,
+        .text_decoration_thickness,
+        .text_underline_offset,
+        .appearance,
+        .user_select,
+        .pointer_events,
+        .touch_action,
+        => true, // baseline, top, middle, bottom, sub, super, text-top, text-bottom, length, %
         // Note: outline-offset and resize are handled via known_shorthands (no PropertyId)
         // text-wrap: wrap, nowrap, balance, pretty, stable, auto
         .text_wrap => eqlIgnoreCase(trimmed, "wrap") or eqlIgnoreCase(trimmed, "nowrap") or
@@ -3301,167 +3382,148 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
     }
     // Known shorthand properties that we don't deeply validate — accept
     const known_shorthands = [_][]const u8{
-        "border",               "border-top",           "border-right",           "border-bottom",       "border-left",
-        "border-radius",        "border-color",         "border-width",           "border-style",
-        "background",           "font",                 "flex",                   "flex-flow",           "transition",           "animation",
-        "text-decoration",      "list-style",           "outline",                "grid",                "grid-template",
-        "grid-template-columns","grid-template-rows",   "grid-area",              "grid-column",
-        "grid-row",             "gap",                  "place-content",          "place-items",         "place-self",
-        "columns",              "column-rule",          "inset",
+        "border",                      "border-top",                "border-right",               "border-bottom",              "border-left",
+        "border-radius",               "border-color",              "border-width",               "border-style",               "background",
+        "font",                        "flex",                      "flex-flow",                  "transition",                 "animation",
+        "text-decoration",             "list-style",                "outline",                    "grid",                       "grid-template",
+        "grid-template-columns",       "grid-template-rows",        "grid-area",                  "grid-column",                "grid-row",
+        "gap",                         "place-content",             "place-items",                "place-self",                 "columns",
+        "column-rule",                 "inset",
         // CSS Text properties (keyword values)
-        "line-break",           "overflow-wrap",        "word-wrap",              "hyphens",
-        "text-decoration-line", "text-decoration-style","text-decoration-color",
-        "text-underline-position","text-underline-offset","text-emphasis-style",  "text-emphasis-color",
-        "text-shadow",          "white-space-collapse",  "text-wrap",             "text-wrap-mode",      "text-wrap-style",
-        "text-indent",          "tab-size",             "text-align-last",      "text-align-all",
-        "text-justify",         "text-autospace",       "text-spacing-trim",    "text-spacing",
-        "text-group-align",     "word-space-transform",
-        "hyphenate-character",  "hyphenate-limit-chars","hanging-punctuation",
+                            "line-break",                 "overflow-wrap",              "word-wrap",
+        "hyphens",                     "text-decoration-line",      "text-decoration-style",      "text-decoration-color",      "text-underline-position",
+        "text-underline-offset",       "text-emphasis-style",       "text-emphasis-color",        "text-shadow",                "white-space-collapse",
+        "text-wrap",                   "text-wrap-mode",            "text-wrap-style",            "text-indent",                "tab-size",
+        "text-align-last",             "text-align-all",            "text-justify",               "text-autospace",             "text-spacing-trim",
+        "text-spacing",                "text-group-align",          "word-space-transform",       "hyphenate-character",        "hyphenate-limit-chars",
+        "hanging-punctuation",
         // CSS positioning/layout properties
-        "contain",              "content-visibility",   "container-type",         "container-name",
-        "aspect-ratio",         "object-fit",           "object-position",
-        "isolation",            "mix-blend-mode",       "filter",                 "backdrop-filter",
-        "clip-path",            "mask",                 "mask-image",
-        "scroll-behavior",     "overscroll-behavior",   "scroll-snap-type",       "scroll-snap-align",
+                "contain",                   "content-visibility",         "container-type",             "container-name",
+        "aspect-ratio",                "object-fit",                "object-position",            "isolation",                  "mix-blend-mode",
+        "filter",                      "backdrop-filter",           "clip-path",                  "mask",                       "mask-image",
+        "scroll-behavior",             "overscroll-behavior",       "scroll-snap-type",           "scroll-snap-align",
         // CSS Logical Properties
-        "inset-block-start",   "inset-block-end",      "inset-inline-start",     "inset-inline-end",
-        "inset-block",         "inset-inline",
-        "margin-block-start",  "margin-block-end",     "margin-inline-start",    "margin-inline-end",
-        "padding-block-start", "padding-block-end",    "padding-inline-start",   "padding-inline-end",
-        "border-block-start-width","border-block-end-width","border-inline-start-width","border-inline-end-width",
-        "border-block-start-style","border-block-end-style","border-inline-start-style","border-inline-end-style",
-        "border-block-start-color","border-block-end-color","border-inline-start-color","border-inline-end-color",
-        "border-block-width",  "border-block-style",   "border-block-color",
-        "border-inline-width", "border-inline-style",  "border-inline-color",
-        "border-block-start",  "border-block-end",     "border-inline-start",    "border-inline-end",
-        "border-block",        "border-inline",
+                 "inset-block-start",
+        "inset-block-end",             "inset-inline-start",        "inset-inline-end",           "inset-block",                "inset-inline",
+        "margin-block-start",          "margin-block-end",          "margin-inline-start",        "margin-inline-end",          "padding-block-start",
+        "padding-block-end",           "padding-inline-start",      "padding-inline-end",         "border-block-start-width",   "border-block-end-width",
+        "border-inline-start-width",   "border-inline-end-width",   "border-block-start-style",   "border-block-end-style",     "border-inline-start-style",
+        "border-inline-end-style",     "border-block-start-color",  "border-block-end-color",     "border-inline-start-color",  "border-inline-end-color",
+        "border-block-width",          "border-block-style",        "border-block-color",         "border-inline-width",        "border-inline-style",
+        "border-inline-color",         "border-block-start",        "border-block-end",           "border-inline-start",        "border-inline-end",
+        "border-block",                "border-inline",
         // CSS Transforms
-        "backface-visibility", "perspective",          "perspective-origin",     "transform-box",
-        "transform-origin",    "transform-style",
+                    "backface-visibility",        "perspective",                "perspective-origin",
+        "transform-box",               "transform-origin",          "transform-style",
         // CSS Writing Modes
-        "writing-mode",        "text-orientation",     "text-combine-upright",   "direction",
-        "unicode-bidi",
+                   "writing-mode",               "text-orientation",
+        "text-combine-upright",        "direction",                 "unicode-bidi",
         // CSS Fonts
-        "font-kerning",        "font-feature-settings","font-language-override", "font-optical-sizing",
-        "font-palette",        "font-size-adjust",     "font-stretch",           "font-synthesis",
-        "font-variant",        "font-variant-caps",    "font-variant-east-asian","font-variant-ligatures",
-        "font-variant-numeric","font-variant-position","font-variation-settings",
-        "font-synthesis-weight","font-synthesis-style", "font-synthesis-small-caps","font-synthesis-position",
-        "font-variant-alternates","font-variant-emoji",  "font-width",
+                      "font-kerning",               "font-feature-settings",
+        "font-language-override",      "font-optical-sizing",       "font-palette",               "font-size-adjust",           "font-stretch",
+        "font-synthesis",              "font-variant",              "font-variant-caps",          "font-variant-east-asian",    "font-variant-ligatures",
+        "font-variant-numeric",        "font-variant-position",     "font-variation-settings",    "font-synthesis-weight",      "font-synthesis-style",
+        "font-synthesis-small-caps",   "font-synthesis-position",   "font-variant-alternates",    "font-variant-emoji",         "font-width",
         // CSS Grid
-        "grid-auto-columns",   "grid-auto-rows",       "grid-auto-flow",
-        "grid-template-areas", "grid-template",
-        "grid-column-start",   "grid-column-end",      "grid-row-start",         "grid-row-end",
+        "grid-auto-columns",           "grid-auto-rows",            "grid-auto-flow",             "grid-template-areas",        "grid-template",
+        "grid-column-start",           "grid-column-end",           "grid-row-start",             "grid-row-end",
         // CSS Animations
-        "animation-delay",     "animation-direction",  "animation-duration",     "animation-fill-mode",
-        "animation-iteration-count","animation-name",  "animation-play-state",   "animation-timing-function",
-        "animation-range-start","animation-range-end",  "animation-range",        "animation-timeline",
-        "animation-composition",
+                      "animation-delay",
+        "animation-direction",         "animation-duration",        "animation-fill-mode",        "animation-iteration-count",  "animation-name",
+        "animation-play-state",        "animation-timing-function", "animation-range-start",      "animation-range-end",        "animation-range",
+        "animation-timeline",          "animation-composition",
         // CSS Transitions
-        "transition-property", "transition-duration",  "transition-timing-function",
-        "transition-behavior",
-        "block-size",          "inline-size",          "min-block-size",         "min-inline-size",
-        "max-block-size",      "max-inline-size",
+            "transition-property",        "transition-duration",        "transition-timing-function",
+        "transition-behavior",         "block-size",                "inline-size",                "min-block-size",             "min-inline-size",
+        "max-block-size",              "max-inline-size",
         // CSS Backgrounds
-        "background-attachment","background-clip",      "background-image",       "background-origin",
-        "background-position", "background-position-x","background-position-y",  "background-repeat",
-        "background-size",     "border-image",         "border-image-source",    "border-image-slice",
-        "border-image-width",  "border-image-outset",  "border-image-repeat",
-        "border-top-left-radius","border-top-right-radius","border-bottom-left-radius","border-bottom-right-radius",
-        "border-top-radius","border-bottom-radius","border-left-radius","border-right-radius",
-        "border-block-start-radius","border-block-end-radius","border-inline-start-radius","border-inline-end-radius",
-        "corner-shape",        "corners",
+                  "background-attachment",      "background-clip",            "background-image",
+        "background-origin",           "background-position",       "background-position-x",      "background-position-y",      "background-repeat",
+        "background-size",             "border-image",              "border-image-source",        "border-image-slice",         "border-image-width",
+        "border-image-outset",         "border-image-repeat",       "border-top-left-radius",     "border-top-right-radius",    "border-bottom-left-radius",
+        "border-bottom-right-radius",  "border-top-radius",         "border-bottom-radius",       "border-left-radius",         "border-right-radius",
+        "border-block-start-radius",   "border-block-end-radius",   "border-inline-start-radius", "border-inline-end-radius",   "corner-shape",
+        "corners",
         // CSS Overscroll Behavior
-        "overscroll-behavior", "overscroll-behavior-x","overscroll-behavior-y",
-        "overscroll-behavior-block","overscroll-behavior-inline",
+                            "overscroll-behavior",       "overscroll-behavior-x",      "overscroll-behavior-y",      "overscroll-behavior-block",
+        "overscroll-behavior-inline",
         // CSS Gaps (rule)
-        "rule-break",          "rule-inset-start",     "rule-inset-end",
-        "rule-inset",          "rule-fill",            "rule-align",
-        "rule-color",          "rule-width",           "rule-style",
-        "rule-size",           "rule-length",          "rule",
+         "rule-break",                "rule-inset-start",           "rule-inset-end",             "rule-inset",
+        "rule-fill",                   "rule-align",                "rule-color",                 "rule-width",                 "rule-style",
+        "rule-size",                   "rule-length",               "rule",
         // CSS Content
-        "quotes",
+                              "quotes",
         // CSS Size Adjust
-        "text-size-adjust",
+                            "text-size-adjust",
         // CSS Anchor Position
-        "anchor-scope",        "anchor-name",          "position-anchor",
-        "position-area",       "position-try-fallbacks","position-try-order",
-        "position-visibility", "inset-area",
+        "anchor-scope",                "anchor-name",               "position-anchor",            "position-area",              "position-try-fallbacks",
+        "position-try-order",          "position-visibility",       "inset-area",
         // CSS Color Adjust
-        "color-adjust",        "print-color-adjust",   "forced-color-adjust",
-        "color-scheme",
+                        "color-adjust",               "print-color-adjust",
+        "forced-color-adjust",         "color-scheme",
         // CSS Rhythm
-        "block-step-size",     "block-step-insert",    "block-step-align",
-        "block-step-round",    "block-step",           "line-height-step",
+                     "block-step-size",            "block-step-insert",          "block-step-align",
+        "block-step-round",            "block-step",                "line-height-step",
         // CSS Overflow
-        "overflow-block",      "overflow-inline",      "scrollbar-gutter",       "overflow-clip-margin",
-        "text-overflow",       "scroll-markers",       "scroll-target-group",    "scroll-buttons",
-        "line-clamp",          "max-lines",            "block-ellipsis",         "continue",
+                  "overflow-block",             "overflow-inline",
+        "scrollbar-gutter",            "overflow-clip-margin",      "text-overflow",              "scroll-markers",             "scroll-target-group",
+        "scroll-buttons",              "line-clamp",                "max-lines",                  "block-ellipsis",             "continue",
         // CSS Images
-        "image-orientation",   "image-rendering",      "image-resolution",
+        "image-orientation",           "image-rendering",           "image-resolution",
         // CSS UI (not in PropertyId)
-        "outline-offset",      "field-sizing",         "interactivity",
+                  "outline-offset",             "field-sizing",
+        "interactivity",
         // CSS Filter Effects
-        "flood-color",         "flood-opacity",        "lighting-color",         "clip",
+                      "flood-color",               "flood-opacity",              "lighting-color",             "clip",
         "color-interpolation-filters",
         // CSS Masking
-        "clip-path",           "clip-rule",            "mask-image",             "mask-mode",
-        "mask-repeat",         "mask-position",        "mask-clip",              "mask-origin",
-        "mask-size",           "mask-composite",       "mask-type",              "mask",
-        "mask-border",         "mask-border-source",   "mask-border-slice",      "mask-border-width",
-        "mask-border-outset",  "mask-border-repeat",   "mask-border-mode",
+        "clip-path",                 "clip-rule",                  "mask-image",                 "mask-mode",
+        "mask-repeat",                 "mask-position",             "mask-clip",                  "mask-origin",                "mask-size",
+        "mask-composite",              "mask-type",                 "mask",                       "mask-border",                "mask-border-source",
+        "mask-border-slice",           "mask-border-width",         "mask-border-outset",         "mask-border-repeat",         "mask-border-mode",
         // CSS Shapes
-        "shape-outside",       "shape-margin",         "shape-image-threshold",
+        "shape-outside",               "shape-margin",              "shape-image-threshold",
         // CSS Multi-column
-        "column-count",        "column-width",         "column-fill",            "column-span",
-        "column-rule-width",   "column-rule-style",    "column-rule-color",
+             "column-count",               "column-width",
+        "column-fill",                 "column-span",               "column-rule-width",          "column-rule-style",          "column-rule-color",
         // CSS Ruby
-        "ruby-align",          "ruby-position",
+        "ruby-align",                  "ruby-position",
         // CSS Lists
-        "list-style-position", "list-style-image",     "marker-side",            "counter-set",
+                    "list-style-position",        "list-style-image",           "marker-side",
+        "counter-set",
         // CSS Tables
-        "caption-side",        "empty-cells",          "border-spacing",
+                        "caption-side",              "empty-cells",                "border-spacing",
         // CSS Inline
-        "alignment-baseline",  "dominant-baseline",    "baseline-shift",         "initial-letter",
-        "line-height-step",    "vertical-align",
+                    "alignment-baseline",
+        "dominant-baseline",           "baseline-shift",            "initial-letter",             "line-height-step",           "vertical-align",
         // CSS Page
-        "break-before",        "break-after",          "break-inside",           "orphans",
-        "widows",              "page",
+        "break-before",                "break-after",               "break-inside",               "orphans",                    "widows",
+        "page",
         // CSS View Transitions
-        "view-transition-name","view-transition-class",
+                               "view-transition-name",      "view-transition-class",
         // CSS Logical (borders)
-        "border-block-start-color","border-block-end-color",
-        "border-inline-start-color","border-inline-end-color",
-        "border-block-color",  "border-inline-color",
-        "border-block-start-width","border-block-end-width",
-        "border-inline-start-width","border-inline-end-width",
-        "border-block-start-style","border-block-end-style",
-        "border-inline-start-style","border-inline-end-style",
+             "border-block-start-color",   "border-block-end-color",
+        "border-inline-start-color",   "border-inline-end-color",   "border-block-color",         "border-inline-color",        "border-block-start-width",
+        "border-block-end-width",      "border-inline-start-width", "border-inline-end-width",    "border-block-start-style",   "border-block-end-style",
+        "border-inline-start-style",   "border-inline-end-style",
         // CSS Align
-        "place-content",       "place-items",          "place-self",
-        "row-gap",             "column-gap",
-        "grid-row-gap",        "grid-column-gap",      "grid-gap",
+          "place-content",              "place-items",                "place-self",
+        "row-gap",                     "column-gap",                "grid-row-gap",               "grid-column-gap",            "grid-gap",
         // CSS Will Change
         "will-change",
         // CSS Motion
-        "offset-path",         "offset-distance",      "offset-rotate",
-        "offset-anchor",       "offset-position",      "offset",
+                        "offset-path",               "offset-distance",            "offset-rotate",              "offset-anchor",
+        "offset-position",             "offset",
         // CSS Text Box Trim
-        "text-box-trim",       "text-box-edge",        "text-box",
+                           "text-box-trim",              "text-box-edge",              "text-box",
         // CSS Scroll Snap
-        "scroll-snap-type",    "scroll-snap-align",    "scroll-snap-stop",
-        "scroll-padding",      "scroll-padding-top",   "scroll-padding-right",
-        "scroll-padding-bottom","scroll-padding-left",  "scroll-padding-block",
-        "scroll-padding-inline","scroll-margin",        "scroll-margin-top",
-        "scroll-margin-right", "scroll-margin-bottom", "scroll-margin-left",
-        "scroll-margin-block", "scroll-margin-inline",
-        "scroll-padding-block-start","scroll-padding-block-end",
-        "scroll-padding-inline-start","scroll-padding-inline-end",
-        "scroll-margin-block-start","scroll-margin-block-end",
-        "scroll-margin-inline-start","scroll-margin-inline-end",
-        "touch-action",         "user-select",          "pointer-events",         "resize",
-        "appearance",           "accent-color",         "caret-color",            "color-scheme",
-        "forced-color-adjust",  "print-color-adjust",
+        "scroll-snap-type",            "scroll-snap-align",         "scroll-snap-stop",           "scroll-padding",             "scroll-padding-top",
+        "scroll-padding-right",        "scroll-padding-bottom",     "scroll-padding-left",        "scroll-padding-block",       "scroll-padding-inline",
+        "scroll-margin",               "scroll-margin-top",         "scroll-margin-right",        "scroll-margin-bottom",       "scroll-margin-left",
+        "scroll-margin-block",         "scroll-margin-inline",      "scroll-padding-block-start", "scroll-padding-block-end",   "scroll-padding-inline-start",
+        "scroll-padding-inline-end",   "scroll-margin-block-start", "scroll-margin-block-end",    "scroll-margin-inline-start", "scroll-margin-inline-end",
+        "touch-action",                "user-select",               "pointer-events",             "resize",                     "appearance",
+        "accent-color",                "caret-color",               "color-scheme",               "forced-color-adjust",        "print-color-adjust",
     };
     for (known_shorthands) |kw| {
         if (eqlIgnoreCase(prop, kw)) return true;
@@ -3507,14 +3569,14 @@ pub fn isValidBoxShorthand(val: []const u8, allow_negative: bool) bool {
 pub fn isValidDisplayValue(val: []const u8) bool {
     // Single-keyword display values
     const single = [_][]const u8{
-        "none",          "contents",       "block",          "inline",
-        "inline-block",  "flex",           "inline-flex",    "grid",
-        "inline-grid",   "table",          "inline-table",   "list-item",
-        "run-in",        "flow",           "flow-root",      "ruby",
-        "ruby-base",     "ruby-text",      "ruby-base-container", "ruby-text-container",
-        "table-row",     "table-cell",     "table-row-group", "table-header-group",
-        "table-footer-group", "table-column", "table-column-group", "table-caption",
-        "math",          "grid-lanes",     "inline-grid-lanes",
+        "none",               "contents",     "block",               "inline",
+        "inline-block",       "flex",         "inline-flex",         "grid",
+        "inline-grid",        "table",        "inline-table",        "list-item",
+        "run-in",             "flow",         "flow-root",           "ruby",
+        "ruby-base",          "ruby-text",    "ruby-base-container", "ruby-text-container",
+        "table-row",          "table-cell",   "table-row-group",     "table-header-group",
+        "table-footer-group", "table-column", "table-column-group",  "table-caption",
+        "math",               "grid-lanes",   "inline-grid-lanes",
     };
     for (single) |kw| {
         if (eqlIgnoreCase(val, kw)) return true;
@@ -3626,16 +3688,7 @@ pub fn canonicalizeDisplayValue(val: []const u8) []const u8 {
     var has_list_item = false;
     for (0..token_count) |i| {
         const tok = tokens[i];
-        if (eqlIgnoreCase(tok, "block")) has_block = true
-        else if (eqlIgnoreCase(tok, "inline")) has_inline = true
-        else if (eqlIgnoreCase(tok, "run-in")) has_run_in = true
-        else if (eqlIgnoreCase(tok, "flow")) has_flow = true
-        else if (eqlIgnoreCase(tok, "flow-root")) has_flow_root = true
-        else if (eqlIgnoreCase(tok, "flex")) has_flex = true
-        else if (eqlIgnoreCase(tok, "grid")) has_grid = true
-        else if (eqlIgnoreCase(tok, "table")) has_table = true
-        else if (eqlIgnoreCase(tok, "ruby")) has_ruby = true
-        else if (eqlIgnoreCase(tok, "list-item")) has_list_item = true;
+        if (eqlIgnoreCase(tok, "block")) has_block = true else if (eqlIgnoreCase(tok, "inline")) has_inline = true else if (eqlIgnoreCase(tok, "run-in")) has_run_in = true else if (eqlIgnoreCase(tok, "flow")) has_flow = true else if (eqlIgnoreCase(tok, "flow-root")) has_flow_root = true else if (eqlIgnoreCase(tok, "flex")) has_flex = true else if (eqlIgnoreCase(tok, "grid")) has_grid = true else if (eqlIgnoreCase(tok, "table")) has_table = true else if (eqlIgnoreCase(tok, "ruby")) has_ruby = true else if (eqlIgnoreCase(tok, "list-item")) has_list_item = true;
     }
 
     if (!has_list_item) {
@@ -3711,9 +3764,9 @@ pub fn canonicalizeRoundModRem(val: []const u8, buf: *[512]u8) ?[]const u8 {
     var comma_count: usize = 0;
     var depth: usize = 0;
     for (inner, 0..) |ch, i| {
-        if (ch == '(') depth += 1
-        else if (ch == ')') { if (depth > 0) depth -= 1; }
-        else if (ch == ',' and depth == 0 and comma_count < 3) {
+        if (ch == '(') depth += 1 else if (ch == ')') {
+            if (depth > 0) depth -= 1;
+        } else if (ch == ',' and depth == 0 and comma_count < 3) {
             commas[comma_count] = i;
             comma_count += 1;
         }
@@ -3729,10 +3782,7 @@ pub fn canonicalizeRoundModRem(val: []const u8, buf: *[512]u8) ?[]const u8 {
         const strat_str = std.mem.trim(u8, inner[0..commas[0]], " ");
         const a_str = std.mem.trim(u8, inner[commas[0] + 1 .. commas[1]], " ");
         const b_str = std.mem.trim(u8, inner[commas[1] + 1 ..], " ");
-        if (eqlIgnoreCase(strat_str, "up")) strategy = .up
-        else if (eqlIgnoreCase(strat_str, "down")) strategy = .down
-        else if (eqlIgnoreCase(strat_str, "to-zero")) strategy = .to_zero
-        else strategy = .nearest;
+        if (eqlIgnoreCase(strat_str, "up")) strategy = .up else if (eqlIgnoreCase(strat_str, "down")) strategy = .down else if (eqlIgnoreCase(strat_str, "to-zero")) strategy = .to_zero else strategy = .nearest;
         a = std.fmt.parseFloat(f64, a_str) catch return null;
         b = std.fmt.parseFloat(f64, b_str) catch return null;
     } else if (std.mem.eql(u8, func_name, "round") and comma_count == 1) {
@@ -3742,9 +3792,7 @@ pub fn canonicalizeRoundModRem(val: []const u8, buf: *[512]u8) ?[]const u8 {
         if (eqlIgnoreCase(first, "nearest") or eqlIgnoreCase(first, "up") or
             eqlIgnoreCase(first, "down") or eqlIgnoreCase(first, "to-zero"))
         {
-            if (eqlIgnoreCase(first, "up")) strategy = .up
-            else if (eqlIgnoreCase(first, "down")) strategy = .down
-            else if (eqlIgnoreCase(first, "to-zero")) strategy = .to_zero;
+            if (eqlIgnoreCase(first, "up")) strategy = .up else if (eqlIgnoreCase(first, "down")) strategy = .down else if (eqlIgnoreCase(first, "to-zero")) strategy = .to_zero;
             a = std.fmt.parseFloat(f64, second) catch return null;
             b = 1;
         } else {
@@ -3851,9 +3899,9 @@ pub fn tryDistributiveExpansion(inner: []const u8, buf: *[512]u8) ?[]const u8 {
             const tstart = epos;
             var nest: usize = 0;
             while (epos < expr_inner.len) {
-                if (expr_inner[epos] == '(') nest += 1
-                else if (expr_inner[epos] == ')') { if (nest > 0) nest -= 1; }
-                else if (nest == 0 and epos > tstart and
+                if (expr_inner[epos] == '(') nest += 1 else if (expr_inner[epos] == ')') {
+                    if (nest > 0) nest -= 1;
+                } else if (nest == 0 and epos > tstart and
                     (expr_inner[epos] == '+' or (expr_inner[epos] == '-' and epos > 0 and expr_inner[epos - 1] == ' ')))
                     break;
                 epos += 1;
@@ -3907,7 +3955,7 @@ pub fn tryDistributiveExpansion(inner: []const u8, buf: *[512]u8) ?[]const u8 {
                 rpos += scalar_str.len;
                 @memcpy(reorder_buf[rpos..][0..3], " * ");
                 rpos += 3;
-                @memcpy(reorder_buf[rpos..][0..close + 1], inner[0 .. close + 1]);
+                @memcpy(reorder_buf[rpos..][0 .. close + 1], inner[0 .. close + 1]);
                 rpos += close + 1;
                 reorder_buf[rpos] = ')';
                 rpos += 1;
@@ -3954,9 +4002,9 @@ pub fn tryDistributiveExpansion(inner: []const u8, buf: *[512]u8) ?[]const u8 {
                     const tstart = epos;
                     var nest: usize = 0;
                     while (epos < expr_inner.len) {
-                        if (expr_inner[epos] == '(') nest += 1
-                        else if (expr_inner[epos] == ')') { if (nest > 0) nest -= 1; }
-                        else if (nest == 0 and epos > tstart and
+                        if (expr_inner[epos] == '(') nest += 1 else if (expr_inner[epos] == ')') {
+                            if (nest > 0) nest -= 1;
+                        } else if (nest == 0 and epos > tstart and
                             (expr_inner[epos] == '+' or (expr_inner[epos] == '-' and epos > 0 and expr_inner[epos - 1] == ' ')))
                             break;
                         epos += 1;
@@ -3994,8 +4042,7 @@ pub fn findMatchingParen(s: []const u8, start: usize) ?usize {
     if (start >= s.len or s[start] != '(') return null;
     var depth: usize = 0;
     for (s[start..], start..) |ch, i| {
-        if (ch == '(') depth += 1
-        else if (ch == ')') {
+        if (ch == '(') depth += 1 else if (ch == ')') {
             depth -= 1;
             if (depth == 0) return i;
         }
@@ -4020,7 +4067,10 @@ fn evalCalcExprSerialize(expr: []const u8, depth: u32) ?f64 {
         var all_wrapped = true;
         for (s, 0..) |ch, i| {
             if (ch == '(') pd += 1 else if (ch == ')') pd -= 1;
-            if (pd == 0 and i < s.len - 1) { all_wrapped = false; break; }
+            if (pd == 0 and i < s.len - 1) {
+                all_wrapped = false;
+                break;
+            }
         }
         if (all_wrapped) return evalCalcExprSerialize(s[1 .. s.len - 1], depth + 1);
     }
@@ -4031,8 +4081,14 @@ fn evalCalcExprSerialize(expr: []const u8, depth: u32) ?f64 {
     var last_mul_div: ?usize = null;
     var i: usize = 0;
     while (i < s.len) : (i += 1) {
-        if (s[i] == '(') { paren_depth += 1; continue; }
-        if (s[i] == ')') { if (paren_depth > 0) paren_depth -= 1; continue; }
+        if (s[i] == '(') {
+            paren_depth += 1;
+            continue;
+        }
+        if (s[i] == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+            continue;
+        }
         if (paren_depth == 0 and i > 0 and i + 1 < s.len and s[i - 1] == ' ' and s[i + 1] == ' ') {
             if (s[i] == '+' or s[i] == '-') last_add_sub = i;
         }
@@ -4196,9 +4252,9 @@ pub fn canonicalizeCalcValue(val: []const u8, buf: *[512]u8) ?[]const u8 {
         const term_start = pos;
         var nesting: usize = 0;
         while (pos < inner.len) {
-            if (inner[pos] == '(') nesting += 1
-            else if (inner[pos] == ')') { if (nesting > 0) nesting -= 1; }
-            else if (nesting == 0 and pos > term_start and
+            if (inner[pos] == '(') nesting += 1 else if (inner[pos] == ')') {
+                if (nesting > 0) nesting -= 1;
+            } else if (nesting == 0 and pos > term_start and
                 (inner[pos] == '+' or (inner[pos] == '-' and pos > 0 and inner[pos - 1] == ' ')))
                 break;
             pos += 1;
@@ -4209,7 +4265,10 @@ pub fn canonicalizeCalcValue(val: []const u8, buf: *[512]u8) ?[]const u8 {
         // Can't canonicalize nested functions (but allow * and / within a term)
         var has_paren = false;
         for (term_str) |ch| {
-            if (ch == '(') { has_paren = true; break; }
+            if (ch == '(') {
+                has_paren = true;
+                break;
+            }
         }
         if (has_paren) return null;
 
@@ -4416,16 +4475,14 @@ pub fn canonicalizeSingleArgMath(val: []const u8, buf: *[512]u8) ?[]const u8 {
     if (trimmed[trimmed.len - 1] != ')') return null;
     // Extract inner content
     var prefix_len: usize = 0;
-    if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "min(")) prefix_len = 4
-    else if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "max(")) prefix_len = 4
-    else return null;
+    if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "min(")) prefix_len = 4 else if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "max(")) prefix_len = 4 else return null;
     const inner = std.mem.trim(u8, trimmed[prefix_len .. trimmed.len - 1], " ");
     // Check: single argument (no commas at top level)
     var nesting: usize = 0;
     for (inner) |ch| {
-        if (ch == '(') nesting += 1
-        else if (ch == ')') { if (nesting > 0) nesting -= 1; }
-        else if (ch == ',' and nesting == 0) return null; // multi-arg
+        if (ch == '(') nesting += 1 else if (ch == ')') {
+            if (nesting > 0) nesting -= 1;
+        } else if (ch == ',' and nesting == 0) return null; // multi-arg
     }
 
     // Wrap as calc() and canonicalize
@@ -4447,9 +4504,9 @@ pub fn canonicalizeClamp(val: []const u8, buf: *[512]u8) ?[]const u8 {
     var start: usize = 0;
     var nesting: usize = 0;
     for (inner, 0..) |ch, k| {
-        if (ch == '(') nesting += 1
-        else if (ch == ')') { if (nesting > 0) nesting -= 1; }
-        else if (ch == ',' and nesting == 0) {
+        if (ch == '(') nesting += 1 else if (ch == ')') {
+            if (nesting > 0) nesting -= 1;
+        } else if (ch == ',' and nesting == 0) {
             if (arg_count >= 3) return null;
             args[arg_count] = std.mem.trim(u8, inner[start..k], " ");
             arg_count += 1;
@@ -4603,16 +4660,17 @@ pub fn isValidBorderWidth(val: []const u8) bool {
 pub fn canonicalizeColorKeyword(val: []const u8, buf: []u8) ?[]const u8 {
     // System colors: canonicalize to lowercase
     const system_colors = [_][]const u8{
-        "activetext",     "buttonborder",   "buttonface",       "buttontext",    "canvas",
-        "canvastext",     "field",          "fieldtext",        "graytext",      "highlight",
-        "highlighttext",  "linktext",       "mark",             "marktext",      "selecteditem",
-        "selecteditemtext", "accentcolor",  "accentcolortext",  "visitedtext",
+        "activetext",       "buttonborder",    "buttonface",        "buttontext",          "canvas",
+        "canvastext",       "field",           "fieldtext",         "graytext",            "highlight",
+        "highlighttext",    "linktext",        "mark",              "marktext",            "selecteditem",
+        "selecteditemtext", "accentcolor",     "accentcolortext",   "visitedtext",
         // Deprecated CSS2 system colors
-        "activeborder",   "activecaption",  "appworkspace",     "background",    "buttonhighlight",
-        "buttonshadow",   "captiontext",    "inactiveborder",   "inactivecaption",
-        "inactivecaptiontext", "infobackground", "infotext",    "menu",          "menutext",
-        "scrollbar",      "threeddarkshadow", "threedface",     "threedhighlight",
-        "threedlightshadow", "threedshadow", "window",          "windowframe",   "windowtext",
+                "activeborder",
+        "activecaption",    "appworkspace",    "background",        "buttonhighlight",     "buttonshadow",
+        "captiontext",      "inactiveborder",  "inactivecaption",   "inactivecaptiontext", "infobackground",
+        "infotext",         "menu",            "menutext",          "scrollbar",           "threeddarkshadow",
+        "threedface",       "threedhighlight", "threedlightshadow", "threedshadow",        "window",
+        "windowframe",      "windowtext",
     };
     for (system_colors) |sc| {
         if (eqlIgnoreCase(val, sc)) {
@@ -4670,7 +4728,10 @@ fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
             // Check if it uses comma syntax
             var has_comma = false;
             for (inner) |ch| {
-                if (ch == ',') { has_comma = true; break; }
+                if (ch == ',') {
+                    has_comma = true;
+                    break;
+                }
             }
             if (has_comma) {
                 // `none` is invalid in legacy comma syntax
@@ -4751,7 +4812,10 @@ fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
                 // Skip until */
                 i += 2;
                 while (i + 1 < val.len) : (i += 1) {
-                    if (val[i] == '*' and val[i + 1] == '/') { i += 2; break; }
+                    if (val[i] == '*' and val[i + 1] == '/') {
+                        i += 2;
+                        break;
+                    }
                 }
             } else {
                 if (spos < stripped.len) {
@@ -4770,16 +4834,17 @@ pub fn isValidColorKeyword(val: []const u8) bool {
     if (eqlIgnoreCase(val, "transparent") or eqlIgnoreCase(val, "currentcolor") or eqlIgnoreCase(val, "currentColor")) return true;
     // CSS system colors
     const system_colors = [_][]const u8{
-        "ActiveText",     "ButtonBorder",   "ButtonFace",       "ButtonText",    "Canvas",
-        "CanvasText",     "Field",          "FieldText",        "GrayText",      "Highlight",
-        "HighlightText",  "LinkText",       "Mark",             "MarkText",      "SelectedItem",
-        "SelectedItemText", "AccentColor",  "AccentColorText",  "VisitedText",
+        "ActiveText",       "ButtonBorder",    "ButtonFace",        "ButtonText",          "Canvas",
+        "CanvasText",       "Field",           "FieldText",         "GrayText",            "Highlight",
+        "HighlightText",    "LinkText",        "Mark",              "MarkText",            "SelectedItem",
+        "SelectedItemText", "AccentColor",     "AccentColorText",   "VisitedText",
         // Deprecated CSS2 system colors (mapped to CSS4 equivalents)
-        "ActiveBorder",   "ActiveCaption",  "AppWorkspace",     "Background",    "ButtonHighlight",
-        "ButtonShadow",   "CaptionText",    "InactiveBorder",   "InactiveCaption",
-        "InactiveCaptionText", "InfoBackground", "InfoText",    "Menu",          "MenuText",
-        "Scrollbar",      "ThreeDDarkShadow", "ThreeDFace",    "ThreeDHighlight",
-        "ThreeDLightShadow", "ThreeDShadow", "Window",         "WindowFrame",   "WindowText",
+                "ActiveBorder",
+        "ActiveCaption",    "AppWorkspace",    "Background",        "ButtonHighlight",     "ButtonShadow",
+        "CaptionText",      "InactiveBorder",  "InactiveCaption",   "InactiveCaptionText", "InfoBackground",
+        "InfoText",         "Menu",            "MenuText",          "Scrollbar",           "ThreeDDarkShadow",
+        "ThreeDFace",       "ThreeDHighlight", "ThreeDLightShadow", "ThreeDShadow",        "Window",
+        "WindowFrame",      "WindowText",
     };
     for (system_colors) |sc| {
         if (eqlIgnoreCase(val, sc)) return true;

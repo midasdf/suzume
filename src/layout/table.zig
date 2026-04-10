@@ -195,88 +195,87 @@ pub fn layoutTable(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Font
         }
     } else {
 
-    // Pass 1: collect explicit widths from cells (non-colspan cells only)
-    // Use grid to get correct column indices
-    var col_has_explicit: [MAX_COLS]bool = [_]bool{false} ** MAX_COLS;
-    // Apply <col> hints as starting explicit widths
-    for (0..num_cols) |ci| {
-        if (col_hints[ci] != null) col_has_explicit[ci] = true;
-    }
-    for (0..num_rows) |ri| {
+        // Pass 1: collect explicit widths from cells (non-colspan cells only)
+        // Use grid to get correct column indices
+        var col_has_explicit: [MAX_COLS]bool = [_]bool{false} ** MAX_COLS;
+        // Apply <col> hints as starting explicit widths
         for (0..num_cols) |ci| {
-            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
-            const cell = grid[ri][ci].box.?;
-            const cs = @min(getColspan(cell), num_cols - ci);
-            if (cs == 1) {
-                const cell_w = getCellExplicitWidth(cell, table_width);
-                if (cell_w) |w| {
-                    if (w > col_widths[ci]) {
-                        col_widths[ci] = w;
-                        col_has_explicit[ci] = true;
+            if (col_hints[ci] != null) col_has_explicit[ci] = true;
+        }
+        for (0..num_rows) |ri| {
+            for (0..num_cols) |ci| {
+                if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+                const cell = grid[ri][ci].box.?;
+                const cs = @min(getColspan(cell), num_cols - ci);
+                if (cs == 1) {
+                    const cell_w = getCellExplicitWidth(cell, table_width);
+                    if (cell_w) |w| {
+                        if (w > col_widths[ci]) {
+                            col_widths[ci] = w;
+                            col_has_explicit[ci] = true;
+                        }
                     }
                 }
             }
         }
-    }
 
-    // Pass 2: estimate content width for flex columns using text length heuristic
-    var col_min_content: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
-    const sample_rows = @min(num_rows, 5);
-    for (0..sample_rows) |ri| {
-        for (0..num_cols) |ci| {
-            if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
-            const cell = grid[ri][ci].box.?;
-            const cs = @min(getColspan(cell), num_cols - ci);
-            if (cs == 1 and !col_has_explicit[ci]) {
-                const est_w = estimateCellContentWidth(cell, cell.style.font_size_px);
-                if (est_w > col_min_content[ci]) {
-                    col_min_content[ci] = est_w;
+        // Pass 2: estimate content width for flex columns using text length heuristic
+        var col_min_content: [MAX_COLS]f32 = [_]f32{0} ** MAX_COLS;
+        const sample_rows = @min(num_rows, 5);
+        for (0..sample_rows) |ri| {
+            for (0..num_cols) |ci| {
+                if (grid[ri][ci].is_spanned or grid[ri][ci].box == null) continue;
+                const cell = grid[ri][ci].box.?;
+                const cs = @min(getColspan(cell), num_cols - ci);
+                if (cs == 1 and !col_has_explicit[ci]) {
+                    const est_w = estimateCellContentWidth(cell, cell.style.font_size_px);
+                    if (est_w > col_min_content[ci]) {
+                        col_min_content[ci] = est_w;
+                    }
                 }
             }
         }
-    }
 
-    // Pass 3: distribute remaining width to columns without explicit widths
-    var used_width: f32 = 0;
-    var flex_cols: usize = 0;
-    var flex_content_total: f32 = 0;
-    for (0..num_cols) |i| {
-        if (col_has_explicit[i]) {
-            used_width += col_widths[i];
-        } else {
-            flex_cols += 1;
-            flex_content_total += @max(col_min_content[i], 1);
-        }
-    }
-
-    const spacing_total = cellspacing * @as(f32, @floatFromInt(num_cols + 1));
-    const remaining = @max(table_width - used_width - spacing_total, 0);
-    if (flex_cols > 0) {
-        if (flex_content_total > 0) {
-            // Distribute proportionally to content width
-            for (0..num_cols) |i| {
-                if (!col_has_explicit[i]) {
-                    const ratio = @max(col_min_content[i], 1) / flex_content_total;
-                    col_widths[i] = remaining * ratio;
-                }
-            }
-        } else {
-            // Equal distribution fallback
-            const flex_width = remaining / @as(f32, @floatFromInt(flex_cols));
-            for (0..num_cols) |i| {
-                if (!col_has_explicit[i]) {
-                    col_widths[i] = flex_width;
-                }
-            }
-        }
-    } else if (used_width > 0 and used_width != table_width) {
-        // Scale explicit widths to fill table
-        const scale = table_width / used_width;
+        // Pass 3: distribute remaining width to columns without explicit widths
+        var used_width: f32 = 0;
+        var flex_cols: usize = 0;
+        var flex_content_total: f32 = 0;
         for (0..num_cols) |i| {
-            col_widths[i] *= scale;
+            if (col_has_explicit[i]) {
+                used_width += col_widths[i];
+            } else {
+                flex_cols += 1;
+                flex_content_total += @max(col_min_content[i], 1);
+            }
         }
-    }
 
+        const spacing_total = cellspacing * @as(f32, @floatFromInt(num_cols + 1));
+        const remaining = @max(table_width - used_width - spacing_total, 0);
+        if (flex_cols > 0) {
+            if (flex_content_total > 0) {
+                // Distribute proportionally to content width
+                for (0..num_cols) |i| {
+                    if (!col_has_explicit[i]) {
+                        const ratio = @max(col_min_content[i], 1) / flex_content_total;
+                        col_widths[i] = remaining * ratio;
+                    }
+                }
+            } else {
+                // Equal distribution fallback
+                const flex_width = remaining / @as(f32, @floatFromInt(flex_cols));
+                for (0..num_cols) |i| {
+                    if (!col_has_explicit[i]) {
+                        col_widths[i] = flex_width;
+                    }
+                }
+            }
+        } else if (used_width > 0 and used_width != table_width) {
+            // Scale explicit widths to fill table
+            const scale = table_width / used_width;
+            for (0..num_cols) |i| {
+                col_widths[i] *= scale;
+            }
+        }
     } // end auto table-layout else branch
 
     // Precompute column X positions (with cellspacing gaps if set)

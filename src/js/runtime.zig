@@ -237,7 +237,7 @@ pub const JsRuntime = struct {
             }
 
             const seq_len: usize = if (b0 < 0xC0) 0 // invalid continuation
-            else if (b0 < 0xE0) 2 else if (b0 < 0xF0) 3 else if (b0 < 0xF8) 4 else 0;
+                else if (b0 < 0xE0) 2 else if (b0 < 0xF0) 3 else if (b0 < 0xF8) 4 else 0;
 
             if (seq_len == 0 or i + seq_len > input.len) {
                 // Latin-1 fallback
@@ -406,8 +406,7 @@ fn moduleLoader(
     @memcpy(src_z, response.body);
 
     // Compile as ES module
-    const func_val = qjs.JS_Eval(c, src_z.ptr, src_z.len, module_name,
-        qjs.JS_EVAL_TYPE_MODULE | qjs.JS_EVAL_FLAG_COMPILE_ONLY);
+    const func_val = qjs.JS_Eval(c, src_z.ptr, src_z.len, module_name, qjs.JS_EVAL_TYPE_MODULE | qjs.JS_EVAL_FLAG_COMPILE_ONLY);
 
     if (quickjs.JS_IsException(func_val)) {
         std.debug.print("[Module] Compilation failed for {s}\n", .{name});

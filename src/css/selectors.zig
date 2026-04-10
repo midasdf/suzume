@@ -259,19 +259,19 @@ const SelectorParser = struct {
             if (c == '>') {
                 self.advance();
                 self.skipWhitespace();
-                try self.components.append(self.allocator,.{ .combinator = .child });
+                try self.components.append(self.allocator, .{ .combinator = .child });
                 continue;
             }
             if (c == '+') {
                 self.advance();
                 self.skipWhitespace();
-                try self.components.append(self.allocator,.{ .combinator = .next_sibling });
+                try self.components.append(self.allocator, .{ .combinator = .next_sibling });
                 continue;
             }
             if (c == '~') {
                 self.advance();
                 self.skipWhitespace();
-                try self.components.append(self.allocator,.{ .combinator = .subsequent_sibling });
+                try self.components.append(self.allocator, .{ .combinator = .subsequent_sibling });
                 continue;
             }
 
@@ -284,7 +284,7 @@ const SelectorParser = struct {
                 if (next == 0 or next == ',' or next == '{') break;
                 if (next == '>' or next == '+' or next == '~') continue; // explicit combinator follows
                 if (self.lastIsSimple()) {
-                    try self.components.append(self.allocator,.{ .combinator = .descendant });
+                    try self.components.append(self.allocator, .{ .combinator = .descendant });
                 }
                 continue;
             }
@@ -294,7 +294,7 @@ const SelectorParser = struct {
                 self.advance();
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
-                try self.components.append(self.allocator,.{ .simple = .{ .class = name } });
+                try self.components.append(self.allocator, .{ .simple = .{ .class = name } });
                 self.specificity.b += 1;
                 continue;
             }
@@ -304,7 +304,7 @@ const SelectorParser = struct {
                 self.advance();
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
-                try self.components.append(self.allocator,.{ .simple = .{ .id = name } });
+                try self.components.append(self.allocator, .{ .simple = .{ .id = name } });
                 self.specificity.a += 1;
                 continue;
             }
@@ -312,7 +312,7 @@ const SelectorParser = struct {
             // Universal selector
             if (c == '*') {
                 self.advance();
-                try self.components.append(self.allocator,.{ .simple = .universal });
+                try self.components.append(self.allocator, .{ .simple = .universal });
                 continue;
             }
 
@@ -320,7 +320,7 @@ const SelectorParser = struct {
             if (c == '[') {
                 const attr = try self.parseAttribute();
                 if (attr) |a| {
-                    try self.components.append(self.allocator,.{ .simple = .{ .attribute = a } });
+                    try self.components.append(self.allocator, .{ .simple = .{ .attribute = a } });
                     self.specificity.b += 1;
                 } else {
                     return null;
@@ -466,7 +466,7 @@ const SelectorParser = struct {
                 }
                 const name = self.consumeIdent();
                 if (name.len == 0) return null;
-                try self.components.append(self.allocator,.{ .simple = .{ .type_sel = name } });
+                try self.components.append(self.allocator, .{ .simple = .{ .type_sel = name } });
                 self.specificity.c += 1;
                 continue;
             }
@@ -1086,11 +1086,7 @@ fn matchIsWhereInner(inner: []const u8, element: ElementAdapter) bool {
     var paren_depth: usize = 0;
     var bracket_depth: usize = 0;
     for (inner, 0..) |ch, i| {
-        if (ch == '(') paren_depth += 1
-        else if (ch == ')' and paren_depth > 0) paren_depth -= 1
-        else if (ch == '[') bracket_depth += 1
-        else if (ch == ']' and bracket_depth > 0) bracket_depth -= 1
-        else if (ch == ',' and paren_depth == 0 and bracket_depth == 0) {
+        if (ch == '(') paren_depth += 1 else if (ch == ')' and paren_depth > 0) paren_depth -= 1 else if (ch == '[') bracket_depth += 1 else if (ch == ']' and bracket_depth > 0) bracket_depth -= 1 else if (ch == ',' and paren_depth == 0 and bracket_depth == 0) {
             const segment = std.mem.trim(u8, inner[start..i], " \t\r\n");
             if (segment.len > 0 and matchInnerSimple(segment, element)) return true;
             start = i + 1;
@@ -1243,4 +1239,3 @@ fn containsWord(haystack: []const u8, needle: []const u8) bool {
 }
 
 const eqlIgnoreCase = util.eqlIgnoreCase;
-

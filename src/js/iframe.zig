@@ -735,7 +735,7 @@ pub fn isSameOrigin(url1: []const u8, url2: []const u8) bool {
 }
 
 fn extractOrigin(url: []const u8) []const u8 {
-    // Find "://" 
+    // Find "://"
     if (std.mem.indexOf(u8, url, "://")) |proto_end| {
         const after_proto = url[proto_end + 3 ..];
         // Find end of host:port (next "/" or end of string)

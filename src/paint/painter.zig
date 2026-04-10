@@ -385,10 +385,7 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
         // For rounded borders: draw a filled rounded rect for border, then a slightly
         // smaller filled rounded rect for background on top (creating a border effect).
         // Use the most prominent border color.
-        const border_color = if ((style.border_top_color >> 24) > 0) style.border_top_color
-            else if ((style.border_left_color >> 24) > 0) style.border_left_color
-            else if ((style.border_bottom_color >> 24) > 0) style.border_bottom_color
-            else style.border_right_color;
+        const border_color = if ((style.border_top_color >> 24) > 0) style.border_top_color else if ((style.border_left_color >> 24) > 0) style.border_left_color else if ((style.border_bottom_color >> 24) > 0) style.border_bottom_color else style.border_right_color;
         const bw_top: i32 = @intFromFloat(style.border_top_width);
         const bw_right: i32 = @intFromFloat(style.border_right_width);
         const bw_bottom: i32 = @intFromFloat(style.border_bottom_width);
@@ -396,12 +393,7 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
 
         if (bw_top > 0 or bw_right > 0 or bw_bottom > 0 or bw_left > 0) {
             // Outer rounded rect (border)
-            surface.fillRoundedRectPerCorner(sx, sy, sw, sh,
-                @intFromFloat(style.border_radius_tl),
-                @intFromFloat(style.border_radius_tr),
-                @intFromFloat(style.border_radius_bl),
-                @intFromFloat(style.border_radius_br),
-                Surface.argbToColour(border_color));
+            surface.fillRoundedRectPerCorner(sx, sy, sw, sh, @intFromFloat(style.border_radius_tl), @intFromFloat(style.border_radius_tr), @intFromFloat(style.border_radius_bl), @intFromFloat(style.border_radius_br), Surface.argbToColour(border_color));
             // Inner rounded rect (punch out interior with background or parent color)
             const inner_x = sx + bw_left;
             const inner_y = sy + bw_top;
@@ -414,9 +406,7 @@ fn paintBorders(box: *const Box, surface: *Surface, scroll_y: f32, scroll_x: f32
                 const inner_r_br = @max(@as(i32, @intFromFloat(style.border_radius_br)) - bw_right, 0);
                 // Use background color for inner fill (or transparent/dark for the "hole")
                 const bg = if ((style.background_color >> 24) > 0) style.background_color else 0x00000000;
-                surface.fillRoundedRectPerCorner(inner_x, inner_y, inner_w, inner_h,
-                    inner_r_tl, inner_r_tr, inner_r_bl, inner_r_br,
-                    Surface.argbToColour(bg));
+                surface.fillRoundedRectPerCorner(inner_x, inner_y, inner_w, inner_h, inner_r_tl, inner_r_tr, inner_r_bl, inner_r_br, Surface.argbToColour(bg));
             }
         }
     } else {
@@ -750,9 +740,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                     // Paint iframe content into the iframe's box area
                     // Offset iframe content to iframe box position
                     const iframe_scroll_y = frame.scroll_y;
-                    paint(iframe_root, surface, fonts, iframe_scroll_y, frame.scroll_x,
-                        @max(screen_y, clip_top), @min(screen_bottom, clip_bottom),
-                        image_cache);
+                    paint(iframe_root, surface, fonts, iframe_scroll_y, frame.scroll_x, @max(screen_y, clip_top), @min(screen_bottom, clip_bottom), image_cache);
                 }
                 return; // Don't paint as image
             }

@@ -208,7 +208,8 @@ pub const WebDriverServer = struct {
             // Build HTTP response
             var resp_hdr: [512]u8 = undefined;
             const status_text = if (resp.status == 200) "OK" else "Error";
-            const hdr = std.fmt.bufPrint(&resp_hdr,
+            const hdr = std.fmt.bufPrint(
+                &resp_hdr,
                 "HTTP/1.1 {d} {s}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {d}\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n",
                 .{ resp.status, status_text, resp.body.len },
             ) catch return;
@@ -454,7 +455,8 @@ pub const WebDriverServer = struct {
     }
 
     fn err(self: *WebDriverServer, status: u16, error_code: []const u8, message: []const u8) Response {
-        const s = std.fmt.bufPrint(&self.scratch_buf,
+        const s = std.fmt.bufPrint(
+            &self.scratch_buf,
             "{{\"value\":{{\"error\":\"{s}\",\"message\":\"{s}\",\"stacktrace\":\"\"}}}}",
             .{ error_code, message },
         ) catch return .{
@@ -493,13 +495,34 @@ fn extractJsonString(json: []const u8, key: []const u8) ?[]const u8 {
                     if (json[src] == '\\' and src + 1 < json.len) {
                         src += 1;
                         switch (json[src]) {
-                            '"' => { S.buf[dst] = '"'; dst += 1; },
-                            '\\' => { S.buf[dst] = '\\'; dst += 1; },
-                            '/' => { S.buf[dst] = '/'; dst += 1; },
-                            'n' => { S.buf[dst] = '\n'; dst += 1; },
-                            'r' => { S.buf[dst] = '\r'; dst += 1; },
-                            't' => { S.buf[dst] = '\t'; dst += 1; },
-                            else => { S.buf[dst] = json[src]; dst += 1; },
+                            '"' => {
+                                S.buf[dst] = '"';
+                                dst += 1;
+                            },
+                            '\\' => {
+                                S.buf[dst] = '\\';
+                                dst += 1;
+                            },
+                            '/' => {
+                                S.buf[dst] = '/';
+                                dst += 1;
+                            },
+                            'n' => {
+                                S.buf[dst] = '\n';
+                                dst += 1;
+                            },
+                            'r' => {
+                                S.buf[dst] = '\r';
+                                dst += 1;
+                            },
+                            't' => {
+                                S.buf[dst] = '\t';
+                                dst += 1;
+                            },
+                            else => {
+                                S.buf[dst] = json[src];
+                                dst += 1;
+                            },
                         }
                         src += 1;
                     } else {

@@ -440,7 +440,7 @@ fn extractFontSrcUrl(src: []const u8) ?[]const u8 {
         const url_pos = indexOfIgnoreCase(remaining, "url(") orelse break;
         remaining = remaining[url_pos + 4 ..];
 
-        if (extractUrl(remaining[0 .. @min(remaining.len, 2048)])) |_| {
+        if (extractUrl(remaining[0..@min(remaining.len, 2048)])) |_| {
             // Reconstruct full url() string to pass to extractUrl
         }
         // Manual URL extraction from current position
@@ -583,23 +583,23 @@ const dom_vtable = selectors.ElementAdapter.VTable{
 };
 
 fn domTagName(ptr: *const anyopaque) ?[]const u8 {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     return node.tagName();
 }
 
 fn domGetAttribute(ptr: *const anyopaque, name: []const u8) ?[]const u8 {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     return node.getAttribute(name);
 }
 
 fn domParent(ptr: *const anyopaque) ?selectors.ElementAdapter {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     if (node.parent()) |p| return makeDomAdapter(p);
     return null;
 }
 
 fn domPrevSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     // Walk backwards through siblings to find previous element
     const lxb = @import("../bindings/lexbor.zig").c;
     var sib = node.lxb_node.prev;
@@ -614,7 +614,7 @@ fn domPrevSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
 }
 
 fn domNextSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     const lxb = @import("../bindings/lexbor.zig").c;
     var sib = node.lxb_node.next;
     while (sib != null) {
@@ -628,13 +628,13 @@ fn domNextSibling(ptr: *const anyopaque) ?selectors.ElementAdapter {
 }
 
 fn domFirstChild(ptr: *const anyopaque) ?selectors.ElementAdapter {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     if (node.firstElementChild()) |c| return makeDomAdapter(c);
     return null;
 }
 
 fn domIsDocument(ptr: *const anyopaque) bool {
-    const node = DomNode{ .lxb_node = @constCast(@ptrCast(@alignCast(ptr))) };
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     return node.nodeType() == .document;
 }
 
@@ -642,7 +642,7 @@ fn domIsHovered(ptr: *const anyopaque) bool {
     const dom_api = @import("../js/dom_api.zig");
     const lxb = @import("../bindings/lexbor.zig").c;
     const hover_node = dom_api.hovered_element orelse return false;
-    const self_node: *lxb.lxb_dom_node_t = @constCast(@ptrCast(@alignCast(ptr)));
+    const self_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(@constCast(ptr)));
     // :hover matches the hovered element AND all its ancestors
     var cur: ?*lxb.lxb_dom_node_t = hover_node;
     while (cur) |n| {
@@ -656,7 +656,7 @@ fn domIsFocused(ptr: *const anyopaque) bool {
     const dom_api = @import("../js/dom_api.zig");
     const lxb = @import("../bindings/lexbor.zig").c;
     const focus_node = dom_api.active_element orelse return false;
-    const self_node: *lxb.lxb_dom_node_t = @constCast(@ptrCast(@alignCast(ptr)));
+    const self_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(@constCast(ptr)));
     return self_node == focus_node;
 }
 
@@ -756,7 +756,6 @@ fn walkAndCompute(
 
         // Sort by cascade priority
         std.mem.sort(CascadeEntry, entries.items, {}, cascadeEntryLessThan);
-
 
         // Build per-element VarMap: collect --* declarations from matching rules.
         // If this element declares custom properties, create a child VarMap inheriting
@@ -1092,15 +1091,39 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .position => style.position = parent.position,
         .width => style.width = parent.width,
         .height => style.height = parent.height,
-        .margin_top => { style.margin_top = parent.margin_top; style.margin_top_is_pct = parent.margin_top_is_pct; },
-        .margin_right => { style.margin_right = parent.margin_right; style.margin_right_is_pct = parent.margin_right_is_pct; },
-        .margin_bottom => { style.margin_bottom = parent.margin_bottom; style.margin_bottom_is_pct = parent.margin_bottom_is_pct; },
-        .margin_left => { style.margin_left = parent.margin_left; style.margin_left_is_pct = parent.margin_left_is_pct; },
+        .margin_top => {
+            style.margin_top = parent.margin_top;
+            style.margin_top_is_pct = parent.margin_top_is_pct;
+        },
+        .margin_right => {
+            style.margin_right = parent.margin_right;
+            style.margin_right_is_pct = parent.margin_right_is_pct;
+        },
+        .margin_bottom => {
+            style.margin_bottom = parent.margin_bottom;
+            style.margin_bottom_is_pct = parent.margin_bottom_is_pct;
+        },
+        .margin_left => {
+            style.margin_left = parent.margin_left;
+            style.margin_left_is_pct = parent.margin_left_is_pct;
+        },
         .margin_trim => style.margin_trim = parent.margin_trim,
-        .padding_top => { style.padding_top = parent.padding_top; style.padding_top_is_pct = parent.padding_top_is_pct; },
-        .padding_right => { style.padding_right = parent.padding_right; style.padding_right_is_pct = parent.padding_right_is_pct; },
-        .padding_bottom => { style.padding_bottom = parent.padding_bottom; style.padding_bottom_is_pct = parent.padding_bottom_is_pct; },
-        .padding_left => { style.padding_left = parent.padding_left; style.padding_left_is_pct = parent.padding_left_is_pct; },
+        .padding_top => {
+            style.padding_top = parent.padding_top;
+            style.padding_top_is_pct = parent.padding_top_is_pct;
+        },
+        .padding_right => {
+            style.padding_right = parent.padding_right;
+            style.padding_right_is_pct = parent.padding_right_is_pct;
+        },
+        .padding_bottom => {
+            style.padding_bottom = parent.padding_bottom;
+            style.padding_bottom_is_pct = parent.padding_bottom_is_pct;
+        },
+        .padding_left => {
+            style.padding_left = parent.padding_left;
+            style.padding_left_is_pct = parent.padding_left_is_pct;
+        },
         .background_color => style.background_color = parent.background_color,
         .opacity => style.opacity = parent.opacity,
         .border_top_width => style.border_top_width = parent.border_top_width,
@@ -1171,26 +1194,16 @@ fn applyDeclaration(
             if (mapDisplay(trimmed)) |d| style.display = d;
         },
         .position => {
-            if (eqlIgnoreCase(trimmed, "static")) style.position = .static_
-            else if (eqlIgnoreCase(trimmed, "relative")) style.position = .relative
-            else if (eqlIgnoreCase(trimmed, "absolute")) style.position = .absolute
-            else if (eqlIgnoreCase(trimmed, "fixed")) style.position = .fixed
-            else if (eqlIgnoreCase(trimmed, "sticky")) style.position = .sticky;
+            if (eqlIgnoreCase(trimmed, "static")) style.position = .static_ else if (eqlIgnoreCase(trimmed, "relative")) style.position = .relative else if (eqlIgnoreCase(trimmed, "absolute")) style.position = .absolute else if (eqlIgnoreCase(trimmed, "fixed")) style.position = .fixed else if (eqlIgnoreCase(trimmed, "sticky")) style.position = .sticky;
         },
         .float_ => {
-            if (eqlIgnoreCase(trimmed, "left")) style.float_ = .left
-            else if (eqlIgnoreCase(trimmed, "right")) style.float_ = .right
-            else if (eqlIgnoreCase(trimmed, "none")) style.float_ = .none;
+            if (eqlIgnoreCase(trimmed, "left")) style.float_ = .left else if (eqlIgnoreCase(trimmed, "right")) style.float_ = .right else if (eqlIgnoreCase(trimmed, "none")) style.float_ = .none;
         },
         .clear => {
-            if (eqlIgnoreCase(trimmed, "left")) style.clear = .left
-            else if (eqlIgnoreCase(trimmed, "right")) style.clear = .right
-            else if (eqlIgnoreCase(trimmed, "both")) style.clear = .both
-            else if (eqlIgnoreCase(trimmed, "none")) style.clear = .none;
+            if (eqlIgnoreCase(trimmed, "left")) style.clear = .left else if (eqlIgnoreCase(trimmed, "right")) style.clear = .right else if (eqlIgnoreCase(trimmed, "both")) style.clear = .both else if (eqlIgnoreCase(trimmed, "none")) style.clear = .none;
         },
         .box_sizing => {
-            if (eqlIgnoreCase(trimmed, "border-box")) style.box_sizing = .border_box
-            else if (eqlIgnoreCase(trimmed, "content-box")) style.box_sizing = .content_box;
+            if (eqlIgnoreCase(trimmed, "border-box")) style.box_sizing = .border_box else if (eqlIgnoreCase(trimmed, "content-box")) style.box_sizing = .content_box;
         },
         .color => {
             if (properties.parseColor(trimmed)) |c| {
@@ -1236,23 +1249,31 @@ fn applyDeclaration(
             }
         },
         .visibility => {
-            if (eqlIgnoreCase(trimmed, "visible")) style.visibility = .visible
-            else if (eqlIgnoreCase(trimmed, "hidden")) style.visibility = .hidden
-            else if (eqlIgnoreCase(trimmed, "collapse")) style.visibility = .collapse;
+            if (eqlIgnoreCase(trimmed, "visible")) style.visibility = .visible else if (eqlIgnoreCase(trimmed, "hidden")) style.visibility = .hidden else if (eqlIgnoreCase(trimmed, "collapse")) style.visibility = .collapse;
         },
         .font_size => {
             // Handle font-size keywords
-            if (eqlIgnoreCase(trimmed, "xx-small")) { style.font_size_px = 9; }
-            else if (eqlIgnoreCase(trimmed, "x-small")) { style.font_size_px = 10; }
-            else if (eqlIgnoreCase(trimmed, "small")) { style.font_size_px = 13; }
-            else if (eqlIgnoreCase(trimmed, "medium")) { style.font_size_px = 16; }
-            else if (eqlIgnoreCase(trimmed, "large")) { style.font_size_px = 18; }
-            else if (eqlIgnoreCase(trimmed, "x-large")) { style.font_size_px = 24; }
-            else if (eqlIgnoreCase(trimmed, "xx-large")) { style.font_size_px = 32; }
-            else if (eqlIgnoreCase(trimmed, "xxx-large")) { style.font_size_px = 48; }
-            else if (eqlIgnoreCase(trimmed, "smaller")) { style.font_size_px = parent_fs * 0.833; }
-            else if (eqlIgnoreCase(trimmed, "larger")) { style.font_size_px = parent_fs * 1.2; }
-            else if (properties.parseLength(trimmed)) |len| {
+            if (eqlIgnoreCase(trimmed, "xx-small")) {
+                style.font_size_px = 9;
+            } else if (eqlIgnoreCase(trimmed, "x-small")) {
+                style.font_size_px = 10;
+            } else if (eqlIgnoreCase(trimmed, "small")) {
+                style.font_size_px = 13;
+            } else if (eqlIgnoreCase(trimmed, "medium")) {
+                style.font_size_px = 16;
+            } else if (eqlIgnoreCase(trimmed, "large")) {
+                style.font_size_px = 18;
+            } else if (eqlIgnoreCase(trimmed, "x-large")) {
+                style.font_size_px = 24;
+            } else if (eqlIgnoreCase(trimmed, "xx-large")) {
+                style.font_size_px = 32;
+            } else if (eqlIgnoreCase(trimmed, "xxx-large")) {
+                style.font_size_px = 48;
+            } else if (eqlIgnoreCase(trimmed, "smaller")) {
+                style.font_size_px = parent_fs * 0.833;
+            } else if (eqlIgnoreCase(trimmed, "larger")) {
+                style.font_size_px = parent_fs * 1.2;
+            } else if (properties.parseLength(trimmed)) |len| {
                 // Percentage font-size is relative to parent font-size
                 if (len.unit == .percent) {
                     style.font_size_px = parent_fs * len.value / 100.0;
@@ -1267,9 +1288,7 @@ fn applyDeclaration(
             if (std.fmt.parseInt(u16, trimmed, 10)) |w| {
                 style.font_weight = w;
             } else |_| {
-                if (eqlIgnoreCase(trimmed, "bold")) style.font_weight = 700
-                else if (eqlIgnoreCase(trimmed, "normal")) style.font_weight = 400
-                else if (eqlIgnoreCase(trimmed, "lighter")) {
+                if (eqlIgnoreCase(trimmed, "bold")) style.font_weight = 700 else if (eqlIgnoreCase(trimmed, "normal")) style.font_weight = 400 else if (eqlIgnoreCase(trimmed, "lighter")) {
                     style.font_weight = if (style.font_weight >= 600) 400 else 100;
                 } else if (eqlIgnoreCase(trimmed, "bolder")) {
                     style.font_weight = if (style.font_weight <= 300) 400 else 700;
@@ -1277,9 +1296,7 @@ fn applyDeclaration(
             }
         },
         .font_style => {
-            if (eqlIgnoreCase(trimmed, "normal")) style.font_style = .normal
-            else if (eqlIgnoreCase(trimmed, "italic")) style.font_style = .italic
-            else if (eqlIgnoreCase(trimmed, "oblique")) style.font_style = .oblique;
+            if (eqlIgnoreCase(trimmed, "normal")) style.font_style = .normal else if (eqlIgnoreCase(trimmed, "italic")) style.font_style = .italic else if (eqlIgnoreCase(trimmed, "oblique")) style.font_style = .oblique;
         },
         .font_family => {
             // Parse font-family: match known generic families and common font names
@@ -1353,45 +1370,25 @@ fn applyDeclaration(
             }
         },
         .text_transform => {
-            if (eqlIgnoreCase(trimmed, "none")) style.text_transform = .none
-            else if (eqlIgnoreCase(trimmed, "uppercase")) style.text_transform = .uppercase
-            else if (eqlIgnoreCase(trimmed, "lowercase")) style.text_transform = .lowercase
-            else if (eqlIgnoreCase(trimmed, "capitalize")) style.text_transform = .capitalize;
+            if (eqlIgnoreCase(trimmed, "none")) style.text_transform = .none else if (eqlIgnoreCase(trimmed, "uppercase")) style.text_transform = .uppercase else if (eqlIgnoreCase(trimmed, "lowercase")) style.text_transform = .lowercase else if (eqlIgnoreCase(trimmed, "capitalize")) style.text_transform = .capitalize;
         },
         .white_space => {
-            if (eqlIgnoreCase(trimmed, "normal")) style.white_space = .normal
-            else if (eqlIgnoreCase(trimmed, "pre")) style.white_space = .pre
-            else if (eqlIgnoreCase(trimmed, "nowrap")) style.white_space = .nowrap
-            else if (eqlIgnoreCase(trimmed, "pre-wrap")) style.white_space = .pre_wrap
-            else if (eqlIgnoreCase(trimmed, "pre-line")) style.white_space = .pre_line
-            else if (eqlIgnoreCase(trimmed, "break-spaces")) style.white_space = .break_spaces;
+            if (eqlIgnoreCase(trimmed, "normal")) style.white_space = .normal else if (eqlIgnoreCase(trimmed, "pre")) style.white_space = .pre else if (eqlIgnoreCase(trimmed, "nowrap")) style.white_space = .nowrap else if (eqlIgnoreCase(trimmed, "pre-wrap")) style.white_space = .pre_wrap else if (eqlIgnoreCase(trimmed, "pre-line")) style.white_space = .pre_line else if (eqlIgnoreCase(trimmed, "break-spaces")) style.white_space = .break_spaces;
         },
         .word_break => {
-            if (eqlIgnoreCase(trimmed, "normal")) style.word_break = .normal
-            else if (eqlIgnoreCase(trimmed, "break-all")) style.word_break = .break_all
-            else if (eqlIgnoreCase(trimmed, "keep-all")) style.word_break = .keep_all;
+            if (eqlIgnoreCase(trimmed, "normal")) style.word_break = .normal else if (eqlIgnoreCase(trimmed, "break-all")) style.word_break = .break_all else if (eqlIgnoreCase(trimmed, "keep-all")) style.word_break = .keep_all;
         },
         .overflow_wrap => {
-            if (eqlIgnoreCase(trimmed, "normal")) style.overflow_wrap = .normal
-            else if (eqlIgnoreCase(trimmed, "break-word")) style.overflow_wrap = .break_word
-            else if (eqlIgnoreCase(trimmed, "anywhere")) style.overflow_wrap = .anywhere;
+            if (eqlIgnoreCase(trimmed, "normal")) style.overflow_wrap = .normal else if (eqlIgnoreCase(trimmed, "break-word")) style.overflow_wrap = .break_word else if (eqlIgnoreCase(trimmed, "anywhere")) style.overflow_wrap = .anywhere;
         },
         .text_overflow => {
-            if (eqlIgnoreCase(trimmed, "clip")) style.text_overflow = .clip
-            else if (eqlIgnoreCase(trimmed, "ellipsis")) style.text_overflow = .ellipsis;
+            if (eqlIgnoreCase(trimmed, "clip")) style.text_overflow = .clip else if (eqlIgnoreCase(trimmed, "ellipsis")) style.text_overflow = .ellipsis;
         },
         .text_indent => {
             if (parseLengthValue(trimmed, fs, vw, vh)) |px| style.text_indent = px;
         },
         .vertical_align => {
-            if (eqlIgnoreCase(trimmed, "baseline")) style.vertical_align = .baseline
-            else if (eqlIgnoreCase(trimmed, "top")) style.vertical_align = .top
-            else if (eqlIgnoreCase(trimmed, "middle")) style.vertical_align = .middle
-            else if (eqlIgnoreCase(trimmed, "bottom")) style.vertical_align = .bottom
-            else if (eqlIgnoreCase(trimmed, "text-top")) style.vertical_align = .text_top
-            else if (eqlIgnoreCase(trimmed, "text-bottom")) style.vertical_align = .text_bottom
-            else if (eqlIgnoreCase(trimmed, "sub")) style.vertical_align = .sub
-            else if (eqlIgnoreCase(trimmed, "super")) style.vertical_align = .super;
+            if (eqlIgnoreCase(trimmed, "baseline")) style.vertical_align = .baseline else if (eqlIgnoreCase(trimmed, "top")) style.vertical_align = .top else if (eqlIgnoreCase(trimmed, "middle")) style.vertical_align = .middle else if (eqlIgnoreCase(trimmed, "bottom")) style.vertical_align = .bottom else if (eqlIgnoreCase(trimmed, "text-top")) style.vertical_align = .text_top else if (eqlIgnoreCase(trimmed, "text-bottom")) style.vertical_align = .text_bottom else if (eqlIgnoreCase(trimmed, "sub")) style.vertical_align = .sub else if (eqlIgnoreCase(trimmed, "super")) style.vertical_align = .super;
         },
         .line_height => {
             if (eqlIgnoreCase(trimmed, "normal")) {
@@ -1450,28 +1447,56 @@ fn applyDeclaration(
             style.margin_trim = parseMarginTrim(trimmed);
         },
         .padding_top => {
-            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_top = v.value; style.padding_top_is_pct = v.is_pct; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| {
+                style.padding_top = v.value;
+                style.padding_top_is_pct = v.is_pct;
+                style.padding_set_by_css = true;
+            }
         },
         .padding_right => {
-            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_right = v.value; style.padding_right_is_pct = v.is_pct; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| {
+                style.padding_right = v.value;
+                style.padding_right_is_pct = v.is_pct;
+                style.padding_set_by_css = true;
+            }
         },
         .padding_bottom => {
-            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_bottom = v.value; style.padding_bottom_is_pct = v.is_pct; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| {
+                style.padding_bottom = v.value;
+                style.padding_bottom_is_pct = v.is_pct;
+                style.padding_set_by_css = true;
+            }
         },
         .padding_left => {
-            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| { style.padding_left = v.value; style.padding_left_is_pct = v.is_pct; style.padding_set_by_css = true; }
+            if (parseLengthOrPct(trimmed, fs, vw, vh)) |v| {
+                style.padding_left = v.value;
+                style.padding_left_is_pct = v.is_pct;
+                style.padding_set_by_css = true;
+            }
         },
         .border_top_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_top_width = px; style.border_set_by_css = true; }
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| {
+                style.border_top_width = px;
+                style.border_set_by_css = true;
+            }
         },
         .border_right_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_right_width = px; style.border_set_by_css = true; }
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| {
+                style.border_right_width = px;
+                style.border_set_by_css = true;
+            }
         },
         .border_bottom_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_bottom_width = px; style.border_set_by_css = true; }
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| {
+                style.border_bottom_width = px;
+                style.border_set_by_css = true;
+            }
         },
         .border_left_width => {
-            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| { style.border_left_width = px; style.border_set_by_css = true; }
+            if (parseBorderWidth(trimmed, fs, vw, vh)) |px| {
+                style.border_left_width = px;
+                style.border_set_by_css = true;
+            }
         },
         .border_top_color => {
             if (eqlIgnoreCase(trimmed, "currentcolor")) {
@@ -1523,22 +1548,13 @@ fn applyDeclaration(
         .bottom => style.bottom = parseDimension(trimmed, fs, vw, vh),
         .left => style.left = parseDimension(trimmed, fs, vw, vh),
         .list_style_type => {
-            if (eqlIgnoreCase(trimmed, "disc")) style.list_style_type = .disc
-            else if (eqlIgnoreCase(trimmed, "circle")) style.list_style_type = .circle
-            else if (eqlIgnoreCase(trimmed, "square")) style.list_style_type = .square
-            else if (eqlIgnoreCase(trimmed, "decimal")) style.list_style_type = .decimal
-            else if (eqlIgnoreCase(trimmed, "none")) style.list_style_type = .none;
+            if (eqlIgnoreCase(trimmed, "disc")) style.list_style_type = .disc else if (eqlIgnoreCase(trimmed, "circle")) style.list_style_type = .circle else if (eqlIgnoreCase(trimmed, "square")) style.list_style_type = .square else if (eqlIgnoreCase(trimmed, "decimal")) style.list_style_type = .decimal else if (eqlIgnoreCase(trimmed, "none")) style.list_style_type = .none;
         },
         .flex_direction => {
-            if (eqlIgnoreCase(trimmed, "row")) style.flex_direction = .row
-            else if (eqlIgnoreCase(trimmed, "row-reverse")) style.flex_direction = .row_reverse
-            else if (eqlIgnoreCase(trimmed, "column")) style.flex_direction = .column
-            else if (eqlIgnoreCase(trimmed, "column-reverse")) style.flex_direction = .column_reverse;
+            if (eqlIgnoreCase(trimmed, "row")) style.flex_direction = .row else if (eqlIgnoreCase(trimmed, "row-reverse")) style.flex_direction = .row_reverse else if (eqlIgnoreCase(trimmed, "column")) style.flex_direction = .column else if (eqlIgnoreCase(trimmed, "column-reverse")) style.flex_direction = .column_reverse;
         },
         .flex_wrap => {
-            if (eqlIgnoreCase(trimmed, "nowrap")) style.flex_wrap = .nowrap
-            else if (eqlIgnoreCase(trimmed, "wrap")) style.flex_wrap = .wrap
-            else if (eqlIgnoreCase(trimmed, "wrap-reverse")) style.flex_wrap = .wrap_reverse;
+            if (eqlIgnoreCase(trimmed, "nowrap")) style.flex_wrap = .nowrap else if (eqlIgnoreCase(trimmed, "wrap")) style.flex_wrap = .wrap else if (eqlIgnoreCase(trimmed, "wrap-reverse")) style.flex_wrap = .wrap_reverse;
         },
         .justify_content => {
             if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
@@ -1583,12 +1599,7 @@ fn applyDeclaration(
                 style.align_items = .baseline;
         },
         .align_self => {
-            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start
-            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end
-            else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center
-            else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch
-            else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline
-            else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
+            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
         },
         .flex_grow => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_grow = v else |_| {}
@@ -1628,28 +1639,34 @@ fn applyDeclaration(
                 style.gap = 0;
                 style.row_gap = 0;
             } else {
-            var it = std.mem.tokenizeAny(u8, trimmed, " \t");
-            const first = it.next() orelse trimmed;
-            const second = it.next();
-            if (parseLengthValue(first, fs, vw, vh)) |row_px| {
-                style.row_gap = row_px;
-                if (second) |s| {
-                    if (parseLengthValue(s, fs, vw, vh)) |col_px| {
-                        style.gap = col_px;
+                var it = std.mem.tokenizeAny(u8, trimmed, " \t");
+                const first = it.next() orelse trimmed;
+                const second = it.next();
+                if (parseLengthValue(first, fs, vw, vh)) |row_px| {
+                    style.row_gap = row_px;
+                    if (second) |s| {
+                        if (parseLengthValue(s, fs, vw, vh)) |col_px| {
+                            style.gap = col_px;
+                        }
+                    } else {
+                        style.gap = row_px;
                     }
-                } else {
-                    style.gap = row_px;
                 }
-            }
             }
         },
         .column_gap => {
-            if (eqlIgnoreCase(trimmed, "normal")) { style.gap = 0; }
-            else if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.gap = px; }
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.gap = 0;
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.gap = px;
+            }
         },
         .row_gap => {
-            if (eqlIgnoreCase(trimmed, "normal")) { style.row_gap = 0; }
-            else if (parseLengthValue(trimmed, fs, vw, vh)) |px| { style.row_gap = px; }
+            if (eqlIgnoreCase(trimmed, "normal")) {
+                style.row_gap = 0;
+            } else if (parseLengthValue(trimmed, fs, vw, vh)) |px| {
+                style.row_gap = px;
+            }
         },
         .box_shadow => {
             parseShadow(trimmed, fs, &style.box_shadow_x, &style.box_shadow_y, &style.box_shadow_blur, &style.box_shadow_color);
@@ -1665,8 +1682,7 @@ fn applyDeclaration(
             style.grid_template_rows = parseGridTemplate(trimmed, arena) orelse &.{};
         },
         .grid_auto_flow => {
-            if (eqlIgnoreCase(trimmed, "row")) style.grid_auto_flow = .row
-            else if (eqlIgnoreCase(trimmed, "column")) style.grid_auto_flow = .column;
+            if (eqlIgnoreCase(trimmed, "row")) style.grid_auto_flow = .row else if (eqlIgnoreCase(trimmed, "column")) style.grid_auto_flow = .column;
         },
         .grid_auto_columns => {
             if (parseOneTrack(trimmed)) |t| style.grid_auto_columns = t;
@@ -1715,30 +1731,23 @@ fn applyDeclaration(
         .counter_increment => style.counter_increment = arena.dupe(u8, trimmed) catch null,
         .transition_duration => {
             if (properties.parseLength(trimmed)) |len| {
-                if (len.unit == .s) style.transition_duration = len.value
-                else if (len.unit == .ms) style.transition_duration = len.value / 1000.0;
+                if (len.unit == .s) style.transition_duration = len.value else if (len.unit == .ms) style.transition_duration = len.value / 1000.0;
             }
         },
         .transition_delay => {
             if (properties.parseLength(trimmed)) |len| {
-                if (len.unit == .s) style.transition_delay = len.value
-                else if (len.unit == .ms) style.transition_delay = len.value / 1000.0;
+                if (len.unit == .s) style.transition_delay = len.value else if (len.unit == .ms) style.transition_delay = len.value / 1000.0;
             }
         },
         .animation_name => style.animation_name = arena.dupe(u8, trimmed) catch null,
         .animation_duration => {
             if (properties.parseLength(trimmed)) |len| {
-                if (len.unit == .s) style.animation_duration = len.value
-                else if (len.unit == .ms) style.animation_duration = len.value / 1000.0;
+                if (len.unit == .s) style.animation_duration = len.value else if (len.unit == .ms) style.animation_duration = len.value / 1000.0;
             }
         },
         .filter => parseFilter(trimmed, style, fs, vw, vh),
         .object_fit => {
-            if (eqlIgnoreCase(trimmed, "contain")) style.object_fit = .contain
-            else if (eqlIgnoreCase(trimmed, "cover")) style.object_fit = .cover
-            else if (eqlIgnoreCase(trimmed, "fill")) style.object_fit = .fill
-            else if (eqlIgnoreCase(trimmed, "none")) style.object_fit = .none
-            else if (eqlIgnoreCase(trimmed, "scale-down")) style.object_fit = .scale_down;
+            if (eqlIgnoreCase(trimmed, "contain")) style.object_fit = .contain else if (eqlIgnoreCase(trimmed, "cover")) style.object_fit = .cover else if (eqlIgnoreCase(trimmed, "fill")) style.object_fit = .fill else if (eqlIgnoreCase(trimmed, "none")) style.object_fit = .none else if (eqlIgnoreCase(trimmed, "scale-down")) style.object_fit = .scale_down;
         },
         .aspect_ratio => {
             if (eqlIgnoreCase(trimmed, "auto")) {
@@ -1770,12 +1779,7 @@ fn applyDeclaration(
         },
         .justify_self => {
             // justify-self maps to align-self for our purposes
-            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start
-            else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end
-            else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center
-            else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch
-            else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline
-            else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
+            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
         },
         .border_collapse => {
             if (eqlIgnoreCase(trimmed, "collapse")) {
@@ -1798,10 +1802,7 @@ fn applyDeclaration(
             if (properties.parseColor(trimmed)) |c| style.outline_color = c.toArgb();
         },
         .background_repeat => {
-            if (eqlIgnoreCase(trimmed, "repeat")) style.background_repeat = .repeat
-            else if (eqlIgnoreCase(trimmed, "no-repeat")) style.background_repeat = .no_repeat
-            else if (eqlIgnoreCase(trimmed, "repeat-x")) style.background_repeat = .repeat_x
-            else if (eqlIgnoreCase(trimmed, "repeat-y")) style.background_repeat = .repeat_y;
+            if (eqlIgnoreCase(trimmed, "repeat")) style.background_repeat = .repeat else if (eqlIgnoreCase(trimmed, "no-repeat")) style.background_repeat = .no_repeat else if (eqlIgnoreCase(trimmed, "repeat-x")) style.background_repeat = .repeat_x else if (eqlIgnoreCase(trimmed, "repeat-y")) style.background_repeat = .repeat_y;
         },
         .background_size => {
             if (eqlIgnoreCase(trimmed, "cover")) {
@@ -1909,30 +1910,16 @@ fn applyDeclaration(
             } else |_| {}
         },
         .animation_direction => {
-            if (eqlIgnoreCase(trimmed, "normal")) style.animation_direction = .normal
-            else if (eqlIgnoreCase(trimmed, "reverse")) style.animation_direction = .reverse
-            else if (eqlIgnoreCase(trimmed, "alternate")) style.animation_direction = .alternate
-            else if (eqlIgnoreCase(trimmed, "alternate-reverse")) style.animation_direction = .alternate_reverse;
+            if (eqlIgnoreCase(trimmed, "normal")) style.animation_direction = .normal else if (eqlIgnoreCase(trimmed, "reverse")) style.animation_direction = .reverse else if (eqlIgnoreCase(trimmed, "alternate")) style.animation_direction = .alternate else if (eqlIgnoreCase(trimmed, "alternate-reverse")) style.animation_direction = .alternate_reverse;
         },
         .animation_fill_mode => {
-            if (eqlIgnoreCase(trimmed, "none")) style.animation_fill_mode = .none
-            else if (eqlIgnoreCase(trimmed, "forwards")) style.animation_fill_mode = .forwards
-            else if (eqlIgnoreCase(trimmed, "backwards")) style.animation_fill_mode = .backwards
-            else if (eqlIgnoreCase(trimmed, "both")) style.animation_fill_mode = .both;
+            if (eqlIgnoreCase(trimmed, "none")) style.animation_fill_mode = .none else if (eqlIgnoreCase(trimmed, "forwards")) style.animation_fill_mode = .forwards else if (eqlIgnoreCase(trimmed, "backwards")) style.animation_fill_mode = .backwards else if (eqlIgnoreCase(trimmed, "both")) style.animation_fill_mode = .both;
         },
         .transition_property => {
-            if (eqlIgnoreCase(trimmed, "all")) style.transition_property = .all
-            else if (eqlIgnoreCase(trimmed, "none")) style.transition_property = .none
-            else if (eqlIgnoreCase(trimmed, "opacity")) style.transition_property = .opacity
-            else if (eqlIgnoreCase(trimmed, "color")) style.transition_property = .color
-            else if (eqlIgnoreCase(trimmed, "background-color") or eqlIgnoreCase(trimmed, "background")) style.transition_property = .background_color
-            else if (eqlIgnoreCase(trimmed, "transform")) style.transition_property = .transform
-            else style.transition_property = .all; // unknown property → treat as all
+            if (eqlIgnoreCase(trimmed, "all")) style.transition_property = .all else if (eqlIgnoreCase(trimmed, "none")) style.transition_property = .none else if (eqlIgnoreCase(trimmed, "opacity")) style.transition_property = .opacity else if (eqlIgnoreCase(trimmed, "color")) style.transition_property = .color else if (eqlIgnoreCase(trimmed, "background-color") or eqlIgnoreCase(trimmed, "background")) style.transition_property = .background_color else if (eqlIgnoreCase(trimmed, "transform")) style.transition_property = .transform else style.transition_property = .all; // unknown property → treat as all
         },
         // Skip these — just parse to avoid unknown property warnings
-        .transition_timing_function,
-        .animation_timing_function, .animation_play_state,
-        .backdrop_filter => {},
+        .transition_timing_function, .animation_timing_function, .animation_play_state, .backdrop_filter => {},
         .outline_style => {
             // outline-style: none → zero out outline-width
             if (eqlIgnoreCase(trimmed, "none")) {
@@ -2229,7 +2216,9 @@ fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool, de
     var split_pos: ?usize = null;
     for (inner, 0..) |c, i| {
         if (c == '(') paren_depth += 1;
-        if (c == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (c == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
         if (c == ',' and paren_depth == 0) {
             split_pos = i;
             break;
@@ -2280,8 +2269,16 @@ fn parseCalcExpr(expr: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32)
     var i: usize = 0;
     while (i < expr.len) {
         const c = expr[i];
-        if (c == '(') { paren_depth += 1; i += 1; continue; }
-        if (c == ')') { if (paren_depth > 0) paren_depth -= 1; i += 1; continue; }
+        if (c == '(') {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if (c == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+            i += 1;
+            continue;
+        }
         if (paren_depth == 0) {
             // CSS calc requires spaces around + and -
             if (i > 0 and i + 1 < expr.len and expr[i - 1] == ' ' and expr[i + 1] == ' ') {
@@ -2492,8 +2489,16 @@ fn resolveCalcExprWithPct(expr: []const u8, font_size: f32, vw: f32, vh: f32, pc
     var i: usize = 0;
     while (i < expr.len) {
         const ch = expr[i];
-        if (ch == '(') { paren_depth += 1; i += 1; continue; }
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; i += 1; continue; }
+        if (ch == '(') {
+            paren_depth += 1;
+            i += 1;
+            continue;
+        }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+            i += 1;
+            continue;
+        }
         if (paren_depth == 0) {
             if (i > 0 and i + 1 < expr.len and expr[i - 1] == ' ' and expr[i + 1] == ' ') {
                 if (ch == '+' or ch == '-') last_add_sub = i;
@@ -2541,7 +2546,9 @@ fn resolveClampWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base
     var part_start: usize = 0;
     for (inner, 0..) |ch, idx| {
         if (ch == '(') paren_depth += 1;
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
         if (ch == ',' and paren_depth == 0 and part_idx < 2) {
             parts[part_idx] = std.mem.trim(u8, inner[part_start..idx], " \t");
             part_idx += 1;
@@ -2585,8 +2592,13 @@ fn resolveMinMaxWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_bas
     var split_pos: ?usize = null;
     for (inner, 0..) |ch, idx| {
         if (ch == '(') paren_depth += 1;
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
-        if (ch == ',' and paren_depth == 0) { split_pos = idx; break; }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
+        if (ch == ',' and paren_depth == 0) {
+            split_pos = idx;
+            break;
+        }
     }
 
     if (split_pos) |sp| {
@@ -2622,7 +2634,9 @@ fn resolveRoundWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base
     var part_start: usize = 0;
     for (inner, 0..) |ch, idx| {
         if (ch == '(') paren_depth += 1;
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
         if (ch == ',' and paren_depth == 0 and part_count < 2) {
             parts[part_count] = std.mem.trim(u8, inner[part_start..idx], " \t");
             part_count += 1;
@@ -2640,11 +2654,7 @@ fn resolveRoundWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base
     if (part_count == 3) {
         // round(strategy, A, B)
         const strat = parts[0];
-        if (std.ascii.eqlIgnoreCase(strat, "nearest")) strategy = .nearest
-        else if (std.ascii.eqlIgnoreCase(strat, "up")) strategy = .up
-        else if (std.ascii.eqlIgnoreCase(strat, "down")) strategy = .down
-        else if (std.ascii.eqlIgnoreCase(strat, "to-zero")) strategy = .to_zero
-        else return null;
+        if (std.ascii.eqlIgnoreCase(strat, "nearest")) strategy = .nearest else if (std.ascii.eqlIgnoreCase(strat, "up")) strategy = .up else if (std.ascii.eqlIgnoreCase(strat, "down")) strategy = .down else if (std.ascii.eqlIgnoreCase(strat, "to-zero")) strategy = .to_zero else return null;
         a_str = parts[1];
         b_str = parts[2];
     } else if (part_count == 2) {
@@ -2654,9 +2664,7 @@ fn resolveRoundWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base
         if (std.ascii.eqlIgnoreCase(maybe_strat, "nearest") or std.ascii.eqlIgnoreCase(maybe_strat, "up") or
             std.ascii.eqlIgnoreCase(maybe_strat, "down") or std.ascii.eqlIgnoreCase(maybe_strat, "to-zero"))
         {
-            if (std.ascii.eqlIgnoreCase(maybe_strat, "up")) strategy = .up
-            else if (std.ascii.eqlIgnoreCase(maybe_strat, "down")) strategy = .down
-            else if (std.ascii.eqlIgnoreCase(maybe_strat, "to-zero")) strategy = .to_zero;
+            if (std.ascii.eqlIgnoreCase(maybe_strat, "up")) strategy = .up else if (std.ascii.eqlIgnoreCase(maybe_strat, "down")) strategy = .down else if (std.ascii.eqlIgnoreCase(maybe_strat, "to-zero")) strategy = .to_zero;
             a_str = parts[1];
             b_str = "1";
         } else {
@@ -2695,8 +2703,13 @@ fn resolveModRemWithPct(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_bas
     var paren_depth: usize = 0;
     for (inner, 0..) |ch, idx| {
         if (ch == '(') paren_depth += 1;
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
-        if (ch == ',' and paren_depth == 0) { split_pos = idx; break; }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
+        if (ch == ',' and paren_depth == 0) {
+            split_pos = idx;
+            break;
+        }
     }
     const sp = split_pos orelse return null;
     const a_str = std.mem.trim(u8, inner[0..sp], " \t");
@@ -2744,8 +2757,13 @@ fn resolveTrigFunc(s: []const u8, func: []const u8, font_size: f32, vw: f32, vh:
         var comma_pos: ?usize = null;
         for (inner, 0..) |ch, i| {
             if (ch == '(') paren_depth += 1;
-            if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
-            if (ch == ',' and paren_depth == 0) { comma_pos = i; break; }
+            if (ch == ')') {
+                if (paren_depth > 0) paren_depth -= 1;
+            }
+            if (ch == ',' and paren_depth == 0) {
+                comma_pos = i;
+                break;
+            }
         }
         const cp = comma_pos orelse return null;
         const y_str = std.mem.trim(u8, inner[0..cp], " \t");
@@ -2829,8 +2847,13 @@ fn resolvePowFunc(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f32
     var comma_pos: ?usize = null;
     for (inner, 0..) |ch, i| {
         if (ch == '(') paren_depth += 1;
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
-        if (ch == ',' and paren_depth == 0) { comma_pos = i; break; }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
+        if (ch == ',' and paren_depth == 0) {
+            comma_pos = i;
+            break;
+        }
     }
     const cp = comma_pos orelse return null;
     const base_v = resolveValueToPxDepth(std.mem.trim(u8, inner[0..cp], " \t"), font_size, vw, vh, pct_base, depth + 1) orelse return null;
@@ -2849,7 +2872,9 @@ fn resolveHypotFunc(s: []const u8, font_size: f32, vw: f32, vh: f32, pct_base: f
     var start: usize = 0;
     for (inner, 0..) |ch, i| {
         if (ch == '(') paren_depth += 1;
-        if (ch == ')') { if (paren_depth > 0) paren_depth -= 1; }
+        if (ch == ')') {
+            if (paren_depth > 0) paren_depth -= 1;
+        }
         if (ch == ',' and paren_depth == 0) {
             const arg = std.mem.trim(u8, inner[start..i], " \t");
             const v = resolveValueToPxDepth(arg, font_size, vw, vh, pct_base, depth + 1) orelse return null;
@@ -2960,8 +2985,13 @@ fn parseOneTrack(t: []const u8) ?ComputedStyle.GridTrackSize {
         var comma: ?usize = null;
         for (inner, 0..) |c, i| {
             if (c == '(') pdepth += 1;
-            if (c == ')') { if (pdepth > 0) pdepth -= 1; }
-            if (c == ',' and pdepth == 0) { comma = i; break; }
+            if (c == ')') {
+                if (pdepth > 0) pdepth -= 1;
+            }
+            if (c == ',' and pdepth == 0) {
+                comma = i;
+                break;
+            }
         }
         if (comma) |cp| {
             const max_str = std.mem.trim(u8, inner[cp + 1 ..], " \t");
@@ -3171,9 +3201,9 @@ fn parseShadow(
     {
         var depth: usize = 0;
         for (s, 0..) |c, i| {
-            if (c == '(') depth += 1
-            else if (c == ')') { if (depth > 0) depth -= 1; }
-            else if (c == ',' and depth == 0) {
+            if (c == '(') depth += 1 else if (c == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (c == ',' and depth == 0) {
                 first_shadow = s[0..i];
                 break;
             }
@@ -3195,7 +3225,10 @@ fn parseShadow(
                     depth += 1;
                 } else if (first_shadow[i] == ')') {
                     if (depth > 0) depth -= 1;
-                    if (depth == 0) { i += 1; break; }
+                    if (depth == 0) {
+                        i += 1;
+                        break;
+                    }
                 } else if ((first_shadow[i] == ' ' or first_shadow[i] == '\t') and depth == 0) {
                     break;
                 }
@@ -3284,9 +3317,7 @@ fn applyHtmlAttributes(node: DomNode, style: *ComputedStyle) void {
     // HTML align attribute → text-align (only if text-align not already set by CSS)
     if (node.getAttribute("align")) |align_val| {
         if (style.text_align == .left) { // default = not set by CSS
-            if (eqlIgnoreCase(align_val, "center")) style.text_align = .center
-            else if (eqlIgnoreCase(align_val, "right")) style.text_align = .right
-            else if (eqlIgnoreCase(align_val, "justify")) style.text_align = .justify;
+            if (eqlIgnoreCase(align_val, "center")) style.text_align = .center else if (eqlIgnoreCase(align_val, "right")) style.text_align = .right else if (eqlIgnoreCase(align_val, "justify")) style.text_align = .justify;
         }
     }
     // HTML width attribute → width (for td, img, table)
@@ -3322,9 +3353,7 @@ fn applyHtmlAttributes(node: DomNode, style: *ComputedStyle) void {
     }
     // HTML valign → vertical-align
     if (node.getAttribute("valign")) |valign_val| {
-        if (eqlIgnoreCase(valign_val, "middle")) style.vertical_align = .middle
-        else if (eqlIgnoreCase(valign_val, "top")) style.vertical_align = .top
-        else if (eqlIgnoreCase(valign_val, "bottom")) style.vertical_align = .bottom;
+        if (eqlIgnoreCase(valign_val, "middle")) style.vertical_align = .middle else if (eqlIgnoreCase(valign_val, "top")) style.vertical_align = .top else if (eqlIgnoreCase(valign_val, "bottom")) style.vertical_align = .bottom;
     }
     // HTML hidden attribute
     if (node.getAttribute("hidden") != null) {
@@ -3478,10 +3507,7 @@ fn parseLinearGradient(value: []const u8, style: *ComputedStyle) bool {
         const deg_str = first[0 .. first.len - 3];
         if (std.fmt.parseFloat(f32, deg_str)) |deg| {
             const normalized = @mod(deg, 360.0);
-            if (normalized < 45 or normalized >= 315) dir = .to_top
-            else if (normalized >= 45 and normalized < 135) dir = .to_right
-            else if (normalized >= 135 and normalized < 225) dir = .to_bottom
-            else dir = .to_left;
+            if (normalized < 45 or normalized >= 315) dir = .to_top else if (normalized >= 45 and normalized < 135) dir = .to_right else if (normalized >= 135 and normalized < 225) dir = .to_bottom else dir = .to_left;
         } else |_| {}
         color1_idx = 1;
         color2_idx = if (part_count > 2) 2 else 1;

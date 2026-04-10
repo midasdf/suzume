@@ -264,13 +264,11 @@ fn handleExternalScript(
     is_module: bool,
 ) void {
     // Resolve URL (absolute http/https/data: or relative to base)
-    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:"))
-        blk: {
-            const u = allocator.allocSentinel(u8, src.len, 0) catch return;
-            @memcpy(u, src);
-            break :blk u;
-        }
-    else if (base_url) |bu|
+    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://") or std.mem.startsWith(u8, src, "data:")) blk: {
+        const u = allocator.allocSentinel(u8, src.len, 0) catch return;
+        @memcpy(u, src);
+        break :blk u;
+    } else if (base_url) |bu|
         resolveUrl(allocator, bu, src) catch return
     else
         return;

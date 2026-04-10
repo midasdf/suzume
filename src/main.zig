@@ -188,10 +188,7 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
         page.total_height, page.total_width, new_root_box.children.items.len,
     });
-
-
 }
-
 
 /// Browser state holding the current page's data.
 const PageState = struct {
@@ -365,7 +362,6 @@ fn updateImageDimensions(box: *Box, cache: *ImageCache, updated: *bool) void {
     }
 }
 
-
 // signalJsEnabled is now in core/script_executor.zig
 
 /// Temporary storage for pre-hover style snapshots (node_ptr → style).
@@ -375,7 +371,6 @@ var transition_snapshots: std.AutoHashMapUnmanaged(usize, ComputedStyle) = .empt
 fn saveTransitionSnapshot(pg: *PageState, _: *anim_mod.AnimationState, hover_node: *lxb.lxb_dom_node_t) void {
     transition_snapshots.clearRetainingCapacity();
     const styles = &(pg.styles orelse return);
-
 
     // Save styles for the hover node and ancestors (since :hover propagates up)
     var cur: ?*lxb.lxb_dom_node_t = hover_node;
@@ -3365,11 +3360,16 @@ fn handleWebDriverCommand(
                 @memcpy(resp_buf[pos..][0..prefix.len], prefix);
                 pos += prefix.len;
                 for (0..count) |i| {
-                    if (i > 0) { resp_buf[pos] = ','; pos += 1; }
-                    resp_buf[pos] = '"'; pos += 1;
+                    if (i > 0) {
+                        resp_buf[pos] = ',';
+                        pos += 1;
+                    }
+                    resp_buf[pos] = '"';
+                    pos += 1;
                     @memcpy(resp_buf[pos..][0..handles_buf[i].len], handles_buf[i]);
                     pos += handles_buf[i].len;
-                    resp_buf[pos] = '"'; pos += 1;
+                    resp_buf[pos] = '"';
+                    pos += 1;
                 }
                 @memcpy(resp_buf[pos..][0..2], "]}");
                 pos += 2;
@@ -3396,11 +3396,16 @@ fn handleWebDriverCommand(
             @memcpy(resp_buf[pos..][0..prefix.len], prefix);
             pos += prefix.len;
             for (0..count) |i| {
-                if (i > 0) { resp_buf[pos] = ','; pos += 1; }
-                resp_buf[pos] = '"'; pos += 1;
+                if (i > 0) {
+                    resp_buf[pos] = ',';
+                    pos += 1;
+                }
+                resp_buf[pos] = '"';
+                pos += 1;
                 @memcpy(resp_buf[pos..][0..handles_buf[i].len], handles_buf[i]);
                 pos += handles_buf[i].len;
-                resp_buf[pos] = '"'; pos += 1;
+                resp_buf[pos] = '"';
+                pos += 1;
             }
             @memcpy(resp_buf[pos..][0..2], "]}");
             pos += 2;
@@ -3409,4 +3414,3 @@ fn handleWebDriverCommand(
         },
     }
 }
-
