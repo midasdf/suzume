@@ -73,25 +73,44 @@ pub fn elementGetTagName(
         return quickjs.JS_NULL();
     }
 
-    // Check namespace: only uppercase for HTML namespace elements in HTML documents.
-    // If __xmlCaseSensitive is set, the element is from an XML/XHTML document where
-    // tagName must preserve original case regardless of namespace.
-    const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
-    const xml_cs_val = qjs.JS_GetPropertyStr(c, this_val, "__xmlCaseSensitive");
-    defer qjs.JS_FreeValue(c, xml_cs_val);
-    const is_xml_cs = !quickjs.JS_IsUndefined(xml_cs_val) and !quickjs.JS_IsNull(xml_cs_val);
-    var is_html = if (is_xml_cs) false else true;
-    if (!is_xml_cs) {
-        if (quickjs.JS_IsNull(ns_val)) {
-            is_html = false;
-        } else if (!quickjs.JS_IsUndefined(ns_val)) {
-            if (api.jsStringToSlice(c, ns_val)) |ns_s| {
-                defer qjs.JS_FreeCString(c, ns_s.ptr);
-                if (!std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml")) is_html = false;
+    // Per DOM spec: tagName is uppercase only in HTML documents.
+    // In XML/XHTML documents (contentType != "text/html"), preserve original case.
+    // Check ownerDocument's type, not element namespace.
+    var is_html = true;
+    {
+        // Check ownerDocument.contentType
+        const owner_doc = qjs.JS_GetPropertyStr(c, this_val, "ownerDocument");
+        defer qjs.JS_FreeValue(c, owner_doc);
+        if (!quickjs.JS_IsUndefined(owner_doc) and !quickjs.JS_IsNull(owner_doc)) {
+            const ct_val = qjs.JS_GetPropertyStr(c, owner_doc, "contentType");
+            defer qjs.JS_FreeValue(c, ct_val);
+            if (!quickjs.JS_IsUndefined(ct_val) and !quickjs.JS_IsNull(ct_val)) {
+                if (api.jsStringToSlice(c, ct_val)) |ct_s| {
+                    defer qjs.JS_FreeCString(c, ct_s.ptr);
+                    // Only "text/html" documents use uppercase tagName
+                    if (!std.mem.eql(u8, ct_s.ptr[0..ct_s.len], "text/html")) is_html = false;
+                }
+            }
+        }
+        // Also check __xmlCaseSensitive flag and namespaceURI as fallback
+        if (is_html) {
+            const xml_cs_val = qjs.JS_GetPropertyStr(c, this_val, "__xmlCaseSensitive");
+            defer qjs.JS_FreeValue(c, xml_cs_val);
+            if (!quickjs.JS_IsUndefined(xml_cs_val) and !quickjs.JS_IsNull(xml_cs_val)) is_html = false;
+        }
+        if (is_html) {
+            const ns_val = qjs.JS_GetPropertyStr(c, this_val, "namespaceURI");
+            defer qjs.JS_FreeValue(c, ns_val);
+            if (quickjs.JS_IsNull(ns_val)) {
+                is_html = false;
+            } else if (!quickjs.JS_IsUndefined(ns_val)) {
+                if (api.jsStringToSlice(c, ns_val)) |ns_s| {
+                    defer qjs.JS_FreeCString(c, ns_s.ptr);
+                    if (!std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml")) is_html = false;
+                }
             }
         }
     }
-    qjs.JS_FreeValue(c, ns_val);
 
     // Get prefix (if any) for qualifiedName
     const prefix_val = qjs.JS_GetPropertyStr(c, this_val, "prefix");
@@ -697,6 +716,9 @@ pub fn elementAppendChild(
         // DOM spec: DocType in non-Document parent → HierarchyRequestError
         var js_nt: i32 = 0;
         _ = qjs.JS_ToInt32(c, &js_nt, nt);
+        // DOM spec: Document node cannot be a child of anything
+        if (js_nt == 9)
+            return api.throwDOMException(c, "HierarchyRequestError", "The new child element is a Document node, which may not be inserted here.");
         if (js_nt == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
             return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
 
@@ -760,7 +782,10 @@ pub fn elementAppendChild(
         var frag_count: usize = 0;
         {
             var fc_count: ?*lxb.lxb_dom_node_t = child.first_child;
-            while (fc_count) |f| { frag_count += 1; fc_count = f.next; }
+            while (fc_count) |f| {
+                frag_count += 1;
+                fc_count = f.next;
+            }
         }
         if (frag_count == 0) return qjs.JS_DupValue(c, args[0]);
         const frag_children = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, frag_count) catch return quickjs.JS_UNDEFINED();
@@ -768,7 +793,11 @@ pub fn elementAppendChild(
         {
             var fc_fill: ?*lxb.lxb_dom_node_t = child.first_child;
             var fi: usize = 0;
-            while (fc_fill) |f| { frag_children[fi] = f; fi += 1; fc_fill = f.next; }
+            while (fc_fill) |f| {
+                frag_children[fi] = f;
+                fi += 1;
+                fc_fill = f.next;
+            }
         }
         const ins_prev = lxb_dom_node_last_child_noi(parent.?);
         // Manually move each child from fragment to parent (lexbor doesn't auto-move fragment children)
@@ -844,6 +873,11 @@ pub fn elementRemoveChild(
         defer qjs.JS_FreeValue(c, nt);
         if (nt.tag == qjs.JS_TAG_UNDEFINED)
             return qjs.JS_ThrowTypeError(c, "Failed to execute 'removeChild': parameter 1 is not of type 'Node'.");
+        // Verify child's parentNode matches this parent (DOM spec: NotFoundError)
+        const pn = qjs.JS_GetPropertyStr(c, args[0], "parentNode");
+        defer qjs.JS_FreeValue(c, pn);
+        const is_child = pn.tag == this_val.tag and pn.u.ptr == this_val.u.ptr;
+        if (!is_child) return api.throwDOMException(c, "NotFoundError", "The node to be removed is not a child of this node.");
         // Remove from __jsChildren tracking on parent
         removeJsChildFromParent(c, this_val, args[0]);
         // Remove parentNode reference on JS-level node
@@ -996,7 +1030,10 @@ pub fn elementInsertBefore(
         var fc_count: usize = 0;
         {
             var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
-            while (fc_cnt_iter) |f| { fc_count += 1; fc_cnt_iter = f.next; }
+            while (fc_cnt_iter) |f| {
+                fc_count += 1;
+                fc_cnt_iter = f.next;
+            }
         }
         if (fc_count == 0) return qjs.JS_DupValue(c, args[0]);
         const frag_ch = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_count) catch return quickjs.JS_UNDEFINED();
@@ -1004,7 +1041,11 @@ pub fn elementInsertBefore(
         {
             var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
             var fi: usize = 0;
-            while (fc_fill) |f| { frag_ch[fi] = f; fi += 1; fc_fill = f.next; }
+            while (fc_fill) |f| {
+                frag_ch[fi] = f;
+                fi += 1;
+                fc_fill = f.next;
+            }
         }
         const ref_is_null2 = quickjs.JS_IsNull(args[1]) or quickjs.JS_IsUndefined(args[1]);
         const eff_ref2: ?*lxb.lxb_dom_node_t = if (!ref_is_null2) api.getNode(c, args[1]) else null;
@@ -1079,6 +1120,23 @@ pub fn elementReplaceChild(
             return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
         return api.throwDOMException(c, "NotFoundError", "The node to be replaced is not a child of this node.");
     };
+    // DOM spec step 1: parent must be Document(9), DocumentFragment(11), or Element(1)
+    {
+        const parent_type = parent.type;
+        if (parent_type != lxb.LXB_DOM_NODE_TYPE_ELEMENT and
+            parent_type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT and
+            parent_type != @as(u32, 11))
+        {
+            // Check JS-level nodeType override (e.g., DocumentFragment backed by div)
+            const js_nt2 = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
+            defer qjs.JS_FreeValue(c, js_nt2);
+            var pt2: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &pt2, js_nt2);
+            if (pt2 != 1 and pt2 != 9 and pt2 != 11)
+                return api.throwDOMException(c, "HierarchyRequestError", "This node type does not support this method.");
+        }
+    }
+
     // DOM spec: TypeError if node is null
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0]))
         return qjs.JS_ThrowTypeError(c, "Failed to execute 'replaceChild': parameter 1 is not of type 'Node'.");
@@ -1151,7 +1209,10 @@ pub fn elementReplaceChild(
         var fc_cnt: usize = 0;
         {
             var fc_cnt_iter: ?*lxb.lxb_dom_node_t = new_node.first_child;
-            while (fc_cnt_iter) |f| { fc_cnt += 1; fc_cnt_iter = f.next; }
+            while (fc_cnt_iter) |f| {
+                fc_cnt += 1;
+                fc_cnt_iter = f.next;
+            }
         }
         if (fc_cnt == 0) return qjs.JS_DupValue(c, args[1]);
         const frag_ch_rc = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, fc_cnt) catch return quickjs.JS_UNDEFINED();
@@ -1159,7 +1220,11 @@ pub fn elementReplaceChild(
         {
             var fc_fill: ?*lxb.lxb_dom_node_t = new_node.first_child;
             var fi: usize = 0;
-            while (fc_fill) |f| { frag_ch_rc[fi] = f; fi += 1; fc_fill = f.next; }
+            while (fc_fill) |f| {
+                frag_ch_rc[fi] = f;
+                fi += 1;
+                fc_fill = f.next;
+            }
         }
         const rep_prev_f = old_node.prev;
         const rep_next_f = old_node.next;
@@ -1218,7 +1283,6 @@ pub fn elementCloneNode(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
 
     // Determine deep flag (default: shallow clone per DOM spec)
     var deep = false;
@@ -1228,7 +1292,7 @@ pub fn elementCloneNode(
         }
     }
 
-    // Check if this is a DocumentFragment (JS nodeType override = 11)
+    // Check JS-level nodeType first (for JS-only objects like DocumentFragment, Document)
     const js_nt = qjs.JS_GetPropertyStr(c, this_val, "nodeType");
     var js_node_type: i32 = 0;
     _ = qjs.JS_ToInt32(c, &js_node_type, js_nt);
@@ -1249,6 +1313,39 @@ pub fn elementCloneNode(
         }
         qjs.JS_FreeValue(c, clone_fn);
     }
+
+    // JS-only Document (nodeType 9 without lxb node, e.g. createDocument/createHTMLDocument)
+    if (js_node_type == 9) {
+        const clone_doc_js =
+            \\(function(src, deep){
+            \\  var ct=src.contentType||'text/html';
+            \\  var d;
+            \\  if(ct==='text/html'){
+            \\    d=document.implementation.createHTMLDocument('');
+            \\  }else{
+            \\    d=document.implementation.createDocument(null,'',null);
+            \\  }
+            \\  /* Remove default children for clean slate */
+            \\  while(d.firstChild)d.removeChild(d.firstChild);
+            \\  /* Deep clone: copy children from source */
+            \\  if(deep&&src.childNodes){for(var i=0;i<src.childNodes.length;i++)d.appendChild(src.childNodes[i].cloneNode(true));}
+            \\  d.contentType=ct;
+            \\  d.URL=src.URL||'about:blank';
+            \\  d.documentURI=src.documentURI||'about:blank';
+            \\  return d;
+            \\})
+        ;
+        const clone_fn2 = qjs.JS_Eval(c, clone_doc_js, clone_doc_js.len, "<doc-clone>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (!quickjs.JS_IsException(clone_fn2)) {
+            var clone_args2 = [2]qjs.JSValue{ this_val, quickjs.JS_NewBool(deep) };
+            const result = qjs.JS_Call(c, clone_fn2, quickjs.JS_UNDEFINED(), 2, &clone_args2);
+            qjs.JS_FreeValue(c, clone_fn2);
+            return result;
+        }
+        qjs.JS_FreeValue(c, clone_fn2);
+    }
+
+    const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
 
     // Text/Comment/PI nodes: create new node with same data
     if (node.type == lxb.LXB_DOM_NODE_TYPE_TEXT) {

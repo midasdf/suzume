@@ -242,6 +242,30 @@ pub fn isValidXmlQName(name: []const u8) bool {
     return true;
 }
 
+/// Validate QName production per DOM spec "validate" step.
+/// Matches browser behavior: for prefixed names (prefix:local), only the
+/// local name's start char is strictly validated. The prefix is lenient.
+/// For unprefixed names, start char is strictly validated.
+pub fn isValidQName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    // Check for invalid characters anywhere in the name
+    for (name) |ch| {
+        if (isInvalidNameChar(ch)) return false;
+    }
+    // Find colon to split prefix:localName
+    if (std.mem.indexOfScalar(u8, name, ':')) |colon| {
+        // Prefixed name: validate local name start char
+        const local = name[colon + 1 ..];
+        if (local.len == 0) return false; // trailing colon
+        if (isInvalidNameStartChar(local[0])) return false;
+        // Check for double colon (e.g., "a::b" is still valid per browsers)
+        return true;
+    }
+    // Unprefixed name: validate start char strictly
+    if (isInvalidNameStartChar(name[0])) return false;
+    return true;
+}
+
 /// document.implementation.createDocumentType(qualifiedName, publicId, systemId)
 pub fn implCreateDocumentType(
     ctx: ?*qjs.JSContext,
@@ -391,6 +415,25 @@ pub fn implCreateDocument(
     const c = ctx orelse return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
 
+    // WebIDL: createDocument requires at least 2 arguments
+    if (argc < 2) {
+        _ = qjs.JS_ThrowTypeError(c, "Failed to execute 'createDocument': 2 arguments required.");
+        return quickjs.JS_EXCEPTION();
+    }
+
+    // Validate 3rd argument (doctype): must be DocumentType (nodeType 10), null, or undefined
+    if (argc >= 3 and !quickjs.JS_IsNull(args[2]) and !quickjs.JS_IsUndefined(args[2])) {
+        // Must be an object with nodeType === 10
+        const nt_check = qjs.JS_GetPropertyStr(c, args[2], "nodeType");
+        var nt_v: i32 = 0;
+        _ = qjs.JS_ToInt32(c, &nt_v, nt_check);
+        qjs.JS_FreeValue(c, nt_check);
+        if (nt_v != 10) {
+            _ = qjs.JS_ThrowTypeError(c, "Failed to execute 'createDocument': parameter 3 is not of type 'DocumentType'.");
+            return quickjs.JS_EXCEPTION();
+        }
+    }
+
     // Get namespace and qualifiedName
     // Per WebIDL: namespace is DOMString? (nullable), qualifiedName is [LegacyNullToEmptyString] DOMString
     var ns: ?[]const u8 = null;
@@ -424,9 +467,9 @@ pub fn implCreateDocument(
         if (qname_ptr) |p| qjs.JS_FreeCString(c, p);
     }
 
-    // Validate qualifiedName per DOM spec
+    // Validate qualifiedName per DOM spec (QName production)
     if (qname) |qn| {
-        if (qn.len > 0 and !isValidXmlName(qn)) {
+        if (qn.len > 0 and !isValidQName(qn)) {
             return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         }
         // Check namespace constraints per DOM spec:
@@ -516,7 +559,23 @@ pub fn documentImportNode(
     const c = ctx orelse return quickjs.JS_NULL();
     if (argc < 1) return quickjs.JS_NULL();
     const args = argv orelse return quickjs.JS_NULL();
-    return qjs.JS_DupValue(c, args[0]);
+    // DOM spec: importNode(node, deep) = clone node, adopt into this document
+    const deep_val = if (argc >= 2) args[1] else quickjs.JS_NewBool(false);
+    const clone_fn = qjs.JS_GetPropertyStr(c, args[0], "cloneNode");
+    defer qjs.JS_FreeValue(c, clone_fn);
+    if (quickjs.JS_IsUndefined(clone_fn) or quickjs.JS_IsNull(clone_fn)) {
+        return qjs.JS_DupValue(c, args[0]);
+    }
+    var clone_args = [1]qjs.JSValue{deep_val};
+    const cloned = qjs.JS_Call(c, clone_fn, args[0], 1, &clone_args);
+    if (quickjs.JS_IsException(cloned)) return cloned;
+    // Set ownerDocument to the importing document (main document)
+    const global = qjs.JS_GetGlobalObject(c);
+    defer qjs.JS_FreeValue(c, global);
+    const doc_obj = qjs.JS_GetPropertyStr(c, global, "document");
+    defer qjs.JS_FreeValue(c, doc_obj);
+    _ = qjs.JS_SetPropertyStr(c, cloned, "ownerDocument", qjs.JS_DupValue(c, doc_obj));
+    return cloned;
 }
 
 pub fn documentCreateRange(
@@ -649,7 +708,13 @@ pub fn initRangePrototype(c: *qjs.JSContext) void {
         \\    var s=this.startContainer,so=this.startOffset,e=this.endContainer,eo=this.endOffset;
         \\    if(s===e){
         \\      if(s.nodeType===3)return(s.data||'').substring(so,eo);
-        \\      return '';
+        \\      /* Same element container: collect text from children [so, eo) */
+        \\      var r='',cn=s.childNodes;
+        \\      for(var i=so;i<eo&&i<cn.length;i++){
+        \\        if(cn[i].nodeType===3)r+=cn[i].data||'';
+        \\        else if(cn[i].textContent!==undefined)r+=cn[i].textContent||'';
+        \\      }
+        \\      return r;
         \\    }
         \\    var result='';
         \\    /* Collect text within range using tree walker */
@@ -1319,9 +1384,9 @@ fn validateAndExtract(c: *qjs.JSContext, ns_arg: qjs.JSValue, qn_arg: qjs.JSValu
     defer qjs.JS_FreeCString(c, qn_s.ptr);
     const qn = qn_s.ptr[0..qn_s.len];
 
-    // Step 1: validate qualifiedName against XML Name production
+    // Step 1: validate qualifiedName against QName production (matching browser behavior)
     // Empty qualifiedName is always invalid
-    if (qn.len == 0 or !isValidXmlName(qn)) {
+    if (qn.len == 0 or !isValidQName(qn)) {
         _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
         return @as(qjs.JSValue, quickjs.JS_EXCEPTION());
     }
@@ -1438,6 +1503,58 @@ pub fn documentCreateElementNS(
     const elem = lxb_dom_document_create_element(doc, create_name.ptr, create_name.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
     const obj = wrapNode(c, node);
+
+    // For non-HTML namespace elements, reset prototype to Element.prototype
+    // (wrapNode sets HTML-specific prototypes based on tag name, but non-HTML
+    // namespace elements should not be instances of HTMLElement)
+    {
+        const is_html_ns = blk: {
+            if (quickjs.JS_IsNull(ns_js) or quickjs.JS_IsUndefined(ns_js)) break :blk false;
+            if (jsStringToSlice(c, ns_js)) |ns_s| {
+                defer qjs.JS_FreeCString(c, ns_s.ptr);
+                break :blk std.mem.eql(u8, ns_s.ptr[0..ns_s.len], "http://www.w3.org/1999/xhtml");
+            }
+            break :blk false;
+        };
+        if (!is_html_ns) {
+            // Non-HTML namespace → Element.prototype
+            const global = qjs.JS_GetGlobalObject(c);
+            defer qjs.JS_FreeValue(c, global);
+            const elem_ctor = qjs.JS_GetPropertyStr(c, global, "Element");
+            defer qjs.JS_FreeValue(c, elem_ctor);
+            if (!quickjs.JS_IsUndefined(elem_ctor)) {
+                const elem_proto = qjs.JS_GetPropertyStr(c, elem_ctor, "prototype");
+                defer qjs.JS_FreeValue(c, elem_proto);
+                if (!quickjs.JS_IsUndefined(elem_proto)) {
+                    _ = qjs.JS_SetPrototype(c, obj, elem_proto);
+                }
+            }
+        } else {
+            // HTML namespace but upper-case local name → HTMLUnknownElement
+            // Per spec, only lowercase names map to known HTML element interfaces
+            var has_upper = false;
+            for (create_name) |ch| {
+                if (ch >= 'A' and ch <= 'Z') {
+                    has_upper = true;
+                    break;
+                }
+            }
+            if (has_upper) {
+                const global = qjs.JS_GetGlobalObject(c);
+                defer qjs.JS_FreeValue(c, global);
+                const proto_map = qjs.JS_GetPropertyStr(c, global, "__elProtos");
+                defer qjs.JS_FreeValue(c, proto_map);
+                if (!quickjs.JS_IsUndefined(proto_map)) {
+                    const unk_proto = qjs.JS_GetPropertyStr(c, proto_map, "__unknown");
+                    defer qjs.JS_FreeValue(c, unk_proto);
+                    if (!quickjs.JS_IsUndefined(unk_proto) and !quickjs.JS_IsNull(unk_proto)) {
+                        _ = qjs.JS_SetPrototype(c, obj, unk_proto);
+                    }
+                }
+            }
+        }
+    }
+
     // Set namespace-related properties on the JS object
     _ = qjs.JS_SetPropertyStr(c, obj, "namespaceURI", ns_js);
     if (colon_pos) |cp| {
@@ -1754,6 +1871,10 @@ pub fn documentCreateDocumentFragment(
             \\  Object.defineProperty(f,'ownerDocument',{value:document,writable:true,configurable:true,enumerable:true});
             \\  Object.defineProperty(f,'textContent',{get:function(){var t='';var n=this.firstChild;while(n){if(n.nodeType===3)t+=n.data||'';else if(n.nodeType===1)t+=n.textContent||'';n=n.nextSibling;}return t;},set:function(v){while(this.firstChild)this.removeChild(this.firstChild);this.__jsChildren=[];if(v!==null&&v!==undefined&&v!=='')this.appendChild(document.createTextNode(''+v));},configurable:true,enumerable:true});
             \\  f.getElementById=function(id){if(!id||id==='')return null;return this.querySelector('#'+CSS.escape(id));};
+            \\  /* Set prototype to DocumentFragment.prototype (inherits Node, not Element) */
+            \\  if(typeof DocumentFragment!=='undefined'){
+            \\    Object.setPrototypeOf(f,DocumentFragment.prototype);
+            \\  }
             \\})
         ;
         const fix_fn = qjs.JS_Eval(c, fix_js, fix_js.len, "<frag-fix>", qjs.JS_EVAL_TYPE_GLOBAL);

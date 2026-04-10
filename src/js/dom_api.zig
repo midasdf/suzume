@@ -2705,7 +2705,10 @@ fn elementSetInnerText(
     // Check if text contains any newlines — fast path if not
     var has_newline = false;
     for (text) |ch| {
-        if (ch == '\n' or ch == '\r') { has_newline = true; break; }
+        if (ch == '\n' or ch == '\r') {
+            has_newline = true;
+            break;
+        }
     }
     if (!has_newline) {
         _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
@@ -3414,9 +3417,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     const doc_frag_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "DocumentFragment", 0, qjs.JS_CFUNC_constructor, 0);
     {
         const dfp = qjs.JS_NewObject(ctx);
+        // DocumentFragment.prototype inherits from Node.prototype (not Element)
+        _ = qjs.JS_SetPrototype(ctx, dfp, node_proto);
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelector", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelector, "querySelector", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "querySelectorAll", qjs.JS_NewCFunction(ctx, &dom_sel.elementQuerySelectorAll, "querySelectorAll", 1));
         _ = qjs.JS_SetPropertyStr(ctx, dfp, "getElementById", qjs.JS_NewCFunction(ctx, &dom_doc.documentGetElementById, "getElementById", 1));
+        // ParentNode mixin: children, firstElementChild, lastElementChild, childElementCount
+        {
+            const ca = qjs.JS_NewAtom(ctx, "children");
+            _ = qjs.JS_DefinePropertyGetSet(ctx, dfp, ca, qjs.JS_NewCFunction(ctx, &dom_node.elementGetChildren, "get children", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+            qjs.JS_FreeAtom(ctx, ca);
+        }
         _ = qjs.JS_SetPropertyStr(ctx, doc_frag_ctor, "prototype", dfp);
     }
     _ = qjs.JS_SetPropertyStr(ctx, global, "DocumentFragment", doc_frag_ctor);
@@ -3448,8 +3459,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const hcp_js =
             \\(function(){
             \\  var p={};
-            \\  p.item=function(i){return i>=0&&i<this.length?this[i]:null;};
-            \\  p.namedItem=function(n){if(!n)return null;for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
+            \\  p.item=function(i){i=i>>>0;return i<this.length?this[i]:null;};
+            \\  p.namedItem=function(n){n=String(n);if(n==='')return null;for(var i=0;i<this.length;i++){var id=this[i].getAttribute?this[i].getAttribute('id'):null;if(id===n)return this[i];}for(var i=0;i<this.length;i++){var ns=this[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=this[i].getAttribute?this[i].getAttribute('name'):null;if(nm===n)return this[i];}}return null;};
             \\  Object.defineProperty(p,'length',{get:function(){return 0;},enumerable:true,configurable:true});
             \\  p[Symbol.iterator]=function(){var self=this,i=0;return{next:function(){return i<self.length?{value:self[i++],done:false}:{done:true};}};};
             \\  p.map=function(cb,t){var r=[];for(var i=0;i<this.length;i++)r.push(cb.call(t,this[i],i,this));return r;};
@@ -3535,7 +3546,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var a=Object.create(typeof Attr!=='undefined'?Attr.prototype:null);
             \\    a.nodeType=2;a.name=name;a.specified=true;a.namespaceURI=ns||null;
             \\    a.prefix=prefix||null;a.localName=prefix?name.substring(prefix.length+1):name;
-            \\    a.value=value;a.nodeName=name;a.nodeValue=value;a.textContent=value;
+            \\    a._val=value;a.nodeName=name;
+            \\    Object.defineProperty(a,'value',{get:function(){return this._val;},set:function(v){this._val=v;this.nodeValue=v;this.textContent=v;if(this.ownerElement){if(this.namespaceURI)this.ownerElement.setAttributeNS(this.namespaceURI,this.name,v);else this.ownerElement.setAttribute(this.name,v);}},configurable:true,enumerable:true});
+            \\    a.nodeValue=value;a.textContent=value;
             \\    a.ownerElement=owner;a.ownerDocument=(owner&&owner.ownerDocument)||document;
             \\    a.childNodes=[];a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
             \\    a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};
@@ -3552,10 +3565,14 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var lc=n.toLowerCase(),store=_getAttrStore(this);
             \\    if(store[lc]){store[lc].value=this.getAttribute(n)||'';store[lc].nodeValue=store[lc].value;store[lc].textContent=store[lc].value;return store[lc];}
             \\    if(!this.hasAttribute(n))return null;
-            \\    var a=_makeAttr(lc,this.getAttribute(n)||'',null,null,this);store[lc]=a;return a;
+            \\    var ns=null,pfx=null,nm=lc,nsm=this.__attrNS;
+            \\    if(nsm){var k=n;if(nsm[k]!==undefined)ns=nsm[k];else if(nsm[lc]!==undefined)ns=nsm[lc];}
+            \\    var ci=n.indexOf(':');if(ci>0){pfx=n.substring(0,ci);nm=n;lc=n.toLowerCase();}
+            \\    var a=_makeAttr(nm,this.getAttribute(n)||'',ns,pfx,this);store[lc]=a;return a;
             \\  };
             \\  EP.getAttributeNodeNS=function(ns,ln){
-            \\    var key=(ns||'')+'\0'+ln,store=_getAttrStore(this);
+            \\    if(!ns||ns==='')return EP.getAttributeNode.call(this,ln);
+            \\    var key=ns+'\0'+ln,store=_getAttrStore(this);
             \\    if(store[key]){store[key].value=this.getAttributeNS(ns,ln)||'';store[key].nodeValue=store[key].value;store[key].textContent=store[key].value;return store[key];}
             \\    if(!this.hasAttributeNS(ns,ln))return null;
             \\    var v=this.getAttributeNS(ns,ln)||'',pfx=null,qn=ln;
@@ -3609,9 +3626,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var oldKeys=Object.getOwnPropertyNames(t);
             \\      for(var k=0;k<oldKeys.length;k++){var ok=oldKeys[k];if(ok==='_self'||ok==='_len')continue;delete t[ok];}
             \\      t._len=len;
+            \\      var nsm=self.__attrNS;
             \\      for(var i=0;i<len;i++){var ra=raw[i],key=ra.name;var cached=store[key.toLowerCase()];
             \\        if(cached){cached.value=ra.value;cached.nodeValue=ra.value;cached.textContent=ra.value;t[i]=cached;}
-            \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
+            \\        else{if(typeof Attr!=='undefined')Object.setPrototypeOf(ra,Attr.prototype);
+            \\          var ans=null,apfx=null,aln=key;if(nsm&&nsm[key]!==undefined)ans=nsm[key];
+            \\          if(ans){var aci=key.indexOf(':');if(aci>0){apfx=key.substring(0,aci);aln=key.substring(aci+1);}}
+            \\          ra.namespaceURI=ans;ra.prefix=apfx;ra.localName=aln;
+            \\          ra._val=ra.value;Object.defineProperty(ra,'value',{get:function(){return this._val;},set:function(v){this._val=v;this.nodeValue=v;this.textContent=v;if(this.ownerElement){if(this.namespaceURI)this.ownerElement.setAttributeNS(this.namespaceURI,this.name,v);else this.ownerElement.setAttribute(this.name,v);}},configurable:true,enumerable:true});
+            \\          store[key.toLowerCase()]=ra;ra.ownerElement=self;t[i]=ra;}
             \\        Object.defineProperty(t,key,{value:t[i],writable:true,enumerable:false,configurable:true});}
             \\    }
             \\    var _handler={
@@ -4506,9 +4529,28 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    get title(){var de=_elemCh(null);if(!de)return'';var h=de.querySelector('head');if(!h)return'';var t=h.querySelector('title');if(!t)return'';var s=t.textContent;return s.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');},
             \\    set title(v){var de=_elemCh(null);if(!de)return;var h=de.querySelector('head');if(!h)return;var t=h.querySelector('title');if(!t){t=document.createElement('title');h.appendChild(t);}t.textContent=String(v);},
             \\    implementation: document.implementation,
-            \\    addEventListener: function(t,f,o) { var de=_elemCh(null);if(de)de.addEventListener(t,f,o); },
-            \\    removeEventListener: function(t,f,o) { var de=_elemCh(null);if(de)de.removeEventListener(t,f,o); },
-            \\    dispatchEvent: function(e) { var de=_elemCh(null);return de?de.dispatchEvent(e):false; },
+            \\    addEventListener: function(t,f,o) {
+            \\      var cap=false,once=false,pas=false;
+            \\      if(typeof o==='boolean')cap=o;else if(o&&typeof o==='object'){cap=!!o.capture;once=!!o.once;pas=!!o.passive;}
+            \\      if(typeof f!=='function'&&!(f&&typeof f==='object'))return;
+            \\      if(f===null||f===undefined)return;
+            \\      var k='__el_'+t+(cap?'\x00c':'');var a=doc[k]||[];
+            \\      for(var i=0;i<a.length;i++)if(a[i].fn===f)return;
+            \\      a.push({fn:f,once:once,passive:pas});doc[k]=a;
+            \\    },
+            \\    removeEventListener: function(t,f,o) {
+            \\      var cap=false;if(typeof o==='boolean')cap=o;else if(o&&typeof o==='object')cap=!!o.capture;
+            \\      var k='__el_'+t+(cap?'\x00c':'');var a=doc[k];if(!a)return;
+            \\      for(var i=0;i<a.length;i++){if(a[i].fn===f){a.splice(i,1);return;}}
+            \\    },
+            \\    dispatchEvent: function(e) {
+            \\      var t=e.type||'';
+            \\      function _fire(k){var a=doc[k];if(!a||!a.length)return;var c=a.slice();for(var i=0;i<c.length;i++){if(e._stopImmediate)break;var h=c[i],fn=h.fn||h;if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}if(typeof fn==='function')fn.call(doc,e);else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(e);}}
+            \\      _fire('__el_'+t+'\x00c');
+            \\      var de=_elemCh(null);var r=de?de.dispatchEvent(e):!e.defaultPrevented;
+            \\      _fire('__el_'+t);
+            \\      return r;
+            \\    },
             \\    createAttribute: function(n) { return document.createAttribute(n); },
             \\    createAttributeNS: function(ns,qn) { return document.createAttributeNS(ns,qn); },
             \\    createTreeWalker: function(r,w,f) { return document.createTreeWalker(r,w,f); },
@@ -4531,8 +4573,10 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    hasChildNodes: function() { return _ch.length>0; },
             \\    contains: function(n) { if(n===doc)return true;for(var i=0;i<_ch.length;i++){if(_ch[i]===n)return true;if(_ch[i].contains&&_ch[i].contains(n))return true;}return false; },
             \\    cloneNode: function(deep) {
-            \\      var nd = document.implementation.createHTMLDocument(title);
-            \\      if(deep){var de=_elemCh(null);if(de&&de.innerHTML)nd.documentElement.innerHTML=de.innerHTML;}
+            \\      var nd = document.implementation.createHTMLDocument('');
+            \\      while(nd.firstChild)nd.removeChild(nd.firstChild);
+            \\      if(deep){for(var i=0;i<_ch.length;i++)nd.appendChild(_ch[i].cloneNode(true));}
+            \\      nd.contentType=doc.contentType;nd.URL=doc.URL;nd.documentURI=doc.documentURI;
             \\      return nd;
             \\    },
             \\    compareDocumentPosition: function(other){if(other===doc)return 0;for(var i=0;i<_ch.length;i++){if(_ch[i]===other)return 20;if(_ch[i].contains&&_ch[i].contains(other))return 20;}if(other.contains&&other.contains(doc))return 10;return 35;},
@@ -4663,6 +4707,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  DocumentFragment = function DocumentFragment() { return document.createDocumentFragment(); };
             \\  DocumentFragment.prototype = oldProto;
             \\  DocumentFragment.prototype.constructor = DocumentFragment;
+            \\  Object.defineProperty(DocumentFragment, Symbol.hasInstance, {
+            \\    value: function(inst) { return inst !== null && typeof inst === 'object' && inst.nodeType === 11; }
+            \\  });
             \\})()
         ;
         const r = qjs.JS_Eval(ctx, df_ctor_js, df_ctor_js.len, "<df-ctor>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -5020,23 +5067,43 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  function createLiveHTMLColl(queryFn){
             \\    var expandos=Object.create(null),cache=null,cacheVer=-1;
             \\    function q(){var v=__domVer();if(cacheVer!==v){var r=queryFn();cache=[];for(var i=0;i<r.length;i++)cache.push(r[i]);cacheVer=v;}return cache;}
-            \\    function ni(name){if(!name)return null;var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
+            \\    function isIdx(p){if(typeof p!=='string')return false;var n=p>>>0;return String(n)===p&&n<4294967295;}
+            \\    function ni(name){if(typeof name!=='string'||name==='')return null;var items=q();for(var i=0;i<items.length;i++){var id=items[i].getAttribute?items[i].getAttribute('id'):null;if(id===name)return items[i];}for(var i=0;i<items.length;i++){var ns=items[i].namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=items[i].getAttribute?items[i].getAttribute('name'):null;if(nm===name)return items[i];}}return null;}
             \\    var t=Object.create(HTMLCollection.prototype);
-            \\    return new Proxy(t,{
-            \\      get:function(t,p){
-            \\        if(p in expandos)return expandos[p];
-            \\        if(p==='length')return q().length;
-            \\        if(typeof p==='string'&&/^\d+$/.test(p)){var items=q(),idx=+p;return idx<items.length?items[idx]:void 0;}
-            \\        if(p===Symbol.iterator){var items=q();return function(){var i=0,a=items;return{next:function(){return i<a.length?{value:a[i++],done:false}:{done:true};}};}}
+            \\    var proxy=new Proxy(t,{
+            \\      get:function(t,p,receiver){
+            \\        if(p==='length'){if(receiver!==proxy)throw new TypeError('Illegal invocation');return q().length;}
+            \\        if(typeof p==='string'&&isIdx(p)){var items=q(),idx=p>>>0;return idx<items.length?items[idx]:void 0;}
+            \\        if(p===Symbol.iterator){var items2=q();return function(){var i=0,a=items2;return{next:function(){return i<a.length?{value:a[i++],done:false}:{done:true};}};};}
             \\        if(p===Symbol.toStringTag)return'HTMLCollection';
+            \\        if(typeof p==='string'&&p in expandos)return expandos[p];
             \\        if(typeof p==='string'&&p!=='item'&&p!=='namedItem'&&p!=='constructor'&&p!=='toString'&&p!=='toLocaleString'&&p!=='valueOf'&&p!=='hasOwnProperty'&&p!=='isPrototypeOf'&&p!=='propertyIsEnumerable'){var f=ni(p);if(f)return f;}
             \\        return t[p];
             \\      },
-            \\      set:function(t,p,v){if(typeof p==='string'&&/^\d+$/.test(p))return false;expandos[p]=v;return true;},
-            \\      has:function(t,p){if(p in expandos)return true;if(p==='length'||p==='item'||p==='namedItem')return true;if(typeof p==='string'){if(/^\d+$/.test(p))return+p<q().length;if(ni(p))return true;}return p in t;},
-            \\      ownKeys:function(){var items=q(),keys=[],seen={};for(var i=0;i<items.length;i++)keys.push(String(i));for(var i=0;i<items.length;i++){var el=items[i];var id=el.getAttribute?el.getAttribute('id'):null;if(id&&!seen[id]){keys.push(id);seen[id]=1;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=el.getAttribute?el.getAttribute('name'):null;if(nm&&!seen[nm]){keys.push(nm);seen[nm]=1;}}}return keys;},
-            \\      getOwnPropertyDescriptor:function(t,p){if(typeof p==='string'){if(/^\d+$/.test(p)){var items=q(),idx=+p;if(idx<items.length)return{value:items[idx],writable:false,enumerable:true,configurable:true};return void 0;}var f=ni(p);if(f)return{value:f,writable:false,enumerable:false,configurable:true};}return void 0;}
+            \\      set:function(t,p,v,receiver){
+            \\        if(receiver!==proxy){Object.defineProperty(receiver,p,{value:v,writable:true,enumerable:true,configurable:true});return true;}
+            \\        if(typeof p==='string'&&isIdx(p))return false;
+            \\        if(typeof p==='string'){var f=ni(p);if(f)return false;}
+            \\        expandos[p]=v;return true;
+            \\      },
+            \\      deleteProperty:function(t,p){
+            \\        if(typeof p==='string'&&isIdx(p)){var items=q();return(p>>>0)>=items.length;}
+            \\        if(p in expandos){var d=Object.getOwnPropertyDescriptor(expandos,p);if(d&&!d.configurable)return false;delete expandos[p];return true;}
+            \\        if(typeof p==='string'){var f=ni(p);if(f)return false;}
+            \\        return true;
+            \\      },
+            \\      defineProperty:function(t,p,desc){
+            \\        if(typeof p==='string'&&isIdx(p))return false;
+            \\        if(typeof p==='string'){var f=ni(p);if(f)return false;}
+            \\        Object.defineProperty(expandos,p,desc);
+            \\        if(desc&&desc.configurable===false)Object.defineProperty(t,p,desc);
+            \\        return true;
+            \\      },
+            \\      has:function(t,p){if(p in expandos)return true;if(p==='length'||p==='item'||p==='namedItem')return true;if(typeof p==='string'){if(isIdx(p))return(p>>>0)<q().length;if(ni(p))return true;}return p in t;},
+            \\      ownKeys:function(){var items=q(),keys=[],seen={};for(var i=0;i<items.length;i++){keys.push(String(i));seen[String(i)]=1;}var ek=Object.getOwnPropertyNames(expandos);for(var j=0;j<ek.length;j++){if(!seen[ek[j]]){keys.push(ek[j]);seen[ek[j]]=1;}}for(var i=0;i<items.length;i++){var el=items[i];var id=el.getAttribute?el.getAttribute('id'):null;if(id&&id!==''&&!seen[id]){keys.push(id);seen[id]=1;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){var nm=el.getAttribute?el.getAttribute('name'):null;if(nm&&nm!==''&&!seen[nm]){keys.push(nm);seen[nm]=1;}}}return keys;},
+            \\      getOwnPropertyDescriptor:function(t,p){if(typeof p==='string'){if(isIdx(p)){var items=q(),idx=p>>>0;if(idx<items.length)return{value:items[idx],writable:false,enumerable:true,configurable:true};return void 0;}if(p in expandos)return Object.getOwnPropertyDescriptor(expandos,p);var f=ni(p);if(f)return{value:f,writable:false,enumerable:false,configurable:true};}return void 0;}
             \\    });
+            \\    return proxy;
             \\  }
             \\  function asciiLower(s){return s.replace(/[A-Z]/g,function(c){return String.fromCharCode(c.charCodeAt(0)+32);});}
             \\  function matchQName(el,tag,lcTag){var qn;var ol=el.__origLocal||el.localName;var pfx=el.prefix;if(pfx&&pfx!==null){qn=pfx+':'+ol;}else{qn=ol;}var ns=el.namespaceURI;if(ns==='http://www.w3.org/1999/xhtml'||ns===void 0){return qn===lcTag;}else{return qn===tag;}}
@@ -5113,7 +5180,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var tn=t.replace(/\\[0-9a-fA-F]{1,6}\s?/g,'X').replace(/\\./g,'X');
             \\      var sq=0,rn=0,cu=0,inStr=false,q='';
             \\      for(var i=0;i<t.length;i++){var c=t[i];if(c==='\\'&&i+1<t.length){i++;continue;}if(inStr){if(c===q)inStr=false;continue;}if(c==='"'||c==="'"){inStr=true;q=c;continue;}if(c==='[')sq++;else if(c===']'){if(--sq<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='(')rn++;else if(c===')'){if(--rn<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}else if(c==='{')cu++;else if(c==='}'){if(--cu<0)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}}
-            \\      if(inStr||sq||rn||cu)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
+            \\      if(inStr)throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^[<>{}()\[\]]$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      if(/^#$/.test(tn)||/^\.(\d|\.|\s*$)/.test(tn)||/\.\s*$/.test(tn)||/\.$/.test(tn))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
             \\      var _nb=tn.replace(/\[[^\]]*\]/g,'');if(/\.\./.test(_nb)||/#\./.test(_nb))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");
@@ -5142,16 +5209,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      var _pcRe=/:([a-z-]+(\()?)/g,_pcM;while((_pcM=_pcRe.exec(tn))!==null){if(_pcM.index>0&&tn[_pcM.index-1]===':')continue;if(!_knownPseudo.test(_pcM[0]))throw new DOMException("'"+s+"' is not a valid selector.","SyntaxError");}
             \\    }
             \\  }
+            \\  function _autoClose(s){var sq=0,rn=0,inStr=false,q='';for(var i=0;i<s.length;i++){var c=s[i];if(c==='\\'&&i+1<s.length){i++;continue;}if(inStr){if(c===q)inStr=false;continue;}if(c==='"'||c==="'"){inStr=true;q=c;continue;}if(c==='[')sq++;else if(c===']'&&sq>0)sq--;else if(c==='(')rn++;else if(c===')'&&rn>0)rn--;}while(sq-->0)s+=']';while(rn-->0)s+=')';return s;}
             \\  var _nm=Element.prototype.matches,_nc=Element.prototype.closest;
             \\  var _nqs=Element.prototype.querySelector,_nqsa=Element.prototype.querySelectorAll;
-            \\  Element.prototype.matches=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'matches': 1 argument required, but only 0 present.");_vSel(s,'matches');return _nm.call(this,s);};
+            \\  Element.prototype.matches=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'matches': 1 argument required, but only 0 present.");_vSel(s,'matches');return _nm.call(this,_autoClose(String(s)));};
             \\  Element.prototype.webkitMatchesSelector=Element.prototype.matches;
-            \\  Element.prototype.closest=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'closest': 1 argument required, but only 0 present.");_vSel(s,'closest');return _nc.call(this,s);};
-            \\  Element.prototype.querySelector=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelector': 1 argument required, but only 0 present.");_vSel(s,'querySelector');return _nqs.call(this,s);};
-            \\  Element.prototype.querySelectorAll=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelectorAll': 1 argument required, but only 0 present.");_vSel(s,'querySelectorAll');return _nqsa.call(this,s);};
+            \\  Element.prototype.closest=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'closest': 1 argument required, but only 0 present.");_vSel(s,'closest');return _nc.call(this,_autoClose(String(s)));};
+            \\  Element.prototype.querySelector=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelector': 1 argument required, but only 0 present.");_vSel(s,'querySelector');return _nqs.call(this,_autoClose(String(s)));};
+            \\  Element.prototype.querySelectorAll=function(s){if(arguments.length<1)throw new TypeError("Failed to execute 'querySelectorAll': 1 argument required, but only 0 present.");_vSel(s,'querySelectorAll');return _nqsa.call(this,_autoClose(String(s)));};
             \\  var _dqs=document.querySelector,_dqsa=document.querySelectorAll;
-            \\  document.querySelector=function(s){_vSel(s,'querySelector');return _dqs.call(document,s);};
-            \\  document.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _dqsa.call(document,s);};
+            \\  document.querySelector=function(s){_vSel(s,'querySelector');return _dqs.call(document,_autoClose(String(s)));};
+            \\  document.querySelectorAll=function(s){_vSel(s,'querySelectorAll');return _dqsa.call(document,_autoClose(String(s)));};
             \\})()
         ;
         const sv_r = qjs.JS_Eval(ctx, sel_valid_js, sel_valid_js.len, "<sel-valid>", qjs.JS_EVAL_TYPE_GLOBAL);

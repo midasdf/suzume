@@ -176,8 +176,12 @@ pub fn setViewportSize(w: u32, h: u32) void {
     viewport_height = h;
 }
 
-pub fn getViewportWidth() u32 { return viewport_width; }
-pub fn getViewportHeight() u32 { return viewport_height; }
+pub fn getViewportWidth() u32 {
+    return viewport_width;
+}
+pub fn getViewportHeight() u32 {
+    return viewport_height;
+}
 
 // ── Timer system ────────────────────────────────────────────────────
 
@@ -481,7 +485,6 @@ pub fn tickTimers(ctx: *qjs.JSContext) bool {
 
     return any_active;
 }
-
 
 /// Check if any timers are pending.
 pub fn hasTimers() bool {
@@ -1385,7 +1388,6 @@ const url_class_js =
 ;
 
 const utility_apis_js =
-    \\globalThis.queueMicrotask = function(cb) { cb(); };
     \\globalThis.structuredClone = function(obj) { return JSON.parse(JSON.stringify(obj)); };
 ;
 
@@ -1475,17 +1477,14 @@ pub fn registerWebApis(js_rt: anytype) void {
 
     // -- Native MutationObserver (replaces polyfill) --
     const events = @import("events.zig");
-    _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver",
-        qjs.JS_NewCFunction2(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1, qjs.JS_CFUNC_constructor, 0));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver", qjs.JS_NewCFunction2(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1, qjs.JS_CFUNC_constructor, 0));
 
     // -- history.pushState URL bar sync --
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url",
-        qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url", qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
 
     // -- DOMParser native parse (for proper Document creation) --
     const dom_doc = @import("dom_document.zig");
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_dom_parse",
-        qjs.JS_NewCFunction(ctx, &dom_doc.suzumeDomParse, "__suzume_dom_parse", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_dom_parse", qjs.JS_NewCFunction(ctx, &dom_doc.suzumeDomParse, "__suzume_dom_parse", 1));
 
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
@@ -1586,8 +1585,7 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- navigator object --
     {
         const nav = qjs.JS_NewObject(ctx);
-        _ = qjs.JS_SetPropertyStr(ctx, nav, "userAgent", qjs.JS_NewString(ctx,
-            "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) suzume/0.4"));
+        _ = qjs.JS_SetPropertyStr(ctx, nav, "userAgent", qjs.JS_NewString(ctx, "Mozilla/5.0 (Linux; aarch64) AppleWebKit/537.36 (KHTML, like Gecko) suzume/0.4"));
         _ = qjs.JS_SetPropertyStr(ctx, nav, "platform", qjs.JS_NewString(ctx, "Linux aarch64"));
         _ = qjs.JS_SetPropertyStr(ctx, nav, "language", qjs.JS_NewString(ctx, "ja"));
         _ = qjs.JS_SetPropertyStr(ctx, nav, "vendor", qjs.JS_NewString(ctx, ""));
@@ -1607,8 +1605,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         // geolocation stub
         {
             const geo = qjs.JS_NewObject(ctx);
-            _ = qjs.JS_SetPropertyStr(ctx, geo, "getCurrentPosition",
-                qjs.JS_NewCFunction(ctx, &jsNoOp, "getCurrentPosition", 1));
+            _ = qjs.JS_SetPropertyStr(ctx, geo, "getCurrentPosition", qjs.JS_NewCFunction(ctx, &jsNoOp, "getCurrentPosition", 1));
             _ = qjs.JS_SetPropertyStr(ctx, nav, "geolocation", geo);
         }
         _ = qjs.JS_SetPropertyStr(ctx, global, "navigator", nav);
@@ -1639,12 +1636,9 @@ pub fn registerWebApis(js_rt: anytype) void {
         _ = qjs.JS_SetPropertyStr(ctx, loc, "search", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "hash", qjs.JS_NewString(ctx, ""));
         _ = qjs.JS_SetPropertyStr(ctx, loc, "origin", qjs.JS_NewString(ctx, ""));
-        _ = qjs.JS_SetPropertyStr(ctx, loc, "assign",
-            qjs.JS_NewCFunction(ctx, &jsLocationAssign, "assign", 1));
-        _ = qjs.JS_SetPropertyStr(ctx, loc, "replace",
-            qjs.JS_NewCFunction(ctx, &jsLocationAssign, "replace", 1));
-        _ = qjs.JS_SetPropertyStr(ctx, loc, "reload",
-            qjs.JS_NewCFunction(ctx, &jsNoOp, "reload", 0));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "assign", qjs.JS_NewCFunction(ctx, &jsLocationAssign, "assign", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "replace", qjs.JS_NewCFunction(ctx, &jsLocationAssign, "replace", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, loc, "reload", qjs.JS_NewCFunction(ctx, &jsNoOp, "reload", 0));
         _ = qjs.JS_SetPropertyStr(ctx, global, "location", loc);
     }
 
@@ -1847,8 +1841,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof sessionStorage==='undefined'){
         \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
         \\}
-
-
         \\if(typeof XMLHttpRequest==='undefined'){
         \\  globalThis.XMLHttpRequest=function(){
         \\    this.readyState=0;this.status=0;this.statusText='';this.responseText='';this.responseURL='';
@@ -2127,7 +2119,6 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  if(!document.getElementsByName)document.getElementsByName=function(n){return document.querySelectorAll('[name=\"'+n+'\"]');};
         \\}
         \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
-
         \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
         \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
         \\if(typeof Atomics!=='undefined'&&!Atomics.waitAsync){
@@ -2167,12 +2158,12 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  AbortSignal.prototype.dispatchEvent=function(e){e.target=this;e.currentTarget=this;var a=this._evtMap[e.type];if(a){a=a.slice();for(var i=0;i<a.length;i++){try{a[i].fn.call(this,e);}catch(ex){}if(a[i].once)this.removeEventListener(e.type,a[i].fn);}}e.currentTarget=null;return!e.defaultPrevented;};
         \\  AbortSignal.prototype.throwIfAborted=function(){if(this.aborted)throw this.reason;};
         \\  AbortSignal.abort=function(reason){var s=new AbortSignal();s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');return s;};
-        \\  AbortSignal.timeout=function(ms){var s=new AbortSignal();setTimeout(function(){s.aborted=true;s.reason=new DOMException('The operation timed out.','TimeoutError');var e=new Event('abort');e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);},ms);return s;};
+        \\  AbortSignal.timeout=function(ms){var s=new AbortSignal();setTimeout(function(){s.aborted=true;s.reason=new DOMException('The operation timed out.','TimeoutError');var e=new Event('abort');e._trusted=true;e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);},ms);return s;};
         \\  AbortSignal.any=function(signals){var s=new AbortSignal();for(var i=0;i<signals.length;i++){if(signals[i].aborted){s.aborted=true;s.reason=signals[i].reason;return s;}}
-        \\    for(var i=0;i<signals.length;i++){(function(sig){sig.addEventListener('abort',function(){if(!s.aborted){s.aborted=true;s.reason=sig.reason;var e=new Event('abort');if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}});})(signals[i]);}return s;};
+        \\    var hs=[];for(var i=0;i<signals.length;i++){(function(sig){var h=function(){if(!s.aborted){s.aborted=true;s.reason=sig.reason;for(var k=0;k<hs.length;k++)hs[k].sig.removeEventListener('abort',hs[k].h);var e=new Event('abort');e._trusted=true;e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};hs.push({sig:sig,h:h});sig.addEventListener('abort',h);})(signals[i]);}return s;};
         \\  globalThis.AbortSignal=AbortSignal;
         \\  function AbortController(){this.signal=new AbortSignal();}
-        \\  AbortController.prototype.abort=function(reason){var s=this.signal;if(!s.aborted){s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');var e=new Event('abort');e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};
+        \\  AbortController.prototype.abort=function(reason){var s=this.signal;if(!s.aborted){s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');var e=new Event('abort');e._trusted=true;e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};
         \\  globalThis.AbortController=AbortController;
         \\}
         \\if(typeof MessageEvent==='undefined'){

@@ -244,7 +244,7 @@ pub fn jsAddEventListener(
             if (!is_global) {
                 // JS-level node or standalone EventTarget: store listeners on the object
                 qjs.JS_FreeValue(c, record.callback);
-                const js_code = "(function(el,type,cb,cap,once,pas){var k='__el_'+type+(cap?'_c':'');var a=el[k]||[];for(var i=0;i<a.length;i++)if(a[i].fn===cb)return;a.push({fn:cb,once:once,passive:pas});el[k]=a;})";
+                const js_code = "(function(el,type,cb,cap,once,pas){var k='__el_'+type+(cap?'\\x00c':'');var a=el[k]||[];for(var i=0;i<a.length;i++)if(a[i].fn===cb)return;a.push({fn:cb,once:once,passive:pas});el[k]=a;})";
                 const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(fn_val)) {
                     var call_args = [6]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture), quickjs.JS_NewBool(once), quickjs.JS_NewBool(passive) };
@@ -320,7 +320,7 @@ pub fn jsRemoveEventListener(
                 break :blk (this_val.tag == gl.tag and this_val.u.ptr == gl.u.ptr);
             };
             if (!is_global and !isDocumentObject(c, this_val)) {
-                const rm_js = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'_c':'');var a=el[k];if(!a)return;for(var i=0;i<a.length;i++){if(a[i].fn===cb){a.splice(i,1);return;}}})";
+                const rm_js = "(function(el,type,cb,cap){var k='__el_'+type+(cap?'\\x00c':'');var a=el[k];if(!a)return;for(var i=0;i<a.length;i++){if(a[i].fn===cb){a.splice(i,1);return;}}})";
                 const rm_fn = qjs.JS_Eval(c, rm_js, rm_js.len, "<rel>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(rm_fn)) {
                     var rm_args = [4]qjs.JSValue{ this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
@@ -435,16 +435,13 @@ fn jsInitEvent(ctx: ?*qjs.JSContext, this_val: qjs.JSValue, argc: c_int, argv: ?
 fn isComposedEvent(event_type: []const u8) bool {
     // UI Events that are always composed
     const composed_events = [_][]const u8{
-        "click", "dblclick", "mousedown", "mouseup", "mousemove", "mouseover", "mouseout",
-        "mouseenter", "mouseleave", "contextmenu", "wheel",
-        "keydown", "keyup", "keypress",
-        "input", "beforeinput", "compositionstart", "compositionupdate", "compositionend",
-        "focus", "blur", "focusin", "focusout",
-        "pointerdown", "pointerup", "pointermove", "pointerover", "pointerout",
-        "pointerenter", "pointerleave", "pointercancel", "gotpointercapture", "lostpointercapture",
-        "touchstart", "touchmove", "touchend", "touchcancel",
-        "dragstart", "drag", "dragend", "dragenter", "dragleave", "dragover", "drop",
-        "select", "selectionchange",
+        "click",        "dblclick",     "mousedown",        "mouseup",           "mousemove",          "mouseover",   "mouseout",
+        "mouseenter",   "mouseleave",   "contextmenu",      "wheel",             "keydown",            "keyup",       "keypress",
+        "input",        "beforeinput",  "compositionstart", "compositionupdate", "compositionend",     "focus",       "blur",
+        "focusin",      "focusout",     "pointerdown",      "pointerup",         "pointermove",        "pointerover", "pointerout",
+        "pointerenter", "pointerleave", "pointercancel",    "gotpointercapture", "lostpointercapture", "touchstart",  "touchmove",
+        "touchend",     "touchcancel",  "dragstart",        "drag",              "dragend",            "dragenter",   "dragleave",
+        "dragover",     "drop",         "select",           "selectionchange",
     };
     for (composed_events) |e| {
         if (std.mem.eql(u8, event_type, e)) return true;
@@ -483,7 +480,16 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
     // Per spec: UI events (click, input, focus, etc.) are composed by default
     const is_composed = isComposedEvent(event_type);
     _ = qjs.JS_SetPropertyStr(ctx, event, "composed", quickjs.JS_NewBool(is_composed));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "isTrusted", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(ctx, event, "_trusted", quickjs.JS_NewBool(false));
+    {
+        // Define isTrusted as a getter reading _trusted (matches Event.prototype behavior)
+        const getter_js = "(function(){return this._trusted||false;})";
+        const getter = qjs.JS_Eval(ctx, getter_js, getter_js.len, "<isTrusted>", qjs.JS_EVAL_TYPE_GLOBAL);
+        const atom = qjs.JS_NewAtom(ctx, "isTrusted");
+        // JS_DefinePropertyGetSet consumes getter/setter refs (calls JS_FreeValue internally)
+        _ = qjs.JS_DefinePropertyGetSet(ctx, event, atom, getter, quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE);
+        qjs.JS_FreeAtom(ctx, atom);
+    }
     _ = qjs.JS_SetPropertyStr(ctx, event, "timeStamp", qjs.JS_NewFloat64(ctx, @import("web_api.zig").getPerformanceNow()));
     _ = qjs.JS_SetPropertyStr(ctx, event, "srcElement", quickjs.JS_NULL());
     _ = qjs.JS_SetPropertyStr(ctx, event, "composedPath", qjs.JS_NewCFunction(ctx, &jsComposedPath, "composedPath", 0));
@@ -961,6 +967,8 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
 
     const event_obj = if (existing_event) |ev| blk: {
         ensureEventMethods(ctx, ev);
+        // DOM spec: script-dispatched events are not trusted
+        _ = qjs.JS_SetPropertyStr(ctx, ev, "_trusted", quickjs.JS_NewBool(false));
         break :blk ev;
     } else blk: {
         owns_event = true;
@@ -1008,17 +1016,124 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
     defer qjs.JS_FreeValue(ctx, doc_obj);
 
-    // Phase 1: Capture (Window → Document → root → ... → parent of target)
-    // 1a: Window capture listeners
-    if (!current_event_flags.stop_propagation) {
-        updateEventPhase(ctx, event_obj, 1); // CAPTURING_PHASE
-        setEventCurrentTarget(ctx, event_obj, global);
-        callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, true);
+    // Check for JS-only Document parent (new Document(), createHTMLDocument())
+    // If the root of the lxb path has a JS parentNode that's a Document (nodeType=9),
+    // we need to include it in capture/bubble dispatch.
+    var js_doc_parent: qjs.JSValue = quickjs.JS_UNDEFINED();
+    var has_js_doc: bool = false;
+    if (path_len > 0) {
+        const root_js = dom_api.wrapNodePublic(ctx, path[path_len - 1]);
+        const pn = qjs.JS_GetPropertyStr(ctx, root_js, "parentNode");
+        qjs.JS_FreeValue(ctx, root_js);
+        if (!quickjs.JS_IsNull(pn) and !quickjs.JS_IsUndefined(pn)) {
+            const pn_nt = qjs.JS_GetPropertyStr(ctx, pn, "nodeType");
+            var pn_nt_v: i32 = 0;
+            _ = qjs.JS_ToInt32(ctx, &pn_nt_v, pn_nt);
+            qjs.JS_FreeValue(ctx, pn_nt);
+            if (pn_nt_v == 9) {
+                // Check it's NOT the main document (already handled separately)
+                if (!(pn.tag == doc_obj.tag and pn.u.ptr == doc_obj.u.ptr)) {
+                    js_doc_parent = pn;
+                    has_js_doc = true;
+                } else {
+                    qjs.JS_FreeValue(ctx, pn);
+                }
+            } else {
+                qjs.JS_FreeValue(ctx, pn);
+            }
+        } else {
+            qjs.JS_FreeValue(ctx, pn);
+        }
     }
-    // 1b: Document capture listeners
-    if (!current_event_flags.stop_propagation) {
-        setEventCurrentTarget(ctx, event_obj, doc_obj);
-        callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, true);
+    defer if (has_js_doc) qjs.JS_FreeValue(ctx, js_doc_parent);
+
+    // Add JS-only Document to composedPath (_path)
+    if (has_js_doc) {
+        const path_arr = qjs.JS_GetPropertyStr(ctx, event_obj, "_path");
+        if (path_arr.tag == qjs.JS_TAG_OBJECT) {
+            // Append document at the end of the path
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), qjs.JS_DupValue(ctx, js_doc_parent));
+        }
+        qjs.JS_FreeValue(ctx, path_arr);
+    }
+
+    // --- Click activation behavior: pre-activation step (DOM spec §3.7) ---
+    // For click events with MouseEvent or element.click(), find the first element
+    // with activation behavior in the path and pre-activate (toggle checkbox/radio).
+    var activation_target: ?*lxb.lxb_dom_node_t = null;
+    var pre_activation_checked: bool = false;
+    var has_pre_activation: bool = false;
+
+    if (std.mem.eql(u8, event_type, "click")) {
+        const is_activating = if (existing_event) |ev| blk: {
+            // External dispatch: only MouseEvent (has 'button' property) triggers activation
+            const has_button = qjs.JS_GetPropertyStr(ctx, ev, "button");
+            const is_mouse = has_button.tag != qjs.JS_TAG_UNDEFINED;
+            qjs.JS_FreeValue(ctx, has_button);
+            break :blk is_mouse;
+        } else true; // Internal dispatch (element.click()) always triggers
+
+        if (is_activating) {
+            // For non-bubbling events, only the target itself can be the activation target.
+            // For bubbling events (or internal click()), search the full path.
+            const search_len = if (existing_event) |ev| blk: {
+                const bub = qjs.JS_GetPropertyStr(ctx, ev, "bubbles");
+                defer qjs.JS_FreeValue(ctx, bub);
+                break :blk if (qjs.JS_ToBool(ctx, bub) > 0) path_len else @min(path_len, 1);
+            } else path_len;
+
+            // Find first element with activation behavior in path (target → root)
+            for (path[0..search_len]) |node| {
+                if (isCheckboxOrRadio(ctx, node) and !isDisabledFormElement(ctx, node)) {
+                    activation_target = node;
+                    // Legacy pre-activation: save state and set new state
+                    const at_js = dom_api.wrapNodePublic(ctx, node);
+                    defer qjs.JS_FreeValue(ctx, at_js);
+                    const cv = qjs.JS_GetPropertyStr(ctx, at_js, "checked");
+                    pre_activation_checked = qjs.JS_ToBool(ctx, cv) > 0;
+                    qjs.JS_FreeValue(ctx, cv);
+                    // Radio: always set checked=true (never uncheck)
+                    // Checkbox: toggle checked state
+                    const type_val = qjs.JS_GetPropertyStr(ctx, at_js, "type");
+                    defer qjs.JS_FreeValue(ctx, type_val);
+                    const is_radio = blk: {
+                        const ts = dom_api.jsStringToSlice(ctx, type_val) orelse break :blk false;
+                        defer qjs.JS_FreeCString(ctx, ts.ptr);
+                        break :blk std.ascii.eqlIgnoreCase(ts.ptr[0..ts.len], "radio");
+                    };
+                    const new_checked = if (is_radio) true else !pre_activation_checked;
+                    // Only set pre-activation if checked state actually changes
+                    // (already-checked radio should not fire spurious input/change)
+                    if (new_checked != pre_activation_checked) {
+                        _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(new_checked));
+                        has_pre_activation = true;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+
+    // Phase 1: Capture (Window → Document → root → ... → parent of target)
+    if (has_js_doc) {
+        // JS-only Document (new Document, createHTMLDocument): capture on that doc
+        if (!current_event_flags.stop_propagation) {
+            updateEventPhase(ctx, event_obj, 1); // CAPTURING_PHASE
+            setEventCurrentTarget(ctx, event_obj, js_doc_parent);
+            dispatchToJsDocPhased(ctx, js_doc_parent, event_obj, event_type, true);
+        }
+    } else {
+        // 1a: Window capture listeners
+        if (!current_event_flags.stop_propagation) {
+            updateEventPhase(ctx, event_obj, 1); // CAPTURING_PHASE
+            setEventCurrentTarget(ctx, event_obj, global);
+            callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, true);
+        }
+        // 1b: Document capture listeners
+        if (!current_event_flags.stop_propagation) {
+            setEventCurrentTarget(ctx, event_obj, doc_obj);
+            callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, true);
+        }
     }
     // 1c: DOM node capture (root -> parent of target)
     if (path_len > 1) {
@@ -1045,8 +1160,8 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                 break;
             }
         }
-        // Call on{event} handler property on target element
-        if (!current_event_flags.stop_propagation) {
+        // Call on{event} handler property on target element (same target — only stopImmediate blocks)
+        if (!current_event_flags.stop_immediate_propagation) {
             const target_js2 = dom_api.wrapNodePublic(ctx, target);
             callOnEventHandler(ctx, target_js2, event_type, event_obj);
             qjs.JS_FreeValue(ctx, target_js2);
@@ -1074,53 +1189,53 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                         break;
                     }
                 }
-                // Call on{event} handler on bubble node
-                if (!current_event_flags.stop_propagation) {
+                // Call on{event} handler on bubble node (same target — only stopImmediate blocks)
+                if (!current_event_flags.stop_immediate_propagation) {
                     const node_js = dom_api.wrapNodePublic(ctx, node);
                     callOnEventHandler(ctx, node_js, event_type, event_obj);
                     qjs.JS_FreeValue(ctx, node_js);
                 }
             }
         }
-        // 3b: Document bubble listeners + on{event} handler
-        if (!current_event_flags.stop_propagation) {
-            updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
-            setEventCurrentTarget(ctx, event_obj, doc_obj);
-            callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, false);
-            callOnEventHandler(ctx, doc_obj, event_type, event_obj);
-        }
-        // 3c: Window bubble listeners + on{event} handler
-        if (!current_event_flags.stop_propagation) {
-            setEventCurrentTarget(ctx, event_obj, global);
-            callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
-            callOnEventHandler(ctx, global, event_type, event_obj);
-        }
-    }
-
-    const ev_result = !current_event_flags.prevent_default;
-
-    // HTML spec: activation behavior for click events on checkbox/radio
-    // Only activates for element.click() (internal, no existing_event) or MouseEvent dispatch
-    if (std.mem.eql(u8, event_type, "click") and ev_result) {
-        if (existing_event) |ev| {
-            // External dispatch — only activate for MouseEvent (has 'button' property)
-            const has_button = qjs.JS_GetPropertyStr(ctx, ev, "button");
-            const is_mouse_event = has_button.tag != qjs.JS_TAG_UNDEFINED;
-            qjs.JS_FreeValue(ctx, has_button);
-            if (is_mouse_event) {
-                activateCheckboxRadio(ctx, target);
+        if (has_js_doc) {
+            // 3b-alt: JS-only Document bubble listeners
+            if (!current_event_flags.stop_propagation) {
+                updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
+                setEventCurrentTarget(ctx, event_obj, js_doc_parent);
+                dispatchToJsDocPhased(ctx, js_doc_parent, event_obj, event_type, false);
+                if (!current_event_flags.stop_immediate_propagation)
+                    callOnEventHandler(ctx, js_doc_parent, event_type, event_obj);
             }
         } else {
-            // Internal dispatch (element.click()) — always activate
-            activateCheckboxRadio(ctx, target);
+            // 3b: Document bubble listeners + on{event} handler
+            if (!current_event_flags.stop_propagation) {
+                updateEventPhase(ctx, event_obj, 3); // BUBBLING_PHASE
+                setEventCurrentTarget(ctx, event_obj, doc_obj);
+                callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, false, false);
+                if (!current_event_flags.stop_immediate_propagation)
+                    callOnEventHandler(ctx, doc_obj, event_type, event_obj);
+            }
+            // 3c: Window bubble listeners + on{event} handler
+            if (!current_event_flags.stop_propagation) {
+                setEventCurrentTarget(ctx, event_obj, global);
+                callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
+                if (!current_event_flags.stop_immediate_propagation)
+                    callOnEventHandler(ctx, global, event_type, event_obj);
+            }
         }
     }
 
-    // DOM spec: clear dispatch flag
-    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
+    var ev_result = !current_event_flags.prevent_default;
+    // Also check JS-side defaultPrevented (may have been set before dispatch started)
+    if (ev_result) {
+        const dp_check = qjs.JS_GetPropertyStr(ctx, event_obj, "defaultPrevented");
+        defer qjs.JS_FreeValue(ctx, dp_check);
+        if (qjs.JS_ToBool(ctx, dp_check) > 0) ev_result = false;
+    }
 
-    // DOM spec: dispatch resets stop propagation flag on the event
-    // Also reset eventPhase to NONE after dispatch completes
+    // DOM spec: clear dispatch flag and reset event state BEFORE post-activation
+    // (tests expect eventPhase=0, currentTarget=null during post-activation handlers)
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
     if (existing_event) |ev| {
         _ = qjs.JS_SetPropertyStr(ctx, ev, "_stopped", quickjs.JS_NewBool(false));
         _ = qjs.JS_SetPropertyStr(ctx, ev, "_cancelBubble", quickjs.JS_NewBool(false));
@@ -1129,50 +1244,93 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     setEventCurrentTarget(ctx, event_obj, quickjs.JS_NULL());
 
     current_event_flags = saved_flags;
+
+    // --- Click activation behavior: post-activation step ---
+    if (has_pre_activation) {
+        if (activation_target) |at| {
+            if (!ev_result) {
+                // Legacy-canceled-activation: revert checked state
+                const at_js = dom_api.wrapNodePublic(ctx, at);
+                _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(pre_activation_checked));
+                qjs.JS_FreeValue(ctx, at_js);
+            } else {
+                // Post-activation: fire input/change events only if connected
+                // Per HTML spec, detached elements should not fire input/change
+                const at_js2 = dom_api.wrapNodePublic(ctx, at);
+                const conn_val = qjs.JS_GetPropertyStr(ctx, at_js2, "isConnected");
+                const is_connected = qjs.JS_ToBool(ctx, conn_val) > 0;
+                qjs.JS_FreeValue(ctx, conn_val);
+                qjs.JS_FreeValue(ctx, at_js2);
+                if (is_connected) {
+                    _ = dispatchEvent(ctx, at, "input");
+                    _ = dispatchEvent(ctx, at, "change");
+                }
+            }
+        }
+    }
+
     return ev_result;
 }
 
-/// HTML spec: activation behavior for checkbox/radio on click
-/// Toggles checked state and fires input/change events if connected to a document.
-fn activateCheckboxRadio(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t) void {
-    const target_js = dom_api.wrapNodePublic(ctx, target);
-    defer qjs.JS_FreeValue(ctx, target_js);
+/// Cached JS function for dispatching to JS-level event listeners.
+var cached_js_doc_dispatch: qjs.JSValue = quickjs.JS_UNDEFINED();
 
-    // Check if target is an INPUT element with type checkbox or radio
-    const tagName_val = qjs.JS_GetPropertyStr(ctx, target_js, "tagName");
-    defer qjs.JS_FreeValue(ctx, tagName_val);
-    const tag_s = dom_api.jsStringToSlice(ctx, tagName_val) orelse return;
-    defer qjs.JS_FreeCString(ctx, tag_s.ptr);
-    if (!std.ascii.eqlIgnoreCase(tag_s.ptr[0..tag_s.len], "INPUT")) return;
-
-    const type_val = qjs.JS_GetPropertyStr(ctx, target_js, "type");
-    defer qjs.JS_FreeValue(ctx, type_val);
-    const type_s = dom_api.jsStringToSlice(ctx, type_val) orelse return;
-    defer qjs.JS_FreeCString(ctx, type_s.ptr);
-    const t = type_s.ptr[0..type_s.len];
-    if (!std.ascii.eqlIgnoreCase(t, "checkbox") and !std.ascii.eqlIgnoreCase(t, "radio")) return;
-
-    // Check if connected to a document
-    var cur: ?*lxb.lxb_dom_node_t = target;
-    var connected = false;
-    while (cur) |n| {
-        if (n.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
-            connected = true;
-            break;
-        }
-        cur = n.parent;
+/// Dispatch to JS-level event listeners (__el_ properties) on a JS object,
+/// filtered by capture/bubble phase. Used for JS-only Document nodes.
+fn dispatchToJsDocPhased(ctx: *qjs.JSContext, doc_obj: qjs.JSValue, event_obj: qjs.JSValue, event_type: []const u8, capture: bool) void {
+    // Lazily compile and cache the dispatch helper
+    if (quickjs.JS_IsUndefined(cached_js_doc_dispatch)) {
+        const js_code =
+            \\(function(doc,evt,type,isCap){
+            \\  var k='__el_'+type+(isCap?'\x00c':'');
+            \\  var a=doc[k];if(!a||!a.length)return;
+            \\  var copy=a.slice();
+            \\  for(var i=0;i<copy.length;i++){
+            \\    if(evt._stopImmediate)break;if(evt._stopped)break;
+            \\    var h=copy[i],fn=h.fn||h;
+            \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+            \\    if(typeof fn==='function')fn.call(doc,evt);
+            \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+            \\  }
+            \\})
+        ;
+        cached_js_doc_dispatch = qjs.JS_Eval(ctx, js_code, js_code.len, "<jsdp>", qjs.JS_EVAL_TYPE_GLOBAL);
     }
-    if (!connected) return;
+    if (!quickjs.JS_IsException(cached_js_doc_dispatch)) {
+        const type_js = qjs.JS_NewStringLen(ctx, event_type.ptr, event_type.len);
+        var args = [4]qjs.JSValue{ doc_obj, event_obj, type_js, quickjs.JS_NewBool(capture) };
+        const r = qjs.JS_Call(ctx, cached_js_doc_dispatch, quickjs.JS_UNDEFINED(), 4, &args);
+        qjs.JS_FreeValue(ctx, r);
+        qjs.JS_FreeValue(ctx, type_js);
+    }
+    syncStopFlags(ctx, event_obj);
+}
 
-    // Toggle checked state
-    const checked_val = qjs.JS_GetPropertyStr(ctx, target_js, "checked");
-    const was_checked = qjs.JS_ToBool(ctx, checked_val) > 0;
-    qjs.JS_FreeValue(ctx, checked_val);
-    _ = qjs.JS_SetPropertyStr(ctx, target_js, "checked", quickjs.JS_NewBool(!was_checked));
+/// Check if a DOM node is an <input type="checkbox"> or <input type="radio">.
+fn isCheckboxOrRadio(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    var name_len: usize = 0;
+    const name_ptr = dom_api.lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name_ptr == null or name_len != 5) return false;
+    if (!std.mem.eql(u8, name_ptr.?[0..5], "input")) return false;
+    const js = dom_api.wrapNodePublic(ctx, node);
+    defer qjs.JS_FreeValue(ctx, js);
+    const type_val = qjs.JS_GetPropertyStr(ctx, js, "type");
+    defer qjs.JS_FreeValue(ctx, type_val);
+    const ts = dom_api.jsStringToSlice(ctx, type_val) orelse return false;
+    defer qjs.JS_FreeCString(ctx, ts.ptr);
+    const t = ts.ptr[0..ts.len];
+    return std.ascii.eqlIgnoreCase(t, "checkbox") or std.ascii.eqlIgnoreCase(t, "radio");
+}
 
-    // Fire input and change events
-    _ = dispatchEvent(ctx, target, "input");
-    _ = dispatchEvent(ctx, target, "change");
+/// Check if a DOM node is a disabled form element (has disabled=true).
+fn isDisabledFormElement(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const js = dom_api.wrapNodePublic(ctx, node);
+    defer qjs.JS_FreeValue(ctx, js);
+    const disabled = qjs.JS_GetPropertyStr(ctx, js, "disabled");
+    defer qjs.JS_FreeValue(ctx, disabled);
+    return qjs.JS_ToBool(ctx, disabled) > 0;
 }
 
 /// Helper: set eventPhase on event object.
@@ -1222,8 +1380,53 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     defer qjs.JS_FreeValue(ctx, global);
     const doc_obj = qjs.JS_GetPropertyStr(ctx, global, "document");
     defer qjs.JS_FreeValue(ctx, doc_obj);
+
+    // Set target/currentTarget to document
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "target", qjs.JS_DupValue(ctx, doc_obj));
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, doc_obj));
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "eventPhase", qjs.JS_NewInt32(ctx, 2)); // AT_TARGET
+
+    // Fire listeners stored on the lxb document node (via document.addEventListener)
+    // AT_TARGET: dispatch capture listeners first, then bubble (DOM spec ordering)
+    if (dom_api.getDocument(ctx)) |doc_ptr| {
+        const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(doc_ptr));
+        for (listener_entries.items) |*entry| {
+            if (entry.key.node == doc_node and std.mem.eql(u8, entry.key.event_type, event_type)) {
+                // Two-pass: capture first, then bubble (AT_TARGET ordering)
+                for ([2]bool{ true, false }) |capture_phase| {
+                    var i: usize = 0;
+                    while (i < entry.callbacks.items.len) {
+                        if (current_event_flags.stop_immediate_propagation) break;
+                        const rec = entry.callbacks.items[i];
+                        if (rec.capture != capture_phase) {
+                            i += 1;
+                            continue;
+                        }
+                        const cb = qjs.JS_DupValue(ctx, rec.callback);
+                        if (rec.once) {
+                            qjs.JS_FreeValue(ctx, entry.callbacks.items[i].callback);
+                            _ = entry.callbacks.orderedRemove(i);
+                        } else {
+                            i += 1;
+                        }
+                        invokeListener(ctx, cb, doc_obj, event_obj);
+                        qjs.JS_FreeValue(ctx, cb);
+                        syncStopFlags(ctx, event_obj);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    // Also fire from document_listener_entries (legacy path)
     callEntryListeners(ctx, &document_listener_entries, event_type, event_obj, doc_obj, true, false);
-    callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, true, false);
+    // Call on{event} handler on document
+    callOnEventHandler(ctx, doc_obj, event_type, event_obj);
+    // Bubble to window (phase 3)
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "eventPhase", qjs.JS_NewInt32(ctx, 3)); // BUBBLING_PHASE
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, global));
+    callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
+    callOnEventHandler(ctx, global, event_type, event_obj);
 }
 
 // ── Registration ────────────────────────────────────────────────────
@@ -1288,7 +1491,7 @@ pub fn registerEventApis(ctx: *qjs.JSContext) void {
         \\  Event.prototype.preventDefault = function() { if (this.cancelable) { this.defaultPrevented = true; this.returnValue = false; } };
         \\  Event.prototype.stopPropagation = function() { this._stopped = true; this._cancelBubble = true; };
         \\  Event.prototype.stopImmediatePropagation = function() { this._stopped = true; this._stopImmediate = true; this._cancelBubble = true; };
-        \\  Event.prototype.composedPath = function() { return this._path ? this._path.slice() : []; };
+        \\  Event.prototype.composedPath = function() { return (this._dispatching && this._path) ? this._path.slice() : []; };
         \\  Event.prototype.initEvent = function(t, b, c) {
         \\    if(arguments.length<1)throw new TypeError("Failed to execute 'initEvent': 1 argument required, but only 0 present.");
         \\    if(this._dispatching)return;
@@ -1741,6 +1944,7 @@ fn jsElementBlur(
 }
 
 /// element.click() — programmatically fire a click event on the element
+/// HTML spec: click() does nothing on disabled form elements.
 /// Activation behavior (checkbox/radio toggle + input/change) handled in dispatchEventWithObj.
 fn jsElementClick(
     ctx: ?*qjs.JSContext,
@@ -1750,6 +1954,8 @@ fn jsElementClick(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const node = dom_api.getNodePublic(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    // HTML spec: click() is a no-op on disabled form elements
+    if (isDisabledFormElement(c, node)) return quickjs.JS_UNDEFINED();
     _ = dispatchEvent(c, node, "click");
     return quickjs.JS_UNDEFINED();
 }
@@ -1881,19 +2087,25 @@ fn dispatchToNativeEntries(c: *qjs.JSContext, entries: *std.ArrayListUnmanaged(W
 fn dispatchToJsEntries(c: *qjs.JSContext, target: qjs.JSValue, event_obj: qjs.JSValue, type_val: qjs.JSValue) void {
     const js_dispatch =
         \\(function(el,evt,type){
-        \\  var k='__el_'+type;var a=el[k];if(!a)return;
-        \\  var copy=a.slice();
-        \\  var origPD=evt.preventDefault;
-        \\  for(var i=0;i<copy.length;i++){
-        \\    var h=copy[i],fn=h.fn||h;
-        \\    if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
-        \\    var wasPD=evt.defaultPrevented;
-        \\    if(h.passive)evt.preventDefault=function(){};
-        \\    else evt.preventDefault=origPD;
-        \\    if(typeof fn==='function')fn.call(el,evt);
-        \\    else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
-        \\    if(h.passive){evt.defaultPrevented=wasPD;evt.returnValue=true;}
+        \\  function _run(k){var a=el[k];if(!a||!a.length)return;
+        \\    var copy=a.slice();
+        \\    for(var i=0;i<copy.length;i++){
+        \\      if(evt._stopImmediate)break;if(evt._stopped)break;
+        \\      var h=copy[i];
+        \\      if(a.indexOf(h)<0)continue;
+        \\      var fn=h.fn||h;
+        \\      if(h.once){var idx=a.indexOf(h);if(idx>=0)a.splice(idx,1);}
+        \\      var wasPD=evt.defaultPrevented,origRV=evt.returnValue;
+        \\      if(h.passive){evt.preventDefault=function(){};var _rvDesc=Object.getOwnPropertyDescriptor(evt,'returnValue');Object.defineProperty(evt,'returnValue',{set:function(){},get:function(){return origRV;},configurable:true});}
+        \\      else evt.preventDefault=origPD;
+        \\      if(typeof fn==='function')fn.call(el,evt);
+        \\      else if(fn&&typeof fn.handleEvent==='function')fn.handleEvent(evt);
+        \\      if(h.passive){evt.defaultPrevented=wasPD;if(_rvDesc)Object.defineProperty(evt,'returnValue',_rvDesc);else evt.returnValue=origRV;}
+        \\    }
         \\  }
+        \\  var origPD=evt.preventDefault;
+        \\  _run('__el_'+type+'\x00c');
+        \\  _run('__el_'+type);
         \\  evt.preventDefault=origPD;
         \\})
     ;
@@ -1945,6 +2157,12 @@ pub fn deinitEvents(ctx: *qjs.JSContext) void {
     document_listener_entries.deinit(allocator);
     document_listener_entries = .empty;
 
+    // Free cached JS dispatch helper
+    if (!quickjs.JS_IsUndefined(cached_js_doc_dispatch)) {
+        qjs.JS_FreeValue(ctx, cached_js_doc_dispatch);
+        cached_js_doc_dispatch = quickjs.JS_UNDEFINED();
+    }
+
     g_ctx = null;
 }
 
@@ -1980,6 +2198,22 @@ const ObserveTarget = struct {
     character_data: bool = false,
     character_data_old_value: bool = false,
     subtree: bool,
+    /// Optional attribute filter: if non-empty, only attributes in this list generate records.
+    attribute_filter: std.ArrayListUnmanaged([]const u8) = .empty,
+
+    fn deinit(self: *ObserveTarget) void {
+        for (self.attribute_filter.items) |f| allocator.free(@constCast(f));
+        self.attribute_filter.deinit(allocator);
+    }
+
+    fn matchesAttributeFilter(self: *const ObserveTarget, attr_name: ?[]const u8) bool {
+        if (self.attribute_filter.items.len == 0) return true; // no filter = match all
+        const name = attr_name orelse return true;
+        for (self.attribute_filter.items) |f| {
+            if (std.mem.eql(u8, f, name)) return true;
+        }
+        return false;
+    }
 };
 
 const MutationObserverEntry = struct {
@@ -1990,6 +2224,7 @@ const MutationObserverEntry = struct {
 
     fn deinit(self: *MutationObserverEntry, ctx: *qjs.JSContext) void {
         qjs.JS_FreeValue(ctx, self.callback);
+        for (self.targets.items) |*t| t.deinit();
         self.targets.deinit(allocator);
         for (self.pending_records.items) |*r| r.deinit();
         self.pending_records.deinit(allocator);
@@ -2091,11 +2326,11 @@ fn recordMutationFull(
                 (t.subtree and isDescendant(target, t.node));
             if (!matches) continue;
 
-            const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list
-            else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes
-            else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data
-            else false;
+            const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data else false;
             if (!want) continue;
+
+            // DOM spec: attributeFilter — skip if attr name not in filter
+            if (std.mem.eql(u8, mutation_type, "attributes") and !t.matchesAttributeFilter(attr_name)) continue;
 
             var record = MutationRecord{
                 .type_str = mutation_type,
@@ -2166,34 +2401,28 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
         const records_arr = qjs.JS_NewArray(ctx);
         for (obs.pending_records.items, 0..) |*rec, idx| {
             const record_obj = qjs.JS_NewObject(ctx);
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "type",
-                qjs.JS_NewStringLen(ctx, rec.type_str.ptr, rec.type_str.len));
-            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "target",
-                dom_api.wrapNodePublic(ctx, rec.target));
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "type", qjs.JS_NewStringLen(ctx, rec.type_str.ptr, rec.type_str.len));
+            _ = qjs.JS_SetPropertyStr(ctx, record_obj, "target", dom_api.wrapNodePublic(ctx, rec.target));
 
             const added_arr = qjs.JS_NewArray(ctx);
             for (rec.added_nodes.items, 0..) |node, ai| {
-                _ = qjs.JS_SetPropertyUint32(ctx, added_arr, @intCast(ai),
-                    dom_api.wrapNodePublic(ctx, node));
+                _ = qjs.JS_SetPropertyUint32(ctx, added_arr, @intCast(ai), dom_api.wrapNodePublic(ctx, node));
             }
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "addedNodes", added_arr);
 
             const removed_arr = qjs.JS_NewArray(ctx);
             for (rec.removed_nodes.items, 0..) |node, ri| {
-                _ = qjs.JS_SetPropertyUint32(ctx, removed_arr, @intCast(ri),
-                    dom_api.wrapNodePublic(ctx, node));
+                _ = qjs.JS_SetPropertyUint32(ctx, removed_arr, @intCast(ri), dom_api.wrapNodePublic(ctx, node));
             }
             _ = qjs.JS_SetPropertyStr(ctx, record_obj, "removedNodes", removed_arr);
 
             if (rec.attribute_name) |name| {
-                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName",
-                    qjs.JS_NewStringLen(ctx, name.ptr, name.len));
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", qjs.JS_NewStringLen(ctx, name.ptr, name.len));
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeName", quickjs.JS_NULL());
             }
             if (rec.attribute_namespace) |ns| {
-                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace",
-                    qjs.JS_NewStringLen(ctx, ns.ptr, ns.len));
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", qjs.JS_NewStringLen(ctx, ns.ptr, ns.len));
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "attributeNamespace", quickjs.JS_NULL());
             }
@@ -2208,8 +2437,7 @@ pub fn flushMutationObservers(ctx: *qjs.JSContext) void {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "nextSibling", quickjs.JS_NULL());
             }
             if (rec.old_value) |ov| {
-                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue",
-                    qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));
+                _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", qjs.JS_NewStringLen(ctx, ov.ptr, ov.len));
             } else {
                 _ = qjs.JS_SetPropertyStr(ctx, record_obj, "oldValue", quickjs.JS_NULL());
             }
@@ -2250,12 +2478,9 @@ pub fn jsMutationObserverConstructor(
         .disconnected = false,
     }) catch return quickjs.JS_UNDEFINED();
     _ = qjs.JS_SetPropertyStr(c, obj, "_idx", qjs.JS_NewInt32(c, @intCast(idx)));
-    _ = qjs.JS_SetPropertyStr(c, obj, "observe",
-        qjs.JS_NewCFunction(c, &jsMutationObserverObserve, "observe", 2));
-    _ = qjs.JS_SetPropertyStr(c, obj, "disconnect",
-        qjs.JS_NewCFunction(c, &jsMutationObserverDisconnect, "disconnect", 0));
-    _ = qjs.JS_SetPropertyStr(c, obj, "takeRecords",
-        qjs.JS_NewCFunction(c, &jsMutationObserverTakeRecords, "takeRecords", 0));
+    _ = qjs.JS_SetPropertyStr(c, obj, "observe", qjs.JS_NewCFunction(c, &jsMutationObserverObserve, "observe", 2));
+    _ = qjs.JS_SetPropertyStr(c, obj, "disconnect", qjs.JS_NewCFunction(c, &jsMutationObserverDisconnect, "disconnect", 0));
+    _ = qjs.JS_SetPropertyStr(c, obj, "takeRecords", qjs.JS_NewCFunction(c, &jsMutationObserverTakeRecords, "takeRecords", 0));
     return obj;
 }
 
@@ -2321,6 +2546,33 @@ fn jsMutationObserverObserve(
 
     const attr_old_val = if (argc >= 2) jsBoolProp(c, args[1], "attributeOldValue") else false;
     const char_data_old = if (argc >= 2) jsBoolProp(c, args[1], "characterDataOldValue") else false;
+
+    // Parse attributeFilter array
+    var attr_filter_list: std.ArrayListUnmanaged([]const u8) = .empty;
+    if (argc >= 2) {
+        const af = qjs.JS_GetPropertyStr(c, args[1], "attributeFilter");
+        defer qjs.JS_FreeValue(c, af);
+        if (!quickjs.JS_IsUndefined(af) and af.tag == qjs.JS_TAG_OBJECT) {
+            const len_val = qjs.JS_GetPropertyStr(c, af, "length");
+            defer qjs.JS_FreeValue(c, len_val);
+            var len: i32 = 0;
+            _ = qjs.JS_ToInt32(c, &len, len_val);
+            const ulen: u32 = if (len > 0) @intCast(len) else 0;
+            var fi: u32 = 0;
+            while (fi < ulen) : (fi += 1) {
+                const item = qjs.JS_GetPropertyUint32(c, af, fi);
+                defer qjs.JS_FreeValue(c, item);
+                const s = dom_api.jsStringToSlice(c, item) orelse continue;
+                defer qjs.JS_FreeCString(c, s.ptr);
+                const copy = allocator.alloc(u8, s.len) catch continue;
+                @memcpy(copy, s.ptr[0..s.len]);
+                attr_filter_list.append(allocator, copy) catch {
+                    allocator.free(copy);
+                };
+            }
+        }
+    }
+
     mutation_observers.items[idx].targets.append(allocator, .{
         .node = target,
         .child_list = child_list,
@@ -2329,6 +2581,7 @@ fn jsMutationObserverObserve(
         .character_data = character_data,
         .character_data_old_value = char_data_old,
         .subtree = subtree,
+        .attribute_filter = attr_filter_list,
     }) catch {};
     mutation_observers.items[idx].disconnected = false;
     return quickjs.JS_UNDEFINED();
@@ -2349,6 +2602,9 @@ fn jsMutationObserverDisconnect(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     const idx = getObserverIdx(c, this_val) orelse return quickjs.JS_UNDEFINED();
     mutation_observers.items[idx].disconnected = true;
+    for (mutation_observers.items[idx].targets.items) |*t| {
+        t.deinit();
+    }
     mutation_observers.items[idx].targets.clearRetainingCapacity();
     return quickjs.JS_UNDEFINED();
 }
