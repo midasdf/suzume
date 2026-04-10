@@ -29,3 +29,7 @@ pub const JsValue = value.JsValue;
 pub const string_pool = @import("string_pool.zig");
 pub const StringPool = string_pool.StringPool;
 pub const StringId = string_pool.StringId;
+
+pub const bytecode = @import("bytecode.zig");
+pub const OpCode = bytecode.OpCode;
+pub const Bytecode = bytecode.Bytecode;

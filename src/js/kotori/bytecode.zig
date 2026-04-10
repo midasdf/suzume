@@ -1,0 +1,139 @@
+// Bytecode definitions for the kotori JS engine.
+// OpCode enum defines all VM instructions.
+// Bytecode struct is a builder for emitting bytecode sequences.
+
+const std = @import("std");
+const value = @import("value.zig");
+pub const JsValue = value.JsValue;
+
+pub const OpCode = enum(u8) {
+    // Stack
+    load_const,
+    pop,
+    dup,
+
+    // Arithmetic
+    add,
+    sub,
+    mul,
+    div,
+    mod,
+    neg,
+    power,
+
+    // Comparison
+    eq,
+    ne,
+    strict_eq,
+    strict_ne,
+    lt,
+    le,
+    gt,
+    ge,
+
+    // Logical / bitwise
+    not,
+    bit_not,
+    bit_and,
+    bit_or,
+    bit_xor,
+    shl,
+    shr,
+    ushr,
+
+    // Variables
+    load_local,
+    store_local,
+    load_global,
+    store_global,
+
+    // Control flow
+    jump,
+    jump_if_false,
+    jump_if_true,
+
+    // Functions
+    call,
+    return_,
+    return_undefined,
+
+    // Special
+    typeof_,
+    void_,
+    halt,
+};
+
+pub const Bytecode = struct {
+    code: std.ArrayListUnmanaged(u8),
+    constants: std.ArrayListUnmanaged(JsValue),
+    local_count: u16,
+    param_count: u16,
+    max_stack: u16,
+
+    pub fn init() Bytecode {
+        return .{
+            .code = .{},
+            .constants = .{},
+            .local_count = 0,
+            .param_count = 0,
+            .max_stack = 0,
+        };
+    }
+
+    pub fn deinit(self: *Bytecode, allocator: std.mem.Allocator) void {
+        self.code.deinit(allocator);
+        self.constants.deinit(allocator);
+    }
+
+    /// Append a single opcode byte.
+    pub fn emit(self: *Bytecode, allocator: std.mem.Allocator, op: OpCode) !void {
+        try self.code.append(allocator, @intFromEnum(op));
+    }
+
+    /// Append opcode followed by a u16 operand in little-endian order.
+    pub fn emitWithU16(self: *Bytecode, allocator: std.mem.Allocator, op: OpCode, operand: u16) !void {
+        try self.code.append(allocator, @intFromEnum(op));
+        try self.code.append(allocator, @intCast(operand & 0xFF));
+        try self.code.append(allocator, @intCast((operand >> 8) & 0xFF));
+    }
+
+    /// Append opcode followed by an i16 operand in little-endian order.
+    pub fn emitWithI16(self: *Bytecode, allocator: std.mem.Allocator, op: OpCode, operand: i16) !void {
+        const u: u16 = @bitCast(operand);
+        try self.emitWithU16(allocator, op, u);
+    }
+
+    /// Add a value to the constant pool and return its index.
+    pub fn addConstant(self: *Bytecode, allocator: std.mem.Allocator, val: JsValue) !u16 {
+        const index: u16 = @intCast(self.constants.items.len);
+        try self.constants.append(allocator, val);
+        return index;
+    }
+
+    /// Return the current byte offset (length of emitted code).
+    pub fn currentOffset(self: *const Bytecode) u32 {
+        return @intCast(self.code.items.len);
+    }
+
+    /// Emit a jump instruction with a placeholder offset (0x0000).
+    /// Returns the byte position of the placeholder so it can be patched later.
+    pub fn emitJump(self: *Bytecode, allocator: std.mem.Allocator, op: OpCode) !u32 {
+        try self.code.append(allocator, @intFromEnum(op));
+        const patch_pos: u32 = @intCast(self.code.items.len);
+        try self.code.append(allocator, 0x00); // placeholder low byte
+        try self.code.append(allocator, 0x00); // placeholder high byte
+        return patch_pos;
+    }
+
+    /// Patch the i16 jump offset at `patch_pos` to reach the current code position.
+    /// The offset is relative to the byte immediately after the two operand bytes.
+    pub fn patchJump(self: *Bytecode, patch_pos: u32) void {
+        const target: u32 = self.currentOffset();
+        // The instruction pointer after reading the operand is at patch_pos + 2.
+        const after_operand: u32 = patch_pos + 2;
+        const delta: i16 = @intCast(@as(i32, @intCast(target)) - @as(i32, @intCast(after_operand)));
+        const u: u16 = @bitCast(delta);
+        self.code.items[patch_pos] = @intCast(u & 0xFF);
+        self.code.items[patch_pos + 1] = @intCast((u >> 8) & 0xFF);
+    }
+};
