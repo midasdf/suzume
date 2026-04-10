@@ -107,19 +107,114 @@ pub const Lexer = struct {
 
     fn readNumber(self: *Lexer) Token {
         const start = self.pos;
-        while (self.pos < self.source.len) {
-            const c = self.source[self.pos];
-            if (c >= '0' and c <= '9') {
-                self.pos += 1;
-            } else if (c == '.' and self.pos + 1 < self.source.len and
-                self.source[self.pos + 1] >= '0' and self.source[self.pos + 1] <= '9')
-            {
-                self.pos += 1;
-            } else {
-                break;
+
+        // Leading dot: .5 .123
+        if (self.pos < self.source.len and self.source[self.pos] == '.') {
+            self.pos += 1; // consume dot
+            // consume fractional digits (and separators)
+            while (self.pos < self.source.len) {
+                const c = self.source[self.pos];
+                if ((c >= '0' and c <= '9') or c == '_') {
+                    self.pos += 1;
+                } else break;
+            }
+            // optional exponent
+            self.readExponent();
+            return self.makeToken(.number, start);
+        }
+
+        // Must start with a digit here
+        // Check for 0x / 0o / 0b prefixes
+        if (self.pos < self.source.len and self.source[self.pos] == '0' and
+            self.pos + 1 < self.source.len)
+        {
+            const prefix = self.source[self.pos + 1];
+            if (prefix == 'x' or prefix == 'X') {
+                self.pos += 2;
+                while (self.pos < self.source.len) {
+                    const c = self.source[self.pos];
+                    if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or
+                        (c >= 'A' and c <= 'F') or c == '_')
+                    {
+                        self.pos += 1;
+                    } else break;
+                }
+                return self.makeToken(.number, start);
+            } else if (prefix == 'o' or prefix == 'O') {
+                self.pos += 2;
+                while (self.pos < self.source.len) {
+                    const c = self.source[self.pos];
+                    if ((c >= '0' and c <= '7') or c == '_') {
+                        self.pos += 1;
+                    } else break;
+                }
+                return self.makeToken(.number, start);
+            } else if (prefix == 'b' or prefix == 'B') {
+                self.pos += 2;
+                while (self.pos < self.source.len) {
+                    const c = self.source[self.pos];
+                    if (c == '0' or c == '1' or c == '_') {
+                        self.pos += 1;
+                    } else break;
+                }
+                return self.makeToken(.number, start);
             }
         }
+
+        // Integer part (with optional numeric separators)
+        while (self.pos < self.source.len) {
+            const c = self.source[self.pos];
+            if ((c >= '0' and c <= '9') or c == '_') {
+                self.pos += 1;
+            } else break;
+        }
+
+        // Optional fractional part
+        if (self.pos < self.source.len and self.source[self.pos] == '.') {
+            // Peek ahead: could be method call like 42.toString() — only consume dot if followed by digit or end
+            const next_pos = self.pos + 1;
+            const after_dot = if (next_pos < self.source.len) self.source[next_pos] else 0;
+            if (after_dot >= '0' and after_dot <= '9') {
+                self.pos += 1; // consume dot
+                while (self.pos < self.source.len) {
+                    const c = self.source[self.pos];
+                    if ((c >= '0' and c <= '9') or c == '_') {
+                        self.pos += 1;
+                    } else break;
+                }
+            } else if (after_dot == 0 or after_dot == ' ' or after_dot == '\t' or
+                after_dot == '\n' or after_dot == '\r' or after_dot == ';' or
+                after_dot == ',' or after_dot == ')' or after_dot == ']' or
+                after_dot == '}' or after_dot == 'e' or after_dot == 'E')
+            {
+                // trailing dot: e.g. "1." — consume dot
+                self.pos += 1;
+            }
+            // else: don't consume dot (method call like 42.toString)
+        }
+
+        // Optional exponent
+        self.readExponent();
+
         return self.makeToken(.number, start);
+    }
+
+    fn readExponent(self: *Lexer) void {
+        if (self.pos >= self.source.len) return;
+        const c = self.source[self.pos];
+        if (c != 'e' and c != 'E') return;
+        self.pos += 1;
+        if (self.pos < self.source.len and
+            (self.source[self.pos] == '+' or self.source[self.pos] == '-'))
+        {
+            self.pos += 1;
+        }
+        while (self.pos < self.source.len) {
+            const d = self.source[self.pos];
+            if ((d >= '0' and d <= '9') or d == '_') {
+                self.pos += 1;
+            } else break;
+        }
     }
 
     fn readString(self: *Lexer, quote: u8) Token {
@@ -273,7 +368,7 @@ pub const Lexer = struct {
                     return self.makeToken(.eq_eq, start);
                 }
                 if (self.match('>')) return self.makeToken(.arrow, start);
-                return self.makeToken(.eq, start);
+                return self.makeToken(.assign, start);
             },
 
             // !  !=  !==

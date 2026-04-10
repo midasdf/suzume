@@ -48,3 +48,37 @@ test "multi-char punctuators" {
 test "assignment operators" {
     try expectTokens("+= -= *= &&=", &.{ .plus_assign, .minus_assign, .star_assign, .amp_amp_assign });
 }
+
+test "integer literals" {
+    try expectTokens("0 42 100", &.{ .number, .number, .number });
+}
+
+test "float literals" {
+    try expectTokens("3.14 .5 1e10 2.5e-3", &.{ .number, .number, .number, .number });
+}
+
+test "hex, octal, binary" {
+    try expectTokens("0xFF 0o77 0b1010", &.{ .number, .number, .number });
+}
+
+test "string literals" {
+    try expectTokens("\"hello\" 'world'", &.{ .string, .string });
+}
+
+test "string with escapes" {
+    try expectTokens("\"he\\\"llo\" '\\n\\t'", &.{ .string, .string });
+}
+
+test "identifiers" {
+    try expectTokens("foo bar _private $dollar", &.{ .identifier, .identifier, .identifier, .identifier });
+}
+
+test "keywords" {
+    try expectTokens("var x = function", &.{ .kw_var, .identifier, .assign, .kw_function });
+}
+
+test "mixed expression" {
+    try expectTokens("var x = 42 + y;", &.{
+        .kw_var, .identifier, .assign, .number, .plus, .identifier, .semicolon,
+    });
+}

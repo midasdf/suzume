@@ -123,6 +123,7 @@ pub const TokenType = enum(u8) {
     ne_eq, // !== (same as bang_eq_eq semantically, separate tag for clarity)
     arrow, // => (same as eq_gt semantically)
     ellipsis, // ... (same as dot_dot_dot semantically)
+    assign, // = (alias for eq)
 
     // Control
     eof,
