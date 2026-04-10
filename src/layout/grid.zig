@@ -469,7 +469,9 @@ fn resolveWithAutoRepeat(tracks: []const ComputedStyle.GridTrackSize, total_widt
                 const avail = @max(total_width - fixed_space, 0);
                 repeat_track_size = @max(avail / 4.0, 100);
             },
-            else => { fixed_count += 1; },
+            else => {
+                fixed_count += 1;
+            },
         }
     }
 
@@ -490,20 +492,35 @@ fn resolveWithAutoRepeat(tracks: []const ComputedStyle.GridTrackSize, total_widt
     for (tracks) |track| {
         switch (track) {
             .px => |px| {
-                if (ri < result.len) { result[ri] = px; ri += 1; }
+                if (ri < result.len) {
+                    result[ri] = px;
+                    ri += 1;
+                }
             },
             .percent => |pct| {
-                if (ri < result.len) { result[ri] = total_width * pct / 100.0; ri += 1; }
+                if (ri < result.len) {
+                    result[ri] = total_width * pct / 100.0;
+                    ri += 1;
+                }
             },
             .fr => |fr| {
-                if (ri < result.len) { result[ri] = fr; ri += 1; } // will be re-distributed below
+                if (ri < result.len) {
+                    result[ri] = fr;
+                    ri += 1;
+                } // will be re-distributed below
             },
             .auto => {
-                if (ri < result.len) { result[ri] = 0; ri += 1; }
+                if (ri < result.len) {
+                    result[ri] = 0;
+                    ri += 1;
+                }
             },
             .auto_repeat_px, .auto_repeat_percent, .auto_repeat_fr => {
                 for (0..repeat_count) |_| {
-                    if (ri < result.len) { result[ri] = repeat_track_size; ri += 1; }
+                    if (ri < result.len) {
+                        result[ri] = repeat_track_size;
+                        ri += 1;
+                    }
                 }
             },
         }

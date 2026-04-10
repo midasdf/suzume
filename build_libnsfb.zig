@@ -1,5 +1,20 @@
 const std = @import("std");
 
+/// Apply Suzume-specific libnsfb changes on top of the upstream submodule checkout.
+/// The submodule SHA must stay reachable from `netsurf-browser/libnsfb`; local edits live in `patches/`.
+fn applyLibNsfbXimPatch(b: *std.Build) *std.Build.Step.Run {
+    const patch_lp = b.path("patches/libnsfb-xim.patch");
+    const run = b.addSystemCommand(&.{"bash"});
+    run.addFileArg(b.path("scripts/apply-libnsfb-patch.sh"));
+    run.addFileArg(patch_lp);
+    run.addDirectoryArg(b.path("deps/libnsfb"));
+    run.addFileInput(patch_lp);
+    run.addFileInput(b.path("scripts/apply-libnsfb-patch.sh"));
+    run.stdio = .inherit;
+    run.has_side_effects = true;
+    return run;
+}
+
 /// Build LibNSFB with X11 (xcb) backend as a static library.
 pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Step.Compile {
     const common_cflags = &[_][]const u8{
@@ -24,6 +39,8 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
             .link_libc = true,
         }),
     });
+
+    lib.step.dependOn(&applyLibNsfbXimPatch(b).step);
 
     lib.addCSourceFiles(.{
         .root = b.path("deps/libnsfb"),

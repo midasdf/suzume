@@ -1,6 +1,5 @@
 /// HTTP status code constants and utilities.
 /// Centralizes HTTP status checking to avoid magic numbers throughout the codebase.
-
 /// 2xx Success
 pub const ok = 200;
 pub const created = 201;

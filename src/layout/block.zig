@@ -239,10 +239,15 @@ fn countCodepoints(text: []const u8) usize {
     var i: usize = 0;
     while (i < text.len) {
         const b = text[i];
-        if (b < 0x80) { i += 1; }
-        else if (b < 0xE0) { i += 2; }
-        else if (b < 0xF0) { i += 3; }
-        else { i += 4; }
+        if (b < 0x80) {
+            i += 1;
+        } else if (b < 0xE0) {
+            i += 2;
+        } else if (b < 0xF0) {
+            i += 3;
+        } else {
+            i += 4;
+        }
         count += 1;
     }
     return count;
@@ -537,22 +542,34 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         var dx: f32 = 0;
         var dy: f32 = 0;
         switch (box.style.left) {
-            .px => |v| { dx = v; },
-            .percent => |p| { dx = p * containing_width / 100.0; },
+            .px => |v| {
+                dx = v;
+            },
+            .percent => |p| {
+                dx = p * containing_width / 100.0;
+            },
             else => {
                 // If left is auto, check right
                 switch (box.style.right) {
-                    .px => |v| { dx = -v; },
-                    .percent => |p| { dx = -p * containing_width / 100.0; },
+                    .px => |v| {
+                        dx = -v;
+                    },
+                    .percent => |p| {
+                        dx = -p * containing_width / 100.0;
+                    },
                     else => {},
                 }
             },
         }
         switch (box.style.top) {
-            .px => |v| { dy = v; },
+            .px => |v| {
+                dy = v;
+            },
             else => {
                 switch (box.style.bottom) {
-                    .px => |v| { dy = -v; },
+                    .px => |v| {
+                        dy = -v;
+                    },
                     else => {},
                 }
             },
@@ -1086,10 +1103,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
                             while (byte_end < text.len) {
                                 const char_start = byte_end;
                                 const first_byte = text[byte_end];
-                                const char_len: usize = if (first_byte < 0x80) 1
-                                    else if (first_byte < 0xE0) 2
-                                    else if (first_byte < 0xF0) 3
-                                    else 4;
+                                const char_len: usize = if (first_byte < 0x80) 1 else if (first_byte < 0xE0) 2 else if (first_byte < 0xF0) 3 else 4;
                                 byte_end = @min(byte_end + char_len, text.len);
                                 const char_metrics = text_renderer.measure(text[char_start..byte_end]);
                                 acc_w += @as(f32, @floatFromInt(char_metrics.width));

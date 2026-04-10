@@ -384,7 +384,7 @@ pub fn resolveUrl(allocator: std.mem.Allocator, base: []const u8, relative: []co
     while (std.mem.startsWith(u8, rel, "../")) {
         rel = rel[3..];
         // Walk up one directory
-        if (std.mem.lastIndexOf(u8, dir[0 .. dir.len -| 1], "/")) |idx| {
+        if (std.mem.lastIndexOf(u8, dir[0..dir.len -| 1], "/")) |idx| {
             dir = dir[0 .. idx + 1];
         }
     }

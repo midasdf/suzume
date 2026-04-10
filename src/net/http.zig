@@ -99,7 +99,7 @@ pub const HttpClient = struct {
                 // Check domain match (simple: exact or suffix match)
                 const domain_match = std.mem.eql(u8, cookie_domain, domain) or
                     (cookie_domain.len > 0 and cookie_domain[0] == '.' and
-                    std.mem.endsWith(u8, domain, cookie_domain[1..]));
+                        std.mem.endsWith(u8, domain, cookie_domain[1..]));
 
                 if (domain_match) {
                     if (result.items.len > 0) {

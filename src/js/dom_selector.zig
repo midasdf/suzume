@@ -78,7 +78,10 @@ fn encodeUtf8(code: u32, buf: []u8) usize {
 fn findUnescapedDot(s: []const u8) ?usize {
     var i: usize = 0;
     while (i < s.len) {
-        if (s[i] == '\\' and i + 1 < s.len) { i += 2; continue; }
+        if (s[i] == '\\' and i + 1 < s.len) {
+            i += 2;
+            continue;
+        }
         if (s[i] == '.') return i;
         i += 1;
     }
@@ -89,7 +92,10 @@ fn findUnescapedDot(s: []const u8) ?usize {
 fn findUnescapedChar(s: []const u8, ch: u8) ?usize {
     var i: usize = 0;
     while (i < s.len) {
-        if (s[i] == '\\' and i + 1 < s.len) { i += 2; continue; }
+        if (s[i] == '\\' and i + 1 < s.len) {
+            i += 2;
+            continue;
+        }
         if (s[i] == ch) return i;
         i += 1;
     }
@@ -174,10 +180,11 @@ pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) b
     var i: usize = 0;
     while (i < sel.len) {
         const ch = sel[i];
-        if (ch == '\\' and i + 1 < sel.len) { i += 2; continue; } // skip CSS escape
-        if (ch == '(' or ch == '[') depth += 1
-        else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-        else if (ch == ',' and depth == 0) {
+        if (ch == '\\' and i + 1 < sel.len) {
+            i += 2;
+            continue;
+        } // skip CSS escape
+        if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) {
             if (matchSingleSelector(node, std.mem.trim(u8, sel[start..i], " \t"))) return true;
             start = i + 1;
         }
@@ -467,8 +474,14 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
                     const dir_val = lxb_dom_element_get_attribute(el, "dir", 3, &dir_len);
                     if (dir_val != null and dir_len > 0) {
                         const dv = dir_val.?[0..dir_len];
-                        if (std.ascii.eqlIgnoreCase(dv, "rtl")) { resolved_dir = "rtl"; break; }
-                        if (std.ascii.eqlIgnoreCase(dv, "ltr")) { resolved_dir = "ltr"; break; }
+                        if (std.ascii.eqlIgnoreCase(dv, "rtl")) {
+                            resolved_dir = "rtl";
+                            break;
+                        }
+                        if (std.ascii.eqlIgnoreCase(dv, "ltr")) {
+                            resolved_dir = "ltr";
+                            break;
+                        }
                         break; // "auto" or other → default ltr
                     }
                 }
@@ -543,10 +556,14 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         var bracket_pos: ?usize = null;
         var bi: usize = 0;
         while (bi < sel.len) : (bi += 1) {
-            if (sel[bi] == '\\' and bi + 1 < sel.len) { bi += 1; continue; } // skip escape
-            if (sel[bi] == '(') depth_b += 1
-            else if (sel[bi] == ')' and depth_b > 0) depth_b -= 1
-            else if (sel[bi] == '[' and depth_b == 0) { bracket_pos = bi; break; }
+            if (sel[bi] == '\\' and bi + 1 < sel.len) {
+                bi += 1;
+                continue;
+            } // skip escape
+            if (sel[bi] == '(') depth_b += 1 else if (sel[bi] == ')' and depth_b > 0) depth_b -= 1 else if (sel[bi] == '[' and depth_b == 0) {
+                bracket_pos = bi;
+                break;
+            }
         }
         if (bracket_pos) |bp| {
             if (bp > 0) {
@@ -658,19 +675,23 @@ pub fn findPseudoStart(sel: []const u8) ?usize {
             if (isHexDigit(sel[i])) {
                 // Skip hex digits (up to 6)
                 var hc: usize = 0;
-                while (i < sel.len and hc < 6 and isHexDigit(sel[i])) { i += 1; hc += 1; }
+                while (i < sel.len and hc < 6 and isHexDigit(sel[i])) {
+                    i += 1;
+                    hc += 1;
+                }
                 // Skip optional whitespace after hex
                 if (i < sel.len) {
-                    if (sel[i] == '\r') { i += 1; if (i < sel.len and sel[i] == '\n') i += 1; } else if (sel[i] == ' ' or sel[i] == '\t' or sel[i] == '\n' or sel[i] == 0x0C) i += 1;
+                    if (sel[i] == '\r') {
+                        i += 1;
+                        if (i < sel.len and sel[i] == '\n') i += 1;
+                    } else if (sel[i] == ' ' or sel[i] == '\t' or sel[i] == '\n' or sel[i] == 0x0C) i += 1;
                 }
             } else {
                 i += 1; // skip escaped char
             }
             continue;
         }
-        if (sel[i] == '(' or sel[i] == '[') depth += 1
-        else if ((sel[i] == ')' or sel[i] == ']') and depth > 0) depth -= 1
-        else if (sel[i] == ':' and depth == 0) return i;
+        if (sel[i] == '(' or sel[i] == '[') depth += 1 else if ((sel[i] == ')' or sel[i] == ']') and depth > 0) depth -= 1 else if (sel[i] == ':' and depth == 0) return i;
         i += 1;
     }
     return null;
@@ -831,9 +852,18 @@ fn isFormInvalid(elem: *lxb.lxb_dom_element_t) bool {
             } else {
                 var cur = n;
                 while (true) {
-                    if (cur.next) |nxt| { current = nxt; break; }
-                    cur = cur.parent orelse { current = null; break; };
-                    if (cur == node) { current = null; break; }
+                    if (cur.next) |nxt| {
+                        current = nxt;
+                        break;
+                    }
+                    cur = cur.parent orelse {
+                        current = null;
+                        break;
+                    };
+                    if (cur == node) {
+                        current = null;
+                        break;
+                    }
                 }
             }
         }
@@ -852,9 +882,18 @@ fn isFormInvalid(elem: *lxb.lxb_dom_element_t) bool {
             } else {
                 var cur = n;
                 while (true) {
-                    if (cur.next) |nxt| { current = nxt; break; }
-                    cur = cur.parent orelse { current = null; break; };
-                    if (cur == node) { current = null; break; }
+                    if (cur.next) |nxt| {
+                        current = nxt;
+                        break;
+                    }
+                    cur = cur.parent orelse {
+                        current = null;
+                        break;
+                    };
+                    if (cur == node) {
+                        current = null;
+                        break;
+                    }
                 }
             }
         }
@@ -981,17 +1020,20 @@ pub fn matchNthFormula(raw_arg: []const u8, idx: u32) bool {
     if (std.ascii.eqlIgnoreCase(arg, "even")) return (idx % 2) == 0;
     if (std.ascii.eqlIgnoreCase(arg, "n")) return true; // matches all
     // Try simple integer
-    if (std.fmt.parseInt(i32, arg, 10)) |n| return n > 0 and idx == @as(u32, @intCast(n))
-    else |_| {}
+    if (std.fmt.parseInt(i32, arg, 10)) |n| return n > 0 and idx == @as(u32, @intCast(n)) else |_| {}
     // Parse An+B: find 'n'
     if (std.mem.indexOfScalar(u8, arg, 'n')) |n_pos| {
         // Parse A (before n)
         var a: i32 = 1;
         if (n_pos > 0) {
             const a_str = std.mem.trim(u8, arg[0..n_pos], ws);
-            if (a_str.len == 1 and a_str[0] == '-') { a = -1; }
-            else if (a_str.len == 1 and a_str[0] == '+') { a = 1; }
-            else if (a_str.len > 0) { a = std.fmt.parseInt(i32, a_str, 10) catch return false; }
+            if (a_str.len == 1 and a_str[0] == '-') {
+                a = -1;
+            } else if (a_str.len == 1 and a_str[0] == '+') {
+                a = 1;
+            } else if (a_str.len > 0) {
+                a = std.fmt.parseInt(i32, a_str, 10) catch return false;
+            }
         }
         // Parse B (after n) — strip internal whitespace for "2n + 2" → "+2"
         var b: i32 = 0;
@@ -1003,10 +1045,15 @@ pub fn matchNthFormula(raw_arg: []const u8, idx: u32) bool {
                 var bc: usize = 0;
                 for (b_raw) |ch| {
                     if (ch != ' ' and ch != '\t' and ch != '\n' and ch != '\r' and ch != 0x0C) {
-                        if (bc < b_compact.len) { b_compact[bc] = ch; bc += 1; }
+                        if (bc < b_compact.len) {
+                            b_compact[bc] = ch;
+                            bc += 1;
+                        }
                     }
                 }
-                if (bc > 0) { b = std.fmt.parseInt(i32, b_compact[0..bc], 10) catch return false; }
+                if (bc > 0) {
+                    b = std.fmt.parseInt(i32, b_compact[0..bc], 10) catch return false;
+                }
             }
         }
         // Match: idx = An + B for some non-negative integer n
@@ -1266,10 +1313,14 @@ pub fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb
             var ci: usize = 0;
             while (ci < trimmed.len) {
                 const ch = trimmed[ci];
-                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
-                if (ch == '(' or ch == '[') depth += 1
-                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-                else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+                if (ch == '\\' and ci + 1 < trimmed.len) {
+                    ci += 2;
+                    continue;
+                }
+                if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) {
+                    has_top_comma = true;
+                    break;
+                }
                 ci += 1;
             }
         }
@@ -1279,10 +1330,11 @@ pub fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb
             var ci: usize = 0;
             while (ci < trimmed.len) {
                 const ch = trimmed[ci];
-                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
-                if (ch == '(' or ch == '[') depth += 1
-                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-                else if (ch == ',' and depth == 0) {
+                if (ch == '\\' and ci + 1 < trimmed.len) {
+                    ci += 2;
+                    continue;
+                }
+                if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) {
                     const sub = std.mem.trim(u8, trimmed[start..ci], " \t");
                     if (sub.len > 0) {
                         if (walkTreeBySelector(node, sub)) |found| return found;
@@ -1593,10 +1645,7 @@ pub fn parseSelectorParts(trimmed: []const u8, out: []SelectorPart) usize {
             }
             if (paren_depth == 0 and bracket_depth == 0 and
                 (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C or c == '>' or c == '+' or c == '~')) break;
-            if (c == '(') paren_depth += 1
-            else if (c == ')' and paren_depth > 0) paren_depth -= 1
-            else if (c == '[') bracket_depth += 1
-            else if (c == ']' and bracket_depth > 0) bracket_depth -= 1;
+            if (c == '(') paren_depth += 1 else if (c == ')' and paren_depth > 0) paren_depth -= 1 else if (c == '[') bracket_depth += 1 else if (c == ']' and bracket_depth > 0) bracket_depth -= 1;
             i += 1;
         }
 
@@ -1689,9 +1738,7 @@ fn hasRelativeMatch(node: *lxb.lxb_dom_node_t, inner: []const u8) bool {
         var depth: u32 = 0;
         var start: usize = 0;
         for (inner, 0..) |ch, i| {
-            if (ch == '(' or ch == '[') depth += 1
-            else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-            else if (ch == ',' and depth == 0) {
+            if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) {
                 const part = std.mem.trim(u8, inner[start..i], " \t");
                 if (part.len > 0 and hasRelativeMatchSingle(node, part)) return true;
                 start = i + 1;
@@ -1726,8 +1773,14 @@ fn hasRelativeMatchSingle(node: *lxb.lxb_dom_node_t, inner: []const u8) bool {
     var bracket_depth: i32 = 0;
     while (simple_end < rest.len) : (simple_end += 1) {
         const ch = rest[simple_end];
-        if (ch == '(' or ch == '[') { paren_depth += 1; bracket_depth += 1; }
-        if (ch == ')' or ch == ']') { paren_depth -= 1; bracket_depth -= 1; }
+        if (ch == '(' or ch == '[') {
+            paren_depth += 1;
+            bracket_depth += 1;
+        }
+        if (ch == ')' or ch == ']') {
+            paren_depth -= 1;
+            bracket_depth -= 1;
+        }
         if (paren_depth <= 0 and bracket_depth <= 0) {
             if (ch == '>' or ch == '+' or ch == '~') break;
             if (ch == ' ' and simple_end + 1 < rest.len) {
@@ -1810,10 +1863,14 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
             var ci: usize = 0;
             while (ci < trimmed.len) {
                 const ch = trimmed[ci];
-                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
-                if (ch == '(' or ch == '[') depth += 1
-                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-                else if (ch == ',' and depth == 0) { has_top_comma = true; break; }
+                if (ch == '\\' and ci + 1 < trimmed.len) {
+                    ci += 2;
+                    continue;
+                }
+                if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) {
+                    has_top_comma = true;
+                    break;
+                }
                 ci += 1;
             }
         }
@@ -1823,10 +1880,11 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
             var ci: usize = 0;
             while (ci < trimmed.len) {
                 const ch = trimmed[ci];
-                if (ch == '\\' and ci + 1 < trimmed.len) { ci += 2; continue; }
-                if (ch == '(' or ch == '[') depth += 1
-                else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-                else if (ch == ',' and depth == 0) {
+                if (ch == '\\' and ci + 1 < trimmed.len) {
+                    ci += 2;
+                    continue;
+                }
+                if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) {
                     const sub = std.mem.trim(u8, trimmed[start..ci], " \t");
                     if (sub.len > 0) walkTreeCollect(ctx, root, sub, arr, idx);
                     start = ci + 1;
@@ -1869,11 +1927,17 @@ pub fn matchLangBCP47(range: []const u8, tag: []const u8) bool {
         var start: usize = 0;
         for (range, 0..) |ch, i| {
             if (ch == '-') {
-                if (range_count < 16) { range_subtags[range_count] = range[start..i]; range_count += 1; }
+                if (range_count < 16) {
+                    range_subtags[range_count] = range[start..i];
+                    range_count += 1;
+                }
                 start = i + 1;
             }
         }
-        if (range_count < 16) { range_subtags[range_count] = range[start..]; range_count += 1; }
+        if (range_count < 16) {
+            range_subtags[range_count] = range[start..];
+            range_count += 1;
+        }
     }
     var tag_subtags: [16][]const u8 = undefined;
     var tag_count: usize = 0;
@@ -1881,11 +1945,17 @@ pub fn matchLangBCP47(range: []const u8, tag: []const u8) bool {
         var start: usize = 0;
         for (tag, 0..) |ch, i| {
             if (ch == '-') {
-                if (tag_count < 16) { tag_subtags[tag_count] = tag[start..i]; tag_count += 1; }
+                if (tag_count < 16) {
+                    tag_subtags[tag_count] = tag[start..i];
+                    tag_count += 1;
+                }
                 start = i + 1;
             }
         }
-        if (tag_count < 16) { tag_subtags[tag_count] = tag[start..]; tag_count += 1; }
+        if (tag_count < 16) {
+            tag_subtags[tag_count] = tag[start..];
+            tag_count += 1;
+        }
     }
 
     if (range_count == 0 or tag_count == 0) return false;

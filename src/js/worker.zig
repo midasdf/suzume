@@ -112,8 +112,7 @@ fn workerThreadMain(handle: *WorkerHandle, script: []const u8) void {
     ;
     _ = qjs.JS_Eval(ctx, post_msg_code, post_msg_code.len, "<worker-init>", qjs.JS_EVAL_TYPE_GLOBAL);
 
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__workerPostMessage",
-        qjs.JS_NewCFunction(ctx, &workerNativePostMessage, "__workerPostMessage", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__workerPostMessage", qjs.JS_NewCFunction(ctx, &workerNativePostMessage, "__workerPostMessage", 1));
 
     // Evaluate the worker script
     const result = qjs.JS_Eval(ctx, script.ptr, script.len, "<worker>", qjs.JS_EVAL_TYPE_GLOBAL);

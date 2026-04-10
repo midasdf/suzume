@@ -386,12 +386,10 @@ fn applyRawDecl(style: *ComputedStyle, decl: ast.Declaration) void {
             if (properties.parseColor(val)) |c| style.background_color = c.toArgb();
         },
         .visibility => {
-            if (std.mem.eql(u8, val, "visible")) style.visibility = .visible
-            else if (std.mem.eql(u8, val, "hidden")) style.visibility = .hidden;
+            if (std.mem.eql(u8, val, "visible")) style.visibility = .visible else if (std.mem.eql(u8, val, "hidden")) style.visibility = .hidden;
         },
         .display => {
-            if (std.mem.eql(u8, val, "none")) style.display = .none
-            else if (std.mem.eql(u8, val, "block")) style.display = .block;
+            if (std.mem.eql(u8, val, "none")) style.display = .none else if (std.mem.eql(u8, val, "block")) style.display = .block;
         },
         else => {},
     }

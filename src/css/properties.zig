@@ -114,9 +114,12 @@ fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) u
     {
         var depth: usize = 0;
         for (inner) |ch| {
-            if (ch == '(') depth += 1
-            else if (ch == ')') { if (depth > 0) depth -= 1; }
-            else if (ch == ',' and depth == 0) { has_comma = true; break; }
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == ',' and depth == 0) {
+                has_comma = true;
+                break;
+            }
         }
     }
 
@@ -125,8 +128,16 @@ fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) u
     var in_token = false;
 
     for (inner, 0..) |ch, i| {
-        if (ch == '(') { depth += 1; in_token = true; continue; }
-        if (ch == ')') { if (depth > 0) depth -= 1; in_token = true; continue; }
+        if (ch == '(') {
+            depth += 1;
+            in_token = true;
+            continue;
+        }
+        if (ch == ')') {
+            if (depth > 0) depth -= 1;
+            in_token = true;
+            continue;
+        }
 
         if (depth == 0) {
             if (has_comma) {
@@ -134,7 +145,10 @@ fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) u
                 if (ch == ',') {
                     if (in_token) {
                         const tok = std.mem.trim(u8, inner[start..i], " \t");
-                        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+                        if (tok.len > 0 and count < 8) {
+                            out[count] = tok;
+                            count += 1;
+                        }
                     }
                     start = i + 1;
                     in_token = false;
@@ -145,7 +159,10 @@ fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) u
                 if (ch == '/') {
                     if (in_token) {
                         const tok = std.mem.trim(u8, inner[start..i], " \t");
-                        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+                        if (tok.len > 0 and count < 8) {
+                            out[count] = tok;
+                            count += 1;
+                        }
                     }
                     has_slash.* = true;
                     start = i + 1;
@@ -155,7 +172,10 @@ fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) u
                 if (ch == ' ' or ch == '\t') {
                     if (in_token) {
                         const tok = std.mem.trim(u8, inner[start..i], " \t");
-                        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+                        if (tok.len > 0 and count < 8) {
+                            out[count] = tok;
+                            count += 1;
+                        }
                     }
                     start = i + 1;
                     in_token = false;
@@ -163,12 +183,18 @@ fn tokenizeColorArgs(inner: []const u8, out: *[8][]const u8, has_slash: *bool) u
                 }
             }
         }
-        if (!in_token) { start = i; in_token = true; }
+        if (!in_token) {
+            start = i;
+            in_token = true;
+        }
     }
     // Final token
     if (in_token) {
         const tok = std.mem.trim(u8, inner[start..], " \t");
-        if (tok.len > 0 and count < 8) { out[count] = tok; count += 1; }
+        if (tok.len > 0 and count < 8) {
+            out[count] = tok;
+            count += 1;
+        }
     }
     return count;
 }
@@ -746,9 +772,7 @@ fn parseColorMixFunc(raw: []const u8) ?values.Color {
 fn findTopLevelComma(s: []const u8) ?usize {
     var depth: u32 = 0;
     for (s, 0..) |ch, i| {
-        if (ch == '(' or ch == '[') depth += 1
-        else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
-        else if (ch == ',' and depth == 0) return i;
+        if (ch == '(' or ch == '[') depth += 1 else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1 else if (ch == ',' and depth == 0) return i;
     }
     return null;
 }
@@ -1149,29 +1173,29 @@ const named_color_table = std.StaticStringMap(values.Color).initComptime(.{
     .{ "accentcolortext", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },
     // Deprecated CSS2 system colors — mapped to CSS4 aliases per spec Appendix A
     // https://drafts.csswg.org/css-color-4/#deprecated-system-colors
-    .{ "activeborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },     // → ButtonBorder
-    .{ "activecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },     // → Canvas
-    .{ "appworkspace", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },      // → Canvas
-    .{ "background", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },        // → Canvas
-    .{ "buttonhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },   // → ButtonFace
-    .{ "buttonshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },      // → ButtonBorder
-    .{ "captiontext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },            // → CanvasText
-    .{ "inactiveborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },    // → ButtonBorder
-    .{ "inactivecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },   // → Canvas
+    .{ "activeborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } }, // → ButtonBorder
+    .{ "activecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "appworkspace", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "background", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "buttonhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } }, // → ButtonFace
+    .{ "buttonshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } }, // → ButtonBorder
+    .{ "captiontext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } }, // → CanvasText
+    .{ "inactiveborder", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } }, // → ButtonBorder
+    .{ "inactivecaption", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
     .{ "inactivecaptiontext", values.Color{ .r = 109, .g = 109, .b = 109, .a = 255 } }, // → GrayText
-    .{ "infobackground", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },    // → Canvas
-    .{ "infotext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },               // → CanvasText
-    .{ "menu", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },              // → Canvas
-    .{ "menutext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },               // → CanvasText
-    .{ "scrollbar", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },         // → Canvas
-    .{ "threeddarkshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },  // → ButtonBorder
-    .{ "threedface", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },        // → ButtonFace
-    .{ "threedhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } },   // → ButtonFace
+    .{ "infobackground", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "infotext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } }, // → CanvasText
+    .{ "menu", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "menutext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } }, // → CanvasText
+    .{ "scrollbar", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "threeddarkshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } }, // → ButtonBorder
+    .{ "threedface", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } }, // → ButtonFace
+    .{ "threedhighlight", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } }, // → ButtonFace
     .{ "threedlightshadow", values.Color{ .r = 240, .g = 240, .b = 240, .a = 255 } }, // → ButtonFace
-    .{ "threedshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },      // → ButtonBorder
-    .{ "window", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } },            // → Canvas
-    .{ "windowframe", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } },       // → ButtonBorder
-    .{ "windowtext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } },              // → CanvasText
+    .{ "threedshadow", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } }, // → ButtonBorder
+    .{ "window", values.Color{ .r = 255, .g = 255, .b = 255, .a = 255 } }, // → Canvas
+    .{ "windowframe", values.Color{ .r = 118, .g = 118, .b = 118, .a = 255 } }, // → ButtonBorder
+    .{ "windowtext", values.Color{ .r = 0, .g = 0, .b = 0, .a = 255 } }, // → CanvasText
 });
 
 fn namedColor(name: []const u8) ?values.Color {
@@ -1754,8 +1778,8 @@ fn expandBorder(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declarat
 
 fn isBorderStyle(tok: []const u8) bool {
     const styles = [_][]const u8{
-        "none", "hidden", "dotted", "dashed", "solid",
-        "double", "groove", "ridge", "inset", "outset",
+        "none",   "hidden", "dotted", "dashed", "solid",
+        "double", "groove", "ridge",  "inset",  "outset",
     };
     for (styles) |s| {
         if (eqlIgnoreCase(tok, s)) return true;
@@ -1808,7 +1832,10 @@ fn expandBackground(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Decl
                     depth += 1;
                 } else if (value[i] == ')') {
                     if (depth > 0) depth -= 1;
-                    if (depth == 0) { i += 1; break; }
+                    if (depth == 0) {
+                        i += 1;
+                        break;
+                    }
                 } else if ((value[i] == ' ' or value[i] == '\t') and depth == 0) {
                     break;
                 }

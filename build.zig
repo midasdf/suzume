@@ -3,6 +3,138 @@ const std = @import("std");
 // const build_libcss = @import("build_libcss.zig");
 const build_libnsfb = @import("build_libnsfb.zig");
 
+/// Append typical Linux multilib / generic library dirs under `root` (sysroot or "").
+/// When `root` is empty, use absolute host paths (`/usr/lib/...`).
+fn appendWoffLibSearchDirs(b: *std.Build, list: *std.ArrayList([]const u8), resolved: std.Target, root: []const u8) !void {
+    const push_abs = struct {
+        fn f(alloc: std.mem.Allocator, lst: *std.ArrayList([]const u8), s: []const u8) !void {
+            try lst.append(alloc, try alloc.dupe(u8, s));
+        }
+    }.f;
+    const push_under_root = struct {
+        fn f(bb: *std.Build, lst: *std.ArrayList([]const u8), sysroot_prefix: []const u8, tail: []const []const u8) !void {
+            const base_owned: ?[]u8 = if (std.fs.path.isAbsolute(sysroot_prefix)) null else bb.pathFromRoot(sysroot_prefix);
+            defer if (base_owned) |p| bb.allocator.free(p);
+            const base: []const u8 = base_owned orelse sysroot_prefix;
+
+            var parts = try bb.allocator.alloc([]const u8, 1 + tail.len);
+            defer bb.allocator.free(parts);
+            parts[0] = base;
+            @memcpy(parts[1..], tail);
+            const abs = bb.pathResolve(parts);
+            try lst.append(bb.allocator, abs);
+        }
+    }.f;
+
+    if (resolved.os.tag == .linux) {
+        if (root.len == 0) {
+            if (resolved.cpu.arch == .x86_64) {
+                try push_abs(b.allocator, list, "/usr/lib/x86_64-linux-gnu");
+                try push_abs(b.allocator, list, "/lib/x86_64-linux-gnu");
+            } else if (resolved.cpu.arch == .aarch64) {
+                try push_abs(b.allocator, list, "/usr/lib/aarch64-linux-gnu");
+                try push_abs(b.allocator, list, "/lib/aarch64-linux-gnu");
+            } else {
+                const triple = try resolved.linuxTriple(b.allocator);
+                defer b.allocator.free(triple);
+                const u = try std.fmt.allocPrint(b.allocator, "/usr/lib/{s}", .{triple});
+                defer b.allocator.free(u);
+                const l = try std.fmt.allocPrint(b.allocator, "/lib/{s}", .{triple});
+                defer b.allocator.free(l);
+                try push_abs(b.allocator, list, u);
+                try push_abs(b.allocator, list, l);
+            }
+        } else {
+            if (resolved.cpu.arch == .x86_64) {
+                try push_under_root(b, list, root, &.{ "usr", "lib", "x86_64-linux-gnu" });
+                try push_under_root(b, list, root, &.{ "lib", "x86_64-linux-gnu" });
+            } else if (resolved.cpu.arch == .aarch64) {
+                try push_under_root(b, list, root, &.{ "usr", "lib", "aarch64-linux-gnu" });
+                try push_under_root(b, list, root, &.{ "lib", "aarch64-linux-gnu" });
+            } else {
+                const triple = try resolved.linuxTriple(b.allocator);
+                defer b.allocator.free(triple);
+                try push_under_root(b, list, root, &.{ "usr", "lib", triple });
+                try push_under_root(b, list, root, &.{ "lib", triple });
+            }
+        }
+    }
+
+    if (root.len == 0) {
+        try push_abs(b.allocator, list, "/usr/lib64");
+        try push_abs(b.allocator, list, "/usr/lib");
+        try push_abs(b.allocator, list, "/lib64");
+        try push_abs(b.allocator, list, "/lib");
+    } else {
+        try push_under_root(b, list, root, &.{ "usr", "lib64" });
+        try push_under_root(b, list, root, &.{ "usr", "lib" });
+        try push_under_root(b, list, root, &.{"lib64"});
+        try push_under_root(b, list, root, &.{"lib"});
+    }
+}
+
+/// Prefer `stem.so`, else any `stem.so*` (longest basename wins as a rough "newest" heuristic).
+fn findWoffSharedObject(b: *std.Build, dirs: []const []const u8, stem: []const u8) ?std.Build.LazyPath {
+    var buf: [512]u8 = undefined;
+    for (dirs) |dir| {
+        const unversioned = std.fmt.bufPrint(&buf, "{s}/{s}.so", .{ dir, stem }) catch continue;
+        std.fs.accessAbsolute(unversioned, .{}) catch continue;
+        return .{ .cwd_relative = b.dupe(unversioned) };
+    }
+    var best_name_len: usize = 0;
+    var best_path: ?[]const u8 = null;
+    defer if (best_path) |p| b.allocator.free(p);
+    for (dirs) |dir| {
+        var d = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch continue;
+        defer d.close();
+        var it = d.iterate();
+        while (it.next() catch break) |ent| {
+            if (ent.kind != .file) continue;
+            if (!std.mem.startsWith(u8, ent.name, stem)) continue;
+            const after = ent.name[stem.len..];
+            if (!std.mem.eql(u8, after, ".so") and !std.mem.startsWith(u8, after, ".so.")) continue;
+            if (ent.name.len <= best_name_len) continue;
+            best_name_len = ent.name.len;
+            if (best_path) |old| b.allocator.free(old);
+            best_path = std.fmt.allocPrint(b.allocator, "{s}/{s}", .{ dir, ent.name }) catch continue;
+        }
+    }
+    if (best_path) |full| {
+        return .{ .cwd_relative = b.dupe(full) };
+    }
+    return null;
+}
+
+fn linkWoff2(exe: *std.Build.Step.Compile) void {
+    const b = exe.step.owner;
+    const rt = exe.root_module.resolved_target orelse return;
+    const resolved = rt.result;
+    const cross_linux = resolved.os.tag == .linux and
+        !(rt.query.isNativeCpu() and rt.query.isNativeOs() and rt.query.isNativeAbi());
+
+    var dirs: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (dirs.items) |p| b.allocator.free(p);
+        dirs.deinit(b.allocator);
+    }
+
+    if (cross_linux) {
+        if (b.sysroot) |sr| {
+            appendWoffLibSearchDirs(b, &dirs, resolved, sr) catch return;
+        }
+        appendWoffLibSearchDirs(b, &dirs, resolved, "sysroot") catch return;
+    } else {
+        appendWoffLibSearchDirs(b, &dirs, resolved, "") catch return;
+    }
+
+    if (findWoffSharedObject(b, dirs.items, "libwoff2dec")) |p| {
+        exe.root_module.addObjectFile(p);
+    }
+    if (findWoffSharedObject(b, dirs.items, "libwoff2common")) |p| {
+        exe.root_module.addObjectFile(p);
+    }
+}
+
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
@@ -89,6 +221,8 @@ pub fn build(b: *std.Build) void {
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
+    // nsfb_x_* helpers used by XIM/cursor live in deps/libnsfb's XCB backend.
+
     // ── QuickJS-ng ──────────────────────────────────────────────────
     const quickjs_dir = "deps/quickjs-ng";
     exe.addIncludePath(b.path(quickjs_dir));
@@ -164,7 +298,7 @@ pub fn build(b: *std.Build) void {
         });
     }
 
-    const plutovg_c_flags: []const []const u8 = &.{ "-fno-sanitize=undefined" };
+    const plutovg_c_flags: []const []const u8 = &.{"-fno-sanitize=undefined"};
     const plutovg_c_sources: []const []const u8 = &.{
         lunasvg_dir ++ "/3rdparty/plutovg/plutovg.c",
         lunasvg_dir ++ "/3rdparty/plutovg/plutovg-paint.c",
@@ -198,11 +332,11 @@ pub fn build(b: *std.Build) void {
     });
     exe.addIncludePath(b.path("src/font"));
 
-    // Cross-compile: add sysroot library/include paths for aarch64 target
+    // Cross-compile: add repo-local sysroot paths for aarch64-linux (see README / packaging notes).
     const resolved = target.result;
     if (resolved.cpu.arch == .aarch64 and resolved.os.tag == .linux) {
-        exe.addLibraryPath(.{ .cwd_relative = "sysroot/usr/lib" });
-        exe.addIncludePath(.{ .cwd_relative = "sysroot/usr/include" });
+        exe.addLibraryPath(b.path("sysroot/usr/lib"));
+        exe.addIncludePath(b.path("sysroot/usr/include"));
     }
 
     // System libraries
@@ -215,10 +349,10 @@ pub fn build(b: *std.Build) void {
     exe.linkSystemLibrary("curl");
     exe.linkSystemLibrary("sqlite3");
     exe.linkSystemLibrary("webp");
-    exe.linkSystemLibrary("woff2dec");
-    exe.linkSystemLibrary("woff2common");
     exe.linkSystemLibrary("brotlidec");
     exe.linkSystemLibrary("fontconfig");
+
+    linkWoff2(exe);
 
     // C++ standard library (needed by HarfBuzz + woff2)
     exe.linkLibCpp();

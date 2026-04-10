@@ -364,9 +364,7 @@ fn buildChildren(
                 child_box.box_type = switch (style.display) {
                     .block, .list_item, .flex, .grid, .inline_grid => .block,
                     .table => .block,
-                    .table_row, .table_cell, .table_row_group,
-                    .table_header_group, .table_footer_group,
-                    .table_column, .table_column_group, .table_caption => .block,
+                    .table_row, .table_cell, .table_row_group, .table_header_group, .table_footer_group, .table_column, .table_column_group, .table_caption => .block,
                     .inline_block, .inline_flex => .inline_box,
                     .inline_ => .inline_box,
                     else => .block,
@@ -488,11 +486,17 @@ fn buildChildren(
                             // Check HTML width/height attributes first
                             if (child.getAttribute("width")) |w_str| {
                                 const w = parseFloatAttr(w_str);
-                                if (w > 0) { svg_w = w; has_explicit_dims = true; }
+                                if (w > 0) {
+                                    svg_w = w;
+                                    has_explicit_dims = true;
+                                }
                             }
                             if (child.getAttribute("height")) |h_str| {
                                 const h = parseFloatAttr(h_str);
-                                if (h > 0) { svg_h = h; has_explicit_dims = true; }
+                                if (h > 0) {
+                                    svg_h = h;
+                                    has_explicit_dims = true;
+                                }
                             }
 
                             // Fall back to viewBox if no explicit width/height
@@ -840,12 +844,12 @@ fn buildChildren(
                 // Recurse into children (skip for replaced/void elements)
                 const skip_recurse = child_box.box_type == .replaced or
                     (if (child.tagName()) |tag|
-                    (std.mem.eql(u8, tag, "input") or
-                        std.mem.eql(u8, tag, "br") or
-                        std.mem.eql(u8, tag, "hr") or
-                        std.mem.eql(u8, tag, "select"))
-                else
-                    false);
+                        (std.mem.eql(u8, tag, "input") or
+                            std.mem.eql(u8, tag, "br") or
+                            std.mem.eql(u8, tag, "hr") or
+                            std.mem.eql(u8, tag, "select"))
+                    else
+                        false);
                 // Process CSS counters (counter-reset, counter-increment)
                 if (style.counter_reset) |cr| {
                     const name = std.mem.trim(u8, cr, " \t");

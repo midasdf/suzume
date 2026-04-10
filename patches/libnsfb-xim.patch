@@ -1,0 +1,77 @@
+diff --git a/include/libnsfb.h b/include/libnsfb.h
+index 674df65..c042195 100644
+--- a/include/libnsfb.h
++++ b/include/libnsfb.h
+@@ -12,6 +12,7 @@
+ #define _LIBNSFB_H 1
+ 
+ #include <stdint.h>
++#include <stdbool.h>
+ 
+ typedef struct nsfb_palette_s nsfb_palette_t;
+ typedef struct nsfb_cursor_s nsfb_cursor_t;
+@@ -166,6 +167,11 @@ int nsfb_get_buffer(nsfb_t *nsfb, uint8_t **ptr, int *linelen);
+  */
+ bool nsfb_dump(nsfb_t *nsfb, int fd);
+ 
++/** X11 surface: window id for XIM / input method integration. */
++unsigned long nsfb_x_get_window_id(nsfb_t *nsfb);
++void nsfb_x_set_cursor_shape(nsfb_t *nsfb, int shape);
++extern unsigned int nsfb_x_last_keycode;
++extern unsigned int nsfb_x_last_keystate;
+ 
+ #endif
+ 
+diff --git a/src/surface/x.c b/src/surface/x.c
+index dfbae56..fb033b9 100644
+--- a/src/surface/x.c
++++ b/src/surface/x.c
+@@ -79,6 +79,31 @@ typedef struct xstate_s {
+     xcb_shm_seg_t segment; /* The handle to the image shared memory */
+ } xstate_t;
+ 
++/*
++ * Suzume integration hooks.
++ *
++ * libnsfb exposes only translated keycodes via nsfb_event_t; for XIM we need the
++ * raw X11 keycode + modifier state, and the native window id.
++ */
++unsigned int nsfb_x_last_keycode = 0;
++unsigned int nsfb_x_last_keystate = 0;
++
++unsigned long nsfb_x_get_window_id(nsfb_t *nsfb)
++{
++    xstate_t *xstate = nsfb->surface_priv;
++    if (xstate == NULL) {
++        return 0;
++    }
++    return (unsigned long)xstate->window;
++}
++
++void nsfb_x_set_cursor_shape(nsfb_t *nsfb, int shape)
++{
++    (void)nsfb;
++    (void)shape;
++    /* TODO: Implement real cursor shapes (arrow/pointer/text) if needed. */
++}
++
+ /* X keyboard codepage to nsfb mapping */
+ static enum nsfb_key_code_e XCSKeyboardMap[256] = {
+     NSFB_KEY_UNKNOWN, /* */
+@@ -1041,12 +1066,16 @@ static bool x_input(nsfb_t *nsfb, nsfb_event_t *event, int timeout)
+ 
+     case XCB_KEY_PRESS:
+         ekp = (xcb_key_press_event_t *)e;
++        nsfb_x_last_keycode = ekp->detail;
++        nsfb_x_last_keystate = ekp->state;
+         event->type = NSFB_EVENT_KEY_DOWN;
+         event->value.keycode = xkeysym_to_nsfbkeycode(xcb_key_symbols_get_keysym(xstate->keysymbols, ekp->detail, 0));
+         break;
+ 
+     case XCB_KEY_RELEASE:
+         ekr = (xcb_key_release_event_t *)e;
++        nsfb_x_last_keycode = ekr->detail;
++        nsfb_x_last_keystate = ekr->state;
+         event->type = NSFB_EVENT_KEY_UP;
+         event->value.keycode = xkeysym_to_nsfbkeycode(xcb_key_symbols_get_keysym(xstate->keysymbols, ekr->detail, 0));
+         break;
