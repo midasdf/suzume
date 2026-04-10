@@ -79,6 +79,12 @@ fn applyActiveTabToUi(
     }
 }
 
+/// Scroll so `match_y` is near the vertical center of the content viewport.
+fn centerScrollOnMatchY(scroll_y: *f32, surface_height: i32, match_y: f32) void {
+    const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface_height)));
+    scroll_y.* = @max(0, match_y - ch / 2.0);
+}
+
 const ErrBlitCtx = struct {
     surface: *Surface,
     colour: u32,
@@ -2111,14 +2117,14 @@ pub fn main() !void {
                             .next_match => {
                                 find_bar.nextMatch();
                                 if (find_bar.currentMatchY()) |match_y| {
-                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.contentHeight(surface.height))) / 2.0);
+                                    centerScrollOnMatchY(&scroll_y, surface.height, match_y);
                                 }
                                 needs_repaint = true;
                             },
                             .prev_match => {
                                 find_bar.prevMatch();
                                 if (find_bar.currentMatchY()) |match_y| {
-                                    scroll_y = @max(0, match_y - @as(f32, @floatFromInt(chrome.contentHeight(surface.height))) / 2.0);
+                                    centerScrollOnMatchY(&scroll_y, surface.height, match_y);
                                 }
                                 needs_repaint = true;
                             },
