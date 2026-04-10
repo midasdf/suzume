@@ -2502,13 +2502,22 @@ fn windowLocationAssign(
     return quickjs.JS_UNDEFINED();
 }
 
+fn windowLocationSetHref(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return windowLocationAssign(ctx, quickjs.JS_UNDEFINED(), argc, argv);
+}
+
 fn createLocationObject(ctx: *qjs.JSContext) qjs.JSValue {
     const loc = qjs.JS_NewObject(ctx);
     if (quickjs.JS_IsException(loc)) return loc;
 
     // href getter
     const hrefAtom = qjs.JS_NewAtom(ctx, "href");
-    _ = qjs.JS_DefinePropertyGetSet(ctx, loc, hrefAtom, qjs.JS_NewCFunction(ctx, &windowLocationGetHref, "get href", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    _ = qjs.JS_DefinePropertyGetSet(ctx, loc, hrefAtom, qjs.JS_NewCFunction(ctx, &windowLocationGetHref, "get href", 0), qjs.JS_NewCFunction(ctx, &windowLocationSetHref, "set href", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
     qjs.JS_FreeAtom(ctx, hrefAtom);
 
     const protocolAtom = qjs.JS_NewAtom(ctx, "protocol");
