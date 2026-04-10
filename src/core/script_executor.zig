@@ -457,10 +457,12 @@ pub fn initPageJs(doc: *Document, page_js_rt: *?JsRuntime, loaded_script_urls: *
     events.dispatchDocumentEvent(js_rt.ctx, "DOMContentLoaded");
     js_rt.executePending();
 
-    // Tick timers for setTimeout(fn, 0) callbacks
+    // Tick timers for setTimeout(fn, 0) callbacks.
+    // Keep iterations low — heavy JS pages (google.com) can crash QuickJS-ng
+    // in timer callbacks. Remaining timers fire safely in the main event loop.
     {
         var timer_iters: u32 = 0;
-        while (web_api.tickTimers(js_rt.ctx) and timer_iters < 100) : (timer_iters += 1) {
+        while (web_api.tickTimers(js_rt.ctx) and timer_iters < 5) : (timer_iters += 1) {
             js_rt.executePending();
         }
     }
@@ -475,10 +477,10 @@ pub fn initPageJs(doc: *Document, page_js_rt: *?JsRuntime, loaded_script_urls: *
     dom_api.iframe.fireIframeLoadEvents(js_rt.ctx);
     js_rt.executePending();
 
-    // Final timer tick
+    // Final timer tick (limited to avoid crashes on heavy JS pages)
     {
         var timer_iters: u32 = 0;
-        while (web_api.tickTimers(js_rt.ctx) and timer_iters < 100) : (timer_iters += 1) {
+        while (web_api.tickTimers(js_rt.ctx) and timer_iters < 5) : (timer_iters += 1) {
             js_rt.executePending();
         }
     }

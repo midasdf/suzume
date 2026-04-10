@@ -16008,7 +16008,11 @@ static JSValue js_build_mapped_arguments(JSContext *ctx, int argc,
 
     props[0].u.value = js_int32(argc); /* length */
     props[1].u.value = js_dup(ctx->array_proto_values); /* Symbol.iterator */
-    props[2].u.value = js_dup(ctx->rt->current_stack_frame->cur_func); /* callee */
+    /* Guard against NULL stack frame (e.g. when called from C via JS_Call) */
+    if (ctx->rt->current_stack_frame)
+        props[2].u.value = js_dup(ctx->rt->current_stack_frame->cur_func); /* callee */
+    else
+        props[2].u.value = JS_UNDEFINED;
 
     val = JS_NewObjectFromShape(ctx, js_dup_shape(ctx->mapped_arguments_shape),
                                 JS_CLASS_MAPPED_ARGUMENTS, props);
@@ -16709,6 +16713,8 @@ static __exception int JS_CopyDataProperties(JSContext *ctx,
 /* only valid inside C functions */
 static JSValueConst JS_GetActiveFunction(JSContext *ctx)
 {
+    if (!ctx->rt->current_stack_frame)
+        return JS_UNDEFINED;
     return ctx->rt->current_stack_frame->cur_func;
 }
 
