@@ -267,6 +267,14 @@ const PageState = struct {
     }
 };
 
+/// Active tab's page state, or null if indices are out of sync.
+fn activePageState(tab_mgr: *const TabManager, page_states: *std.ArrayListUnmanaged(PageState)) ?*PageState {
+    if (tab_mgr.active_index < page_states.items.len) {
+        return &page_states.items[tab_mgr.active_index];
+    }
+    return null;
+}
+
 // Script types and functions are now in core/script_executor.zig
 const DeferredScript = script_executor.DeferredScript;
 const setCurrentScript = script_executor.setCurrentScript;
@@ -1059,23 +1067,24 @@ pub fn main() !void {
 
                 // Auto-load the active (first) tab after session restore
                 if (tab_mgr.getActiveTab()) |tab| {
-                    if (tab.url.len > 0 and tab_mgr.active_index < page_states.items.len) {
-                        const pg = &page_states.items[tab_mgr.active_index];
-                        const url_z = allocator.allocSentinel(u8, tab.url.len, 0) catch null;
-                        if (url_z) |uz| {
-                            defer allocator.free(uz);
-                            @memcpy(uz, tab.url);
-                            url_input.setText(tab.url);
-                            url_input.focused = false;
-                            status_text = "Loading...";
-                            if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width, surface.height)) {
-                                status_text = "Done";
-                                scroll_y = 0;
-                                scroll_x = 0;
-                                if (current_url) |old| allocator.free(old);
-                                current_url = allocator.dupe(u8, tab.url) catch null;
-                            } else {
-                                status_text = "Failed";
+                    if (tab.url.len > 0) {
+                        if (activePageState(&tab_mgr, &page_states)) |pg| {
+                            const url_z = allocator.allocSentinel(u8, tab.url.len, 0) catch null;
+                            if (url_z) |uz| {
+                                defer allocator.free(uz);
+                                @memcpy(uz, tab.url);
+                                url_input.setText(tab.url);
+                                url_input.focused = false;
+                                status_text = "Loading...";
+                                if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*si| si else null, surface.width, surface.height)) {
+                                    status_text = "Done";
+                                    scroll_y = 0;
+                                    scroll_x = 0;
+                                    if (current_url) |old| allocator.free(old);
+                                    current_url = allocator.dupe(u8, tab.url) catch null;
+                                } else {
+                                    status_text = "Failed";
+                                }
                             }
                         }
                     }
@@ -1214,10 +1223,7 @@ pub fn main() !void {
         // Repaint if needed
         // Apply CSS animations before repaint
         {
-            const anim_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                &page_states.items[tab_mgr.active_index]
-            else
-                null;
+            const anim_pg = activePageState(&tab_mgr, &page_states);
             if (anim_pg) |pg| {
                 if (pg.anim_state) |*as| {
                     if (pg.root_box != null and pg.styles != null and as.hasActiveAnimations()) {
@@ -1240,10 +1246,7 @@ pub fn main() !void {
             // 2. Else if body has a background, propagate it to the canvas
             // 3. Else default to white
             const canvas_bg: ?u32 = blk: {
-                const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                    &page_states.items[tab_mgr.active_index]
-                else
-                    null;
+                const active_pg = activePageState(&tab_mgr, &page_states);
                 if (active_pg) |pg| {
                     if (pg.root_box) |root| {
                         // Step 1: check html element background
@@ -1269,10 +1272,7 @@ pub fn main() !void {
             chrome.clearContentArea(&surface, canvas_bg);
 
             // Paint page content (from active tab's page state)
-            const active_page: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                &page_states.items[tab_mgr.active_index]
-            else
-                null;
+            const active_page = activePageState(&tab_mgr, &page_states);
 
             if (active_page) |page| {
                 if (page.root_box) |root_box| {
@@ -1337,10 +1337,7 @@ pub fn main() !void {
 
         // Tick JS timers (setTimeout/setInterval) and check for DOM mutations
         {
-            const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                &page_states.items[tab_mgr.active_index]
-            else
-                null;
+            const active_pg = activePageState(&tab_mgr, &page_states);
             if (active_pg) |pg| {
                 if (pg.js_rt) |*js_rt| {
                     // Sync scroll position to JS before ticking timers
@@ -1389,7 +1386,7 @@ pub fn main() !void {
             if (nav_url_z) |uz| {
                 defer allocator.free(uz);
                 @memcpy(uz, nav_url);
-                const nav_pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                const nav_pg = activePageState(&tab_mgr, &page_states);
                 if (nav_pg) |pg| {
                     status_text = "Loading...";
                     if (navigateTo(allocator, &loader, uz, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
@@ -1425,7 +1422,7 @@ pub fn main() !void {
                     form_input.insertText(committed);
                     // Dispatch "input" event on the focused element
                     {
-                        const xim_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        const xim_pg = activePageState(&tab_mgr, &page_states);
                         if (xim_pg) |pg| {
                             if (pg.js_rt) |*js_rt| {
                                 _ = events.dispatchEvent(js_rt.ctx, focused_input_node.?, "input");
@@ -1454,10 +1451,7 @@ pub fn main() !void {
 
         // Incremental image loading: load multiple images per event loop tick
         {
-            const active_img_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                &page_states.items[tab_mgr.active_index]
-            else
-                null;
+            const active_img_pg = activePageState(&tab_mgr, &page_states);
             if (active_img_pg) |pg| {
                 // Load up to 10 images per tick, but cap total time at 3 seconds
                 // to keep the event loop responsive
@@ -1572,10 +1566,7 @@ pub fn main() !void {
                         @intCast(@max(0, chrome.contentHeight(surface.height))),
                     );
                     // Re-layout page content for new width
-                    const resize_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                        &page_states.items[tab_mgr.active_index]
-                    else
-                        null;
+                    const resize_pg = activePageState(&tab_mgr, &page_states);
                     if (resize_pg) |pg| {
                         // Full re-cascade + re-layout for viewport-dependent CSS (@media, vw/vh)
                         restylePage(pg, allocator, &fonts, surface.width, surface.height);
@@ -1709,7 +1700,7 @@ pub fn main() !void {
                             @memcpy(url_z, url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
@@ -1731,7 +1722,7 @@ pub fn main() !void {
                             @memcpy(url_z, url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
@@ -1754,7 +1745,7 @@ pub fn main() !void {
                         const url_z = allocator.allocSentinel(u8, hist_url.len, 0) catch continue;
                         defer allocator.free(url_z);
                         @memcpy(url_z, hist_url);
-                        const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                        const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                         if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                             status_text = "Done";
                             scroll_y = 0;
@@ -1828,7 +1819,7 @@ pub fn main() !void {
                             url_input.setText(url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
@@ -1860,7 +1851,7 @@ pub fn main() !void {
                             url_input.setText(url);
                             status_text = "Loading...";
                             needs_repaint = true;
-                            const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                            const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                             if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                 status_text = "Done";
                                 scroll_y = 0;
@@ -1951,10 +1942,7 @@ pub fn main() !void {
                         }
 
                         // Not a tab bar click — forward to regular click handler
-                        const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                            &page_states.items[tab_mgr.active_index]
-                        else
-                            null;
+                        const active_pg = activePageState(&tab_mgr, &page_states);
                         if (active_pg) |page| {
                             prev_focused_input_node = focused_input_node;
                             handleClick(
@@ -1995,7 +1983,7 @@ pub fn main() !void {
                             // Update tab with new URL and page title
                             if (current_url) |cu| {
                                 tab_mgr.updateActiveUrl(cu);
-                                const active_pg_title: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                                const active_pg_title = activePageState(&tab_mgr, &page_states);
                                 const click_title = if (active_pg_title) |pgt| (if (pgt.doc) |*d| extractTitle(d) else null) else null;
                                 tab_mgr.updateActiveTitle(click_title orelse cu);
                                 // Record in storage with title
@@ -2008,10 +1996,7 @@ pub fn main() !void {
                         continue;
                     }
                     if (key == nsfb_c.NSFB_KEY_MOUSE_4 or key == nsfb_c.NSFB_KEY_MOUSE_5) {
-                        const active_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                            &page_states.items[tab_mgr.active_index]
-                        else
-                            null;
+                        const active_pg = activePageState(&tab_mgr, &page_states);
                         const total_h: f32 = if (active_pg) |pg| pg.total_height else 0;
                         const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
                         var new_scroll = scroll_y;
@@ -2068,7 +2053,7 @@ pub fn main() !void {
                                                 std.debug.print("[input] XIM text into form: \"{s}\" total=\"{s}\"\n", .{ composed, form_input.getText() });
                                                 // Dispatch "input" event on the focused element
                                                 {
-                                                    const xim_pg2: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                                                    const xim_pg2 = activePageState(&tab_mgr, &page_states);
                                                     if (xim_pg2) |pg| {
                                                         if (pg.js_rt) |*js_rt| {
                                                             _ = events.dispatchEvent(js_rt.ctx, focused_input_node.?, "input");
@@ -2105,10 +2090,7 @@ pub fn main() !void {
                                 needs_repaint = true;
                             },
                             .search => {
-                                const active_pg_fb: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                                    &page_states.items[tab_mgr.active_index]
-                                else
-                                    null;
+                                const active_pg_fb = activePageState(&tab_mgr, &page_states);
                                 if (active_pg_fb) |pg| {
                                     find_bar.performSearch(pg.root_box);
                                 }
@@ -2140,7 +2122,7 @@ pub fn main() !void {
                     if (focused_input_node != null) {
                         // Dispatch "keydown" event on the focused element
                         {
-                            const kd_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                            const kd_pg = activePageState(&tab_mgr, &page_states);
                             if (kd_pg) |pg| {
                                 if (pg.js_rt) |*js_rt| {
                                     _ = events.dispatchKeyboardEvent(js_rt.ctx, focused_input_node.?, "keydown", key);
@@ -2158,7 +2140,7 @@ pub fn main() !void {
                         switch (form_result) {
                             .submit => {
                                 // Enter pressed: submit the form
-                                const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                                const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                                 const fi_node = focused_input_node.?;
                                 const fi_form = findParentForm(fi_node) orelse continue;
                                 if (submitForm(allocator, fi_form, fi_node, &form_input, current_url, &loader, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) |nav_url| {
@@ -2208,7 +2190,7 @@ pub fn main() !void {
                             .consumed => {
                                 // Dispatch "input" event on the focused element
                                 if (focused_input_node) |fi_node_input| {
-                                    const input_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                                    const input_pg = activePageState(&tab_mgr, &page_states);
                                     if (input_pg) |pg| {
                                         if (pg.js_rt) |*js_rt| {
                                             _ = events.dispatchEvent(js_rt.ctx, fi_node_input, "input");
@@ -2245,7 +2227,7 @@ pub fn main() !void {
                                     status_text = "Loading...";
                                     needs_repaint = true;
 
-                                    const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else continue;
+                                    const pg = activePageState(&tab_mgr, &page_states) orelse continue;
                                     if (navigateTo(allocator, &loader, url_z, &fonts, pg, if (storage_inst) |*s| s else null, surface.width, surface.height)) {
                                         status_text = "Done";
                                         scroll_y = 0;
@@ -2303,10 +2285,7 @@ pub fn main() !void {
                     } else {
                         // Content area: handle scroll keys
                         {
-                            const active_pg2: ?*PageState = if (tab_mgr.active_index < page_states.items.len)
-                                &page_states.items[tab_mgr.active_index]
-                            else
-                                null;
+                            const active_pg2 = activePageState(&tab_mgr, &page_states);
                             const total_h2: f32 = if (active_pg2) |pg| pg.total_height else 0;
                             const total_w2: f32 = if (active_pg2) |pg| pg.total_width else 0;
                             const ch = @as(f32, @floatFromInt(chrome.contentHeight(surface.height)));
@@ -2362,7 +2341,7 @@ pub fn main() !void {
 
                     // Dispatch "keyup" event on the focused form element
                     if (focused_input_node) |ku_node| {
-                        const ku_pg: ?*PageState = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        const ku_pg = activePageState(&tab_mgr, &page_states);
                         if (ku_pg) |pg| {
                             if (pg.js_rt) |*js_rt| {
                                 _ = events.dispatchKeyboardEvent(js_rt.ctx, ku_node, "keyup", key);
@@ -2388,7 +2367,7 @@ pub fn main() !void {
 
                     // Dispatch mousemove to JS if in content area
                     if (mouse_y >= chrome.content_y and mouse_y < surface.height - chrome.status_bar_height) {
-                        const pg_move = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        const pg_move = activePageState(&tab_mgr, &page_states);
                         if (pg_move) |p_move| {
                             if (p_move.js_rt) |*js_rt| {
                                 if (p_move.root_box) |root| {
@@ -2441,7 +2420,7 @@ pub fn main() !void {
                     if (mouse_y >= chrome.content_y and mouse_y < surface.height - chrome.status_bar_height) {
                         const layout_x = @as(f32, @floatFromInt(mouse_x)) + scroll_x;
                         const layout_y = @as(f32, @floatFromInt(mouse_y - chrome.content_y)) + scroll_y;
-                        const pg = if (tab_mgr.active_index < page_states.items.len) &page_states.items[tab_mgr.active_index] else null;
+                        const pg = activePageState(&tab_mgr, &page_states);
                         if (pg) |p| {
                             if (p.root_box) |root| {
                                 const link = painter_mod.hitTestLink(root, layout_x, layout_y);
