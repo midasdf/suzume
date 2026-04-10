@@ -1349,6 +1349,7 @@ pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
         if (std.mem.eql(u8, entry.event_type, event_type)) {
             const event_obj = createEventObject(ctx, event_type, null, null);
             _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_trusted", quickjs.JS_NewBool(true));
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(true));
             defer qjs.JS_FreeValue(ctx, event_obj);
             var i: usize = 0;
             while (i < entry.callbacks.items.len) {
@@ -1365,6 +1366,7 @@ pub fn dispatchWindowEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
                     i += 1;
                 }
             }
+            _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
             break;
         }
     }
@@ -1385,6 +1387,8 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "target", qjs.JS_DupValue(ctx, doc_obj));
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, doc_obj));
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "eventPhase", qjs.JS_NewInt32(ctx, 2)); // AT_TARGET
+    // DOM spec: set dispatch flag — dispatchEvent must throw InvalidStateError while dispatching
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(true));
 
     // Fire listeners stored on the lxb document node (via document.addEventListener)
     // AT_TARGET: dispatch capture listeners first, then bubble (DOM spec ordering)
@@ -1427,6 +1431,8 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "currentTarget", qjs.JS_DupValue(ctx, global));
     callEntryListeners(ctx, &window_listener_entries, event_type, event_obj, global, false, false);
     callOnEventHandler(ctx, global, event_type, event_obj);
+    // DOM spec: clear dispatch flag after dispatch completes
+    _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_dispatching", quickjs.JS_NewBool(false));
 }
 
 // ── Registration ────────────────────────────────────────────────────
