@@ -1102,8 +1102,12 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                         break :blk std.ascii.eqlIgnoreCase(ts.ptr[0..ts.len], "radio");
                     };
                     const new_checked = if (is_radio) true else !pre_activation_checked;
-                    _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(new_checked));
-                    has_pre_activation = true;
+                    // Only set pre-activation if checked state actually changes
+                    // (already-checked radio should not fire spurious input/change)
+                    if (new_checked != pre_activation_checked) {
+                        _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(new_checked));
+                        has_pre_activation = true;
+                    }
                     break;
                 }
             }
@@ -1383,25 +1387,32 @@ pub fn dispatchDocumentEvent(ctx: *qjs.JSContext, event_type: []const u8) void {
     _ = qjs.JS_SetPropertyStr(ctx, event_obj, "eventPhase", qjs.JS_NewInt32(ctx, 2)); // AT_TARGET
 
     // Fire listeners stored on the lxb document node (via document.addEventListener)
+    // AT_TARGET: dispatch capture listeners first, then bubble (DOM spec ordering)
     if (dom_api.getDocument(ctx)) |doc_ptr| {
         const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(doc_ptr));
         for (listener_entries.items) |*entry| {
             if (entry.key.node == doc_node and std.mem.eql(u8, entry.key.event_type, event_type)) {
-                // Iterate with once/stopImmediate support
-                var i: usize = 0;
-                while (i < entry.callbacks.items.len) {
-                    if (current_event_flags.stop_immediate_propagation) break;
-                    const rec = entry.callbacks.items[i];
-                    const cb = qjs.JS_DupValue(ctx, rec.callback);
-                    if (rec.once) {
-                        qjs.JS_FreeValue(ctx, entry.callbacks.items[i].callback);
-                        _ = entry.callbacks.orderedRemove(i);
-                    } else {
-                        i += 1;
+                // Two-pass: capture first, then bubble (AT_TARGET ordering)
+                for ([2]bool{ true, false }) |capture_phase| {
+                    var i: usize = 0;
+                    while (i < entry.callbacks.items.len) {
+                        if (current_event_flags.stop_immediate_propagation) break;
+                        const rec = entry.callbacks.items[i];
+                        if (rec.capture != capture_phase) {
+                            i += 1;
+                            continue;
+                        }
+                        const cb = qjs.JS_DupValue(ctx, rec.callback);
+                        if (rec.once) {
+                            qjs.JS_FreeValue(ctx, entry.callbacks.items[i].callback);
+                            _ = entry.callbacks.orderedRemove(i);
+                        } else {
+                            i += 1;
+                        }
+                        invokeListener(ctx, cb, doc_obj, event_obj);
+                        qjs.JS_FreeValue(ctx, cb);
+                        syncStopFlags(ctx, event_obj);
                     }
-                    invokeListener(ctx, cb, doc_obj, event_obj);
-                    qjs.JS_FreeValue(ctx, cb);
-                    syncStopFlags(ctx, event_obj);
                 }
                 break;
             }

@@ -1318,12 +1318,18 @@ pub fn elementCloneNode(
     if (js_node_type == 9) {
         const clone_doc_js =
             \\(function(src, deep){
-            \\  var d=document.implementation.createHTMLDocument('');
+            \\  var ct=src.contentType||'text/html';
+            \\  var d;
+            \\  if(ct==='text/html'){
+            \\    d=document.implementation.createHTMLDocument('');
+            \\  }else{
+            \\    d=document.implementation.createDocument(null,'',null);
+            \\  }
             \\  /* Remove default children for clean slate */
             \\  while(d.firstChild)d.removeChild(d.firstChild);
             \\  /* Deep clone: copy children from source */
             \\  if(deep&&src.childNodes){for(var i=0;i<src.childNodes.length;i++)d.appendChild(src.childNodes[i].cloneNode(true));}
-            \\  d.contentType=src.contentType||'application/xml';
+            \\  d.contentType=ct;
             \\  d.URL=src.URL||'about:blank';
             \\  d.documentURI=src.documentURI||'about:blank';
             \\  return d;

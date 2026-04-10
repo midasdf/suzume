@@ -300,7 +300,8 @@ pub fn elementGetAttributeNS(
                     }
                 }
                 // Attribute has no stored namespace (null) — match if req_ns is also null
-                if (req_ns == null) {
+                // Only match unprefixed attributes to avoid false positives (e.g. "xml:lang")
+                if (req_ns == null and std.mem.indexOfScalar(u8, attr_qname, ':') == null) {
                     var val_len: usize = 0;
                     if (lxb_dom_attr_value_noi(attr, &val_len)) |val_ptr| {
                         return qjs.JS_NewStringLen(c, val_ptr, val_len);
@@ -487,8 +488,8 @@ pub fn elementHasAttributeNS(
                         }
                     }
                 }
-                // No stored namespace — match if req_ns is also null
-                if (req_ns == null) return quickjs.JS_NewBool(true);
+                // No stored namespace — match if req_ns is also null (unprefixed only)
+                if (req_ns == null and std.mem.indexOfScalar(u8, attr_qname, ':') == null) return quickjs.JS_NewBool(true);
             }
         }
         attr_it = lxb_dom_element_next_attribute_noi(attr);
@@ -736,11 +737,20 @@ pub fn classListAdd(
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);
     // Save old class value before modification (lexbor invalidates pointer on set)
     var _ocb: [4096]u8 = undefined;
+    var old_class_heap: ?[]u8 = null;
+    defer if (old_class_heap) |h| std.heap.page_allocator.free(h);
     var old_class_copy: ?[]const u8 = null;
     if (cur != null) {
-        const cl = @min(cur_len, _ocb.len);
-        @memcpy(_ocb[0..cl], cur.?[0..cl]);
-        old_class_copy = _ocb[0..cl];
+        if (cur_len <= _ocb.len) {
+            @memcpy(_ocb[0..cur_len], cur.?[0..cur_len]);
+            old_class_copy = _ocb[0..cur_len];
+        } else {
+            old_class_heap = std.heap.page_allocator.alloc(u8, cur_len) catch null;
+            if (old_class_heap) |h| {
+                @memcpy(h, cur.?[0..cur_len]);
+                old_class_copy = h;
+            }
+        }
     }
     if (argc == 0 and (cur == null or cur_len == 0)) return quickjs.JS_UNDEFINED();
 
