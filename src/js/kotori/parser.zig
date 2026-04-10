@@ -12,7 +12,7 @@ pub const Parser = struct {
     pub fn init(source: []const u8, allocator: std.mem.Allocator) Parser {
         return .{
             .lexer = lexer_mod.Lexer.init(source),
-            .ast = ast_mod.Ast.init(allocator),
+            .ast = .{},
             .pool = pool_mod.StringPool.init(allocator),
             .allocator = allocator,
         };
@@ -25,7 +25,7 @@ pub const Parser = struct {
     }
 
     pub fn deinit(self: *Parser) void {
-        self.ast.deinit();
+        self.ast.deinit(self.allocator);
         self.pool.deinit();
     }
 };
