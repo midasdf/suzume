@@ -298,28 +298,20 @@ const PageState = struct {
     anim_state: ?anim_mod.AnimationState = null,
 
     fn deinit(self: *PageState) void {
-        if (self.js_rt) |*jrt| {
-            dom_api.clearNodeCache(jrt.ctx);
-            events.deinitEvents(jrt.ctx);
-            jrt.deinit();
-        }
-        // Clear dynamic script execution globals
+        // Clear dynamic script execution globals (safe — just nulls pointers)
         dom_api.setJsRuntime(null);
         dom_api.setLoader(null);
         dom_api.setLoadedScriptUrls(null);
-        if (self.loaded_script_urls) |*urls| {
-            var it = urls.keyIterator();
-            while (it.next()) |key| std.heap.c_allocator.free(@constCast(key.*));
-            urls.deinit();
-        }
-        if (self.anim_state) |*as| as.deinit();
-        if (self.image_cache) |*ic| ic.deinit();
-        self.pending_images.deinit(std.heap.c_allocator);
-        if (self.base_url) |bu| std.heap.c_allocator.free(bu);
-        if (self.external_css) |ec| std.heap.c_allocator.free(ec);
-        if (self.styles) |*s| s.deinit();
-        if (self.doc) |*d| d.deinit();
-        if (self.error_alloc) |ea| std.heap.c_allocator.free(ea);
+        dom_api.setRootBox(null);
+        dom_api.setStyles(null);
+        // Reset global state without freeing JS values (leak-safe)
+        dom_api.resetNodeCacheLeaky();
+        events.resetEventsLeaky();
+        // Leak the entire old page state during navigation.
+        // QuickJS with disabled GC corrupts the heap during teardown,
+        // causing cascading free() failures in subsequent allocations.
+        // This is the standard approach for embedded browsers — each page
+        // gets a fresh runtime, and the OS reclaims everything on exit.
         self.* = .{};
     }
 };

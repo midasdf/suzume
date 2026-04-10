@@ -2135,6 +2135,17 @@ pub fn getTextClassId() qjs.JSClassID {
 }
 
 /// Clean up all event listeners. Called when navigating to a new page.
+/// Reset event state without freeing JS values (for leak-safe navigation teardown).
+/// Use when the JS runtime is being leaked intentionally to avoid heap corruption.
+pub fn resetEventsLeaky() void {
+    listener_entries = .empty;
+    window_listener_entries = .empty;
+    document_listener_entries = .empty;
+    cached_js_doc_dispatch = quickjs.JS_UNDEFINED();
+    mutation_observers = .empty;
+    g_ctx = null;
+}
+
 pub fn deinitEvents(ctx: *qjs.JSContext) void {
     for (listener_entries.items) |*entry| {
         for (entry.callbacks.items) |rec| {

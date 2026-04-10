@@ -501,6 +501,16 @@ pub fn cacheDocumentNode(ctx: *qjs.JSContext, doc_ptr: *anyopaque, doc_js: qjs.J
     node_cache.?.put(key, qjs.JS_DupValue(ctx, doc_js)) catch {};
 }
 
+/// Reset node cache without freeing JS values (for leak-safe navigation teardown).
+pub fn resetNodeCacheLeaky() void {
+    if (node_cache) |*cache| {
+        cache.clearRetainingCapacity();
+    }
+    text_proto_val = quickjs.JS_UNDEFINED();
+    comment_proto_val = quickjs.JS_UNDEFINED();
+    pi_proto_val = quickjs.JS_UNDEFINED();
+}
+
 /// Clear the node identity cache (called on page navigation).
 pub fn clearNodeCache(ctx: *qjs.JSContext) void {
     if (node_cache) |*cache| {
