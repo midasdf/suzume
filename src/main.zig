@@ -41,6 +41,7 @@ const font_fallback = "/usr/share/fonts/TTF/DejaVuSans.ttf";
 const font_serif = "/usr/share/fonts/TTF/DejaVuSerif.ttf";
 const font_mono = "/usr/share/fonts/TTF/DejaVuSansMono.ttf";
 
+const hit_test_mod = @import("hit_test.zig");
 const dom_test = @import("test_dom_style.zig");
 const JsRuntime = @import("js/runtime.zig").JsRuntime;
 const quickjs = @import("bindings/quickjs.zig");
@@ -2371,8 +2372,9 @@ pub fn main() !void {
                                 if (p_move.root_box) |root| {
                                     const lx_m = @as(f32, @floatFromInt(mouse_x)) + scroll_x;
                                     const ly_m = @as(f32, @floatFromInt(mouse_y - chrome.content_y)) + scroll_y;
-                                    if (painter_mod.hitTestNode(root, lx_m, ly_m)) |node_ptr| {
-                                        const mnode: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
+                                    const hit_result_hover = hit_test_mod.hitTest(root, .{ .x = lx_m, .y = ly_m });
+                                    if (hit_result_hover.dom_node) |dn| {
+                                        const mnode: *lxb.lxb_dom_node_t = dn.lxb_node;
                                         // Update hover state for CSS :hover
                                         if (dom_api.hovered_element != mnode) {
                                             // Save pre-hover styles for transitions
@@ -2421,38 +2423,32 @@ pub fn main() !void {
                         const pg = activePageState(&tab_mgr, &page_states);
                         if (pg) |p| {
                             if (p.root_box) |root| {
-                                const link = painter_mod.hitTestLink(root, layout_x, layout_y);
-                                if (link != null) {
+                                const move_result = hit_test_mod.hitTest(root, .{ .x = layout_x, .y = layout_y });
+                                if (move_result.link_url != null) {
                                     surface.setCursor(.pointer);
-                                } else {
-                                    // Check for form elements
-                                    const hit = painter_mod.hitTestNode(root, layout_x, layout_y);
+                                } else if (move_result.form_element) |fe| {
+                                    const ftag = fe.tagName() orelse "";
                                     var cursor_set = false;
-                                    if (hit) |node_ptr| {
-                                        const fnode = findFormElement(@ptrCast(@alignCast(node_ptr)));
-                                        if (fnode) |fn_node| {
-                                            const fdn = DomNode{ .lxb_node = fn_node };
-                                            const ftag = fdn.tagName() orelse "";
-                                            if (std.mem.eql(u8, ftag, "input")) {
-                                                const itype = fdn.getAttribute("type") orelse "text";
-                                                if (std.mem.eql(u8, itype, "submit") or
-                                                    std.mem.eql(u8, itype, "button") or
-                                                    std.mem.eql(u8, itype, "reset"))
-                                                {
-                                                    surface.setCursor(.pointer);
-                                                } else {
-                                                    surface.setCursor(.text);
-                                                }
-                                                cursor_set = true;
-                                            } else if (std.mem.eql(u8, ftag, "button")) {
-                                                surface.setCursor(.pointer);
-                                                cursor_set = true;
-                                            }
+                                    if (std.mem.eql(u8, ftag, "input")) {
+                                        const itype = fe.getAttribute("type") orelse "text";
+                                        if (std.mem.eql(u8, itype, "submit") or
+                                            std.mem.eql(u8, itype, "button") or
+                                            std.mem.eql(u8, itype, "reset"))
+                                        {
+                                            surface.setCursor(.pointer);
+                                        } else {
+                                            surface.setCursor(.text);
                                         }
+                                        cursor_set = true;
+                                    } else if (std.mem.eql(u8, ftag, "button")) {
+                                        surface.setCursor(.pointer);
+                                        cursor_set = true;
                                     }
                                     if (!cursor_set) {
                                         surface.setCursor(.arrow);
                                     }
+                                } else {
+                                    surface.setCursor(.arrow);
                                 }
                             }
                         }
@@ -2647,8 +2643,9 @@ fn clickJsMouseSequencePrevented(
     win_h: i32,
     needs_repaint: *bool,
 ) bool {
-    if (painter_mod.hitTestNode(root_box, layout_x, layout_y)) |node_ptr| {
-        const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
+    const js_hit = hit_test_mod.hitTest(root_box, .{ .x = layout_x, .y = layout_y });
+    if (js_hit.dom_node) |dn| {
+        const node: *lxb.lxb_dom_node_t = dn.lxb_node;
         _ = events.dispatchMouseEvent(js_rt.ctx, node, "mousedown", mouse_x, mouse_y_content, 0);
         js_rt.executePending();
         _ = events.dispatchMouseEvent(js_rt.ctx, node, "mouseup", mouse_x, mouse_y_content, 0);
@@ -2734,32 +2731,31 @@ fn handleClick(
 
         // Re-read root_box in case restylePage replaced it
         const current_root = page.root_box orelse return false;
-        const hit_link = painter_mod.hitTestLink(current_root, layout_x, layout_y);
-        const hit_node = painter_mod.hitTestNode(current_root, layout_x, layout_y);
-        if (hit_node) |np| {
-            const hn: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(np));
-            const hdn = DomNode{ .lxb_node = hn };
-            std.debug.print("[click] hitNode tag={s} link={s}\n", .{ hdn.tagName() orelse "?", if (hit_link) |l| l else "(none)" });
+        const click_result = hit_test_mod.hitTest(current_root, .{ .x = layout_x, .y = layout_y });
+        if (click_result.dom_node) |dn| {
+            const hdn = dn;
+            std.debug.print("[click] hitNode tag={s} link={s}\n", .{ hdn.tagName() orelse "?", if (click_result.link_url) |l| l else "(none)" });
         } else {
-            std.debug.print("[click] hitNode=null link={s}\n", .{if (hit_link) |l| l else "(none)"});
+            std.debug.print("[click] hitNode=null link={s}\n", .{if (click_result.link_url) |l| l else "(none)"});
         }
 
         // Check for form element clicks before link navigation
-        if (hit_node) |node_ptr| {
-            const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_ptr));
-            const dom_node = DomNode{ .lxb_node = node };
+        if (click_result.dom_node) |dn| {
+            const node: *lxb.lxb_dom_node_t = dn.lxb_node;
+            const dom_node = dn;
 
-            // Walk up/down to find the actual form element
-            const form_node = findFormElement(node);
-            if (form_node) |fn_| {
-                const fdn = DomNode{ .lxb_node = fn_ };
-                std.debug.print("[form] Found form element: {s}\n", .{fdn.tagName() orelse "?"});
+            // Form element already found by unified hitTest
+            if (click_result.form_element) |fe| {
+                std.debug.print("[form] Found form element: {s}\n", .{fe.tagName() orelse "?"});
             } else {
                 std.debug.print("[form] No form element found near {s}\n", .{dom_node.tagName() orelse "?"});
             }
 
-            if (form_node) |fnode| {
-                const fdom = DomNode{ .lxb_node = fnode };
+            // Also check via findFormElement for children (hitTest only walks up)
+            const legacy_form = findFormElement(node);
+            const form_node_dn = click_result.form_element orelse if (legacy_form) |lf| DomNode{ .lxb_node = lf } else null;
+
+            if (form_node_dn) |fdom| {
                 const ftag = fdom.tagName() orelse "";
 
                 if (std.mem.eql(u8, ftag, "input")) {
@@ -2777,7 +2773,7 @@ fn handleClick(
 
                     if (is_text_input) {
                         // Focus this input
-                        focused_input_node.* = fnode;
+                        focused_input_node.* = fdom.lxb_node;
                         const current_value = fdom.getAttribute("value") orelse "";
                         form_input.setText(current_value);
                         std.debug.print("[form] Focused input type={s} value=\"{s}\"\n", .{ input_type, current_value });
@@ -2786,7 +2782,7 @@ fn handleClick(
                     } else if (is_button_input) {
                         // Submit button clicked — submit the form
                         std.debug.print("[form] Submit button clicked\n", .{});
-                        const btn_form = findParentForm(fnode) orelse return false;
+                        const btn_form = findParentForm(fdom.lxb_node) orelse return false;
                         if (submitForm(allocator, btn_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w, win_h)) |nav_url| {
                             defer allocator.free(nav_url);
                             url_input.setText(nav_url);
@@ -2808,7 +2804,7 @@ fn handleClick(
                     }
                 } else if (std.mem.eql(u8, ftag, "textarea")) {
                     // <textarea> — focus for text input (Google search uses textarea)
-                    focused_input_node.* = fnode;
+                    focused_input_node.* = fdom.lxb_node;
                     const current_value = fdom.getAttribute("value") orelse "";
                     form_input.setText(current_value);
                     std.debug.print("[form] Focused textarea\n", .{});
@@ -2817,7 +2813,7 @@ fn handleClick(
                 } else if (std.mem.eql(u8, ftag, "button")) {
                     // <button> click — submit the form
                     std.debug.print("[form] <button> clicked\n", .{});
-                    const button_form = findParentForm(fnode) orelse return false;
+                    const button_form = findParentForm(fdom.lxb_node) orelse return false;
                     if (submitForm(allocator, button_form, focused_input_node.*, form_input, current_url.*, loader, fonts, page, storage, win_w, win_h)) |nav_url| {
                         defer allocator.free(nav_url);
                         url_input.setText(nav_url);
@@ -2846,7 +2842,7 @@ fn handleClick(
             focused_input_node.* = null;
         }
 
-        if (hit_link) |link_href| {
+        if (click_result.link_url) |link_href| {
             // Resolve URL
             const base = if (current_url.*) |u| u else "";
             const resolved = resolveUrl(allocator, base, link_href) catch return false;
