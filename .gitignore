@@ -2,3 +2,5 @@
 sysroot-aarch64/
 suzume-sysroot/
 .worktrees/
+zephwm/.zig-cache/
+zephwm/zig-out/
