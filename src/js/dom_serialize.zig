@@ -207,6 +207,7 @@ pub fn elementSetOuterHTML(
 
     if (s.len == 0) {
         lxb_dom_node_remove(node);
+        events.recordMutationChildListBulk(parent, &.{}, &.{node}, null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     }
@@ -214,11 +215,25 @@ pub fn elementSetOuterHTML(
     const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     const frag = lxb_html_document_parse_fragment(doc, elem, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
 
+    // Collect fragment's children before moving (these will be the addedNodes)
+    var added_buf: [64]*lxb.lxb_dom_node_t = undefined;
+    var added_count: usize = 0;
+    {
+        var ch: ?*lxb.lxb_dom_node_t = frag.first_child;
+        while (ch) |child| {
+            if (added_count < added_buf.len) {
+                added_buf[added_count] = child;
+                added_count += 1;
+            }
+            ch = child.next;
+        }
+    }
+
     // Insert all fragment children before this node, then remove this node
     moveChildrenBefore(frag, node);
     _ = lxb_dom_node_destroy(frag);
     lxb_dom_node_remove(node);
-    events.recordMutation(parent, "childList", null, null, null);
+    events.recordMutationChildListBulk(parent, added_buf[0..added_count], &.{node}, null, null);
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
