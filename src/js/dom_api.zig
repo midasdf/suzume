@@ -2914,14 +2914,18 @@ const MAX_CSS_LENGTH: f32 = 33554432.0; // 2^25, implementation-defined max CSS 
 
 // ── Registration ────────────────────────────────────────────────────
 
-/// Register DOM API classes and the `document` global.
-/// Must be called after page parse and before script execution.
-/// Register Element and Text classes on the Runtime. Call ONCE per Runtime.
+/// Register DOM API classes on the Runtime.
+/// Class IDs are allocated once (process-global in QuickJS), but JS_NewClass
+/// must be called on every new Runtime so the runtime knows about the class.
 /// Must be called before registerDomApis.
 pub fn registerDomClasses(rt: *qjs.JSRuntime) void {
-    if (element_class_id != 0) return; // Already registered
+    // Allocate class IDs only once (they are process-global counters)
+    if (element_class_id == 0) {
+        _ = qjs.JS_NewClassID(rt, &element_class_id);
+        _ = qjs.JS_NewClassID(rt, &text_class_id);
+    }
 
-    _ = qjs.JS_NewClassID(rt, &element_class_id);
+    // Register classes on this runtime (must be done for each new runtime)
     const elem_class_def = qjs.JSClassDef{
         .class_name = "Element",
         .finalizer = null,
@@ -2931,7 +2935,6 @@ pub fn registerDomClasses(rt: *qjs.JSRuntime) void {
     };
     _ = qjs.JS_NewClass(rt, element_class_id, &elem_class_def);
 
-    _ = qjs.JS_NewClassID(rt, &text_class_id);
     const text_class_def = qjs.JSClassDef{
         .class_name = "Text",
         .finalizer = null,
