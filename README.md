@@ -20,7 +20,7 @@ Lightweight GUI web browser written in Zig. Targets Raspberry Pi Zero 2W (512MB 
 - CSS transforms (translate), transitions, animations
 - 120+ CSS properties, 200+ unit tests
 - HTML5 parsing via lexbor
-- **JavaScript engine** — QuickJS-ng with full DOM/Web API
+- **JavaScript engine** — kotori (self-implemented in Zig) + QuickJS-ng fallback
 - X11/XCB framebuffer rendering via libnsfb
 - FreeType + HarfBuzz text shaping (CJK support)
 - Tab browsing, keyboard navigation, find-in-page
@@ -67,6 +67,8 @@ bash tests/wpt/run_wpt.sh html/dom
 zig build              # native build
 zig build run          # run browser
 zig build test-css     # run CSS engine tests
+zig build test-kotori      # run kotori JS engine tests
+zig build test-kotori-dom  # run kotori DOM binding tests
 ```
 
 ### Cross-compile for RPi Zero 2W (aarch64)
@@ -83,7 +85,7 @@ src/
 ├── dom/          # DOM tree (lexbor wrapper)
 ├── layout/       # Layout engine (block, flex, grid, table, inline)
 ├── paint/        # Framebuffer painter (libnsfb)
-├── js/           # JavaScript runtime (QuickJS-ng)
+├── js/           # JavaScript runtime (kotori engine + QuickJS-ng fallback)
 ├── net/          # HTTP loader (libcurl, SSL fallback)
 ├── ui/           # Browser chrome (tabs, address bar, input)
 └── features/     # Adblock, config, storage, userscript
@@ -91,7 +93,24 @@ src/
 
 ## JavaScript Engine
 
-Powered by QuickJS-ng with comprehensive Web API layer:
+### kotori (default)
+
+Self-implemented JS engine written in Zig. NaN-boxed values, bytecode compiler, stack-based VM.
+
+- **Language** — var, function, closures, objects, arrays, strings, prototype chain, try-catch-throw
+- **DOM API** — document.getElementById/querySelector/createElement, innerHTML/textContent, appendChild, style.*, addEventListener
+- **DOM traversal** — parentNode, firstChild, nextSibling, children, childNodes
+- **Selector matching** — #id, .class, tag, tag.class, tag#id combinations
+- **Integration** — Inline `<script>` execution, DOM mutation detection, automatic re-render
+
+```bash
+./suzume https://example.com              # uses kotori (default)
+SUZUME_JS=quickjs ./suzume https://example.com  # use QuickJS instead
+```
+
+### QuickJS-ng (fallback)
+
+Full-featured ES2024 engine for complex sites. Activate with `SUZUME_JS=quickjs`.
 
 - **ES2024 complete** — BigInt, private fields, top-level await, Array.at, Object.groupBy, etc.
 - **ES Modules** — `<script type="module">`, import/export, HTTP-based module loader

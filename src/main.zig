@@ -348,7 +348,7 @@ const hexDigit = script_executor.hexDigit;
 
 /// Initialize JavaScript for a loaded page: set up DOM APIs, execute scripts, fire events.
 /// Delegates to core/script_executor.zig.
-/// Set SUZUME_JS=kotori to use the experimental kotori engine.
+/// Default: kotori engine. Set SUZUME_JS=quickjs for legacy QuickJS engine.
 fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, fonts: ?*painter_mod.FontCache) void {
     // Extract URL fragment for :target pseudo-class
     if (base_url) |url| {
@@ -364,16 +364,16 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
         dom_api.url_fragment_len = 0;
     }
 
-    // Check for kotori engine flag
-    const use_kotori = if (std.posix.getenv("SUZUME_JS")) |val|
-        std.mem.eql(u8, val, "kotori")
+    // Check for JS engine flag (default: kotori, set SUZUME_JS=quickjs for legacy)
+    const use_quickjs = if (std.posix.getenv("SUZUME_JS")) |val|
+        std.mem.eql(u8, val, "quickjs")
     else
         false;
 
-    if (use_kotori) {
-        script_executor.initPageJsKotori(doc, &page.kotori_rt, allocator);
-    } else {
+    if (use_quickjs) {
         script_executor.initPageJs(doc, &page.js_rt, &page.loaded_script_urls, allocator, loader, base_url, fonts);
+    } else {
+        script_executor.initPageJsKotori(doc, &page.kotori_rt, allocator);
     }
 }
 
