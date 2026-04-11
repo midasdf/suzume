@@ -68,6 +68,11 @@ pub const KotoriRuntime = struct {
             compiler.deinit();
             return .{ .err = @errorName(e) };
         };
+        // Transfer function objects to VM before deinit (they're referenced by bytecode constants)
+        for (compiler.functions.items) |obj| {
+            self.vm.objects.append(self.allocator, obj) catch {};
+        }
+        compiler.functions.items.len = 0; // prevent deinit from freeing them
         compiler.deinit();
 
         // Store bytecode (VM will reference it during execution)

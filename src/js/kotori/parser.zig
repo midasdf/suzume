@@ -361,6 +361,11 @@ pub const Parser = struct {
         const text = self.tokenSlice(self.current);
         const sid = self.pool.intern(text) catch return error.OutOfMemory;
         self.advance();
+        // Check for single-param arrow function: x => expr
+        if (self.check(.eq_gt) or self.check(.arrow)) {
+            const param_node = self.ast.addNode(self.allocator, .{ .identifier = sid }) catch return error.OutOfMemory;
+            return self.parseArrowFunction(&.{param_node});
+        }
         return self.ast.addNode(self.allocator, .{ .identifier = sid }) catch return error.OutOfMemory;
     }
 
