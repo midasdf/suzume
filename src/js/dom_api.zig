@@ -5267,7 +5267,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     {
         const sel_valid_js =
             \\(function(){
-            \\  var _knownPseudo=/^:(hover|active|focus|focus-within|focus-visible|visited|link|any-link|target|root|empty|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type|enabled|disabled|checked|indeterminate|default|read-only|read-write|placeholder-shown|defined|scope|host|lang|dir|is|not|has|where|nth-child|nth-last-child|nth-of-type|nth-last-of-type|optional|required|valid|invalid|in-range|out-of-range|autofill|heading|state|user-valid|user-invalid|modal|fullscreen|picture-in-picture|paused|playing|current|past|future|local-link|target-within)(\(|$)/;
+            \\  var _knownPseudo=/^:(hover|active|focus|focus-within|focus-visible|visited|link|any-link|target|root|empty|first-child|last-child|first-of-type|last-of-type|only-child|only-of-type|enabled|disabled|checked|indeterminate|default|read-only|read-write|placeholder-shown|defined|scope|host|lang|dir|is|not|has|where|nth-child|nth-last-child|nth-of-type|nth-last-of-type|optional|required|valid|invalid|in-range|out-of-range|autofill|heading|state|user-valid|user-invalid|modal|fullscreen|picture-in-picture|paused|playing|current|past|future|local-link|target-within|open|closed|blank|popover-open)(\(|$)/;
             \\  var _knownPelem=/^::(before|after|first-line|first-letter|placeholder|selection|marker|backdrop|file-selector-button|part|slotted)(\(|$)/;
             \\  function _vSel(s,meth){
             \\    if(arguments.length<1)throw new TypeError("Failed to execute '"+meth+"': 1 argument required, but only 0 present.");

@@ -581,6 +581,46 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             }
             return false;
         }
+        // :open — matches <details open>, <dialog open>, <select> with open popup
+        if (std.ascii.eqlIgnoreCase(sel, ":open")) {
+            var name_len_o: usize = 0;
+            const name_ptr_o = lxb_dom_element_local_name(elem, &name_len_o);
+            if (name_ptr_o == null) return false;
+            const tag_o = name_ptr_o.?[0..name_len_o];
+            if (std.ascii.eqlIgnoreCase(tag_o, "details") or std.ascii.eqlIgnoreCase(tag_o, "dialog")) {
+                var attr_len_o: usize = 0;
+                const attr_val_o = lxb_dom_element_get_attribute(elem, "open", 4, &attr_len_o);
+                return attr_val_o != null;
+            }
+            return false;
+        }
+        // :closed — opposite of :open
+        if (std.ascii.eqlIgnoreCase(sel, ":closed")) {
+            var name_len_c: usize = 0;
+            const name_ptr_c = lxb_dom_element_local_name(elem, &name_len_c);
+            if (name_ptr_c == null) return false;
+            const tag_c = name_ptr_c.?[0..name_len_c];
+            if (std.ascii.eqlIgnoreCase(tag_c, "details") or std.ascii.eqlIgnoreCase(tag_c, "dialog")) {
+                var attr_len_c: usize = 0;
+                const attr_val_c = lxb_dom_element_get_attribute(elem, "open", 4, &attr_len_c);
+                return attr_val_c == null;
+            }
+            // Non-details/dialog elements are considered :closed
+            return true;
+        }
+        // :modal — matches <dialog> shown as modal (has open attribute)
+        if (std.ascii.eqlIgnoreCase(sel, ":modal")) {
+            var name_len_m: usize = 0;
+            const name_ptr_m = lxb_dom_element_local_name(elem, &name_len_m);
+            if (name_ptr_m == null) return false;
+            const tag_m = name_ptr_m.?[0..name_len_m];
+            if (std.ascii.eqlIgnoreCase(tag_m, "dialog")) {
+                var attr_len_m: usize = 0;
+                const attr_val_m = lxb_dom_element_get_attribute(elem, "open", 4, &attr_len_m);
+                return attr_val_m != null;
+            }
+            return false;
+        }
         // Unknown pseudo — return false (conservative)
         return false;
     }
