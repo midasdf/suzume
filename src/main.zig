@@ -373,7 +373,7 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     if (use_quickjs) {
         script_executor.initPageJs(doc, &page.js_rt, &page.loaded_script_urls, allocator, loader, base_url, fonts);
     } else {
-        script_executor.initPageJsKotori(doc, &page.kotori_rt, allocator);
+        script_executor.initPageJsKotori(doc, &page.kotori_rt, allocator, loader, base_url);
     }
 }
 

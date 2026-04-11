@@ -547,7 +547,7 @@ const KotoriRuntime = @import("kotori_runtime").KotoriRuntime;
 
 /// Initialize page JavaScript using the kotori engine (experimental).
 /// Simplified path: inline scripts only, no modules/defer/events/timers.
-pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocator: std.mem.Allocator) void {
+pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
     const doc_ptr: *anyopaque = @ptrCast(@alignCast(doc.html_doc));
 
     var krt = KotoriRuntime.init(allocator, doc_ptr) catch {
@@ -555,16 +555,17 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
         return;
     };
 
-    // Execute inline <script> tags
+    // Execute <script> tags (inline + external)
     const doc_node = doc.documentNode();
-    kotoriExecScripts(doc_node.lxb_node, &krt);
+    var ext_count: usize = 0;
+    kotoriExecScripts(doc_node.lxb_node, &krt, allocator, loader, base_url, &ext_count);
 
     page_kotori_rt.* = krt;
     std.debug.print("[kotori] Page JS initialized (kotori engine)\n", .{});
 }
 
-/// Walk DOM tree and execute inline <script> tags via kotori.
-fn kotoriExecScripts(node: *lxb.lxb_dom_node_t, krt: *KotoriRuntime) void {
+/// Walk DOM tree and execute <script> tags (inline + external) via kotori.
+fn kotoriExecScripts(node: *lxb.lxb_dom_node_t, krt: *KotoriRuntime, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, ext_count: *usize) void {
     if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
         const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
         var name_len: usize = 0;
@@ -582,16 +583,23 @@ fn kotoriExecScripts(node: *lxb.lxb_dom_node_t, krt: *KotoriRuntime) void {
                 if (!is_js) return;
             }
 
-            // Get inline content
-            var content_len: usize = 0;
-            const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
-            if (content_ptr != null and content_len > 0 and content_len <= 512 * 1024) {
-                const code = content_ptr.?[0..content_len];
-                std.debug.print("[kotori] Executing <script> ({d} bytes)\n", .{content_len});
-                const result = krt.eval(code);
-                if (!result.isOk()) {
-                    if (result == .err) {
-                        std.debug.print("[kotori:ERROR] {s}\n", .{result.err});
+            // Check for src attribute (external script)
+            var src_len: usize = 0;
+            const src_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "src", 3, &src_len);
+            if (src_ptr != null and src_len > 0) {
+                kotoriHandleExternalScript(src_ptr.?[0..src_len], krt, allocator, loader, base_url, ext_count);
+            } else {
+                // Get inline content
+                var content_len: usize = 0;
+                const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
+                if (content_ptr != null and content_len > 0 and content_len <= 512 * 1024) {
+                    const code = content_ptr.?[0..content_len];
+                    std.debug.print("[kotori] Executing <script> ({d} bytes)\n", .{content_len});
+                    const result = krt.eval(code);
+                    if (!result.isOk()) {
+                        if (result == .err) {
+                            std.debug.print("[kotori:ERROR] {s}\n", .{result.err});
+                        }
                     }
                 }
             }
@@ -601,7 +609,64 @@ fn kotoriExecScripts(node: *lxb.lxb_dom_node_t, krt: *KotoriRuntime) void {
     // Recurse into children
     var child: ?*lxb.lxb_dom_node_t = node.first_child;
     while (child) |ch| {
-        kotoriExecScripts(ch, krt);
+        kotoriExecScripts(ch, krt, allocator, loader, base_url, ext_count);
         child = ch.next;
     }
+}
+
+/// Fetch and execute an external script via kotori engine.
+fn kotoriHandleExternalScript(
+    src: []const u8,
+    krt: *KotoriRuntime,
+    allocator: std.mem.Allocator,
+    loader: ?*Loader,
+    base_url: ?[]const u8,
+    ext_count: *usize,
+) void {
+    // Resolve URL
+    const resolved_url = if (std.mem.startsWith(u8, src, "http://") or std.mem.startsWith(u8, src, "https://")) blk: {
+        const u = allocator.allocSentinel(u8, src.len, 0) catch return;
+        @memcpy(u, src);
+        break :blk u;
+    } else if (base_url) |bu|
+        resolveUrl(allocator, bu, src) catch return
+    else
+        return;
+    defer allocator.free(resolved_url);
+
+    if (!std.mem.startsWith(u8, resolved_url, "http://") and !std.mem.startsWith(u8, resolved_url, "https://")) return;
+
+    const ld = loader orelse return;
+    if (ext_count.* >= max_external_script_count) return;
+
+    std.debug.print("[kotori] Fetching external script: {s}\n", .{resolved_url});
+
+    var response = ld.loadBytesWithTimeout(resolved_url, external_script_timeout) catch |err| {
+        std.debug.print("[kotori] Failed to fetch external script {s}: {}\n", .{ resolved_url, err });
+        return;
+    };
+
+    if (response.status_code != http_status.ok) {
+        std.debug.print("[kotori] External script returned status {d}: {s}\n", .{ response.status_code, resolved_url });
+        response.deinit();
+        return;
+    }
+
+    if (response.body.len > max_external_script_size) {
+        std.debug.print("[kotori] External script too large ({d} bytes): {s}\n", .{ response.body.len, resolved_url });
+        response.deinit();
+        return;
+    }
+
+    ext_count.* += 1;
+    const code = response.body;
+    std.debug.print("[kotori] Executing external <script src=\"{s}\"> ({d} bytes)\n", .{ resolved_url, code.len });
+
+    const result = krt.eval(code);
+    if (!result.isOk()) {
+        if (result == .err) {
+            std.debug.print("[kotori:ERROR] {s}\n", .{result.err});
+        }
+    }
+    response.deinit();
 }
