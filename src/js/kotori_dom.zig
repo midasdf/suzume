@@ -136,6 +136,15 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const doc_id = try vm.pool.intern("document");
     try vm.globals.put(vm.allocator, doc_id, JsValue.initObject(doc_obj));
 
+    // ── window global (proxy to globals) ──
+    const win_obj = try vm.createObj(.{ .obj_type = .window_proxy });
+    const window_id = try vm.pool.intern("window");
+    try vm.globals.put(vm.allocator, window_id, JsValue.initObject(win_obj));
+    const self_id = try vm.pool.intern("self");
+    try vm.globals.put(vm.allocator, self_id, JsValue.initObject(win_obj));
+    const globalthis_id = try vm.pool.intern("globalThis");
+    try vm.globals.put(vm.allocator, globalthis_id, JsValue.initObject(win_obj));
+
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
     vm.dom_set_prop = &domSetProp;
@@ -146,6 +155,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
 // ══════════════════════════════════════════════════════════════════════
 
 fn domGetProp(vm: *VM, obj: *JsObject, name_id: StringId) ?JsValue {
+    if (obj.obj_type == .window_proxy) {
+        // window.x → globals[x]
+        return vm.globals.get(name_id);
+    }
     const name = vm.pool.get(name_id) orelse return null;
     if (obj.obj_type == .dom_node) return domNodeGetProp(vm, obj, name);
     if (obj.obj_type == .dom_style) return domStyleGetProp(vm, obj, name);
@@ -153,6 +166,11 @@ fn domGetProp(vm: *VM, obj: *JsObject, name_id: StringId) ?JsValue {
 }
 
 fn domSetProp(vm: *VM, obj: *JsObject, name_id: StringId, val: JsValue) bool {
+    if (obj.obj_type == .window_proxy) {
+        // window.x = val → globals[x] = val
+        vm.globals.put(vm.allocator, name_id, val) catch {};
+        return true;
+    }
     const name = vm.pool.get(name_id) orelse return false;
     if (obj.obj_type == .dom_node) return domNodeSetProp(vm, obj, name, val);
     if (obj.obj_type == .dom_style) return domStyleSetProp(vm, obj, name, val);

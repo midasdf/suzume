@@ -16,6 +16,7 @@ pub const ObjType = enum(u8) {
     native_function,
     dom_node,
     dom_style,
+    window_proxy,
 };
 
 pub const JsObject = struct {
