@@ -395,6 +395,61 @@ pub fn elementSetAttributeNS(
     const val = jsStringToSlice(c, args[2]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
 
+    // DOM spec: if an attribute with the same namespace and local name exists,
+    // update it (even if the prefix differs). Remove old qualified name first.
+    {
+        const attr_ns_obj = qjs.JS_GetPropertyStr(c, this_val, "__attrNS");
+        defer qjs.JS_FreeValue(c, attr_ns_obj);
+        if (!quickjs.JS_IsUndefined(attr_ns_obj) and !quickjs.JS_IsNull(attr_ns_obj)) {
+            // Iterate existing attributes to find same ns+localName with different qname
+            var attr_it: ?*anyopaque = lxb_dom_element_first_attribute_noi(elem);
+            while (attr_it) |attr| {
+                var attr_name_len: usize = 0;
+                if (lxb_dom_attr_qualified_name(attr, &attr_name_len)) |attr_name_ptr| {
+                    const attr_qn = attr_name_ptr[0..attr_name_len];
+                    const attr_local = extractLocalName(attr_qn);
+                    if (std.mem.eql(u8, attr_local, local_name) and !std.mem.eql(u8, attr_qn, qname_s)) {
+                        // Check if namespace matches
+                        const stored_ns = qjs.JS_GetPropertyStr(c, attr_ns_obj, attr_name_ptr);
+                        defer qjs.JS_FreeValue(c, stored_ns);
+                        if (!quickjs.JS_IsUndefined(stored_ns) and !quickjs.JS_IsNull(stored_ns)) {
+                            if (jsStringToSlice(c, stored_ns)) |sns| {
+                                defer qjs.JS_FreeCString(c, sns.ptr);
+                                const stored = sns.ptr[0..sns.len];
+                                const req_ns = namespace orelse "";
+                                if (std.mem.eql(u8, stored, req_ns)) {
+                                    // Same ns+local, different prefix: update value in-place, keep original qname
+                                    // Capture old value for MutationObserver
+                                    var _ov_ns: [4096]u8 = undefined;
+                                    var ov_ns: ?[]const u8 = null;
+                                    {
+                                        var ovl: usize = 0;
+                                        const ovp = lxb_dom_attr_value_noi(attr, &ovl);
+                                        if (ovp != null) {
+                                            const cl2 = @min(ovl, _ov_ns.len);
+                                            @memcpy(_ov_ns[0..cl2], ovp.?[0..cl2]);
+                                            ov_ns = _ov_ns[0..cl2];
+                                        }
+                                    }
+                                    _ = lxb_dom_element_set_attribute(elem, attr_qn.ptr, attr_qn.len, val.ptr, val.len);
+                                    const node_m: *lxb.lxb_dom_node_t = @ptrCast(elem);
+                                    events.recordMutationAttrNS(node_m, local_name, ns_slice, ov_ns);
+                                    setDomDirty();
+                                    return quickjs.JS_UNDEFINED();
+                                }
+                            }
+                        } else if (namespace == null) {
+                            // Both null namespace
+                            _ = lxb_dom_element_remove_attribute(elem, attr_qn.ptr, attr_qn.len);
+                            break;
+                        }
+                    }
+                }
+                attr_it = lxb_dom_element_next_attribute_noi(attr);
+            }
+        }
+    }
+
     // Capture old value before setting
     var _ov_buf: [4096]u8 = undefined;
     var old_val: ?[]const u8 = null;
