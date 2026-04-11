@@ -12,6 +12,41 @@ extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_n
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
+// ── Namespace prefix validation (CSS Selectors §3) ─────────────────
+// In HTML, no @namespace declarations exist, so any `prefix|element`
+// selector (other than *|element) must throw SyntaxError per spec.
+fn hasUndeclaredNamespace(sel: []const u8) bool {
+    var i: usize = 0;
+    var bracket_depth: usize = 0;
+    var paren_depth: usize = 0;
+    while (i < sel.len) : (i += 1) {
+        const ch = sel[i];
+        if (ch == '\\' and i + 1 < sel.len) {
+            i += 1; // skip escaped char
+            continue;
+        }
+        if (ch == '[') {
+            bracket_depth += 1;
+        } else if (ch == ']' and bracket_depth > 0) {
+            bracket_depth -= 1;
+        } else if (ch == '(') {
+            paren_depth += 1;
+        } else if (ch == ')' and paren_depth > 0) {
+            paren_depth -= 1;
+        } else if (ch == '|' and bracket_depth == 0) {
+            // `|` outside brackets/parens = namespace separator
+            // Valid forms: `*|E` (any ns), `|E` (no ns)
+            // Invalid: `prefix|E` (undeclared ns)
+            if (i > 0 and sel[i - 1] != '*' and sel[i - 1] != ',' and sel[i - 1] != ' ' and sel[i - 1] != '|') {
+                // Check it's not an attribute selector operator like |=
+                if (i + 1 < sel.len and sel[i + 1] == '=') continue;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 // ── Scope element for :scope pseudo-class (DOM spec §4.2.6) ────────
 // Stack-based to handle reentrancy (nested querySelector calls from getters,
 // MutationObserver callbacks, etc.)
@@ -1186,7 +1221,10 @@ pub fn elementMatches(
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
-    return quickjs.JS_NewBool(elementMatchesSelector(node, s.ptr[0..s.len]));
+    const sel = s.ptr[0..s.len];
+    if (hasUndeclaredNamespace(sel))
+        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+    return quickjs.JS_NewBool(elementMatchesSelector(node, sel));
 }
 
 // ── element.closest(selector) ───────────────────────────────────────
@@ -1204,6 +1242,8 @@ pub fn elementClosest(
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel = s.ptr[0..s.len];
+    if (hasUndeclaredNamespace(sel))
+        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
 
     // Walk up from this element — :scope refers to this element
     setScopeElement(node);
@@ -1230,10 +1270,13 @@ pub fn elementQuerySelector(
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    const sel = s.ptr[0..s.len];
+    if (hasUndeclaredNamespace(sel))
+        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
 
     setScopeElement(node);
     defer clearScopeElement();
-    const found = walkTreeBySelector(node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
+    const found = walkTreeBySelector(node, sel) orelse return quickjs.JS_NULL();
     return api.wrapNode(c, found);
 }
 
@@ -1249,13 +1292,16 @@ pub fn elementQuerySelectorAll(
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NULL();
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    const sel_qs = s.ptr[0..s.len];
+    if (hasUndeclaredNamespace(sel_qs))
+        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
 
     setScopeElement(node);
     defer clearScopeElement();
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
     var idx: u32 = 0;
-    walkTreeCollect(c, node, s.ptr[0..s.len], arr, &idx);
+    walkTreeCollect(c, node, sel_qs, arr, &idx);
     // Set NodeList prototype for instanceof checks
     const nl_js = "(function(a){if(typeof NodeList!=='undefined')Object.setPrototypeOf(a,NodeList.prototype);})";
     const nl_fn = qjs.JS_Eval(c, nl_js, nl_js.len, "<nl>", qjs.JS_EVAL_TYPE_GLOBAL);
@@ -1414,9 +1460,12 @@ pub fn documentQuerySelector(
     const args = argv orelse return quickjs.JS_NULL();
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    const sel_d = s.ptr[0..s.len];
+    if (hasUndeclaredNamespace(sel_d))
+        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
 
     const doc_node = api.dom_doc.getDocumentNode() orelse return quickjs.JS_NULL();
-    const found = walkTreeBySelector(doc_node, s.ptr[0..s.len]) orelse return quickjs.JS_NULL();
+    const found = walkTreeBySelector(doc_node, sel_d) orelse return quickjs.JS_NULL();
     return api.wrapNode(c, found);
 }
 
@@ -1431,13 +1480,16 @@ pub fn documentQuerySelectorAll(
     const args = argv orelse return quickjs.JS_NULL();
     const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    const sel_da = s.ptr[0..s.len];
+    if (hasUndeclaredNamespace(sel_da))
+        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
 
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
 
     const doc_node = api.dom_doc.getDocumentNode() orelse return arr;
     var idx: u32 = 0;
-    walkTreeCollect(c, doc_node, s.ptr[0..s.len], arr, &idx);
+    walkTreeCollect(c, doc_node, sel_da, arr, &idx);
     // Set NodeList prototype
     const nl_js = "(function(a){if(typeof NodeList!=='undefined')Object.setPrototypeOf(a,NodeList.prototype);})";
     const nl_fn = qjs.JS_Eval(c, nl_js, nl_js.len, "<nl>", qjs.JS_EVAL_TYPE_GLOBAL);

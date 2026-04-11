@@ -498,7 +498,7 @@ pub fn implCreateDocument(
 
     // Build XML document-like object via Document constructor
     const js =
-        \\(function(){var d=typeof XMLDocument!=='undefined'?new XMLDocument():new Document();d.contentType='application/xml';d.characterSet='UTF-8';d.charset='UTF-8';d.inputEncoding='UTF-8';d.URL='about:blank';d.documentURI='about:blank';d.compatMode='CSS1Compat';return d;})()
+        \\(function(){var d=typeof XMLDocument!=='undefined'?new XMLDocument():new Document();d.contentType='application/xml';d.characterSet='UTF-8';d.charset='UTF-8';d.inputEncoding='UTF-8';d.URL='about:blank';d.documentURI='about:blank';d.compatMode='CSS1Compat';d._isXmlDoc=true;return d;})()
     ;
     const doc = qjs.JS_Eval(c, js, js.len, "<createDoc>", qjs.JS_EVAL_TYPE_GLOBAL);
 

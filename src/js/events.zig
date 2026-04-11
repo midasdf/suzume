@@ -2250,6 +2250,36 @@ const MutationObserverEntry = struct {
 
 var mutation_observers: std.ArrayListUnmanaged(MutationObserverEntry) = .empty;
 
+/// Suppresses childList mutation recording when true (used by replaceChildren batching).
+/// While suppressed, added/removed nodes are collected in deferred buffers.
+pub var suppress_childlist: bool = false;
+var deferred_target: ?*lxb.lxb_dom_node_t = null;
+var deferred_added: [64]?*lxb.lxb_dom_node_t = .{null} ** 64;
+var deferred_added_count: usize = 0;
+var deferred_removed: [64]?*lxb.lxb_dom_node_t = .{null} ** 64;
+var deferred_removed_count: usize = 0;
+
+/// Begin suppressing childList mutations (call before replaceChildren loop).
+pub fn beginSuppressChildList(target: *lxb.lxb_dom_node_t) void {
+    suppress_childlist = true;
+    deferred_target = target;
+    deferred_added_count = 0;
+    deferred_removed_count = 0;
+}
+
+/// End suppression and emit one bulk MutationRecord.
+pub fn endSuppressChildList() void {
+    suppress_childlist = false;
+    const target = deferred_target orelse return;
+    // Build added/removed slices
+    var added_buf: [64]*lxb.lxb_dom_node_t = undefined;
+    for (deferred_added[0..deferred_added_count], 0..) |n, i| added_buf[i] = n.?;
+    var removed_buf: [64]*lxb.lxb_dom_node_t = undefined;
+    for (deferred_removed[0..deferred_removed_count], 0..) |n, i| removed_buf[i] = n.?;
+    recordMutationChildListBulk(target, added_buf[0..deferred_added_count], removed_buf[0..deferred_removed_count], null, null);
+    deferred_target = null;
+}
+
 /// Record a mutation for any observing MutationObservers.
 pub fn recordMutation(
     target: *lxb.lxb_dom_node_t,
@@ -2268,6 +2298,22 @@ pub fn recordMutationChildList(
     prev_sib: ?*lxb.lxb_dom_node_t,
     next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
+    if (suppress_childlist) {
+        // Collect for deferred bulk record
+        if (added) |a| {
+            if (deferred_added_count < deferred_added.len) {
+                deferred_added[deferred_added_count] = a;
+                deferred_added_count += 1;
+            }
+        }
+        if (removed) |r| {
+            if (deferred_removed_count < deferred_removed.len) {
+                deferred_removed[deferred_removed_count] = r;
+                deferred_removed_count += 1;
+            }
+        }
+        return;
+    }
     recordMutationFull(target, "childList", added, removed, null, null, null, prev_sib, next_sib);
 }
 
@@ -2315,6 +2361,15 @@ pub fn recordMutationChildListMulti(
     prev_sib: ?*lxb.lxb_dom_node_t,
     next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
+    if (suppress_childlist) {
+        for (added_nodes) |a| {
+            if (deferred_added_count < deferred_added.len) {
+                deferred_added[deferred_added_count] = a;
+                deferred_added_count += 1;
+            }
+        }
+        return;
+    }
     for (mutation_observers.items) |*obs| {
         if (obs.disconnected) continue;
         for (obs.targets.items) |t| {

@@ -2290,3 +2290,27 @@ pub fn upgradeSubtreeCustomElements(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node
         child = ch.*.next;
     }
 }
+
+// ── Mutation suppression for replaceChildren batching ───────────────
+
+pub fn jsBeginMutSuppress(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const node = api.getNode(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    events.beginSuppressChildList(node);
+    return quickjs.JS_UNDEFINED();
+}
+
+pub fn jsEndMutSuppress(
+    _: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    events.endSuppressChildList();
+    return quickjs.JS_UNDEFINED();
+}
