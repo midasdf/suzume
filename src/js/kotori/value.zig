@@ -40,9 +40,43 @@ pub const JsValue = packed struct {
     pub const undefined_val: JsValue = .{ .bits = @as(u64, TAG_UNDEFINED) << 48 };
     pub const nan_val: JsValue = .{ .bits = @as(u64, TAG_NAN) << 48 };
 
+    pub fn initString(id: @import("string_pool.zig").StringId) JsValue {
+        const tag: u64 = @as(u64, TAG_STRING) << 48;
+        return .{ .bits = tag | @as(u64, id) };
+    }
+
+    pub fn isString(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_STRING;
+    }
+
+    pub fn asStringId(self: JsValue) @import("string_pool.zig").StringId {
+        return @intCast(self.bits & 0x0000FFFFFFFFFFFF);
+    }
+
     pub fn isGcPtr(self: JsValue) bool {
         const tag: u16 = @intCast(self.bits >> 48);
         return tag == TAG_OBJECT or tag == TAG_STRING or tag == TAG_SYMBOL;
+    }
+
+    pub fn isObject(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_OBJECT;
+    }
+
+    pub fn initObject(ptr: *anyopaque) JsValue {
+        const addr: u64 = @intFromPtr(ptr);
+        const tag: u64 = @as(u64, TAG_OBJECT) << 48;
+        return .{ .bits = tag | (addr & 0x0000FFFFFFFFFFFF) };
+    }
+
+    pub fn asObject(self: JsValue) *anyopaque {
+        const addr: usize = @intCast(self.bits & 0x0000FFFFFFFFFFFF);
+        return @ptrFromInt(addr);
+    }
+
+    pub fn asJsObject(self: JsValue) *@import("object.zig").JsObject {
+        return @ptrCast(@alignCast(self.asObject()));
     }
 
     pub fn asNumber(self: JsValue) f64 {
@@ -52,11 +86,9 @@ pub const JsValue = packed struct {
     // ── Type checks ──────────────────────────────────────────────────
 
     pub fn isNumber(self: JsValue) bool {
-        // A tagged value always has exponent bits all-ones (top 13 bits set).
-        // A normal f64 (including real NaN) may also match TAG_NAN, so we check
-        // that the top 16 bits are NOT one of our tag values.
-        const tag: u16 = @intCast(self.bits >> 48);
-        return tag < TAG_NAN;
+        // Tagged values use quiet NaN space: exponent all-ones + quiet bit (bits 62:51 = 0xFFF).
+        // Normal floats (including negatives, infinity) never have this pattern.
+        return (self.bits >> 51) & 0xFFF != 0xFFF;
     }
 
     pub fn isInt(self: JsValue) bool {
@@ -108,7 +140,7 @@ pub const JsValue = packed struct {
             const n = self.asNumber();
             return n != 0.0 and !std.math.isNan(n);
         }
-        // Objects, strings, symbols are truthy
+        // Objects, strings, symbols are truthy (empty string falsiness needs pool access — TODO)
         return true;
     }
 
@@ -161,11 +193,15 @@ pub const JsValue = packed struct {
     }
 
     pub fn jsStrictEq(a: JsValue, b: JsValue) JsValue {
-        // Same bits → always equal (handles null==null, undefined==undefined, bool, int)
+        // Same bits → always equal (handles null==null, undefined==undefined, bool, int, string by id)
         if (a.bits == b.bits) return initBool(true);
         // Both numbers: compare as f64 (NaN != NaN)
         if (a.isNumber() and b.isNumber()) {
             return initBool(a.asNumber() == b.asNumber());
+        }
+        // Strings: same StringId means same content (interned)
+        if (a.isString() and b.isString()) {
+            return initBool(a.asStringId() == b.asStringId());
         }
         return initBool(false);
     }

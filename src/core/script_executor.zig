@@ -538,3 +538,70 @@ fn signalJsEnabled(doc: *Document) void {
         _ = lxb.lxb_dom_element_set_attribute(html_elem, "class", 5, new_class.ptr, new_class.len);
     }
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Kotori JS engine integration
+// ══════════════════════════════════════════════════════════════════════
+
+const KotoriRuntime = @import("kotori_runtime").KotoriRuntime;
+
+/// Initialize page JavaScript using the kotori engine (experimental).
+/// Simplified path: inline scripts only, no modules/defer/events/timers.
+pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocator: std.mem.Allocator) void {
+    const doc_ptr: *anyopaque = @ptrCast(@alignCast(doc.html_doc));
+
+    var krt = KotoriRuntime.init(allocator, doc_ptr) catch {
+        std.debug.print("[kotori] Failed to init kotori runtime\n", .{});
+        return;
+    };
+
+    // Execute inline <script> tags
+    const doc_node = doc.documentNode();
+    kotoriExecScripts(doc_node.lxb_node, &krt);
+
+    page_kotori_rt.* = krt;
+    std.debug.print("[kotori] Page JS initialized (kotori engine)\n", .{});
+}
+
+/// Walk DOM tree and execute inline <script> tags via kotori.
+fn kotoriExecScripts(node: *lxb.lxb_dom_node_t, krt: *KotoriRuntime) void {
+    if (node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        var name_len: usize = 0;
+        const name_ptr: ?[*]const u8 = lxb.lxb_dom_element_local_name(elem, &name_len);
+        if (name_ptr != null and name_len == 6 and std.mem.eql(u8, name_ptr.?[0..6], "script")) {
+            // Skip modules and non-JS types
+            var type_len: usize = 0;
+            const type_ptr: ?[*]const u8 = lxb.lxb_dom_element_get_attribute(elem, "type", 4, &type_len);
+            if (type_ptr != null and type_len > 0) {
+                const stype = type_ptr.?[0..type_len];
+                if (std.mem.eql(u8, stype, "module")) return;
+                const is_js = stype.len == 0 or
+                    std.mem.eql(u8, stype, "text/javascript") or
+                    std.mem.eql(u8, stype, "application/javascript");
+                if (!is_js) return;
+            }
+
+            // Get inline content
+            var content_len: usize = 0;
+            const content_ptr: ?[*]const u8 = lxb.lxb_dom_node_text_content(node, &content_len);
+            if (content_ptr != null and content_len > 0 and content_len <= 512 * 1024) {
+                const code = content_ptr.?[0..content_len];
+                std.debug.print("[kotori] Executing <script> ({d} bytes)\n", .{content_len});
+                const result = krt.eval(code);
+                if (!result.isOk()) {
+                    if (result == .err) {
+                        std.debug.print("[kotori:ERROR] {s}\n", .{result.err});
+                    }
+                }
+            }
+            return; // Don't recurse into script content
+        }
+    }
+    // Recurse into children
+    var child: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (child) |ch| {
+        kotoriExecScripts(ch, krt);
+        child = ch.next;
+    }
+}

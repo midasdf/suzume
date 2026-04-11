@@ -33,3 +33,15 @@ pub const StringId = string_pool.StringId;
 pub const bytecode = @import("bytecode.zig");
 pub const OpCode = bytecode.OpCode;
 pub const Bytecode = bytecode.Bytecode;
+
+pub const compiler = @import("compiler.zig");
+pub const Compiler = compiler.Compiler;
+
+pub const object = @import("object.zig");
+pub const JsObject = object.JsObject;
+pub const FunctionObj = object.FunctionObj;
+pub const UpvalueDef = object.UpvalueDef;
+pub const UpvalueCell = object.UpvalueCell;
+
+pub const vm = @import("vm.zig");
+pub const VM = vm.VM;

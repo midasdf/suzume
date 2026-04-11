@@ -47,6 +47,8 @@ const JsRuntime = @import("js/runtime.zig").JsRuntime;
 const quickjs = @import("bindings/quickjs.zig");
 const web_api = @import("js/web_api.zig");
 const dom_api = @import("js/dom_api.zig");
+const kotori_dom = @import("kotori_dom");
+const kotori_runtime = @import("kotori_runtime");
 const events = @import("js/events.zig");
 const WebDriverServer = @import("net/webdriver.zig").WebDriverServer;
 const CommandSlot = @import("net/webdriver.zig").CommandSlot;
@@ -286,6 +288,7 @@ const PageState = struct {
     total_width: f32 = 0,
     image_cache: ?ImageCache = null,
     js_rt: ?JsRuntime = null,
+    kotori_rt: ?kotori_runtime.KotoriRuntime = null,
     /// External CSS text (from <link> fetches), kept for re-cascade after DOM mutation.
     external_css: ?[]const u8 = null,
     /// Pending image URLs for incremental loading (1 per event loop tick).
@@ -345,6 +348,7 @@ const hexDigit = script_executor.hexDigit;
 
 /// Initialize JavaScript for a loaded page: set up DOM APIs, execute scripts, fire events.
 /// Delegates to core/script_executor.zig.
+/// Set SUZUME_JS=kotori to use the experimental kotori engine.
 fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8, fonts: ?*painter_mod.FontCache) void {
     // Extract URL fragment for :target pseudo-class
     if (base_url) |url| {
@@ -359,7 +363,18 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     } else {
         dom_api.url_fragment_len = 0;
     }
-    script_executor.initPageJs(doc, &page.js_rt, &page.loaded_script_urls, allocator, loader, base_url, fonts);
+
+    // Check for kotori engine flag
+    const use_kotori = if (std.posix.getenv("SUZUME_JS")) |val|
+        std.mem.eql(u8, val, "kotori")
+    else
+        false;
+
+    if (use_kotori) {
+        script_executor.initPageJsKotori(doc, &page.kotori_rt, allocator);
+    } else {
+        script_executor.initPageJs(doc, &page.js_rt, &page.loaded_script_urls, allocator, loader, base_url, fonts);
+    }
 }
 
 /// Recursively collect image URLs from the box tree.
@@ -835,8 +850,9 @@ fn navigateTo(
     }
 
     // Re-style if JS mutated the DOM during script execution
-    if (dom_api.dom_dirty) {
+    if (dom_api.dom_dirty or kotori_dom.dom_dirty) {
         dom_api.dom_dirty = false;
+        kotori_dom.dom_dirty = false;
         restylePage(page, allocator, fonts, layout_width, layout_height);
     }
 
@@ -3107,6 +3123,8 @@ pub const js = struct {
     pub const web_apis = @import("js/web_api.zig");
     pub const dom_apis = @import("js/dom_api.zig");
     pub const event_system = @import("js/events.zig");
+    pub const kotori_dom_api = @import("kotori_dom");
+    pub const kotori_rt = @import("kotori_runtime");
 };
 
 // ── WebDriver Command Handler ───────────────────────────────────────

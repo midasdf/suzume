@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Kotori Engine Test</title>
+</head>
+<body>
+    <h1 id="title">Hello from HTML</h1>
+    <div id="container">
+        <p id="text">Original text</p>
+    </div>
+    <div id="dynamic"></div>
+
+    <script>
+        var title = document.getElementById("title");
+        title.textContent = "Hello from Kotori!";
+        title.style.color = "blue";
+
+        var text = document.getElementById("text");
+        text.textContent = "Modified by JavaScript";
+        text.style.backgroundColor = "yellow";
+
+        var container = document.getElementById("dynamic");
+        var p = document.createElement("p");
+        p.textContent = "Dynamically created paragraph";
+        container.appendChild(p);
+
+        var span = document.createElement("span");
+        span.textContent = " - powered by kotori";
+        span.style.color = "green";
+        container.appendChild(span);
+    </script>
+</body>
+</html>

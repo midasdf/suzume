@@ -162,12 +162,40 @@ pub fn build(b: *std.Build) void {
     // const libcss = build_libcss.buildLibCss(b, target, optimize);
     const libnsfb = build_libnsfb.buildLibNsfb(b, target, optimize);
 
+    // ── kotori JS engine module (shared by exe and tests) ──────────
+    const kotori_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori/kotori.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // ── kotori DOM bridge module ────────────────────────────────────
+    const kotori_dom_exe_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori_dom.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kotori_dom_exe_mod.addImport("kotori", kotori_mod);
+    kotori_dom_exe_mod.addIncludePath(lexbor_dep.path("lib"));
+
+    // ── kotori runtime module ────────────────────────────────────
+    const kotori_rt_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori_runtime.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kotori_rt_mod.addImport("kotori", kotori_mod);
+    kotori_rt_mod.addImport("kotori_dom", kotori_dom_exe_mod);
+
     // ── Main executable ───────────────────────────────────────────
     const exe_mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe_mod.addImport("kotori", kotori_mod);
+    exe_mod.addImport("kotori_dom", kotori_dom_exe_mod);
+    exe_mod.addImport("kotori_runtime", kotori_rt_mod);
 
     const exe = b.addExecutable(.{
         .name = "suzume",
@@ -472,11 +500,7 @@ pub fn build(b: *std.Build) void {
     test_css_step.dependOn(&run_css_tests.step);
 
     // ── kotori JS engine tests ─────────────────────────────────
-    const kotori_mod = b.createModule(.{
-        .root_source_file = b.path("src/js/kotori/kotori.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // (kotori_mod is created above, shared with exe_mod)
 
     const test_kotori_lexer_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_kotori_lexer.zig"),
@@ -515,4 +539,31 @@ pub fn build(b: *std.Build) void {
     const run_kotori_tests = b.addRunArtifact(kotori_tests);
     const test_kotori_step = b.step("test-kotori", "Run kotori JS engine tests");
     test_kotori_step.dependOn(&run_kotori_tests.step);
+
+    // ── kotori DOM integration tests ─────────────────────────────
+    const kotori_dom_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori_dom.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    kotori_dom_mod.addImport("kotori", kotori_mod);
+    kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
+
+    const test_kotori_dom_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_kotori_dom.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_kotori_dom_mod.addImport("kotori", kotori_mod);
+    test_kotori_dom_mod.addImport("kotori_dom", kotori_dom_mod);
+    test_kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
+
+    const kotori_dom_tests = b.addTest(.{
+        .root_module = test_kotori_dom_mod,
+    });
+    kotori_dom_tests.linkLibrary(lexbor_lib);
+
+    const run_kotori_dom_tests = b.addRunArtifact(kotori_dom_tests);
+    const test_kotori_dom_step = b.step("test-kotori-dom", "Run kotori DOM binding tests");
+    test_kotori_dom_step.dependOn(&run_kotori_dom_tests.step);
 }

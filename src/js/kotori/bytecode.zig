@@ -11,6 +11,7 @@ pub const OpCode = enum(u8) {
     load_const,
     pop,
     dup,
+    swap,
 
     // Arithmetic
     add,
@@ -46,6 +47,8 @@ pub const OpCode = enum(u8) {
     store_local,
     load_global,
     store_global,
+    load_upvalue,
+    store_upvalue,
 
     // Control flow
     jump,
@@ -53,9 +56,32 @@ pub const OpCode = enum(u8) {
     jump_if_true,
 
     // Functions
-    call,
+    new_function, // operand: u16 constant index → FunctionObj
+    call, // operand: u16 arg count
     return_,
     return_undefined,
+    close_upvalue, // operand: u16 stack slot to close
+
+    // Objects
+    new_object, // operand: u16 property count
+    get_prop, // operand: u16 constant index → StringId
+    set_prop, // operand: u16 constant index → StringId
+    get_elem, // stack: [obj, key] → [value]
+    set_elem, // stack: [obj, key, value] → [value]
+
+    // Arrays
+    new_array, // operand: u16 element count
+    array_push, // stack: [array, value] → [array] — append value to array
+
+    // This / method calls / constructor
+    load_this,
+    call_method, // operand: u16 arg count (stack: [this, func, args...])
+    construct, // operand: u16 arg count (stack: [func, args...])
+
+    // Exception handling
+    try_begin, // operand: i16 offset to catch handler
+    try_end,
+    throw_,
 
     // Special
     typeof_,
@@ -128,8 +154,11 @@ pub const Bytecode = struct {
     /// Patch the i16 jump offset at `patch_pos` to reach the current code position.
     /// The offset is relative to the byte immediately after the two operand bytes.
     pub fn patchJump(self: *Bytecode, patch_pos: u32) void {
-        const target: u32 = self.currentOffset();
-        // The instruction pointer after reading the operand is at patch_pos + 2.
+        self.patchJumpTo(patch_pos, self.currentOffset());
+    }
+
+    /// Patch the i16 jump offset at `patch_pos` to reach an arbitrary target position.
+    pub fn patchJumpTo(self: *Bytecode, patch_pos: u32, target: u32) void {
         const after_operand: u32 = patch_pos + 2;
         const delta: i16 = @intCast(@as(i32, @intCast(target)) - @as(i32, @intCast(after_operand)));
         const u: u16 = @bitCast(delta);
