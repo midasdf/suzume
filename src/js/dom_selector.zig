@@ -33,11 +33,10 @@ fn hasUndeclaredNamespace(sel: []const u8) bool {
             paren_depth += 1;
         } else if (ch == ')' and paren_depth > 0) {
             paren_depth -= 1;
-        } else if (ch == '|' and bracket_depth == 0 and paren_depth == 0) {
-            // `|` outside brackets/parens = namespace separator
+        } else if (ch == '|' and bracket_depth == 0) {
+            // `|` outside brackets = namespace separator
             // Valid forms: `*|E` (any ns), `|E` (no ns)
-            // Invalid at top level: `prefix|E` (undeclared ns)
-            // Inside :is()/:not()/:has() (paren_depth > 0), allow namespace prefixes
+            // Invalid: `prefix|E` (undeclared ns)
             if (i > 0 and sel[i - 1] != '*' and sel[i - 1] != ',' and sel[i - 1] != ' ' and sel[i - 1] != '|') {
                 // Check it's not an attribute selector operator like |=
                 if (i + 1 < sel.len and sel[i + 1] == '=') continue;
@@ -675,7 +674,7 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         }
         return false;
     }
-    // .class (may be chained: .class1.class2.class3)
+    // .class (may be chained: .class1.class2.class3, or compound .class#id, .class[attr])
     if (sel[0] == '.') {
         var val_len: usize = 0;
         const val = lxb_dom_element_get_attribute(elem, "class", 5, &val_len);
@@ -683,13 +682,34 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         const class_val = val.?[0..val_len];
         var rest = sel[1..];
         while (rest.len > 0) {
-            const next_dot = findUnescapedDot(rest) orelse rest.len;
-            if (next_dot == 0) return false;
+            // Find end of this class name: next unescaped dot, hash, bracket, or colon
+            var end: usize = rest.len;
+            {
+                var ci: usize = 0;
+                while (ci < rest.len) {
+                    if (rest[ci] == '\\' and ci + 1 < rest.len) {
+                        ci += 2; // skip escaped char entirely
+                        continue;
+                    }
+                    if (ci > 0 and (rest[ci] == '.' or rest[ci] == '#' or rest[ci] == '[' or rest[ci] == ':')) {
+                        end = ci;
+                        break;
+                    }
+                    ci += 1;
+                }
+            }
+            if (end == 0) return false;
             var esc_buf: [512]u8 = undefined;
-            const decoded = decodeCssEscapes(rest[0..next_dot], &esc_buf);
+            const decoded = decodeCssEscapes(rest[0..end], &esc_buf);
             if (!api.classContains(class_val, decoded)) return false;
-            if (next_dot >= rest.len) break;
-            rest = rest[next_dot + 1 ..];
+            rest = rest[end..];
+            if (rest.len == 0) break;
+            if (rest[0] == '.') {
+                rest = rest[1..]; // consume dot, continue class matching
+            } else {
+                // Remaining is #id, [attr], :pseudo — delegate
+                return matchSingleSimple(elem, rest);
+            }
         }
         return true;
     }
