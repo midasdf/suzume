@@ -350,9 +350,35 @@ pub const Loader = struct {
 /// Returns a sentinel-terminated owned string.
 pub fn resolveUrl(allocator: std.mem.Allocator, base: []const u8, relative: []const u8) ![:0]const u8 {
     // Absolute URL (has scheme)
-    if (std.mem.startsWith(u8, relative, "https://") or std.mem.startsWith(u8, relative, "http://")) {
+    if (hasScheme(relative)) {
         const result = try allocator.allocSentinel(u8, relative.len, 0);
         @memcpy(result, relative);
+        return result;
+    }
+
+    // Empty reference resolves to the current document URL without its fragment.
+    if (relative.len == 0) {
+        const base_no_frag = stripFragment(base);
+        const result = try allocator.allocSentinel(u8, base_no_frag.len, 0);
+        @memcpy(result, base_no_frag);
+        return result;
+    }
+
+    // Fragment-only: keep the current URL/path/query, replace the fragment.
+    if (relative[0] == '#') {
+        const base_no_frag = stripFragment(base);
+        const result = try allocator.allocSentinel(u8, base_no_frag.len + relative.len, 0);
+        @memcpy(result[0..base_no_frag.len], base_no_frag);
+        @memcpy(result[base_no_frag.len..][0..relative.len], relative);
+        return result;
+    }
+
+    // Query-only: keep the current URL/path, replace query and fragment.
+    if (relative[0] == '?') {
+        const base_no_query = stripQueryAndFragment(base);
+        const result = try allocator.allocSentinel(u8, base_no_query.len + relative.len, 0);
+        @memcpy(result[0..base_no_query.len], base_no_query);
+        @memcpy(result[base_no_query.len..][0..relative.len], relative);
         return result;
     }
 
@@ -397,6 +423,33 @@ pub fn resolveUrl(allocator: std.mem.Allocator, base: []const u8, relative: []co
     if (needs_slash) result[dir.len] = '/';
     @memcpy(result[dir.len + slash_len ..][0..rel.len], rel);
     return result;
+}
+
+fn hasScheme(url: []const u8) bool {
+    if (url.len == 0) return false;
+    const first = url[0];
+    if (!std.ascii.isAlphabetic(first)) return false;
+
+    for (url[1..]) |ch| {
+        switch (ch) {
+            ':' => return true,
+            '/', '?', '#' => return false,
+            'A'...'Z', 'a'...'z', '0'...'9', '+', '-', '.' => {},
+            else => return false,
+        }
+    }
+    return false;
+}
+
+fn stripFragment(url: []const u8) []const u8 {
+    const hash = std.mem.indexOfScalar(u8, url, '#') orelse return url;
+    return url[0..hash];
+}
+
+fn stripQueryAndFragment(url: []const u8) []const u8 {
+    const query = std.mem.indexOfScalar(u8, url, '?') orelse url.len;
+    const hash = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
+    return url[0..@min(query, hash)];
 }
 
 fn extractScheme(url: []const u8) []const u8 {

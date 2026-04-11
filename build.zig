@@ -412,6 +412,19 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_tests.step);
 
+    const url_resolve_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_url_resolve.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_resolve_mod.addIncludePath(lexbor_dep.path("lib"));
+    const url_resolve_tests = b.addTest(.{
+        .root_module = url_resolve_mod,
+    });
+    url_resolve_tests.linkLibC();
+    const run_url_resolve_tests = b.addRunArtifact(url_resolve_tests);
+    test_step.dependOn(&run_url_resolve_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
