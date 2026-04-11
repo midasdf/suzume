@@ -1314,6 +1314,8 @@ const url_class_js =
     \\      }
     \\    }
     \\  }
+    \\  // Percent-encode non-ASCII characters per URL spec
+    \\  try { url = encodeURI(url); } catch(e) {}
     \\  this.href = url;
     \\  // Parse protocol
     \\  var protoEnd = url.indexOf("://");

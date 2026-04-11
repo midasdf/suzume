@@ -537,7 +537,7 @@ pub fn implCreateDocument(
     // If qualifiedName is provided, create and append document element
     if (qname) |qn| {
         if (qn.len > 0) {
-            const create_js = "(function(d,ns,qn){var e=document.createElementNS(ns,qn);d.appendChild(e);d.documentElement=e;return d;})";
+            const create_js = "(function(d,ns,qn){var e=document.createElementNS(ns,qn);e.ownerDocument=d;d.appendChild(e);d.documentElement=e;return d;})";
             const fn_val = qjs.JS_Eval(c, create_js, create_js.len, "<createDocEl>", qjs.JS_EVAL_TYPE_GLOBAL);
             var call_args = [3]qjs.JSValue{ doc, if (ns != null) args[0] else quickjs.JS_NULL(), args[1] };
             const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 3, &call_args);
