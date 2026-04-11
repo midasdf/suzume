@@ -212,6 +212,11 @@ pub const Compiler = struct {
             .bool_literal => |b| try self.emitConstant(JsValue.initBool(b)),
             .null_literal => try self.emitConstant(JsValue.null_val),
             .string_literal => |sid| try self.emitConstant(JsValue.initString(sid)),
+            .regex_literal => {
+                // Regex literals compile to a placeholder object for now.
+                // Full RegExp support is a future task.
+                try self.emitConstant(JsValue.null_val);
+            },
 
             .template_literal => |list| {
                 // Template literal: [str, expr, str, expr, ..., str]
@@ -419,6 +424,7 @@ pub const Compiler = struct {
             // ── This / Update ────────────────────────────────────────
             .this => try self.emitOp(.load_this),
             .update => |u| try self.compileUpdate(u.operand, u.op),
+            .await_expr => |operand| try self.compileNode(operand), // no async — just evaluate
 
             else => try self.emitConstant(JsValue.undefined_val),
         }
@@ -554,7 +560,49 @@ pub const Compiler = struct {
             const p = self.parser.ast.getNode(p_idx);
             switch (p) {
                 .identifier => |id| _ = try self.addLocal(id),
+                .assign_pattern => |ap| {
+                    // Default param: use the left-hand identifier as local name
+                    const left = self.parser.ast.getNode(ap.left);
+                    switch (left) {
+                        .identifier => |id| _ = try self.addLocal(id),
+                        else => _ = try self.addLocal(0),
+                    }
+                },
+                .rest_element => |operand| {
+                    // Rest param: use the identifier as local name
+                    const elem = self.parser.ast.getNode(operand);
+                    switch (elem) {
+                        .identifier => |id| _ = try self.addLocal(id),
+                        else => _ = try self.addLocal(0),
+                    }
+                },
                 else => _ = try self.addLocal(0), // placeholder
+            }
+        }
+
+        // Emit default parameter value checks (before body)
+        // VM already pads missing args with undefined, so we check and replace
+        for (params, 0..) |p_idx, i| {
+            const p = self.parser.ast.getNode(p_idx);
+            switch (p) {
+                .assign_pattern => |ap| {
+                    // if (param === undefined) param = default_expr;
+                    try self.emitOpU16(.load_local, @intCast(i));
+                    try self.emitConstant(JsValue.undefined_val);
+                    try self.emitOp(.strict_ne);
+                    const jump_over = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+                    // Evaluate default expression and store
+                    try self.compileNode(ap.right);
+                    try self.emitOpU16(.store_local, @intCast(i));
+                    self.current.bc.patchJump(jump_over);
+                },
+                .rest_element => {
+                    // Rest params: for now, initialize as empty array
+                    // Full implementation collects remaining args (Task #2)
+                    try self.emitOpU16(.new_array, 0);
+                    try self.emitOpU16(.store_local, @intCast(i));
+                },
+                else => {},
             }
         }
 

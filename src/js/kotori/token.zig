@@ -50,6 +50,8 @@ pub const TokenType = enum(u8) {
     kw_with,
     kw_yield,
     kw_of,
+    kw_async,
+    kw_await,
 
     // Special keyword-like values
     kw_true,
@@ -169,6 +171,8 @@ const keyword_map = std.StaticStringMap(TokenType).initComptime(.{
     .{ "new", .kw_new },
     .{ "null", .kw_null },
     .{ "of", .kw_of },
+    .{ "async", .kw_async },
+    .{ "await", .kw_await },
     .{ "return", .kw_return },
     .{ "static", .kw_static },
     .{ "super", .kw_super },

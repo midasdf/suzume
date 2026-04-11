@@ -52,6 +52,7 @@ pub const Parser = struct {
     peek_token: Token,
     prev_line: u32,
     owns_pool: bool = true,
+    no_in: bool = false, // suppress 'in' as binary op (for-statement init)
 
     pub fn init(allocator: std.mem.Allocator, source: []const u8) Parser {
         var lex = lexer_mod.Lexer.init(source);
@@ -168,6 +169,8 @@ pub const Parser = struct {
 
         // 2. Loop infix
         while (true) {
+            // In for-statement init, 'in' is not a binary operator
+            if (self.no_in and self.current.type == .kw_in) break;
             const infix_prec = infixPrecedence(self.current.type);
             if (@intFromEnum(infix_prec) < @intFromEnum(min_prec)) break;
             if (infix_prec == .none) break;
@@ -192,6 +195,20 @@ pub const Parser = struct {
             .kw_null => return self.parseNull(),
             .kw_undefined => return self.parseUndefined(),
             .identifier => return self.parseIdentifier(),
+            .kw_async => {
+                if (self.peek_token.type == .kw_function) {
+                    self.advance(); // consume 'async'
+                    return self.parseFunctionExpr();
+                }
+                // Treat as identifier
+                return self.parseIdentifier();
+            },
+            .kw_await => {
+                // await expr → evaluate expr (async semantics not supported, just parse)
+                self.advance();
+                const operand = try self.parsePrecedence(.unary_);
+                return self.ast.addNode(self.allocator, .{ .await_expr = operand }) catch return error.OutOfMemory;
+            },
             .kw_this => return self.parseThis(),
             .lparen => return self.parseGrouped(),
             .lbracket => return self.parseArrayLiteral(),
@@ -209,6 +226,7 @@ pub const Parser = struct {
             .kw_function => return self.parseFunctionExpr(),
             .template => return self.parseTemplateLiteral(),
             .template_head => return self.parseTemplateLiteral(),
+            .slash => return self.parseRegex(),
             else => return error.UnexpectedToken,
         }
     }
@@ -341,6 +359,53 @@ pub const Parser = struct {
         return self.ast.addNode(self.allocator, .{ .template_literal = list }) catch return error.OutOfMemory;
     }
 
+    fn parseRegex(self: *Parser) ParseError!NodeIndex {
+        // self.current is the '/' token. Re-read source from that position as regex.
+        const source = self.lexer.source;
+        var pos: u32 = self.current.start + 1; // skip opening /
+
+        // Read pattern (until unescaped /)
+        while (pos < source.len) {
+            const ch = source[pos];
+            if (ch == '/') break;
+            if (ch == '\\' and pos + 1 < source.len) {
+                pos += 2; // skip escaped char
+                continue;
+            }
+            if (ch == '\n' or ch == '\r') break;
+            pos += 1;
+        }
+
+        const pattern_start = self.current.start + 1;
+        const pattern_end = pos;
+
+        if (pos < source.len and source[pos] == '/') pos += 1; // skip closing /
+
+        // Read flags (gimsuvy)
+        const flags_start = pos;
+        while (pos < source.len) {
+            const ch = source[pos];
+            if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z')) {
+                pos += 1;
+            } else break;
+        }
+        const flags_end = pos;
+
+        // Intern pattern and flags strings
+        const pattern = self.pool.intern(source[pattern_start..pattern_end]) catch return error.OutOfMemory;
+        const flags = self.pool.intern(source[flags_start..flags_end]) catch return error.OutOfMemory;
+
+        // Update lexer position past the regex, then re-lex current and peek
+        self.lexer.pos = pos;
+        self.current = nextMeaningful(&self.lexer);
+        self.peek_token = nextMeaningful(&self.lexer);
+
+        return self.ast.addNode(self.allocator, .{ .regex_literal = .{
+            .pattern = pattern,
+            .flags = flags,
+        } }) catch return error.OutOfMemory;
+    }
+
     fn parseBool(self: *Parser, val: bool) ParseError!NodeIndex {
         self.advance();
         return self.ast.addNode(self.allocator, .{ .bool_literal = val }) catch return error.OutOfMemory;
@@ -471,14 +536,52 @@ pub const Parser = struct {
     }
 
     fn parseProperty(self: *Parser) ParseError!NodeIndex {
-        // key: value
+        // Check for method shorthand: identifier() { ... }
+        // and getter/setter: get prop() { ... }, set prop(val) { ... }
         const key = try self.parsePropertyKey();
-        try self.expect(.colon);
-        const value = try self.parsePrecedence(.assignment);
+
+        // Method shorthand: key(...) { body }
+        if (self.check(.lparen)) {
+            self.advance(); // consume (
+            var params = std.ArrayListUnmanaged(NodeIndex){};
+            defer params.deinit(self.allocator);
+            while (!self.check(.rparen) and !self.check(.eof)) {
+                const param = try self.parseFunctionParam();
+                params.append(self.allocator, param) catch return error.OutOfMemory;
+                if (!self.match(.comma)) break;
+            }
+            try self.expect(.rparen);
+            const body = try self.parseBlock();
+            const params_list = self.ast.addNodeList(self.allocator, params.items) catch return error.OutOfMemory;
+            const func_node = try self.ast.addNode(self.allocator, .{ .function_expr = .{
+                .params = params_list,
+                .body = body,
+                .is_expression = true,
+            } });
+            return self.ast.addNode(self.allocator, .{ .property = .{
+                .key = key,
+                .value = func_node,
+                .kind = .init,
+                .method = true,
+            } }) catch return error.OutOfMemory;
+        }
+
+        // key: value
+        if (self.match(.colon)) {
+            const value = try self.parsePrecedence(.assignment);
+            return self.ast.addNode(self.allocator, .{ .property = .{
+                .key = key,
+                .value = value,
+                .kind = .init,
+            } }) catch return error.OutOfMemory;
+        }
+
+        // Shorthand property: { x } means { x: x }
         return self.ast.addNode(self.allocator, .{ .property = .{
             .key = key,
-            .value = value,
+            .value = key,
             .kind = .init,
+            .shorthand = true,
         } }) catch return error.OutOfMemory;
     }
 
@@ -514,8 +617,8 @@ pub const Parser = struct {
             .kw_instanceof, .kw_let, .kw_new, .kw_return, .kw_static,
             .kw_super, .kw_switch, .kw_this, .kw_throw, .kw_try,
             .kw_typeof, .kw_var, .kw_void, .kw_while, .kw_with,
-            .kw_yield, .kw_of, .kw_true, .kw_false, .kw_null,
-            .kw_undefined,
+            .kw_yield, .kw_of, .kw_async, .kw_await,
+            .kw_true, .kw_false, .kw_null, .kw_undefined,
             => true,
             else => false,
         };
@@ -565,6 +668,31 @@ pub const Parser = struct {
         } }) catch return error.OutOfMemory;
     }
 
+    /// Parse a single function parameter: identifier, identifier = default, or ...identifier
+    fn parseFunctionParam(self: *Parser) ParseError!NodeIndex {
+        // Rest parameter: ...identifier
+        if (self.check(.ellipsis)) {
+            self.advance(); // consume ...
+            const operand = try self.parseIdentifier();
+            return self.ast.addNode(self.allocator, .{ .rest_element = operand }) catch return error.OutOfMemory;
+        }
+
+        // Regular parameter
+        const ident = try self.parseIdentifier();
+
+        // Default value: identifier = expr
+        if (self.check(.eq) or self.check(.assign)) {
+            self.advance(); // consume =
+            const default_val = try self.parsePrecedence(.assignment);
+            return self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                .left = ident,
+                .right = default_val,
+            } }) catch return error.OutOfMemory;
+        }
+
+        return ident;
+    }
+
     fn parseFunctionExpr(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume 'function'
 
@@ -581,7 +709,7 @@ pub const Parser = struct {
         var params = std.ArrayListUnmanaged(NodeIndex){};
         defer params.deinit(self.allocator);
         while (!self.check(.rparen) and !self.check(.eof)) {
-            const param = try self.parseIdentifier();
+            const param = try self.parseFunctionParam();
             params.append(self.allocator, param) catch return error.OutOfMemory;
             if (!self.match(.comma)) break;
         }
@@ -631,6 +759,11 @@ pub const Parser = struct {
                 if (self.current.type == .identifier and self.peek_token.type == .colon) {
                     return self.parseLabeledStatement();
                 }
+                // Check for 'async function' declaration
+                if (self.current.type == .kw_async and self.peek_token.type == .kw_function) {
+                    self.advance(); // consume 'async'
+                    return self.parseFunctionDecl();
+                }
                 // Expression statement
                 const expr = try self.parseExpression();
                 try self.expectSemicolon();
@@ -660,6 +793,108 @@ pub const Parser = struct {
         return self.ast.addNode(self.allocator, .{ .block = list }) catch return error.OutOfMemory;
     }
 
+    /// Parse a binding target: identifier, [array pattern], or {object pattern}
+    fn parseBindingTarget(self: *Parser) ParseError!NodeIndex {
+        if (self.check(.lbracket)) return self.parseArrayPattern();
+        if (self.check(.lbrace)) return self.parseObjectPattern();
+        return self.parseIdentifier();
+    }
+
+    fn parseArrayPattern(self: *Parser) ParseError!NodeIndex {
+        self.advance(); // consume [
+        var elements = std.ArrayListUnmanaged(NodeIndex){};
+        defer elements.deinit(self.allocator);
+
+        while (!self.check(.rbracket) and !self.check(.eof)) {
+            if (self.check(.ellipsis)) {
+                self.advance();
+                const rest = try self.parseBindingTarget();
+                const rest_node = self.ast.addNode(self.allocator, .{ .rest_element = rest }) catch return error.OutOfMemory;
+                elements.append(self.allocator, rest_node) catch return error.OutOfMemory;
+                break; // rest must be last
+            }
+            if (self.check(.comma)) {
+                // Elision: [, , x] — push null_node as placeholder
+                elements.append(self.allocator, null_node) catch return error.OutOfMemory;
+            } else {
+                var elem = try self.parseBindingTarget();
+                // Default value: x = expr
+                if (self.check(.eq) or self.check(.assign)) {
+                    self.advance();
+                    const def = try self.parsePrecedence(.assignment);
+                    elem = self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                        .left = elem,
+                        .right = def,
+                    } }) catch return error.OutOfMemory;
+                }
+                elements.append(self.allocator, elem) catch return error.OutOfMemory;
+            }
+            if (!self.match(.comma)) break;
+        }
+        try self.expect(.rbracket);
+
+        const list = self.ast.addNodeList(self.allocator, elements.items) catch return error.OutOfMemory;
+        return self.ast.addNode(self.allocator, .{ .array_pattern = list }) catch return error.OutOfMemory;
+    }
+
+    fn parseObjectPattern(self: *Parser) ParseError!NodeIndex {
+        self.advance(); // consume {
+        var props = std.ArrayListUnmanaged(NodeIndex){};
+        defer props.deinit(self.allocator);
+
+        while (!self.check(.rbrace) and !self.check(.eof)) {
+            if (self.check(.ellipsis)) {
+                self.advance();
+                const rest = try self.parseBindingTarget();
+                const rest_node = self.ast.addNode(self.allocator, .{ .rest_element = rest }) catch return error.OutOfMemory;
+                props.append(self.allocator, rest_node) catch return error.OutOfMemory;
+                break;
+            }
+            const key = try self.parsePropertyKey();
+            if (self.match(.colon)) {
+                // key: pattern
+                var value = try self.parseBindingTarget();
+                if (self.check(.eq) or self.check(.assign)) {
+                    self.advance();
+                    const def = try self.parsePrecedence(.assignment);
+                    value = self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                        .left = value,
+                        .right = def,
+                    } }) catch return error.OutOfMemory;
+                }
+                const prop = self.ast.addNode(self.allocator, .{ .property = .{
+                    .key = key,
+                    .value = value,
+                    .kind = .init,
+                } }) catch return error.OutOfMemory;
+                props.append(self.allocator, prop) catch return error.OutOfMemory;
+            } else {
+                // Shorthand: { x } means { x: x }, with optional default
+                var value = key;
+                if (self.check(.eq) or self.check(.assign)) {
+                    self.advance();
+                    const def = try self.parsePrecedence(.assignment);
+                    value = self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                        .left = key,
+                        .right = def,
+                    } }) catch return error.OutOfMemory;
+                }
+                const prop = self.ast.addNode(self.allocator, .{ .property = .{
+                    .key = key,
+                    .value = value,
+                    .kind = .init,
+                    .shorthand = true,
+                } }) catch return error.OutOfMemory;
+                props.append(self.allocator, prop) catch return error.OutOfMemory;
+            }
+            if (!self.match(.comma)) break;
+        }
+        try self.expect(.rbrace);
+
+        const list = self.ast.addNodeList(self.allocator, props.items) catch return error.OutOfMemory;
+        return self.ast.addNode(self.allocator, .{ .object_pattern = list }) catch return error.OutOfMemory;
+    }
+
     fn parseVarDecl(self: *Parser) ParseError!NodeIndex {
         const kind: ast_mod.VarDecl.Kind = switch (self.current.type) {
             .kw_var => .@"var",
@@ -673,7 +908,7 @@ pub const Parser = struct {
         defer declarators.deinit(self.allocator);
 
         while (true) {
-            const name = try self.parseIdentifier();
+            const name = try self.parseBindingTarget();
             var init_node: NodeIndex = null_node;
             if (self.match(.eq) or self.match(.assign)) {
                 init_node = try self.parsePrecedence(.assignment);
@@ -749,15 +984,23 @@ pub const Parser = struct {
         } else if (self.check(.kw_var) or self.check(.kw_let) or self.check(.kw_const)) {
             // var/let/const declaration - parse without consuming semicolon
             init_node = try self.parseVarDeclNoSemicolon();
-            // Check for for-in
+            // Check for for-in / for-of
             if (self.match(.kw_in)) {
                 return self.parseForIn(init_node);
             }
+            if (self.match(.kw_of)) {
+                return self.parseForOf(init_node);
+            }
             try self.expect(.semicolon);
         } else {
+            self.no_in = true;
             init_node = try self.parseExpression();
+            self.no_in = false;
             if (self.match(.kw_in)) {
                 return self.parseForIn(init_node);
+            }
+            if (self.match(.kw_of)) {
+                return self.parseForOf(init_node);
             }
             try self.expect(.semicolon);
         }
@@ -798,7 +1041,7 @@ pub const Parser = struct {
         defer declarators.deinit(self.allocator);
 
         while (true) {
-            const name = try self.parseIdentifier();
+            const name = try self.parseBindingTarget();
             var init_val: NodeIndex = null_node;
             if (self.match(.eq) or self.match(.assign)) {
                 init_val = try self.parsePrecedence(.assignment);
@@ -824,6 +1067,18 @@ pub const Parser = struct {
         try self.expect(.rparen);
         const body = try self.parseStatement();
         return self.ast.addNode(self.allocator, .{ .for_in_stmt = .{
+            .left = left,
+            .right = right,
+            .body = body,
+        } }) catch return error.OutOfMemory;
+    }
+
+    fn parseForOf(self: *Parser, left: NodeIndex) ParseError!NodeIndex {
+        // 'of' already consumed (as identifier token since 'of' is not a keyword)
+        const right = try self.parsePrecedence(.assignment);
+        try self.expect(.rparen);
+        const body = try self.parseStatement();
+        return self.ast.addNode(self.allocator, .{ .for_of_stmt = .{
             .left = left,
             .right = right,
             .body = body,
@@ -964,7 +1219,7 @@ pub const Parser = struct {
         var params = std.ArrayListUnmanaged(NodeIndex){};
         defer params.deinit(self.allocator);
         while (!self.check(.rparen) and !self.check(.eof)) {
-            const param = try self.parseIdentifier();
+            const param = try self.parseFunctionParam();
             params.append(self.allocator, param) catch return error.OutOfMemory;
             if (!self.match(.comma)) break;
         }

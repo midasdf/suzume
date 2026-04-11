@@ -1342,3 +1342,77 @@ test "eval: constructor with prototype methods" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
 }
+
+// ── Default parameter values ──────────────────────────────────────
+
+test "eval: function with default param (not provided)" {
+    const result = try evalExpr(
+        \\function greet(name, greeting) {
+        \\  if (greeting === undefined) greeting = "hello";
+        \\  return greeting;
+        \\}
+        \\greet("world")
+    );
+    // Baseline: manual undefined check works
+    try std.testing.expect(result.isString());
+}
+
+test "eval: default param value used when arg missing" {
+    const result = try evalExpr(
+        \\function add(a, b = 10) {
+        \\  return a + b;
+        \\}
+        \\add(5)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "eval: default param value overridden when arg provided" {
+    const result = try evalExpr(
+        \\function add(a, b = 10) {
+        \\  return a + b;
+        \\}
+        \\add(5, 20)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 25.0), result.asNumber(), 0.001);
+}
+
+test "eval: default param with object literal" {
+    const result = try evalExpr(
+        \\function setup(opts = {}) {
+        \\  return typeof opts;
+        \\}
+        \\setup()
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: multiple default params" {
+    const result = try evalExpr(
+        \\function calc(a = 1, b = 2, c = 3) {
+        \\  return a + b + c;
+        \\}
+        \\calc()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: default param in function expression" {
+    const result = try evalExpr(
+        \\var fn1 = function(x, y = 100) {
+        \\  return x + y;
+        \\};
+        \\fn1(1)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 101.0), result.asNumber(), 0.001);
+}
+
+test "eval: rest parameter basic" {
+    const result = try evalExpr(
+        \\function first(a, ...rest) {
+        \\  return a;
+        \\}
+        \\first(42, 1, 2, 3)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}

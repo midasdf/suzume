@@ -136,7 +136,8 @@ for test in $TESTS; do
     URL="http://127.0.0.1:$PORT/$test"
 
     # Run suzume with Xvfb, capture stderr (console output)
-    OUTPUT=$(DISPLAY="$DISPLAY_NUM" timeout "$TIMEOUT" "$SUZUME_BIN" "$URL" 2>&1 || true)
+    # Use QuickJS for WPT tests (kotori lacks setTimeout and other Web APIs needed by testharness.js)
+    OUTPUT=$(DISPLAY="$DISPLAY_NUM" SUZUME_JS=quickjs timeout "$TIMEOUT" "$SUZUME_BIN" "$URL" 2>&1 || true)
 
     # Extract WPT_SUMMARY line
     SUMMARY=$(echo "$OUTPUT" | grep "WPT_SUMMARY:" | tail -1)
