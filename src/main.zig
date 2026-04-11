@@ -63,6 +63,23 @@ const session = @import("core/session.zig");
 const url_utils = @import("core/url_utils.zig");
 const http_status = @import("net/http_status.zig");
 
+// ── Sync restyle for getComputedStyle ─────────────────────────────
+// When JS calls getComputedStyle() after DOM mutations, we need fresh styles.
+// These globals store the current page context for the synchronous restyle callback.
+var g_restyle_page: ?*PageState = null;
+var g_restyle_allocator: std.mem.Allocator = undefined;
+var g_restyle_fonts: ?*painter_mod.FontCache = null;
+var g_restyle_width: i32 = 800;
+var g_restyle_height: i32 = 600;
+
+fn syncRestyle() void {
+    if (g_restyle_page) |page| {
+        if (g_restyle_fonts) |fonts| {
+            restylePage(page, g_restyle_allocator, fonts, g_restyle_width, g_restyle_height);
+        }
+    }
+}
+
 /// After `tab_mgr` switches the active tab, restore scroll/URL bar and lazy-load an empty page if needed.
 fn applyActiveTabToUi(
     allocator: std.mem.Allocator,
@@ -825,6 +842,14 @@ fn navigateTo(
     dom_api.setRootBox(page.root_box);
     dom_api.setStyles(if (page.styles) |*s| &s.styles else null);
     dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
+
+    // Set up sync restyle context for getComputedStyle during JS execution
+    g_restyle_page = page;
+    g_restyle_allocator = allocator;
+    g_restyle_fonts = fonts;
+    g_restyle_width = layout_width;
+    g_restyle_height = layout_height;
+    dom_api.restyle_fn = &syncRestyle;
 
     // Initialize JavaScript: DOM APIs, execute scripts, fire events
     initPageJs(&page.doc.?, page, allocator, loader, base_url_copy, fonts);

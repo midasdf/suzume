@@ -2590,6 +2590,9 @@ pub fn windowGetComputedStyle(
     // Verify the argument is a valid element
     _ = getElement(c, args[0]) orelse return quickjs.JS_UNDEFINED();
 
+    // Flush stale styles: if DOM was mutated, re-cascade before reading
+    api.flushStylesIfDirty();
+
     // Build a CSSStyleDeclaration-like object backed by the element's inline style
     const obj = qjs.JS_NewObject(c);
     if (quickjs.JS_IsException(obj)) return obj;

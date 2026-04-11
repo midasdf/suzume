@@ -163,6 +163,17 @@ pub fn setRootBox(root: ?*const Box) void {
     g_top_frame.root_box = root;
 }
 
+/// Restyle callback — set from main.zig. Called by getComputedStyle when DOM is dirty.
+/// Triggers synchronous re-cascade + layout so computed styles are fresh.
+pub var restyle_fn: ?*const fn () void = null;
+
+/// Flush stale styles: if DOM is dirty, trigger synchronous restyle.
+pub fn flushStylesIfDirty() void {
+    if (dom_dirty) {
+        if (restyle_fn) |f| f();
+    }
+}
+
 /// Global styles pointer — set from main after cascade, used for getComputedStyle.
 pub var g_styles: ?*const cascade_mod.StyleMap = null;
 
