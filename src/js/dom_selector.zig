@@ -33,10 +33,11 @@ fn hasUndeclaredNamespace(sel: []const u8) bool {
             paren_depth += 1;
         } else if (ch == ')' and paren_depth > 0) {
             paren_depth -= 1;
-        } else if (ch == '|' and bracket_depth == 0) {
+        } else if (ch == '|' and bracket_depth == 0 and paren_depth == 0) {
             // `|` outside brackets/parens = namespace separator
             // Valid forms: `*|E` (any ns), `|E` (no ns)
-            // Invalid: `prefix|E` (undeclared ns)
+            // Invalid at top level: `prefix|E` (undeclared ns)
+            // Inside :is()/:not()/:has() (paren_depth > 0), allow namespace prefixes
             if (i > 0 and sel[i - 1] != '*' and sel[i - 1] != ',' and sel[i - 1] != ' ' and sel[i - 1] != '|') {
                 // Check it's not an attribute selector operator like |=
                 if (i + 1 < sel.len and sel[i + 1] == '=') continue;
@@ -652,8 +653,67 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
         }
         return true;
     }
-    // * (universal)
+    // * or *|* (universal)
     if (sel.len == 1 and sel[0] == '*') return true;
+    if (std.mem.eql(u8, sel, "*|*")) return true;
+
+    // Namespace prefix handling: *|tag (any namespace), |tag (no namespace), prefix|tag
+    // Strip the prefix and match by local name only
+    if (std.mem.indexOfScalar(u8, sel, '|')) |pipe_pos| {
+        const prefix = sel[0..pipe_pos];
+        const local_part = sel[pipe_pos + 1 ..];
+        if (local_part.len == 0) return false;
+        // *|tag — match any element with local name (ignore namespace)
+        if (std.mem.eql(u8, prefix, "*")) {
+            if (local_part.len == 1 and local_part[0] == '*') return true; // *|*
+            var name_len_ns: usize = 0;
+            const name_ptr_ns = lxb_dom_element_local_name(elem, &name_len_ns);
+            if (name_ptr_ns == null) return false;
+            return std.ascii.eqlIgnoreCase(name_ptr_ns.?[0..name_len_ns], local_part);
+        }
+        // |tag — match element with no namespace (HTML elements)
+        if (prefix.len == 0) {
+            var name_len_ns: usize = 0;
+            const name_ptr_ns = lxb_dom_element_local_name(elem, &name_len_ns);
+            if (name_ptr_ns == null) return false;
+            return std.ascii.eqlIgnoreCase(name_ptr_ns.?[0..name_len_ns], local_part);
+        }
+        // prefix|tag — match by known namespace URI + local name
+        // Map well-known prefixes to namespace URIs
+        {
+            const ns_uri: ?[]const u8 = if (std.mem.eql(u8, prefix, "svg"))
+                "http://www.w3.org/2000/svg"
+            else if (std.mem.eql(u8, prefix, "math") or std.mem.eql(u8, prefix, "mathml"))
+                "http://www.w3.org/1998/Math/MathML"
+            else if (std.mem.eql(u8, prefix, "xlink"))
+                "http://www.w3.org/1999/xlink"
+            else if (std.mem.eql(u8, prefix, "html"))
+                "http://www.w3.org/1999/xhtml"
+            else
+                null; // Unknown prefix — no match
+            if (ns_uri == null) return false;
+            // Check element namespace (lexbor stores it in the node structure)
+            const node_ns: *lxb.lxb_dom_node_t = @ptrCast(elem);
+            _ = node_ns;
+            // HTML elements have XHTML namespace, SVG elements have SVG namespace, etc.
+            // For HTML documents, all elements are in XHTML namespace unless explicitly SVG/MathML
+            // Check local name first
+            var name_len_ns: usize = 0;
+            const name_ptr_ns = lxb_dom_element_local_name(elem, &name_len_ns);
+            if (name_ptr_ns == null) return false;
+            if (!std.ascii.eqlIgnoreCase(name_ptr_ns.?[0..name_len_ns], local_part)) return false;
+            // Check namespace: lexbor HTML elements have ns_id for XHTML/SVG/MathML
+            const ns_id = elem.node.ns;
+            const expected_html = std.mem.eql(u8, ns_uri.?, "http://www.w3.org/1999/xhtml");
+            const expected_svg = std.mem.eql(u8, ns_uri.?, "http://www.w3.org/2000/svg");
+            const expected_math = std.mem.eql(u8, ns_uri.?, "http://www.w3.org/1998/Math/MathML");
+            // Lexbor ns IDs: 1=HTML, 2=MATH, 3=SVG, 4=XLINK, 5=XML, 6=XMLNS
+            if (expected_html and ns_id == 1) return true;
+            if (expected_svg and ns_id == 3) return true;
+            if (expected_math and ns_id == 2) return true;
+            return false;
+        }
+    }
 
     // Compound: tag.class1.class2 or tag#id
     if (findUnescapedDot(sel)) |dot| {
