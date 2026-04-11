@@ -805,8 +805,10 @@ pub fn elementAppendChild(
             lxb_dom_node_remove(fnode);
             lxb_dom_node_insert_child(parent.?, fnode);
         }
-        // Record mutation with individual children as addedNodes
+        // Record mutation on parent with addedNodes
         events.recordMutationChildListMulti(parent.?, frag_children, ins_prev, null);
+        // DOM spec: also record removal mutation on the fragment itself (removedNodes)
+        events.recordMutationChildListRemovedMulti(child, frag_children);
         api.setDomDirty();
         for (frag_children) |fc_node| {
             api.maybeExecuteDynamicScriptPublic(c, fc_node, args[0]);
@@ -1055,6 +1057,8 @@ pub fn elementInsertBefore(
             if (eff_ref2) |er| lxb_dom_node_insert_before(er, fnode) else lxb_dom_node_insert_child(parent.?, fnode);
         }
         events.recordMutationChildListMulti(parent.?, frag_ch, frag_prev, eff_ref2);
+        // DOM spec: record removal mutation on the fragment itself
+        events.recordMutationChildListRemovedMulti(new_node, frag_ch);
         api.setDomDirty();
         for (frag_ch) |fnode| {
             api.maybeExecuteDynamicScriptPublic(c, fnode, args[0]);
@@ -1236,6 +1240,8 @@ pub fn elementReplaceChild(
         lxb_dom_node_remove(old_node);
         events.recordMutationChildListMulti(parent, frag_ch_rc, rep_prev_f, rep_next_f);
         events.recordMutationChildList(parent, null, old_node, rep_prev_f, rep_next_f);
+        // DOM spec: record removal mutation on the fragment itself
+        events.recordMutationChildListRemovedMulti(new_node, frag_ch_rc);
         api.setDomDirty();
         return qjs.JS_DupValue(c, args[1]);
     }

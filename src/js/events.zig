@@ -2396,6 +2396,38 @@ pub fn recordMutationChildListMulti(
     }
 }
 
+/// Record a childList mutation with multiple removedNodes (for fragment removal).
+pub fn recordMutationChildListRemovedMulti(
+    target: *lxb.lxb_dom_node_t,
+    removed_nodes: []const *lxb.lxb_dom_node_t,
+) void {
+    if (suppress_childlist) return;
+    for (mutation_observers.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            const matches = (t.node == target) or
+                (t.subtree and isDescendant(target, t.node));
+            if (!matches) continue;
+            if (!t.child_list) continue;
+
+            var record = MutationRecord{
+                .type_str = "childList",
+                .target = target,
+                .attribute_name = null,
+                .added_nodes = .empty,
+                .removed_nodes = .empty,
+                .previous_sibling = null,
+                .next_sibling = null,
+            };
+            for (removed_nodes) |n| {
+                record.removed_nodes.append(allocator, n) catch {};
+            }
+            obs.pending_records.append(allocator, record) catch {};
+            break;
+        }
+    }
+}
+
 pub fn recordMutationWithOldValue(
     target: *lxb.lxb_dom_node_t,
     mutation_type: []const u8,
