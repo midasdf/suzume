@@ -213,6 +213,23 @@ pub const Compiler = struct {
             .null_literal => try self.emitConstant(JsValue.null_val),
             .string_literal => |sid| try self.emitConstant(JsValue.initString(sid)),
 
+            .template_literal => |list| {
+                // Template literal: [str, expr, str, expr, ..., str]
+                // Compile each part and concatenate with add (string +)
+                const items = self.parser.ast.getNodeList(list);
+                if (items.len == 0) {
+                    // Empty template → empty string
+                    const empty_id = self.parser.pool.intern("") catch return error.OutOfMemory;
+                    try self.emitConstant(JsValue.initString(empty_id));
+                } else {
+                    try self.compileNode(items[0]);
+                    for (items[1..]) |item| {
+                        try self.compileNode(item);
+                        try self.emitOp(.add);
+                    }
+                }
+            },
+
             .binary => |bin| {
                 // Short-circuit for logical_and / logical_or
                 if (bin.op == .logical_and) {

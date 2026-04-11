@@ -207,6 +207,8 @@ pub const Parser = struct {
             .plus_plus => return self.parseUpdate(.pre_inc),
             .minus_minus => return self.parseUpdate(.pre_dec),
             .kw_function => return self.parseFunctionExpr(),
+            .template => return self.parseTemplateLiteral(),
+            .template_head => return self.parseTemplateLiteral(),
             else => return error.UnexpectedToken,
         }
     }
@@ -269,6 +271,74 @@ pub const Parser = struct {
         const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
         const sid = self.pool.intern(content) catch return error.OutOfMemory;
         return self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+    }
+
+    fn parseTemplateLiteral(self: *Parser) ParseError!NodeIndex {
+        var parts: [64]NodeIndex = undefined;
+        var count: usize = 0;
+
+        if (self.current.type == .template) {
+            // No-substitution template: `text`
+            const text = self.tokenSlice(self.current);
+            self.advance();
+            const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
+            const sid = self.pool.intern(content) catch return error.OutOfMemory;
+            return self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+        }
+
+        // template_head: `text${
+        {
+            const text = self.tokenSlice(self.current);
+            // Strip leading backtick and trailing ${
+            const content = if (text.len >= 3) text[1 .. text.len - 2] else "";
+            const sid = self.pool.intern(content) catch return error.OutOfMemory;
+            const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+            if (count < parts.len) {
+                parts[count] = str_node;
+                count += 1;
+            }
+            self.advance(); // consume template_head
+        }
+
+        // Parse expression + (template_middle | template_tail) pairs
+        while (true) {
+            // Parse the interpolated expression
+            const expr = try self.parsePrecedence(.assignment);
+            if (count < parts.len) {
+                parts[count] = expr;
+                count += 1;
+            }
+
+            if (self.current.type == .template_middle) {
+                // }text${
+                const text = self.tokenSlice(self.current);
+                const content = if (text.len >= 3) text[1 .. text.len - 2] else "";
+                const sid = self.pool.intern(content) catch return error.OutOfMemory;
+                const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+                if (count < parts.len) {
+                    parts[count] = str_node;
+                    count += 1;
+                }
+                self.advance(); // consume template_middle
+            } else if (self.current.type == .template_tail) {
+                // }text`
+                const text = self.tokenSlice(self.current);
+                const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
+                const sid = self.pool.intern(content) catch return error.OutOfMemory;
+                const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+                if (count < parts.len) {
+                    parts[count] = str_node;
+                    count += 1;
+                }
+                self.advance(); // consume template_tail
+                break;
+            } else {
+                break; // malformed template
+            }
+        }
+
+        const list = self.ast.addNodeList(self.allocator, parts[0..count]) catch return error.OutOfMemory;
+        return self.ast.addNode(self.allocator, .{ .template_literal = list }) catch return error.OutOfMemory;
     }
 
     fn parseBool(self: *Parser, val: bool) ParseError!NodeIndex {
