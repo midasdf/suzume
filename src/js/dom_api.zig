@@ -5363,11 +5363,22 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    }
             \\    return r.replace(/\s{2,}/g,' ').trim();
             \\  }
+            \\  function _canonAnPlusB(s){
+            \\    s=s.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\s+/g,'').toLowerCase();
+            \\    if(s==='even')return '2n';if(s==='odd')return '2n+1';
+            \\    var m=s.match(/^([+-]?\d*)[nN]([+-]\d+)?$/);
+            \\    if(m){var a=m[1],b=m[2]?parseInt(m[2],10):0;
+            \\      if(a===''||a==='+')a=1;else if(a==='-')a=-1;else a=parseInt(a,10);
+            \\      if(a===0)return String(b);var r2='';
+            \\      if(a===1)r2='n';else if(a===-1)r2='-n';else r2=a+'n';
+            \\      if(b>0)r2+='+'+b;else if(b<0)r2+=b;return r2;}
+            \\    var n=parseInt(s,10);if(!isNaN(n)&&String(n)===s)return String(n);return s;
+            \\  }
             \\  function _canonOne(s){
             \\    var r='',i=0;
             \\    while(i<s.length){
             \\      if(s[i]==='['){var j=_findClose(s,i,'[',']');r+=_canonAttr(s.substring(i,j+1));i=j+1;}
-            \\      else if(s[i]==='('){var j=_findClose(s,i,'(',')');var inner=s.substring(i+1,j);r+='('+_canonSel(inner)+')';i=j+1;}
+            \\      else if(s[i]==='('){var j=_findClose(s,i,'(',')');var inner=s.substring(i+1,j);var pre=r.replace(/\s+$/,'');if(/:(nth-child|nth-last-child|nth-of-type|nth-last-of-type)$/i.test(pre)){r+='('+_canonAnPlusB(inner)+')';}else{r+='('+_canonSel(inner)+')';}i=j+1;}
             \\      else{r+=s[i];i++;}
             \\    }
             \\    r=_normCombinatorsOuter(r);
@@ -5410,9 +5421,28 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\
             \\  // ── style.sheet property via Element prototype getter ──
             \\  var _sheetMap=new WeakMap();
+            \\  function _parseStyleRules(css){
+            \\    var rules=[];var i=0;
+            \\    while(i<css.length){
+            \\      while(i<css.length&&(css[i]===' '||css[i]==='\n'||css[i]==='\r'||css[i]==='\t'))i++;
+            \\      if(i>=css.length)break;
+            \\      if(css[i]==='@'){var end=css.indexOf('}',i);if(end===-1)break;var inner=css.indexOf('{',i);if(inner!==-1&&inner<end){var d=1;var j=inner+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}i=j;continue;}i=end+1;continue;}
+            \\      var bi=css.indexOf('{',i);if(bi===-1)break;
+            \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+            \\      var d2=1;var j2=bi+1;while(j2<css.length&&d2>0){if(css[j2]==='{')d2++;if(css[j2]==='}')d2--;j2++;}
+            \\      var body=css.substring(bi+1,j2-1).trim();
+            \\      if(sel){try{document.querySelector(sel);var c=_canonSel(sel);rules.push(new CSSStyleRule(c,body));}catch(e){}}
+            \\      i=j2;
+            \\    }
+            \\    return rules;
+            \\  }
             \\  Object.defineProperty(Element.prototype,'sheet',{get:function(){
             \\    if(!this.tagName||this.tagName.toUpperCase()!=='STYLE')return void 0;
-            \\    var sh=_sheetMap.get(this);if(!sh){sh=new _Sheet();sh.ownerNode=this;_sheetMap.set(this,sh);}return sh;
+            \\    var sh=_sheetMap.get(this);
+            \\    if(!sh){sh=new _Sheet();sh.ownerNode=this;_sheetMap.set(this,sh);sh._lastText=null;}
+            \\    var txt=this.textContent||'';
+            \\    if(txt!==sh._lastText){sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;}
+            \\    return sh;
             \\  },configurable:true,enumerable:true});
             \\
             \\  // ── CSS.supports("selector(...)") ──
