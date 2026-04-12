@@ -632,6 +632,9 @@ pub const ElementAdapter = struct {
         isDocumentNode: *const fn (ptr: *const anyopaque) bool,
         isHovered: *const fn (ptr: *const anyopaque) bool,
         isFocused: *const fn (ptr: *const anyopaque) bool,
+        /// Check if element has any child node (element or text, not comments).
+        /// Used for :empty pseudo-class.
+        hasContentChildren: *const fn (ptr: *const anyopaque) bool,
     };
 
     pub fn tagName(self: ElementAdapter) ?[]const u8 {
@@ -660,6 +663,10 @@ pub const ElementAdapter = struct {
 
     pub fn firstChild(self: ElementAdapter) ?ElementAdapter {
         return self.vtable.firstChild(self.ptr);
+    }
+
+    pub fn hasContentChildren(self: ElementAdapter) bool {
+        return self.vtable.hasContentChildren(self.ptr);
     }
 
     pub fn isDocumentNode(self: ElementAdapter) bool {
@@ -868,7 +875,7 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             const p = element.parent() orelse return false;
             return p.isDocumentNode();
         },
-        .empty => return element.firstChild() == null,
+        .empty => return !element.hasContentChildren(),
         .first_of_type => {
             const tag = element.tagName() orelse return false;
             var sib = element.previousElementSibling();

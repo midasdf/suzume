@@ -611,6 +611,7 @@ const dom_vtable = selectors.ElementAdapter.VTable{
     .isDocumentNode = domIsDocument,
     .isHovered = domIsHovered,
     .isFocused = domIsFocused,
+    .hasContentChildren = domHasContentChildren,
 };
 
 fn domTagName(ptr: *const anyopaque) ?[]const u8 {
@@ -667,6 +668,19 @@ fn domFirstChild(ptr: *const anyopaque) ?selectors.ElementAdapter {
     const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     if (node.firstElementChild()) |c| return makeDomAdapter(c);
     return null;
+}
+
+fn domHasContentChildren(ptr: *const anyopaque) bool {
+    const lxb = @import("../bindings/lexbor.zig").c;
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
+    // CSS :empty — check for element or text child nodes (not comments)
+    var child = node.lxb_node.first_child;
+    while (child != null) {
+        const c = child.?;
+        if (c.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT or c.*.type == lxb.LXB_DOM_NODE_TYPE_TEXT) return true;
+        child = c.*.next;
+    }
+    return false;
 }
 
 fn domIsDocument(ptr: *const anyopaque) bool {
