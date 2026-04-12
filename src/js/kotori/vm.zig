@@ -364,6 +364,20 @@ pub const VM = struct {
                         frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
                     }
                 },
+                .jump_if_not_nullish => {
+                    const offset = self.readI16(frame);
+                    const val = self.pop();
+                    if (!val.isNull() and !val.isUndefined()) {
+                        frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    }
+                },
+                .jump_if_nullish => {
+                    const offset = self.readI16(frame);
+                    const val = self.pop();
+                    if (val.isNull() or val.isUndefined()) {
+                        frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    }
+                },
 
                 // ── Functions ────────────────────────────────────────
                 .new_function => {

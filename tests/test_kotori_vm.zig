@@ -3046,3 +3046,40 @@ test "console.trace" {
         \\console.trace("trace test"); 42;
     );
 }
+
+// ── Nullish coalescing (??) ─────────────────────────────────────
+
+test "eval: null ?? 42" {
+    const result = try evalExpr("null ?? 42");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: undefined ?? 42" {
+    const result = try evalExpr("undefined ?? 42");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: 0 ?? 42 (not nullish)" {
+    const result = try evalExpr("0 ?? 42");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: false ?? 42 (not nullish)" {
+    const result = try evalExpr("false ?? 42");
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: empty string ?? fallback (not nullish)" {
+    const result = try evalExpr("\"\" ?? 42");
+    try std.testing.expect(result.isString());
+}
+
+test "eval: hello ?? 42" {
+    const result = try evalExpr("\"hello\" ?? 42");
+    try std.testing.expect(result.isString());
+}
+
+test "eval: chained null ?? undefined ?? 42" {
+    const result = try evalExpr("null ?? undefined ?? 42");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}

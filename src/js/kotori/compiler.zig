@@ -259,6 +259,15 @@ pub const Compiler = struct {
                     self.current.bc.patchJump(skip);
                     return;
                 }
+                if (bin.op == .nullish) {
+                    try self.compileNode(bin.lhs);
+                    try self.emitOp(.dup);
+                    const skip = try self.current.bc.emitJump(self.allocator, .jump_if_not_nullish);
+                    try self.emitOp(.pop);
+                    try self.compileNode(bin.rhs);
+                    self.current.bc.patchJump(skip);
+                    return;
+                }
                 try self.compileNode(bin.lhs);
                 try self.compileNode(bin.rhs);
                 try self.emitOp(binaryOpToOpCode(bin.op));
