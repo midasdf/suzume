@@ -2913,3 +2913,60 @@ test "Date instanceof Date" {
     , "result");
     try std.testing.expect(result.asBool() == true);
 }
+
+// ---------------------------------------------------------------
+// Promise.all / race / allSettled / any
+// ---------------------------------------------------------------
+
+test "Promise.all resolves" {
+    const result = try evalWithMicrotasks(
+        \\var result = null;
+        \\Promise.all([Promise.resolve(1), Promise.resolve(2), Promise.resolve(3)])
+        \\  .then(function(vals) { result = vals.length; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "Promise.all rejects on first failure" {
+    const result = try evalWithMicrotasks(
+        \\var result = null;
+        \\Promise.all([Promise.resolve(1), Promise.reject("fail"), Promise.resolve(3)])
+        \\  .catch(function(e) { result = e; });
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Promise.all empty" {
+    const result = try evalWithMicrotasks(
+        \\var result = null;
+        \\Promise.all([]).then(function(vals) { result = vals.length; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "Promise.race resolves first" {
+    const result = try evalWithMicrotasks(
+        \\var result = null;
+        \\Promise.race([Promise.resolve(42), Promise.resolve(99)])
+        \\  .then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "Promise.allSettled" {
+    const result = try evalWithMicrotasks(
+        \\var result = null;
+        \\Promise.allSettled([Promise.resolve(1), Promise.reject("e")])
+        \\  .then(function(arr) { result = arr.length; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "Promise.any resolves first success" {
+    const result = try evalWithMicrotasks(
+        \\var result = null;
+        \\Promise.any([Promise.reject("a"), Promise.resolve(42)])
+        \\  .then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}

@@ -1452,6 +1452,10 @@ pub const VM = struct {
             // Promise.resolve / Promise.reject (static methods on constructor)
             try self.registerNativeMethod(promise_ctor, "resolve", &nativePromiseResolve);
             try self.registerNativeMethod(promise_ctor, "reject", &nativePromiseReject);
+            try self.registerNativeMethod(promise_ctor, "all", &nativePromiseAll);
+            try self.registerNativeMethod(promise_ctor, "race", &nativePromiseRace);
+            try self.registerNativeMethod(promise_ctor, "allSettled", &nativePromiseAllSettled);
+            try self.registerNativeMethod(promise_ctor, "any", &nativePromiseAny);
         }
 
         // ── fetch ──
@@ -1894,6 +1898,16 @@ pub const VM = struct {
     fn callJsFunction(self: *VM, func_val: JsValue, this_val: JsValue, args: []const JsValue) !JsValue {
         if (!func_val.isObject()) return JsValue.undefined_val;
         const obj = func_val.asJsObject();
+
+        // Handle native functions directly
+        if (obj.obj_type == .native_function) {
+            // Push func on stack so getCallerFuncObj can find it
+            self.push(func_val);
+            const result = try obj.data.native_fn(@ptrCast(self), this_val, args);
+            self.sp -= 1; // pop func
+            return result;
+        }
+
         if (obj.obj_type != .function) return JsValue.undefined_val;
 
         const func = &obj.data.function;
@@ -4060,6 +4074,329 @@ pub const VM = struct {
         const n = val.toNumber();
         if (std.math.isNan(n) or n < 0) return 0;
         return @intFromFloat(@min(n, 4294967295.0));
+    }
+
+    // ── Promise aggregation methods ────────────────────────────────
+
+    fn nativePromiseAll(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const result_promise = try vm.createPromiseObj();
+        const items = getArrayItems(args) orelse {
+            try vm.resolvePromise(result_promise, JsValue.initObject(try vm.createArray()));
+            return JsValue.initObject(result_promise);
+        };
+        if (items.len == 0) {
+            try vm.resolvePromise(result_promise, JsValue.initObject(try vm.createArray()));
+            return JsValue.initObject(result_promise);
+        }
+        // Shared state: results array + counter stored as properties on a state object
+        const state = try vm.createObj(.{});
+        const results = try vm.createArray();
+        for (0..items.len) |_| try results.data.array.append(vm.allocator, JsValue.undefined_val);
+        try state.setProperty(vm.allocator, try vm.pool.intern("r"), JsValue.initObject(results));
+        try state.setProperty(vm.allocator, try vm.pool.intern("c"), JsValue.initNumber(0));
+        try state.setProperty(vm.allocator, try vm.pool.intern("t"), JsValue.initNumber(@floatFromInt(items.len)));
+        try state.setProperty(vm.allocator, try vm.pool.intern("p"), JsValue.initObject(result_promise));
+        try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(false)); // done flag
+
+        for (items, 0..) |item, idx| {
+            // Wrap each item with Promise.resolve behavior
+            const wrapped: JsValue = if (item.isObject() and item.asJsObject().obj_type == .promise)
+                item
+            else blk: {
+                const p = try vm.createPromiseObj();
+                try vm.resolvePromise(p, item);
+                break :blk JsValue.initObject(p);
+            };
+            // Create resolve handler that captures index + state
+            const handler_obj = try vm.createObj(.{});
+            handler_obj.obj_type = .native_function;
+            handler_obj.data = .{ .native_fn = &promiseAllOnFulfilled };
+            try handler_obj.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            try handler_obj.setProperty(vm.allocator, try vm.pool.intern("i"), JsValue.initNumber(@floatFromInt(idx)));
+            // Create reject handler
+            const rej_obj = try vm.createObj(.{});
+            rej_obj.obj_type = .native_function;
+            rej_obj.data = .{ .native_fn = &promiseAggReject };
+            try rej_obj.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            // Attach .then(handler, reject)
+            _ = try nativePromiseThen(@ptrCast(vm), wrapped, &.{ JsValue.initObject(handler_obj), JsValue.initObject(rej_obj) });
+        }
+        return JsValue.initObject(result_promise);
+    }
+
+    fn promiseAllOnFulfilled(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const caller = getCallerFuncObj(vm) orelse return JsValue.undefined_val;
+        const state = (caller.getProperty(try vm.pool.intern("s")) orelse return JsValue.undefined_val).asJsObject();
+        const done_val = state.getProperty(try vm.pool.intern("d")) orelse JsValue.initBool(false);
+        if (done_val.isBool() and done_val.asBool()) return JsValue.undefined_val;
+        const idx: usize = @intFromFloat((caller.getProperty(try vm.pool.intern("i")) orelse JsValue.initNumber(0)).asNumber());
+        const results = (state.getProperty(try vm.pool.intern("r")) orelse return JsValue.undefined_val).asJsObject();
+        const val = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (idx < results.data.array.items.len) results.data.array.items[idx] = val;
+        const count = (state.getProperty(try vm.pool.intern("c")) orelse JsValue.initNumber(0)).asNumber() + 1;
+        try state.setProperty(vm.allocator, try vm.pool.intern("c"), JsValue.initNumber(count));
+        const total = (state.getProperty(try vm.pool.intern("t")) orelse JsValue.initNumber(0)).asNumber();
+        if (count >= total) {
+            try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(true));
+            const promise = (state.getProperty(try vm.pool.intern("p")) orelse return JsValue.undefined_val).asJsObject();
+            try vm.resolvePromise(promise, JsValue.initObject(results));
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn promiseAggReject(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const caller = getCallerFuncObj(vm) orelse return JsValue.undefined_val;
+        const state = (caller.getProperty(try vm.pool.intern("s")) orelse return JsValue.undefined_val).asJsObject();
+        const done_val = state.getProperty(try vm.pool.intern("d")) orelse JsValue.initBool(false);
+        if (done_val.isBool() and done_val.asBool()) return JsValue.undefined_val;
+        try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(true));
+        const promise = (state.getProperty(try vm.pool.intern("p")) orelse return JsValue.undefined_val).asJsObject();
+        const reason = if (args.len > 0) args[0] else JsValue.undefined_val;
+        try vm.rejectPromise(promise, reason);
+        return JsValue.undefined_val;
+    }
+
+    fn nativePromiseRace(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const result_promise = try vm.createPromiseObj();
+        const items = getArrayItems(args) orelse return JsValue.initObject(result_promise);
+        if (items.len == 0) return JsValue.initObject(result_promise); // never settles per spec
+
+        const state = try vm.createObj(.{});
+        try state.setProperty(vm.allocator, try vm.pool.intern("p"), JsValue.initObject(result_promise));
+        try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(false));
+
+        for (items) |item| {
+            const wrapped: JsValue = if (item.isObject() and item.asJsObject().obj_type == .promise)
+                item
+            else blk: {
+                const p = try vm.createPromiseObj();
+                try vm.resolvePromise(p, item);
+                break :blk JsValue.initObject(p);
+            };
+            const res_fn = try vm.createObj(.{});
+            res_fn.obj_type = .native_function;
+            res_fn.data = .{ .native_fn = &promiseRaceOnSettle };
+            try res_fn.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            try res_fn.setProperty(vm.allocator, try vm.pool.intern("m"), JsValue.initBool(false)); // mode: false=resolve
+            const rej_fn = try vm.createObj(.{});
+            rej_fn.obj_type = .native_function;
+            rej_fn.data = .{ .native_fn = &promiseRaceOnSettle };
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("m"), JsValue.initBool(true)); // mode: true=reject
+            _ = try nativePromiseThen(@ptrCast(vm), wrapped, &.{ JsValue.initObject(res_fn), JsValue.initObject(rej_fn) });
+        }
+        return JsValue.initObject(result_promise);
+    }
+
+    fn promiseRaceOnSettle(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const caller = getCallerFuncObj(vm) orelse return JsValue.undefined_val;
+        const state = (caller.getProperty(try vm.pool.intern("s")) orelse return JsValue.undefined_val).asJsObject();
+        const done_val = state.getProperty(try vm.pool.intern("d")) orelse JsValue.initBool(false);
+        if (done_val.isBool() and done_val.asBool()) return JsValue.undefined_val;
+        try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(true));
+        const promise = (state.getProperty(try vm.pool.intern("p")) orelse return JsValue.undefined_val).asJsObject();
+        const val = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const is_reject = (caller.getProperty(try vm.pool.intern("m")) orelse JsValue.initBool(false)).asBool();
+        if (is_reject) try vm.rejectPromise(promise, val) else try vm.resolvePromise(promise, val);
+        return JsValue.undefined_val;
+    }
+
+    fn nativePromiseAllSettled(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const result_promise = try vm.createPromiseObj();
+        const items = getArrayItems(args) orelse {
+            try vm.resolvePromise(result_promise, JsValue.initObject(try vm.createArray()));
+            return JsValue.initObject(result_promise);
+        };
+        if (items.len == 0) {
+            try vm.resolvePromise(result_promise, JsValue.initObject(try vm.createArray()));
+            return JsValue.initObject(result_promise);
+        }
+        const state = try vm.createObj(.{});
+        const results = try vm.createArray();
+        for (0..items.len) |_| try results.data.array.append(vm.allocator, JsValue.undefined_val);
+        try state.setProperty(vm.allocator, try vm.pool.intern("r"), JsValue.initObject(results));
+        try state.setProperty(vm.allocator, try vm.pool.intern("c"), JsValue.initNumber(0));
+        try state.setProperty(vm.allocator, try vm.pool.intern("t"), JsValue.initNumber(@floatFromInt(items.len)));
+        try state.setProperty(vm.allocator, try vm.pool.intern("p"), JsValue.initObject(result_promise));
+
+        for (items, 0..) |item, idx| {
+            const wrapped: JsValue = if (item.isObject() and item.asJsObject().obj_type == .promise)
+                item
+            else blk: {
+                const p = try vm.createPromiseObj();
+                try vm.resolvePromise(p, item);
+                break :blk JsValue.initObject(p);
+            };
+            const res_fn = try vm.createObj(.{});
+            res_fn.obj_type = .native_function;
+            res_fn.data = .{ .native_fn = &promiseAllSettledOnSettle };
+            try res_fn.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            try res_fn.setProperty(vm.allocator, try vm.pool.intern("i"), JsValue.initNumber(@floatFromInt(idx)));
+            try res_fn.setProperty(vm.allocator, try vm.pool.intern("m"), JsValue.initBool(false));
+            const rej_fn = try vm.createObj(.{});
+            rej_fn.obj_type = .native_function;
+            rej_fn.data = .{ .native_fn = &promiseAllSettledOnSettle };
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("i"), JsValue.initNumber(@floatFromInt(idx)));
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("m"), JsValue.initBool(true));
+            _ = try nativePromiseThen(@ptrCast(vm), wrapped, &.{ JsValue.initObject(res_fn), JsValue.initObject(rej_fn) });
+        }
+        return JsValue.initObject(result_promise);
+    }
+
+    fn promiseAllSettledOnSettle(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const caller = getCallerFuncObj(vm) orelse return JsValue.undefined_val;
+        const state = (caller.getProperty(try vm.pool.intern("s")) orelse return JsValue.undefined_val).asJsObject();
+        const idx: usize = @intFromFloat((caller.getProperty(try vm.pool.intern("i")) orelse JsValue.initNumber(0)).asNumber());
+        const is_reject = (caller.getProperty(try vm.pool.intern("m")) orelse JsValue.initBool(false)).asBool();
+        const results = (state.getProperty(try vm.pool.intern("r")) orelse return JsValue.undefined_val).asJsObject();
+        const val = if (args.len > 0) args[0] else JsValue.undefined_val;
+        // Create {status, value/reason} object
+        const entry = try vm.createObj(.{});
+        const status_str = if (is_reject) "rejected" else "fulfilled";
+        try entry.setProperty(vm.allocator, try vm.pool.intern("status"), JsValue.initString(try vm.pool.intern(status_str)));
+        if (is_reject) {
+            try entry.setProperty(vm.allocator, try vm.pool.intern("reason"), val);
+        } else {
+            try entry.setProperty(vm.allocator, try vm.pool.intern("value"), val);
+        }
+        if (idx < results.data.array.items.len) results.data.array.items[idx] = JsValue.initObject(entry);
+        const count = (state.getProperty(try vm.pool.intern("c")) orelse JsValue.initNumber(0)).asNumber() + 1;
+        try state.setProperty(vm.allocator, try vm.pool.intern("c"), JsValue.initNumber(count));
+        const total = (state.getProperty(try vm.pool.intern("t")) orelse JsValue.initNumber(0)).asNumber();
+        if (count >= total) {
+            const promise = (state.getProperty(try vm.pool.intern("p")) orelse return JsValue.undefined_val).asJsObject();
+            try vm.resolvePromise(promise, JsValue.initObject(results));
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn nativePromiseAny(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const result_promise = try vm.createPromiseObj();
+        const items = getArrayItems(args) orelse {
+            // Empty → reject with AggregateError
+            const err = try vm.createObj(.{});
+            if (vm.error_proto) |ep| err.prototype = ep;
+            try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern("All promises were rejected")));
+            try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern("AggregateError")));
+            try err.setProperty(vm.allocator, try vm.pool.intern("errors"), JsValue.initObject(try vm.createArray()));
+            try vm.rejectPromise(result_promise, JsValue.initObject(err));
+            return JsValue.initObject(result_promise);
+        };
+        if (items.len == 0) {
+            const err = try vm.createObj(.{});
+            if (vm.error_proto) |ep| err.prototype = ep;
+            try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern("All promises were rejected")));
+            try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern("AggregateError")));
+            try err.setProperty(vm.allocator, try vm.pool.intern("errors"), JsValue.initObject(try vm.createArray()));
+            try vm.rejectPromise(result_promise, JsValue.initObject(err));
+            return JsValue.initObject(result_promise);
+        }
+        const state = try vm.createObj(.{});
+        const errors = try vm.createArray();
+        for (0..items.len) |_| try errors.data.array.append(vm.allocator, JsValue.undefined_val);
+        try state.setProperty(vm.allocator, try vm.pool.intern("e"), JsValue.initObject(errors));
+        try state.setProperty(vm.allocator, try vm.pool.intern("c"), JsValue.initNumber(0));
+        try state.setProperty(vm.allocator, try vm.pool.intern("t"), JsValue.initNumber(@floatFromInt(items.len)));
+        try state.setProperty(vm.allocator, try vm.pool.intern("p"), JsValue.initObject(result_promise));
+        try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(false));
+
+        for (items, 0..) |item, idx| {
+            const wrapped: JsValue = if (item.isObject() and item.asJsObject().obj_type == .promise)
+                item
+            else blk: {
+                const p = try vm.createPromiseObj();
+                try vm.resolvePromise(p, item);
+                break :blk JsValue.initObject(p);
+            };
+            // Resolve handler: first to fulfill wins
+            const res_fn = try vm.createObj(.{});
+            res_fn.obj_type = .native_function;
+            res_fn.data = .{ .native_fn = &promiseAnyOnFulfilled };
+            try res_fn.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            // Reject handler: count rejections
+            const rej_fn = try vm.createObj(.{});
+            rej_fn.obj_type = .native_function;
+            rej_fn.data = .{ .native_fn = &promiseAnyOnRejected };
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("s"), JsValue.initObject(state));
+            try rej_fn.setProperty(vm.allocator, try vm.pool.intern("i"), JsValue.initNumber(@floatFromInt(idx)));
+            _ = try nativePromiseThen(@ptrCast(vm), wrapped, &.{ JsValue.initObject(res_fn), JsValue.initObject(rej_fn) });
+        }
+        return JsValue.initObject(result_promise);
+    }
+
+    fn promiseAnyOnFulfilled(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const caller = getCallerFuncObj(vm) orelse return JsValue.undefined_val;
+        const state = (caller.getProperty(try vm.pool.intern("s")) orelse return JsValue.undefined_val).asJsObject();
+        const done_val = state.getProperty(try vm.pool.intern("d")) orelse JsValue.initBool(false);
+        if (done_val.isBool() and done_val.asBool()) return JsValue.undefined_val;
+        try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(true));
+        const promise = (state.getProperty(try vm.pool.intern("p")) orelse return JsValue.undefined_val).asJsObject();
+        const val = if (args.len > 0) args[0] else JsValue.undefined_val;
+        try vm.resolvePromise(promise, val);
+        return JsValue.undefined_val;
+    }
+
+    fn promiseAnyOnRejected(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const caller = getCallerFuncObj(vm) orelse return JsValue.undefined_val;
+        const state = (caller.getProperty(try vm.pool.intern("s")) orelse return JsValue.undefined_val).asJsObject();
+        const done_val = state.getProperty(try vm.pool.intern("d")) orelse JsValue.initBool(false);
+        if (done_val.isBool() and done_val.asBool()) return JsValue.undefined_val;
+        const idx: usize = @intFromFloat((caller.getProperty(try vm.pool.intern("i")) orelse JsValue.initNumber(0)).asNumber());
+        const errors = (state.getProperty(try vm.pool.intern("e")) orelse return JsValue.undefined_val).asJsObject();
+        const reason = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (idx < errors.data.array.items.len) errors.data.array.items[idx] = reason;
+        const count = (state.getProperty(try vm.pool.intern("c")) orelse JsValue.initNumber(0)).asNumber() + 1;
+        try state.setProperty(vm.allocator, try vm.pool.intern("c"), JsValue.initNumber(count));
+        const total = (state.getProperty(try vm.pool.intern("t")) orelse JsValue.initNumber(0)).asNumber();
+        if (count >= total) {
+            try state.setProperty(vm.allocator, try vm.pool.intern("d"), JsValue.initBool(true));
+            const promise = (state.getProperty(try vm.pool.intern("p")) orelse return JsValue.undefined_val).asJsObject();
+            const err = try vm.createObj(.{});
+            if (vm.error_proto) |ep| err.prototype = ep;
+            try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern("All promises were rejected")));
+            try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern("AggregateError")));
+            try err.setProperty(vm.allocator, try vm.pool.intern("errors"), JsValue.initObject(errors));
+            try vm.rejectPromise(promise, JsValue.initObject(err));
+        }
+        return JsValue.undefined_val;
+    }
+
+    // Helper: get array items from first argument
+    fn getArrayItems(args: []const JsValue) ?[]const JsValue {
+        if (args.len == 0 or !args[0].isObject()) return null;
+        const obj = args[0].asJsObject();
+        if (obj.obj_type != .array) return null;
+        return obj.data.array.items;
+    }
+
+    // Helper: find calling native function on the stack.
+    // callJsFunction pushes func_val before calling native, so it's at sp-1
+    // (since native runs before sp is adjusted). Walk back to find it.
+    fn getCallerFuncObj(vm: *VM) ?*JsObject {
+        const s_id = vm.pool.intern("s") catch return null;
+        var i = vm.sp;
+        while (i > 0) {
+            i -= 1;
+            const val = vm.stack[i];
+            if (val.isObject()) {
+                const obj = val.asJsObject();
+                if (obj.obj_type == .native_function) {
+                    if (obj.getProperty(s_id) != null) return obj;
+                }
+            }
+        }
+        return null;
     }
 
     // ── Date helpers ──────────────────────────────────────────────
