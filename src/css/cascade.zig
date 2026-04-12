@@ -20,6 +20,7 @@ const Declaration = ast.Declaration;
 const VarMap = variables.VarMap;
 
 pub const StyleMap = std.AutoHashMap(usize, ComputedStyle);
+pub const CustomPropMap = std.AutoHashMap(usize, *const VarMap);
 
 // ── Style sharing cache ────────────────────────────────────────────────
 // When two elements share the same tag, class, id, inline style, and their
@@ -119,6 +120,7 @@ pub const FontFaceInfo = struct {
 
 pub const CascadeResult = struct {
     styles: StyleMap,
+    custom_props: CustomPropMap,
     arena: std.heap.ArenaAllocator,
     font_faces: std.ArrayListUnmanaged(FontFaceInfo) = .empty,
     keyframes: std.StringHashMapUnmanaged(ast.KeyframesRule) = .empty,
@@ -127,8 +129,14 @@ pub const CascadeResult = struct {
         return self.styles.get(@intFromPtr(node.lxb_node));
     }
 
+    /// Look up resolved custom properties (--*) for a node.
+    pub fn getCustomProps(self: *const CascadeResult, node_ptr: usize) ?*const VarMap {
+        return self.custom_props.get(node_ptr);
+    }
+
     pub fn deinit(self: *CascadeResult) void {
         self.styles.deinit();
+        self.custom_props.deinit();
         self.arena.deinit();
     }
 };
@@ -277,6 +285,7 @@ pub fn cascade(
 ) !CascadeResult {
     var result = CascadeResult{
         .styles = StyleMap.init(allocator),
+        .custom_props = CustomPropMap.init(allocator),
         .arena = std.heap.ArenaAllocator.init(allocator),
     };
     errdefer result.deinit();
@@ -339,6 +348,7 @@ pub fn cascade(
         doc_root,
         null,
         &result.styles,
+        &result.custom_props,
         &ua_index,
         &author_index,
         &root_vars,
@@ -716,6 +726,7 @@ fn walkAndCompute(
     node: DomNode,
     parent_style: ?*const ComputedStyle,
     styles: *StyleMap,
+    custom_props_map: *CustomPropMap,
     ua_index: *const FlatRuleIndex,
     author_index: *const FlatRuleIndex,
     var_map: *const VarMap,
@@ -780,7 +791,7 @@ fn walkAndCompute(
                     var cached_copy = entry.style;
                     var child = node.firstChild();
                     while (child) |c| {
-                        try walkAndCompute(c, &cached_copy, styles, ua_index, author_index, var_map, vw, vh, arena, &element_bloom, style_cache);
+                        try walkAndCompute(c, &cached_copy, styles, custom_props_map, ua_index, author_index, var_map, vw, vh, arena, &element_bloom, style_cache);
                         child = c.nextSibling();
                     }
                     return;
@@ -824,19 +835,21 @@ fn walkAndCompute(
                 break;
             }
         }
-        var child_var_map_storage: VarMap = undefined;
         if (has_custom_props) {
-            child_var_map_storage = VarMap.init(arena);
-            child_var_map_storage.parent = var_map;
+            const child_var_map = arena.create(VarMap) catch unreachable;
+            child_var_map.* = VarMap.init(arena);
+            child_var_map.parent = var_map;
             for (entries.items) |entry| {
                 if (entry.decl.property == .custom and entry.decl.property_name.len >= 2 and
                     entry.decl.property_name[0] == '-' and entry.decl.property_name[1] == '-')
                 {
-                    child_var_map_storage.set(entry.decl.property_name, entry.decl.value_raw) catch {};
+                    child_var_map.set(entry.decl.property_name, entry.decl.value_raw) catch {};
                 }
             }
-            element_var_map = &child_var_map_storage;
+            element_var_map = child_var_map;
         }
+        // Store the VarMap for this element (for getComputedStyle custom property lookup)
+        custom_props_map.put(@intFromPtr(node.lxb_node), element_var_map) catch {};
 
         // Apply in order (lowest priority first, last write wins for same property)
         const parent_fs = if (parent_style) |ps| ps.font_size_px else 16.0;
@@ -876,14 +889,14 @@ fn walkAndCompute(
         // Pass the element's bloom filter so children accumulate ancestor info.
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, &style, styles, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom, style_cache);
+            try walkAndCompute(c, &style, styles, custom_props_map, ua_index, author_index, element_var_map, vw, vh, arena, &element_bloom, style_cache);
             child = c.nextSibling();
         }
     } else {
         // Non-element nodes (text, etc.) — recurse with parent's VarMap and bloom
         var child = node.firstChild();
         while (child) |c| {
-            try walkAndCompute(c, parent_style, styles, ua_index, author_index, var_map, vw, vh, arena, parent_bloom, style_cache);
+            try walkAndCompute(c, parent_style, styles, custom_props_map, ua_index, author_index, var_map, vw, vh, arena, parent_bloom, style_cache);
             child = c.nextSibling();
         }
     }

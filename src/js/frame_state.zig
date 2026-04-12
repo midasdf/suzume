@@ -24,6 +24,7 @@ pub const FrameState = struct {
     // Layout
     root_box: ?*const Box = null,
     styles: ?*const cascade_mod.StyleMap = null,
+    custom_props: ?*const cascade_mod.CustomPropMap = null,
     viewport_width: f32 = 800,
     viewport_height: f32 = 600,
 

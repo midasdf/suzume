@@ -114,6 +114,13 @@ pub fn getStylesForCtx(ctx: *qjs.JSContext) ?*const cascade_mod.StyleMap {
     return g_styles;
 }
 
+pub fn getCustomPropsForCtx(ctx: *qjs.JSContext) ?*const cascade_mod.CustomPropMap {
+    if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
+        if (fs.custom_props) |cp| return cp;
+    }
+    return g_custom_props;
+}
+
 pub fn getViewportForCtx(ctx: *qjs.JSContext) struct { w: f32, h: f32 } {
     if (frame_state.getFrameStateFromCtx(ctx)) |fs| {
         if (fs.viewport_width != 0 or fs.viewport_height != 0)
@@ -177,11 +184,18 @@ pub fn flushStylesIfDirty() void {
 
 /// Global styles pointer — set from main after cascade, used for getComputedStyle.
 pub var g_styles: ?*const cascade_mod.StyleMap = null;
+/// Global custom properties map — set from main after cascade.
+pub var g_custom_props: ?*const cascade_mod.CustomPropMap = null;
 
 /// Set the styles pointer (called from main after cascade/restyle).
 pub fn setStyles(styles: ?*const cascade_mod.StyleMap) void {
     g_styles = styles;
     g_top_frame.styles = styles;
+}
+
+/// Set the custom properties map (called from main after cascade/restyle).
+pub fn setCustomProps(cp: ?*const cascade_mod.CustomPropMap) void {
+    g_custom_props = cp;
 }
 
 /// Viewport dimensions for getComputedStyle resolution.

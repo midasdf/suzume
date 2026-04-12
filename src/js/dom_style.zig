@@ -198,6 +198,35 @@ pub fn computedStyleGetPropertyValue(
     defer qjs.JS_FreeCString(c, prop_s.ptr);
     const prop = prop_s.ptr[0..prop_s.len];
 
+    // Custom properties (--*): look up from cascade VarMap, then inline style
+    if (prop.len >= 2 and prop[0] == '-' and prop[1] == '-') {
+        // 1. Check inline style first (highest specificity)
+        const elem = getElement(c, elem_val);
+        if (elem) |el| {
+            var style_len: usize = 0;
+            const style_ptr = lxb_dom_element_get_attribute(el, "style", 5, &style_len);
+            if (style_ptr != null and style_len > 0) {
+                if (getStyleProperty(style_ptr.?[0..style_len], prop)) |val| {
+                    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+                    return qjs.JS_NewStringLen(c, trimmed.ptr, trimmed.len);
+                }
+            }
+        }
+        // 2. Check cascade custom properties map
+        const node = getNode(c, elem_val);
+        if (node != null) {
+            if (api.getCustomPropsForCtx(c)) |cp_map| {
+                if (cp_map.get(@intFromPtr(node.?))) |var_map| {
+                    if (var_map.get(prop)) |val| {
+                        const trimmed = std.mem.trim(u8, val, " \t\r\n");
+                        return qjs.JS_NewStringLen(c, trimmed.ptr, trimmed.len);
+                    }
+                }
+            }
+        }
+        return qjs.JS_NewStringLen(c, "", 0);
+    }
+
     // Check inline style FIRST (highest specificity — reflects JS modifications)
     const elem = getElement(c, elem_val);
     if (elem) |el| {

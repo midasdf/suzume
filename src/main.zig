@@ -289,6 +289,7 @@ fn restylePage(page: *PageState, allocator: std.mem.Allocator, fonts: *painter_m
     // Update global root box and styles pointers for JS layout/style queries
     dom_api.setRootBox(new_root_box);
     dom_api.setStyles(&page.styles.?.styles);
+    dom_api.setCustomProps(&page.styles.?.custom_props);
     dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
 
     std.debug.print("[JS] DOM mutation → re-styled and re-laid out (height={d:.0} width={d:.0} children={d})\n", .{
@@ -329,6 +330,7 @@ const PageState = struct {
         dom_api.setLoadedScriptUrls(null);
         dom_api.setRootBox(null);
         dom_api.setStyles(null);
+        dom_api.setCustomProps(null);
         // Reset global state without freeing JS values (leak-safe)
         dom_api.resetNodeCacheLeaky();
         events.resetEventsLeaky();
@@ -841,6 +843,7 @@ fn navigateTo(
     // Set root box and styles pointers for JS layout/style queries
     dom_api.setRootBox(page.root_box);
     dom_api.setStyles(if (page.styles) |*s| &s.styles else null);
+    dom_api.setCustomProps(if (page.styles) |*s| &s.custom_props else null);
     dom_api.setViewport(@floatFromInt(layout_width), @floatFromInt(layout_height));
 
     // Set up sync restyle context for getComputedStyle during JS execution
