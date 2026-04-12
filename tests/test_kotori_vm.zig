@@ -1655,6 +1655,111 @@ test "eval: isFinite infinity" {
     try std.testing.expect(!result.asBool());
 }
 
+// ── Map ─────────────────────────────────────────────────────────
+
+test "eval: new Map basic" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set("a", 1);
+        \\m.set("b", 2);
+        \\m.get("a") + m.get("b")
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map size" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set("x", 10);
+        \\m.set("y", 20);
+        \\m.size
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map has/delete" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set("a", 1);
+        \\var had = m.has("a");
+        \\m.delete("a");
+        \\var hasAfter = m.has("a");
+        \\had && !hasAfter
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Map overwrite value" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set("a", 1);
+        \\m.set("a", 99);
+        \\m.get("a")
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map forEach" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set("a", 10);
+        \\m.set("b", 20);
+        \\var sum = 0;
+        \\m.forEach(function(v) { sum = sum + v; });
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+// ── Set ─────────────────────────────────────────────────────────
+
+test "eval: new Set basic" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add(1);
+        \\s.add(2);
+        \\s.add(1);
+        \\s.size
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set has/delete" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add(42);
+        \\var had = s.has(42);
+        \\s.delete(42);
+        \\var hasAfter = s.has(42);
+        \\had && !hasAfter
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Set forEach" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add(10);
+        \\s.add(20);
+        \\s.add(30);
+        \\var sum = 0;
+        \\s.forEach(function(v) { sum = sum + v; });
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set clear" {
+    const result = try evalExpr(
+        \\var s = new Set();
+        \\s.add(1);
+        \\s.add(2);
+        \\s.clear();
+        \\s.size
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
 // ── setTimeout / setInterval / clearTimeout ─────────────────────
 
 test "eval: setTimeout returns timer id" {

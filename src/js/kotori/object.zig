@@ -17,6 +17,8 @@ pub const ObjType = enum(u8) {
     dom_node,
     dom_style,
     window_proxy,
+    map,
+    set,
 };
 
 pub const JsObject = struct {
@@ -27,6 +29,11 @@ pub const JsObject = struct {
 
     pub const NativeFn = *const fn (ctx: *anyopaque, this: value_mod.JsValue, args: []const value_mod.JsValue) anyerror!value_mod.JsValue;
 
+    pub const MapEntry = struct {
+        key: value_mod.JsValue,
+        val: value_mod.JsValue,
+    };
+
     pub const ObjData = union(enum) {
         none,
         function: FunctionObj,
@@ -34,6 +41,8 @@ pub const JsObject = struct {
         native_fn: NativeFn,
         dom_node: *anyopaque,
         dom_style: *anyopaque,
+        map_data: std.ArrayListUnmanaged(MapEntry),
+        set_data: std.ArrayListUnmanaged(value_mod.JsValue),
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -41,6 +50,8 @@ pub const JsObject = struct {
         switch (self.data) {
             .function => |*f| f.deinit(allocator),
             .array => |*a| a.deinit(allocator),
+            .map_data => |*m| m.deinit(allocator),
+            .set_data => |*s| s.deinit(allocator),
             .none, .native_fn, .dom_node, .dom_style => {},
         }
     }

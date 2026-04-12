@@ -624,6 +624,17 @@ pub const VM = struct {
                     }
 
                     const obj = func_val.asJsObject();
+
+                    // Native function construct (e.g. new Map(), new Set())
+                    if (obj.obj_type == .native_function) {
+                        const native = obj.data.native_fn;
+                        const base = self.sp - arg_count;
+                        const result = try native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]);
+                        self.sp = base - 1; // pop func
+                        self.push(result);
+                        continue;
+                    }
+
                     if (obj.obj_type != .function) {
                         self.sp -= arg_count + 1;
                         self.push(JsValue.undefined_val);
@@ -957,6 +968,16 @@ pub const VM = struct {
         try arr_constructor.setProperty(self.allocator, proto_id, JsValue.initObject(ap));
         const arr_id = try self.pool.intern("Array");
         try self.globals.put(self.allocator, arr_id, JsValue.initObject(arr_constructor));
+
+        // ── Map constructor ──
+        const map_constructor = try self.createNativeFn(&nativeMapConstructor);
+        const map_id = try self.pool.intern("Map");
+        try self.globals.put(self.allocator, map_id, JsValue.initObject(map_constructor));
+
+        // ── Set constructor ──
+        const set_constructor = try self.createNativeFn(&nativeSetConstructor);
+        const set_id = try self.pool.intern("Set");
+        try self.globals.put(self.allocator, set_id, JsValue.initObject(set_constructor));
 
         // ── JSON ──
         const json_obj = try self.createObj(.{});
@@ -1706,6 +1727,251 @@ pub const VM = struct {
             }
         }
         return JsValue.initObject(new_arr);
+    }
+
+    // ── Map methods ──────────────────────────────────────────────
+
+    fn nativeMapConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const map_obj = try vm.allocator.create(JsObject);
+        map_obj.* = .{ .obj_type = .map, .data = .{ .map_data = .{} } };
+        try vm.objects.append(vm.allocator, map_obj);
+        // Register methods
+        try vm.registerNativeMethod(map_obj, "set", &nativeMapSet);
+        try vm.registerNativeMethod(map_obj, "get", &nativeMapGet);
+        try vm.registerNativeMethod(map_obj, "has", &nativeMapHas);
+        try vm.registerNativeMethod(map_obj, "delete", &nativeMapDelete);
+        try vm.registerNativeMethod(map_obj, "clear", &nativeMapClear);
+        try vm.registerNativeMethod(map_obj, "forEach", &nativeMapForEach);
+        try vm.registerNativeMethod(map_obj, "keys", &nativeMapKeys);
+        try vm.registerNativeMethod(map_obj, "values", &nativeMapValues);
+        try vm.registerNativeMethod(map_obj, "entries", &nativeMapEntries);
+        return JsValue.initObject(map_obj);
+    }
+
+    fn mapFindIndex(map_obj: *JsObject, key: JsValue) ?usize {
+        for (map_obj.data.map_data.items, 0..) |entry, i| {
+            if (JsValue.jsStrictEq(entry.key, key).asBool()) return i;
+        }
+        return null;
+    }
+
+    fn nativeMapSet(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len < 2) return this;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return this;
+        if (mapFindIndex(obj, args[0])) |idx| {
+            obj.data.map_data.items[idx].val = args[1];
+        } else {
+            try obj.data.map_data.append(vm.allocator, .{ .key = args[0], .val = args[1] });
+        }
+        // Update size property
+        const size_id = try vm.pool.intern("size");
+        try obj.setProperty(vm.allocator, size_id, JsValue.initNumber(@floatFromInt(obj.data.map_data.items.len)));
+        return this;
+    }
+
+    fn nativeMapGet(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.undefined_val;
+        if (mapFindIndex(obj, args[0])) |idx| return obj.data.map_data.items[idx].val;
+        return JsValue.undefined_val;
+    }
+
+    fn nativeMapHas(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.initBool(false);
+        return JsValue.initBool(mapFindIndex(obj, args[0]) != null);
+    }
+
+    fn nativeMapDelete(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.initBool(false);
+        if (mapFindIndex(obj, args[0])) |idx| {
+            _ = obj.data.map_data.orderedRemove(idx);
+            const size_id = try vm.pool.intern("size");
+            try obj.setProperty(vm.allocator, size_id, JsValue.initNumber(@floatFromInt(obj.data.map_data.items.len)));
+            return JsValue.initBool(true);
+        }
+        return JsValue.initBool(false);
+    }
+
+    fn nativeMapClear(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.undefined_val;
+        obj.data.map_data.clearRetainingCapacity();
+        const size_id = try vm.pool.intern("size");
+        try obj.setProperty(vm.allocator, size_id, JsValue.initNumber(0));
+        return JsValue.undefined_val;
+    }
+
+    fn nativeMapForEach(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.undefined_val;
+        const callback = args[0];
+        for (obj.data.map_data.items) |entry| {
+            const cb_args = [_]JsValue{ entry.val, entry.key, this };
+            _ = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn nativeMapKeys(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.undefined_val;
+        const arr = try vm.createArray();
+        for (obj.data.map_data.items) |entry| {
+            try arr.data.array.append(vm.allocator, entry.key);
+        }
+        return JsValue.initObject(arr);
+    }
+
+    fn nativeMapValues(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.undefined_val;
+        const arr = try vm.createArray();
+        for (obj.data.map_data.items) |entry| {
+            try arr.data.array.append(vm.allocator, entry.val);
+        }
+        return JsValue.initObject(arr);
+    }
+
+    fn nativeMapEntries(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .map) return JsValue.undefined_val;
+        const arr = try vm.createArray();
+        for (obj.data.map_data.items) |entry| {
+            const pair = try vm.createArray();
+            try pair.data.array.append(vm.allocator, entry.key);
+            try pair.data.array.append(vm.allocator, entry.val);
+            try arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+        }
+        return JsValue.initObject(arr);
+    }
+
+    // ── Set methods ──────────────────────────────────────────────
+
+    fn nativeSetConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const set_obj = try vm.allocator.create(JsObject);
+        set_obj.* = .{ .obj_type = .set, .data = .{ .set_data = .{} } };
+        try vm.objects.append(vm.allocator, set_obj);
+        try vm.registerNativeMethod(set_obj, "add", &nativeSetAdd);
+        try vm.registerNativeMethod(set_obj, "has", &nativeSetHas);
+        try vm.registerNativeMethod(set_obj, "delete", &nativeSetDelete);
+        try vm.registerNativeMethod(set_obj, "clear", &nativeSetClear);
+        try vm.registerNativeMethod(set_obj, "forEach", &nativeSetForEach);
+        try vm.registerNativeMethod(set_obj, "keys", &nativeSetValues); // keys() === values() for Set
+        try vm.registerNativeMethod(set_obj, "values", &nativeSetValues);
+        try vm.registerNativeMethod(set_obj, "entries", &nativeSetEntries);
+        return JsValue.initObject(set_obj);
+    }
+
+    fn setFindIndex(set_obj: *JsObject, val: JsValue) ?usize {
+        for (set_obj.data.set_data.items, 0..) |item, i| {
+            if (JsValue.jsStrictEq(item, val).asBool()) return i;
+        }
+        return null;
+    }
+
+    fn nativeSetAdd(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return this;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return this;
+        if (setFindIndex(obj, args[0]) == null) {
+            try obj.data.set_data.append(vm.allocator, args[0]);
+            const size_id = try vm.pool.intern("size");
+            try obj.setProperty(vm.allocator, size_id, JsValue.initNumber(@floatFromInt(obj.data.set_data.items.len)));
+        }
+        return this;
+    }
+
+    fn nativeSetHas(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return JsValue.initBool(false);
+        return JsValue.initBool(setFindIndex(obj, args[0]) != null);
+    }
+
+    fn nativeSetDelete(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return JsValue.initBool(false);
+        if (setFindIndex(obj, args[0])) |idx| {
+            _ = obj.data.set_data.orderedRemove(idx);
+            const size_id = try vm.pool.intern("size");
+            try obj.setProperty(vm.allocator, size_id, JsValue.initNumber(@floatFromInt(obj.data.set_data.items.len)));
+            return JsValue.initBool(true);
+        }
+        return JsValue.initBool(false);
+    }
+
+    fn nativeSetClear(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return JsValue.undefined_val;
+        obj.data.set_data.clearRetainingCapacity();
+        const size_id = try vm.pool.intern("size");
+        try obj.setProperty(vm.allocator, size_id, JsValue.initNumber(0));
+        return JsValue.undefined_val;
+    }
+
+    fn nativeSetForEach(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return JsValue.undefined_val;
+        const callback = args[0];
+        for (obj.data.set_data.items) |item| {
+            const cb_args = [_]JsValue{ item, item, this };
+            _ = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn nativeSetValues(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return JsValue.undefined_val;
+        const arr = try vm.createArray();
+        for (obj.data.set_data.items) |item| {
+            try arr.data.array.append(vm.allocator, item);
+        }
+        return JsValue.initObject(arr);
+    }
+
+    fn nativeSetEntries(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .set) return JsValue.undefined_val;
+        const arr = try vm.createArray();
+        for (obj.data.set_data.items) |item| {
+            const pair = try vm.createArray();
+            try pair.data.array.append(vm.allocator, item);
+            try pair.data.array.append(vm.allocator, item);
+            try arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+        }
+        return JsValue.initObject(arr);
     }
 
     // ── JSON methods ───────────────────────────────────────────────
