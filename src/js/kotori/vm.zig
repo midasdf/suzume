@@ -835,9 +835,33 @@ pub const VM = struct {
                             if (iterable.isObject()) {
                                 const iter_obj = iterable.asJsObject();
                                 if (iter_obj.obj_type == .array) {
+                                    // Fast path: array spread
                                     for (iter_obj.data.array.items) |item| {
                                         try arr.data.array.append(self.allocator, item);
                                     }
+                                } else if (iter_obj.obj_type == .generator) {
+                                    // Generator: collect all yielded values by calling .next() until done
+                                    const g_next_id = try self.pool.intern("next");
+                                    const g_done_id = try self.pool.intern("done");
+                                    const g_value_id = try self.pool.intern("value");
+                                    var g_iters: u32 = 0;
+                                    while (g_iters < 10000) : (g_iters += 1) {
+                                        const g_next_fn = iter_obj.getProperty(g_next_id) orelse break;
+                                        const g_result = try self.callJsFunction(g_next_fn, iterable, &.{});
+                                        if (!g_result.isObject()) break;
+                                        const g_result_obj = g_result.asJsObject();
+                                        const g_done = g_result_obj.getProperty(g_done_id) orelse JsValue.initBool(true);
+                                        if (g_done.isTruthy()) break;
+                                        const g_value = g_result_obj.getProperty(g_value_id) orelse JsValue.undefined_val;
+                                        try arr.data.array.append(self.allocator, g_value);
+                                    }
+                                } else if (iter_obj.obj_type == .iterator) {
+                                    // Iterator object: drain into array
+                                    try self.drainIteratorIntoArray(iterable, arr);
+                                } else if (self.findSymbolProp(iter_obj, SYMBOL_ITERATOR)) |iter_fn| {
+                                    // Custom iterable with Symbol.iterator
+                                    const iterator = try self.callJsFunction(iter_fn, iterable, &.{});
+                                    try self.drainIteratorIntoArray(iterator, arr);
                                 }
                             } else if (iterable.isString()) {
                                 // Spread string into chars
