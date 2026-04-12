@@ -19,6 +19,7 @@ pub const ObjType = enum(u8) {
     window_proxy,
     map,
     set,
+    regexp,
 };
 
 pub const JsObject = struct {
@@ -28,6 +29,13 @@ pub const JsObject = struct {
     data: ObjData = .none,
 
     pub const NativeFn = *const fn (ctx: *anyopaque, this: value_mod.JsValue, args: []const value_mod.JsValue) anyerror!value_mod.JsValue;
+
+    pub const RegExpData = struct {
+        source: string_pool.StringId, // pattern source
+        global: bool = false,
+        ignore_case: bool = false,
+        multiline: bool = false,
+    };
 
     pub const MapEntry = struct {
         key: value_mod.JsValue,
@@ -43,6 +51,7 @@ pub const JsObject = struct {
         dom_style: *anyopaque,
         map_data: std.ArrayListUnmanaged(MapEntry),
         set_data: std.ArrayListUnmanaged(value_mod.JsValue),
+        regexp_data: RegExpData,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -52,7 +61,7 @@ pub const JsObject = struct {
             .array => |*a| a.deinit(allocator),
             .map_data => |*m| m.deinit(allocator),
             .set_data => |*s| s.deinit(allocator),
-            .none, .native_fn, .dom_node, .dom_style => {},
+            .none, .native_fn, .dom_node, .dom_style, .regexp_data => {},
         }
     }
 

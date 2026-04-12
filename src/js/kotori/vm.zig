@@ -683,6 +683,16 @@ pub const VM = struct {
                     self.frame_count += 1;
                 },
 
+                // ── RegExp ───────────────────────────────────────────
+                .new_regexp => {
+                    const pat_ci = self.readU16(frame);
+                    const flags_ci = self.readU16(frame);
+                    const pattern_id = @as(StringId, @bitCast(frame.bc.constants.items[pat_ci].asInt()));
+                    const flags_id = @as(StringId, @bitCast(frame.bc.constants.items[flags_ci].asInt()));
+                    const re_obj = try self.createRegExp(pattern_id, flags_id);
+                    self.push(JsValue.initObject(re_obj));
+                },
+
                 // ── Iteration ────────────────────────────────────────
                 .get_length => {
                     const obj_val = self.pop();
@@ -964,6 +974,8 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "startsWith", &nativeStringStartsWith);
         try self.registerNativeMethod(sp, "endsWith", &nativeStringEndsWith);
         try self.registerNativeMethod(sp, "replace", &nativeStringReplace);
+        try self.registerNativeMethod(sp, "match", &nativeStringMatch);
+        try self.registerNativeMethod(sp, "search", &nativeStringSearch);
         try self.registerNativeMethod(sp, "repeat", &nativeStringRepeat);
         try self.registerNativeMethod(sp, "padStart", &nativeStringPadStart);
         try self.registerNativeMethod(sp, "padEnd", &nativeStringPadEnd);
@@ -1760,6 +1772,210 @@ pub const VM = struct {
         return JsValue.initObject(new_arr);
     }
 
+    // ── RegExp methods ────────────────────────────────────────────
+
+    fn createRegExp(self: *VM, pattern_id: StringId, flags_id: StringId) !*JsObject {
+        var global = false;
+        var ignore_case = false;
+        var multiline = false;
+        if (self.pool.get(flags_id)) |flags| {
+            for (flags) |ch| {
+                switch (ch) {
+                    'g' => global = true,
+                    'i' => ignore_case = true,
+                    'm' => multiline = true,
+                    else => {},
+                }
+            }
+        }
+        const obj = try self.allocator.create(JsObject);
+        obj.* = .{
+            .obj_type = .regexp,
+            .data = .{ .regexp_data = .{
+                .source = pattern_id,
+                .global = global,
+                .ignore_case = ignore_case,
+                .multiline = multiline,
+            } },
+        };
+        try self.objects.append(self.allocator, obj);
+        // Set properties
+        const source_id = try self.pool.intern("source");
+        try obj.setProperty(self.allocator, source_id, JsValue.initString(pattern_id));
+        const global_id = try self.pool.intern("global");
+        try obj.setProperty(self.allocator, global_id, JsValue.initBool(global));
+        const ic_id = try self.pool.intern("ignoreCase");
+        try obj.setProperty(self.allocator, ic_id, JsValue.initBool(ignore_case));
+        // Methods
+        try self.registerNativeMethod(obj, "test", &nativeRegExpTest);
+        try self.registerNativeMethod(obj, "exec", &nativeRegExpExec);
+        return obj;
+    }
+
+    fn nativeRegExpTest(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .regexp) return JsValue.initBool(false);
+        const re = obj.data.regexp_data;
+        const pattern = vm.pool.get(re.source) orelse return JsValue.initBool(false);
+        const str = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
+        return JsValue.initBool(simpleMatch(pattern, str, re.ignore_case) != null);
+    }
+
+    fn nativeRegExpExec(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0 or !args[0].isString()) return JsValue.null_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .regexp) return JsValue.null_val;
+        const re = obj.data.regexp_data;
+        const pattern = vm.pool.get(re.source) orelse return JsValue.null_val;
+        const str = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+        const match_result = simpleMatch(pattern, str, re.ignore_case) orelse return JsValue.null_val;
+        // Return [matched_string] with index property
+        const arr = try vm.createArray();
+        const matched = str[match_result.start..match_result.end];
+        const match_sid = try vm.pool.intern(matched);
+        try arr.data.array.append(vm.allocator, JsValue.initString(match_sid));
+        const index_id = try vm.pool.intern("index");
+        try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(match_result.start)));
+        return JsValue.initObject(arr);
+    }
+
+    const MatchResult = struct { start: usize, end: usize };
+
+    /// Simple pattern matcher supporting: literal chars, ., ^, $, \d, \w, \s, *, +, ?
+    /// Not a full regex engine but covers common JS patterns.
+    fn simpleMatch(pattern: []const u8, str: []const u8, ignore_case: bool) ?MatchResult {
+        // Try matching at each position
+        var anchored_start = false;
+        var pat = pattern;
+        if (pat.len > 0 and pat[0] == '^') {
+            anchored_start = true;
+            pat = pat[1..];
+        }
+        var anchored_end = false;
+        if (pat.len > 0 and pat[pat.len - 1] == '$' and (pat.len < 2 or pat[pat.len - 2] != '\\')) {
+            anchored_end = true;
+            pat = pat[0 .. pat.len - 1];
+        }
+
+        if (anchored_start) {
+            if (matchAt(pat, str, 0, ignore_case)) |end| {
+                if (anchored_end and end != str.len) return null;
+                return .{ .start = 0, .end = end };
+            }
+            return null;
+        }
+
+        var pos: usize = 0;
+        while (pos <= str.len) : (pos += 1) {
+            if (matchAt(pat, str, pos, ignore_case)) |end| {
+                if (anchored_end and end != str.len) continue;
+                return .{ .start = pos, .end = end };
+            }
+        }
+        return null;
+    }
+
+    /// Try to match pattern starting at str[pos]. Returns end position if match.
+    fn matchAt(pat: []const u8, str: []const u8, start: usize, ignore_case: bool) ?usize {
+        var pi: usize = 0;
+        var si: usize = start;
+
+        while (pi < pat.len) {
+            // Check for quantifier after current atom
+            const atom_len = atomLength(pat, pi);
+            const after_atom = pi + atom_len;
+            if (after_atom < pat.len and (pat[after_atom] == '*' or pat[after_atom] == '+' or pat[after_atom] == '?')) {
+                const quant = pat[after_atom];
+                const min: usize = if (quant == '+') 1 else 0;
+                const max: usize = if (quant == '?') 1 else str.len - si + 1;
+                // Greedy: try max matches first, then fewer
+                var count: usize = 0;
+                while (count < max and si + count <= str.len) {
+                    if (!matchAtom(pat, pi, str, si + count, ignore_case)) break;
+                    count += 1;
+                }
+                // Try from count down to min
+                while (count >= min) {
+                    if (matchAt(pat[after_atom + 1 ..], str, si + count, ignore_case)) |end| return end;
+                    if (count == 0) break;
+                    count -= 1;
+                }
+                return null;
+            }
+
+            // No quantifier — must match exactly once
+            if (!matchAtom(pat, pi, str, si, ignore_case)) return null;
+            si += 1;
+            pi += atom_len;
+        }
+        return si;
+    }
+
+    fn atomLength(pat: []const u8, pi: usize) usize {
+        if (pi < pat.len and pat[pi] == '\\' and pi + 1 < pat.len) return 2;
+        if (pi < pat.len and pat[pi] == '[') {
+            // Character class — find closing ]
+            var j = pi + 1;
+            if (j < pat.len and pat[j] == ']') j += 1; // ] at start is literal
+            while (j < pat.len and pat[j] != ']') j += 1;
+            if (j < pat.len) return j - pi + 1;
+        }
+        return 1;
+    }
+
+    fn matchAtom(pat: []const u8, pi: usize, str: []const u8, si: usize, ignore_case: bool) bool {
+        if (si >= str.len) return false;
+        const ch = str[si];
+        if (pat[pi] == '.') return ch != '\n';
+        if (pat[pi] == '\\' and pi + 1 < pat.len) {
+            return switch (pat[pi + 1]) {
+                'd' => ch >= '0' and ch <= '9',
+                'D' => !(ch >= '0' and ch <= '9'),
+                'w' => (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_',
+                'W' => !((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_'),
+                's' => ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r',
+                'S' => !(ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r'),
+                'n' => ch == '\n',
+                't' => ch == '\t',
+                'r' => ch == '\r',
+                else => ch == pat[pi + 1],
+            };
+        }
+        if (pat[pi] == '[') {
+            return matchCharClass(pat, pi, ch);
+        }
+        if (ignore_case) {
+            const a = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
+            const b = if (pat[pi] >= 'A' and pat[pi] <= 'Z') pat[pi] + 32 else pat[pi];
+            return a == b;
+        }
+        return ch == pat[pi];
+    }
+
+    fn matchCharClass(pat: []const u8, pi: usize, ch: u8) bool {
+        var j = pi + 1;
+        var negate = false;
+        if (j < pat.len and pat[j] == '^') {
+            negate = true;
+            j += 1;
+        }
+        var matched = false;
+        while (j < pat.len and pat[j] != ']') {
+            if (j + 2 < pat.len and pat[j + 1] == '-' and pat[j + 2] != ']') {
+                // Range
+                if (ch >= pat[j] and ch <= pat[j + 2]) matched = true;
+                j += 3;
+            } else {
+                if (ch == pat[j]) matched = true;
+                j += 1;
+            }
+        }
+        return if (negate) !matched else matched;
+    }
+
     // ── Map methods ──────────────────────────────────────────────
 
     fn nativeMapConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
@@ -2372,6 +2588,55 @@ pub const VM = struct {
         if (args.len == 0) return JsValue.initBool(false);
         const n = args[0].toNumber();
         return JsValue.initBool(!std.math.isNan(n) and !std.math.isInf(n));
+    }
+
+    fn nativeStringMatch(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.null_val;
+        if (args.len == 0) return JsValue.null_val;
+        const vm = vmFromCtx(ctx);
+        // Accept RegExp object or string pattern
+        var pattern: []const u8 = undefined;
+        var ignore_case = false;
+        if (args[0].isObject()) {
+            const obj = args[0].asJsObject();
+            if (obj.obj_type == .regexp) {
+                const re = obj.data.regexp_data;
+                pattern = vm.pool.get(re.source) orelse return JsValue.null_val;
+                ignore_case = re.ignore_case;
+            } else return JsValue.null_val;
+        } else if (args[0].isString()) {
+            pattern = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+        } else return JsValue.null_val;
+
+        const result = simpleMatch(pattern, s, ignore_case) orelse return JsValue.null_val;
+        const arr = try vm.createArray();
+        const matched = s[result.start..result.end];
+        const match_sid = try vm.pool.intern(matched);
+        try arr.data.array.append(vm.allocator, JsValue.initString(match_sid));
+        const index_id = try vm.pool.intern("index");
+        try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(result.start)));
+        return JsValue.initObject(arr);
+    }
+
+    fn nativeStringSearch(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.initNumber(-1);
+        if (args.len == 0) return JsValue.initNumber(-1);
+        const vm = vmFromCtx(ctx);
+        var pattern: []const u8 = undefined;
+        var ignore_case = false;
+        if (args[0].isObject()) {
+            const obj = args[0].asJsObject();
+            if (obj.obj_type == .regexp) {
+                const re = obj.data.regexp_data;
+                pattern = vm.pool.get(re.source) orelse return JsValue.initNumber(-1);
+                ignore_case = re.ignore_case;
+            } else return JsValue.initNumber(-1);
+        } else if (args[0].isString()) {
+            pattern = vm.pool.get(args[0].asStringId()) orelse return JsValue.initNumber(-1);
+        } else return JsValue.initNumber(-1);
+
+        const result = simpleMatch(pattern, s, ignore_case) orelse return JsValue.initNumber(-1);
+        return JsValue.initNumber(@floatFromInt(result.start));
     }
 
     // ── String extra methods ───────────────────────────────────────

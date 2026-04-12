@@ -78,6 +78,9 @@ pub const OpCode = enum(u8) {
     call_method, // operand: u16 arg count (stack: [this, func, args...])
     construct, // operand: u16 arg count (stack: [func, args...])
 
+    // RegExp
+    new_regexp, // operand: u16 const index for pattern, next u16 for flags
+
     // Iteration
     get_length, // stack: [obj] → [number] — get .length property
     get_keys, // stack: [obj] → [array] — get Object.keys()

@@ -1823,6 +1823,96 @@ test "eval: Set clear" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }
 
+// ── RegExp ──────────────────────────────────────────────────────
+
+test "eval: regex test basic" {
+    const result = try evalExpr(
+        \\var re = /hello/;
+        \\re.test("say hello world")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex test no match" {
+    const result = try evalExpr(
+        \\var re = /xyz/;
+        \\re.test("hello world")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: regex test anchored" {
+    const result = try evalExpr(
+        \\var re = /^hello/;
+        \\re.test("hello world")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex test end anchor" {
+    const result = try evalExpr(
+        \\var re = /world$/;
+        \\re.test("hello world")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex dot and quantifier" {
+    const result = try evalExpr(
+        \\var re = /h.+o/;
+        \\re.test("hello")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex digit class" {
+    const result = try evalExpr(
+        \\var re = /\d+/;
+        \\re.test("abc123def")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex case insensitive" {
+    const result = try evalExpr(
+        \\var re = /hello/i;
+        \\re.test("HELLO")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex exec returns match" {
+    const result = try evalExpr(
+        \\var re = /\d+/;
+        \\var m = re.exec("abc123def");
+        \\m.index
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: string match" {
+    const result = try evalExpr(
+        \\var m = "hello world".match(/world/);
+        \\m.index
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: string search" {
+    const result = try evalExpr(
+        \\"abc123".search(/\d/)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: regex char class" {
+    const result = try evalExpr(
+        \\var re = /[aeiou]/;
+        \\re.test("hello")
+    );
+    try std.testing.expect(result.asBool());
+}
+
 // ── setTimeout / setInterval / clearTimeout ─────────────────────
 
 test "eval: setTimeout returns timer id" {

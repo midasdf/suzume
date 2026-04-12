@@ -212,10 +212,13 @@ pub const Compiler = struct {
             .bool_literal => |b| try self.emitConstant(JsValue.initBool(b)),
             .null_literal => try self.emitConstant(JsValue.null_val),
             .string_literal => |sid| try self.emitConstant(JsValue.initString(sid)),
-            .regex_literal => {
-                // Regex literals compile to a placeholder object for now.
-                // Full RegExp support is a future task.
-                try self.emitConstant(JsValue.null_val);
+            .regex_literal => |re| {
+                const pat_ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(re.pattern));
+                try self.emitOpU16(.new_regexp, pat_ci);
+                const flags_ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(re.flags));
+                // Emit flags index as additional u16
+                try self.current.bc.code.append(self.allocator, @intCast(flags_ci & 0xFF));
+                try self.current.bc.code.append(self.allocator, @intCast((flags_ci >> 8) & 0xFF));
             },
 
             .template_literal => |list| {
