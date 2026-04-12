@@ -42,9 +42,22 @@ pub const VM = struct {
     // DOM property interception (set by kotori_dom.zig)
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
     dom_set_prop: ?*const fn (*VM, *JsObject, StringId, JsValue) bool = null,
+    // Timer queue (setTimeout/setInterval)
+    timers: std.ArrayListUnmanaged(TimerEntry) = .{},
+    next_timer_id: u32 = 1,
+
     // Exception handling
     try_stack: [32]TryContext = undefined,
     try_depth: u32 = 0,
+
+    pub const TimerEntry = struct {
+        id: u32,
+        callback: JsValue,
+        delay_ms: u32,
+        is_interval: bool,
+        fired: bool = false,
+        cancelled: bool = false,
+    };
 
     const TryContext = struct {
         catch_offset: u32,
@@ -69,6 +82,7 @@ pub const VM = struct {
 
     pub fn deinit(self: *VM) void {
         self.globals.deinit(self.allocator);
+        self.timers.deinit(self.allocator);
         for (self.closure_entries.items) |entry| {
             self.allocator.free(entry.upvalues);
         }
@@ -908,6 +922,116 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "startsWith", &nativeStringStartsWith);
         try self.registerNativeMethod(sp, "endsWith", &nativeStringEndsWith);
         try self.registerNativeMethod(sp, "replace", &nativeStringReplace);
+        try self.registerNativeMethod(sp, "repeat", &nativeStringRepeat);
+        try self.registerNativeMethod(sp, "padStart", &nativeStringPadStart);
+        try self.registerNativeMethod(sp, "padEnd", &nativeStringPadEnd);
+
+        // ── Object ──
+        const obj_constructor = try self.createObj(.{});
+        try self.registerNativeMethod(obj_constructor, "keys", &nativeObjectKeys);
+        try self.registerNativeMethod(obj_constructor, "values", &nativeObjectValues);
+        try self.registerNativeMethod(obj_constructor, "entries", &nativeObjectEntries);
+        try self.registerNativeMethod(obj_constructor, "assign", &nativeObjectAssign);
+        try self.registerNativeMethod(obj_constructor, "create", &nativeObjectCreate);
+        try self.registerNativeMethod(obj_constructor, "defineProperty", &nativeObjectDefineProperty);
+        try self.registerNativeMethod(obj_constructor, "defineProperties", &nativeObjectDefineProperties);
+        try self.registerNativeMethod(obj_constructor, "setPrototypeOf", &nativeObjectSetPrototypeOf);
+        try self.registerNativeMethod(obj_constructor, "getPrototypeOf", &nativeObjectGetPrototypeOf);
+        try self.registerNativeMethod(obj_constructor, "getOwnPropertyNames", &nativeObjectKeys); // same as keys for now
+        try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor);
+        try self.registerNativeMethod(obj_constructor, "freeze", &nativeObjectPassthrough);
+        try self.registerNativeMethod(obj_constructor, "seal", &nativeObjectPassthrough);
+        try self.registerNativeMethod(obj_constructor, "preventExtensions", &nativeObjectPassthrough);
+        try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeReturnFalse);
+        try self.registerNativeMethod(obj_constructor, "isSealed", &nativeReturnFalse);
+        try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeReturnTrue);
+        const obj_id = try self.pool.intern("Object");
+        try self.globals.put(self.allocator, obj_id, JsValue.initObject(obj_constructor));
+
+        // ── Array constructor ──
+        const arr_constructor = try self.createObj(.{});
+        try self.registerNativeMethod(arr_constructor, "isArray", &nativeArrayIsArray);
+        try self.registerNativeMethod(arr_constructor, "from", &nativeArrayFrom);
+        // Array.prototype accessible from constructor
+        const proto_id = try self.pool.intern("prototype");
+        try arr_constructor.setProperty(self.allocator, proto_id, JsValue.initObject(ap));
+        const arr_id = try self.pool.intern("Array");
+        try self.globals.put(self.allocator, arr_id, JsValue.initObject(arr_constructor));
+
+        // ── JSON ──
+        const json_obj = try self.createObj(.{});
+        try self.registerNativeMethod(json_obj, "stringify", &nativeJsonStringify);
+        try self.registerNativeMethod(json_obj, "parse", &nativeJsonParse);
+        const json_id = try self.pool.intern("JSON");
+        try self.globals.put(self.allocator, json_id, JsValue.initObject(json_obj));
+
+        // ── Math ──
+        const math_obj = try self.createObj(.{});
+        try self.registerNativeMethod(math_obj, "floor", &nativeMathFloor);
+        try self.registerNativeMethod(math_obj, "ceil", &nativeMathCeil);
+        try self.registerNativeMethod(math_obj, "round", &nativeMathRound);
+        try self.registerNativeMethod(math_obj, "abs", &nativeMathAbs);
+        try self.registerNativeMethod(math_obj, "min", &nativeMathMin);
+        try self.registerNativeMethod(math_obj, "max", &nativeMathMax);
+        try self.registerNativeMethod(math_obj, "random", &nativeMathRandom);
+        try self.registerNativeMethod(math_obj, "pow", &nativeMathPow);
+        try self.registerNativeMethod(math_obj, "sqrt", &nativeMathSqrt);
+        try self.registerNativeMethod(math_obj, "log", &nativeMathLog);
+        try self.registerNativeMethod(math_obj, "log10", &nativeMathLog10);
+        try self.registerNativeMethod(math_obj, "trunc", &nativeMathTrunc);
+        try self.registerNativeMethod(math_obj, "sign", &nativeMathSign);
+        // Math constants
+        const pi_id = try self.pool.intern("PI");
+        try math_obj.setProperty(self.allocator, pi_id, JsValue.initNumber(std.math.pi));
+        const e_id = try self.pool.intern("E");
+        try math_obj.setProperty(self.allocator, e_id, JsValue.initNumber(std.math.e));
+        const inf_id = try self.pool.intern("Infinity");
+        try math_obj.setProperty(self.allocator, inf_id, JsValue.initNumber(std.math.inf(f64)));
+        const math_id = try self.pool.intern("Math");
+        try self.globals.put(self.allocator, math_id, JsValue.initObject(math_obj));
+
+        // ── Global functions ──
+        const parse_int_obj = try self.createNativeFn(&nativeParseInt);
+        const parse_int_id = try self.pool.intern("parseInt");
+        try self.globals.put(self.allocator, parse_int_id, JsValue.initObject(parse_int_obj));
+
+        const parse_float_obj = try self.createNativeFn(&nativeParseFloat);
+        const parse_float_id = try self.pool.intern("parseFloat");
+        try self.globals.put(self.allocator, parse_float_id, JsValue.initObject(parse_float_obj));
+
+        const is_nan_obj = try self.createNativeFn(&nativeIsNaN);
+        const is_nan_id = try self.pool.intern("isNaN");
+        try self.globals.put(self.allocator, is_nan_id, JsValue.initObject(is_nan_obj));
+
+        const is_finite_obj = try self.createNativeFn(&nativeIsFinite);
+        const is_finite_id = try self.pool.intern("isFinite");
+        try self.globals.put(self.allocator, is_finite_id, JsValue.initObject(is_finite_obj));
+
+        // ── setTimeout / setInterval / clearTimeout / clearInterval ──
+        const set_timeout_obj = try self.createNativeFn(&nativeSetTimeout);
+        const set_timeout_id = try self.pool.intern("setTimeout");
+        try self.globals.put(self.allocator, set_timeout_id, JsValue.initObject(set_timeout_obj));
+
+        const set_interval_obj = try self.createNativeFn(&nativeSetInterval);
+        const set_interval_id = try self.pool.intern("setInterval");
+        try self.globals.put(self.allocator, set_interval_id, JsValue.initObject(set_interval_obj));
+
+        const clear_timeout_obj = try self.createNativeFn(&nativeClearTimer);
+        const clear_timeout_id = try self.pool.intern("clearTimeout");
+        try self.globals.put(self.allocator, clear_timeout_id, JsValue.initObject(clear_timeout_obj));
+
+        const clear_interval_obj = try self.createNativeFn(&nativeClearTimer);
+        const clear_interval_id = try self.pool.intern("clearInterval");
+        try self.globals.put(self.allocator, clear_interval_id, JsValue.initObject(clear_interval_obj));
+
+        // ── Global constants ──
+        const undef_id = try self.pool.intern("undefined");
+        try self.globals.put(self.allocator, undef_id, JsValue.undefined_val);
+        const null_id = try self.pool.intern("null");
+        try self.globals.put(self.allocator, null_id, JsValue.null_val);
+        const nan_id = try self.pool.intern("NaN");
+        try self.globals.put(self.allocator, nan_id, JsValue.nan_val);
+        try self.globals.put(self.allocator, inf_id, JsValue.initNumber(std.math.inf(f64)));
     }
 
     const NativeFn = object_mod.JsObject.NativeFn;
@@ -1318,6 +1442,713 @@ pub const VM = struct {
             }
         }
         return JsValue.initObject(new_arr);
+    }
+
+    // ── Timer methods ──────────────────────────────────────────────
+
+    fn nativeSetTimeout(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        return addTimer(ctx, args, false);
+    }
+
+    fn nativeSetInterval(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        return addTimer(ctx, args, true);
+    }
+
+    fn addTimer(ctx: *anyopaque, args: []const JsValue, is_interval: bool) !JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.undefined_val;
+        const callback = args[0];
+        if (!callback.isObject()) return JsValue.undefined_val;
+        const delay: u32 = if (args.len > 1) @intFromFloat(@max(0, @min(args[1].toNumber(), 2147483647))) else 0;
+        const id = vm.next_timer_id;
+        vm.next_timer_id += 1;
+        try vm.timers.append(vm.allocator, .{
+            .id = id,
+            .callback = callback,
+            .delay_ms = delay,
+            .is_interval = is_interval,
+        });
+        return JsValue.initNumber(@floatFromInt(id));
+    }
+
+    fn nativeClearTimer(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const id: u32 = @intFromFloat(@max(0, args[0].toNumber()));
+        for (vm.timers.items) |*entry| {
+            if (entry.id == id) {
+                entry.cancelled = true;
+                break;
+            }
+        }
+        return JsValue.undefined_val;
+    }
+
+    /// Fire all pending timers once. Called from the browser event loop.
+    /// For simplicity, all timers fire immediately when runPendingTimers is called
+    /// (delay is tracked but not enforced by kotori — the caller controls timing).
+    pub fn runPendingTimers(self: *VM) !bool {
+        if (self.timers.items.len == 0) return false;
+        var fired_any = false;
+        // Process timers (copy to avoid issues with modification during iteration)
+        var i: usize = 0;
+        while (i < self.timers.items.len) {
+            var entry = &self.timers.items[i];
+            if (entry.cancelled) {
+                _ = self.timers.swapRemove(i);
+                continue;
+            }
+            if (entry.fired and !entry.is_interval) {
+                _ = self.timers.swapRemove(i);
+                continue;
+            }
+            // Fire the callback
+            entry.fired = true;
+            fired_any = true;
+            _ = self.callJsFunction(entry.callback, JsValue.undefined_val, &.{}) catch {};
+            // After callback, re-check bounds (callback may have added timers)
+            if (i < self.timers.items.len) {
+                if (!self.timers.items[i].is_interval or self.timers.items[i].cancelled) {
+                    _ = self.timers.swapRemove(i);
+                    continue;
+                }
+                // Reset interval for next round
+                self.timers.items[i].fired = false;
+            }
+            i += 1;
+        }
+        return fired_any;
+    }
+
+    /// Check if any timers are pending (unfired, not cancelled).
+    pub fn hasPendingTimers(self: *VM) bool {
+        for (self.timers.items) |entry| {
+            if (!entry.cancelled and (!entry.fired or entry.is_interval)) return true;
+        }
+        return false;
+    }
+
+    // ── Object methods ─────────────────────────────────────────────
+
+    fn nativeObjectKeys(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
+        const obj = args[0].asJsObject();
+        for (obj.properties.keys()) |key_id| {
+            try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeObjectValues(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
+        const obj = args[0].asJsObject();
+        for (obj.properties.values()) |val| {
+            try new_arr.data.array.append(vm.allocator, val);
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeObjectEntries(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
+        const obj = args[0].asJsObject();
+        const keys = obj.properties.keys();
+        const vals = obj.properties.values();
+        for (keys, vals) |key_id, val| {
+            const pair = try vm.createArray();
+            try pair.data.array.append(vm.allocator, JsValue.initString(key_id));
+            try pair.data.array.append(vm.allocator, val);
+            try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeObjectAssign(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const target = args[0].asJsObject();
+        for (args[1..]) |src_val| {
+            if (!src_val.isObject()) continue;
+            const src = src_val.asJsObject();
+            for (src.properties.keys(), src.properties.values()) |key, val| {
+                try target.setProperty(vm.allocator, key, val);
+            }
+        }
+        return args[0];
+    }
+
+    fn nativeObjectCreate(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_obj = try vm.createObj(.{});
+        if (args.len > 0 and args[0].isObject()) {
+            new_obj.prototype = args[0].asJsObject();
+        }
+        return JsValue.initObject(new_obj);
+    }
+
+    fn nativeObjectDefineProperty(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 3 or !args[0].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const target = args[0].asJsObject();
+        // Get property name from string arg
+        if (!args[1].isString()) return args[0];
+        const name_id = args[1].asStringId();
+        // Descriptor object
+        if (!args[2].isObject()) return args[0];
+        const desc = args[2].asJsObject();
+        // Check for value property
+        const value_id = try vm.pool.intern("value");
+        if (desc.getProperty(value_id)) |val| {
+            try target.setProperty(vm.allocator, name_id, val);
+        }
+        // Check for get property (getter)
+        const get_id = try vm.pool.intern("get");
+        if (desc.getProperty(get_id)) |getter| {
+            // For now, just call the getter and store its result
+            if (getter.isObject()) {
+                const result = try vm.callJsFunction(getter, args[0], &.{});
+                try target.setProperty(vm.allocator, name_id, result);
+            }
+        }
+        return args[0];
+    }
+
+    fn nativeObjectDefineProperties(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2 or !args[0].isObject() or !args[1].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const target = args[0].asJsObject();
+        const props = args[1].asJsObject();
+        const value_id = try vm.pool.intern("value");
+        for (props.properties.keys(), props.properties.values()) |key, desc_val| {
+            if (!desc_val.isObject()) continue;
+            const desc = desc_val.asJsObject();
+            if (desc.getProperty(value_id)) |val| {
+                try target.setProperty(vm.allocator, key, val);
+            }
+        }
+        return args[0];
+    }
+
+    fn nativeObjectSetPrototypeOf(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2 or !args[0].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
+        const target = args[0].asJsObject();
+        if (args[1].isObject()) {
+            target.prototype = args[1].asJsObject();
+        } else if (args[1].isNull()) {
+            target.prototype = null;
+        }
+        return args[0];
+    }
+
+    fn nativeObjectGetPrototypeOf(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        _ = ctx;
+        if (args.len == 0 or !args[0].isObject()) return JsValue.null_val;
+        const obj = args[0].asJsObject();
+        if (obj.prototype) |proto| return JsValue.initObject(proto);
+        return JsValue.null_val;
+    }
+
+    fn nativeObjectGetOwnPropertyDescriptor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2 or !args[0].isObject() or !args[1].isString()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = args[0].asJsObject();
+        const name_id = args[1].asStringId();
+        // Only check own properties (not prototype chain)
+        const val = obj.properties.get(name_id) orelse return JsValue.undefined_val;
+        const desc = try vm.createObj(.{});
+        const value_id = try vm.pool.intern("value");
+        try desc.setProperty(vm.allocator, value_id, val);
+        const writable_id = try vm.pool.intern("writable");
+        try desc.setProperty(vm.allocator, writable_id, JsValue.initBool(true));
+        const enumerable_id = try vm.pool.intern("enumerable");
+        try desc.setProperty(vm.allocator, enumerable_id, JsValue.initBool(true));
+        const configurable_id = try vm.pool.intern("configurable");
+        try desc.setProperty(vm.allocator, configurable_id, JsValue.initBool(true));
+        return JsValue.initObject(desc);
+    }
+
+    fn nativeObjectPassthrough(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        return if (args.len > 0) args[0] else JsValue.undefined_val;
+    }
+
+    fn nativeReturnFalse(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initBool(false);
+    }
+
+    fn nativeReturnTrue(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initBool(true);
+    }
+
+    // ── Array static methods ───────────────────────────────────────
+
+    fn nativeArrayIsArray(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(false);
+        if (!args[0].isObject()) return JsValue.initBool(false);
+        return JsValue.initBool(args[0].asJsObject().obj_type == .array);
+    }
+
+    fn nativeArrayFrom(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0) return JsValue.initObject(new_arr);
+        const src = args[0];
+        if (src.isObject()) {
+            const obj = src.asJsObject();
+            if (obj.obj_type == .array) {
+                for (obj.data.array.items) |item| {
+                    try new_arr.data.array.append(vm.allocator, item);
+                }
+            }
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    // ── JSON methods ───────────────────────────────────────────────
+
+    fn nativeJsonStringify(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        try jsonSerialize(vm, args[0], &buf);
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn jsonSerialize(vm: *VM, val: JsValue, buf: *std.ArrayListUnmanaged(u8)) !void {
+        if (val.isNull() or val.isUndefined()) {
+            try buf.appendSlice(vm.allocator, "null");
+        } else if (val.isBool()) {
+            try buf.appendSlice(vm.allocator, if (val.asBool()) "true" else "false");
+        } else if (val.isInt()) {
+            var tmp: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&tmp, "{d}", .{val.asInt()}) catch "0";
+            try buf.appendSlice(vm.allocator, s);
+        } else if (val.isNumber()) {
+            const n = val.asNumber();
+            if (std.math.isNan(n) or std.math.isInf(n)) {
+                try buf.appendSlice(vm.allocator, "null");
+            } else {
+                var tmp: [64]u8 = undefined;
+                const s = formatValue(vm.pool, val, &tmp);
+                try buf.appendSlice(vm.allocator, s);
+            }
+        } else if (val.isString()) {
+            const s = vm.pool.get(val.asStringId()) orelse "";
+            try buf.append(vm.allocator, '"');
+            for (s) |c| {
+                switch (c) {
+                    '"' => try buf.appendSlice(vm.allocator, "\\\""),
+                    '\\' => try buf.appendSlice(vm.allocator, "\\\\"),
+                    '\n' => try buf.appendSlice(vm.allocator, "\\n"),
+                    '\r' => try buf.appendSlice(vm.allocator, "\\r"),
+                    '\t' => try buf.appendSlice(vm.allocator, "\\t"),
+                    else => try buf.append(vm.allocator, c),
+                }
+            }
+            try buf.append(vm.allocator, '"');
+        } else if (val.isObject()) {
+            const obj = val.asJsObject();
+            if (obj.obj_type == .array) {
+                try buf.append(vm.allocator, '[');
+                for (obj.data.array.items, 0..) |item, i| {
+                    if (i > 0) try buf.append(vm.allocator, ',');
+                    try jsonSerialize(vm, item, buf);
+                }
+                try buf.append(vm.allocator, ']');
+            } else if (obj.obj_type == .function or obj.obj_type == .native_function) {
+                try buf.appendSlice(vm.allocator, "undefined");
+            } else {
+                try buf.append(vm.allocator, '{');
+                var first = true;
+                for (obj.properties.keys(), obj.properties.values()) |key_id, prop_val| {
+                    // Skip function values in JSON
+                    if (prop_val.isObject()) {
+                        const p = prop_val.asJsObject();
+                        if (p.obj_type == .function or p.obj_type == .native_function) continue;
+                    }
+                    if (!first) try buf.append(vm.allocator, ',');
+                    first = false;
+                    const key_str = vm.pool.get(key_id) orelse "";
+                    try buf.append(vm.allocator, '"');
+                    try buf.appendSlice(vm.allocator, key_str);
+                    try buf.append(vm.allocator, '"');
+                    try buf.append(vm.allocator, ':');
+                    try jsonSerialize(vm, prop_val, buf);
+                }
+                try buf.append(vm.allocator, '}');
+            }
+        } else {
+            try buf.appendSlice(vm.allocator, "null");
+        }
+    }
+
+    fn nativeJsonParse(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const s = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+        var pos: usize = 0;
+        return jsonParseValue(vm, s, &pos) catch JsValue.undefined_val;
+    }
+
+    fn jsonParseValue(vm: *VM, s: []const u8, pos: *usize) error{OutOfMemory}!JsValue {
+        jsonSkipWhitespace(s, pos);
+        if (pos.* >= s.len) return JsValue.undefined_val;
+        return switch (s[pos.*]) {
+            '"' => jsonParseString(vm, s, pos),
+            '{' => jsonParseObject(vm, s, pos),
+            '[' => jsonParseArray(vm, s, pos),
+            't' => {
+                if (pos.* + 4 <= s.len and std.mem.eql(u8, s[pos.* .. pos.* + 4], "true")) {
+                    pos.* += 4;
+                    return JsValue.initBool(true);
+                }
+                return JsValue.undefined_val;
+            },
+            'f' => {
+                if (pos.* + 5 <= s.len and std.mem.eql(u8, s[pos.* .. pos.* + 5], "false")) {
+                    pos.* += 5;
+                    return JsValue.initBool(false);
+                }
+                return JsValue.undefined_val;
+            },
+            'n' => {
+                if (pos.* + 4 <= s.len and std.mem.eql(u8, s[pos.* .. pos.* + 4], "null")) {
+                    pos.* += 4;
+                    return JsValue.null_val;
+                }
+                return JsValue.undefined_val;
+            },
+            else => jsonParseNumber(s, pos),
+        };
+    }
+
+    fn jsonSkipWhitespace(s: []const u8, pos: *usize) void {
+        while (pos.* < s.len and (s[pos.*] == ' ' or s[pos.*] == '\t' or s[pos.*] == '\n' or s[pos.*] == '\r')) pos.* += 1;
+    }
+
+    fn jsonParseString(vm: *VM, s: []const u8, pos: *usize) !JsValue {
+        pos.* += 1; // skip opening "
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        while (pos.* < s.len and s[pos.*] != '"') {
+            if (s[pos.*] == '\\' and pos.* + 1 < s.len) {
+                pos.* += 1;
+                switch (s[pos.*]) {
+                    'n' => try buf.append(vm.allocator, '\n'),
+                    'r' => try buf.append(vm.allocator, '\r'),
+                    't' => try buf.append(vm.allocator, '\t'),
+                    '"' => try buf.append(vm.allocator, '"'),
+                    '\\' => try buf.append(vm.allocator, '\\'),
+                    '/' => try buf.append(vm.allocator, '/'),
+                    else => try buf.append(vm.allocator, s[pos.*]),
+                }
+            } else {
+                try buf.append(vm.allocator, s[pos.*]);
+            }
+            pos.* += 1;
+        }
+        if (pos.* < s.len) pos.* += 1; // skip closing "
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn jsonParseNumber(s: []const u8, pos: *usize) !JsValue {
+        const start = pos.*;
+        if (pos.* < s.len and (s[pos.*] == '-' or s[pos.*] == '+')) pos.* += 1;
+        while (pos.* < s.len and s[pos.*] >= '0' and s[pos.*] <= '9') pos.* += 1;
+        if (pos.* < s.len and s[pos.*] == '.') {
+            pos.* += 1;
+            while (pos.* < s.len and s[pos.*] >= '0' and s[pos.*] <= '9') pos.* += 1;
+        }
+        if (pos.* < s.len and (s[pos.*] == 'e' or s[pos.*] == 'E')) {
+            pos.* += 1;
+            if (pos.* < s.len and (s[pos.*] == '-' or s[pos.*] == '+')) pos.* += 1;
+            while (pos.* < s.len and s[pos.*] >= '0' and s[pos.*] <= '9') pos.* += 1;
+        }
+        if (pos.* == start) return JsValue.undefined_val;
+        const n = std.fmt.parseFloat(f64, s[start..pos.*]) catch return JsValue.nan_val;
+        return JsValue.initNumber(n);
+    }
+
+    fn jsonParseObject(vm: *VM, s: []const u8, pos: *usize) !JsValue {
+        pos.* += 1; // skip {
+        const obj = try vm.createObj(.{});
+        jsonSkipWhitespace(s, pos);
+        if (pos.* < s.len and s[pos.*] == '}') {
+            pos.* += 1;
+            return JsValue.initObject(obj);
+        }
+        while (pos.* < s.len) {
+            jsonSkipWhitespace(s, pos);
+            if (pos.* >= s.len or s[pos.*] != '"') break;
+            const key_val = try jsonParseString(vm, s, pos);
+            jsonSkipWhitespace(s, pos);
+            if (pos.* < s.len and s[pos.*] == ':') pos.* += 1;
+            const val = try jsonParseValue(vm, s, pos);
+            try obj.setProperty(vm.allocator, key_val.asStringId(), val);
+            jsonSkipWhitespace(s, pos);
+            if (pos.* < s.len and s[pos.*] == ',') {
+                pos.* += 1;
+            } else break;
+        }
+        if (pos.* < s.len and s[pos.*] == '}') pos.* += 1;
+        return JsValue.initObject(obj);
+    }
+
+    fn jsonParseArray(vm: *VM, s: []const u8, pos: *usize) !JsValue {
+        pos.* += 1; // skip [
+        const arr = try vm.createArray();
+        jsonSkipWhitespace(s, pos);
+        if (pos.* < s.len and s[pos.*] == ']') {
+            pos.* += 1;
+            return JsValue.initObject(arr);
+        }
+        while (pos.* < s.len) {
+            const val = try jsonParseValue(vm, s, pos);
+            try arr.data.array.append(vm.allocator, val);
+            jsonSkipWhitespace(s, pos);
+            if (pos.* < s.len and s[pos.*] == ',') {
+                pos.* += 1;
+            } else break;
+        }
+        if (pos.* < s.len and s[pos.*] == ']') pos.* += 1;
+        return JsValue.initObject(arr);
+    }
+
+    // ── Math methods ───────────────────────────────────────────────
+
+    fn nativeMathFloor(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@floor(args[0].toNumber()));
+    }
+
+    fn nativeMathCeil(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@ceil(args[0].toNumber()));
+    }
+
+    fn nativeMathRound(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@round(args[0].toNumber()));
+    }
+
+    fn nativeMathAbs(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@abs(args[0].toNumber()));
+    }
+
+    fn nativeMathMin(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initNumber(std.math.inf(f64));
+        var result = args[0].toNumber();
+        for (args[1..]) |a| {
+            const n = a.toNumber();
+            if (std.math.isNan(n)) return JsValue.nan_val;
+            if (n < result) result = n;
+        }
+        return JsValue.initNumber(result);
+    }
+
+    fn nativeMathMax(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initNumber(-std.math.inf(f64));
+        var result = args[0].toNumber();
+        for (args[1..]) |a| {
+            const n = a.toNumber();
+            if (std.math.isNan(n)) return JsValue.nan_val;
+            if (n > result) result = n;
+        }
+        return JsValue.initNumber(result);
+    }
+
+    fn nativeMathRandom(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        // Simple PRNG — good enough for non-crypto use
+        const S = struct {
+            var state: u64 = 0x853c49e6748fea9b;
+        };
+        S.state ^= S.state << 13;
+        S.state ^= S.state >> 7;
+        S.state ^= S.state << 17;
+        const f: f64 = @as(f64, @floatFromInt(S.state & 0x1FFFFFFFFFFFFF)) / @as(f64, @floatFromInt(@as(u64, 0x1FFFFFFFFFFFFF)));
+        return JsValue.initNumber(f);
+    }
+
+    fn nativeMathPow(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.pow(f64, args[0].toNumber(), args[1].toNumber()));
+    }
+
+    fn nativeMathSqrt(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@sqrt(args[0].toNumber()));
+    }
+
+    fn nativeMathLog(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@log(args[0].toNumber()));
+    }
+
+    fn nativeMathLog10(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.log10(args[0].toNumber()));
+    }
+
+    fn nativeMathTrunc(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@trunc(args[0].toNumber()));
+    }
+
+    fn nativeMathSign(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const n = args[0].toNumber();
+        if (std.math.isNan(n)) return JsValue.nan_val;
+        if (n > 0) return JsValue.initNumber(1);
+        if (n < 0) return JsValue.initNumber(-1);
+        return JsValue.initNumber(0);
+    }
+
+    // ── Global functions ───────────────────────────────────────────
+
+    fn nativeParseInt(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const vm = vmFromCtx(ctx);
+        if (args[0].isNumber()) return JsValue.initNumber(@trunc(args[0].asNumber()));
+        if (args[0].isInt()) return args[0];
+        if (!args[0].isString()) return JsValue.nan_val;
+        const s = std.mem.trim(u8, vm.pool.get(args[0].asStringId()) orelse return JsValue.nan_val, " \t\n\r");
+        if (s.len == 0) return JsValue.nan_val;
+        // Determine radix
+        var radix: u8 = 10;
+        var start: usize = 0;
+        if (args.len > 1) {
+            const r = args[1].toNumber();
+            if (!std.math.isNan(r) and r >= 2 and r <= 36) radix = @intFromFloat(r);
+        } else if (s.len > 2 and s[0] == '0' and (s[1] == 'x' or s[1] == 'X')) {
+            radix = 16;
+            start = 2;
+        }
+        var neg = false;
+        if (start < s.len and s[start] == '-') {
+            neg = true;
+            start += 1;
+        } else if (start < s.len and s[start] == '+') {
+            start += 1;
+        }
+        var result: f64 = 0;
+        var found = false;
+        for (s[start..]) |c| {
+            const digit: u8 = if (c >= '0' and c <= '9')
+                c - '0'
+            else if (c >= 'a' and c <= 'z')
+                c - 'a' + 10
+            else if (c >= 'A' and c <= 'Z')
+                c - 'A' + 10
+            else
+                break;
+            if (digit >= radix) break;
+            found = true;
+            result = result * @as(f64, @floatFromInt(radix)) + @as(f64, @floatFromInt(digit));
+        }
+        if (!found) return JsValue.nan_val;
+        return JsValue.initNumber(if (neg) -result else result);
+    }
+
+    fn nativeParseFloat(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        if (args[0].isNumber()) return args[0];
+        if (args[0].isInt()) return JsValue.initNumber(@floatFromInt(args[0].asInt()));
+        if (!args[0].isString()) return JsValue.nan_val;
+        const vm = vmFromCtx(ctx);
+        const s = std.mem.trim(u8, vm.pool.get(args[0].asStringId()) orelse return JsValue.nan_val, " \t\n\r");
+        const n = std.fmt.parseFloat(f64, s) catch return JsValue.nan_val;
+        return JsValue.initNumber(n);
+    }
+
+    fn nativeIsNaN(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(true);
+        return JsValue.initBool(std.math.isNan(args[0].toNumber()));
+    }
+
+    fn nativeIsFinite(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(false);
+        const n = args[0].toNumber();
+        return JsValue.initBool(!std.math.isNan(n) and !std.math.isInf(n));
+    }
+
+    // ── String extra methods ───────────────────────────────────────
+
+    fn nativeStringRepeat(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.initString(try vm.pool.intern(""));
+        const count = clampToUsize(args[0]);
+        if (count == 0 or s.len == 0) return JsValue.initString(try vm.pool.intern(""));
+        if (count > 10000) return JsValue.initString(try vm.pool.intern("")); // safety limit
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        var i: usize = 0;
+        while (i < count) : (i += 1) try buf.appendSlice(vm.allocator, s);
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn nativeStringPadStart(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return this;
+        const target_len = clampToUsize(args[0]);
+        if (target_len <= s.len) return this;
+        const pad_str = if (args.len > 1 and args[1].isString())
+            vm.pool.get(args[1].asStringId()) orelse " "
+        else
+            " ";
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        const pad_needed = target_len - s.len;
+        var i: usize = 0;
+        while (i < pad_needed) : (i += 1) {
+            try buf.append(vm.allocator, pad_str[i % pad_str.len]);
+        }
+        try buf.appendSlice(vm.allocator, s);
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn nativeStringPadEnd(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return this;
+        const target_len = clampToUsize(args[0]);
+        if (target_len <= s.len) return this;
+        const pad_str = if (args.len > 1 and args[1].isString())
+            vm.pool.get(args[1].asStringId()) orelse " "
+        else
+            " ";
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        try buf.appendSlice(vm.allocator, s);
+        var i: usize = 0;
+        const pad_needed = target_len - s.len;
+        while (i < pad_needed) : (i += 1) {
+            try buf.append(vm.allocator, pad_str[i % pad_str.len]);
+        }
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    // ── Helper: create array ───────────────────────────────────────
+
+    fn createArray(self: *VM) !*JsObject {
+        const obj = try self.allocator.create(JsObject);
+        obj.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = self.array_proto };
+        try self.objects.append(self.allocator, obj);
+        return obj;
+    }
+
+    fn createNativeFn(self: *VM, func: NativeFn) !*JsObject {
+        const fn_obj = try self.allocator.create(JsObject);
+        fn_obj.* = .{ .obj_type = .native_function, .data = .{ .native_fn = func } };
+        try self.objects.append(self.allocator, fn_obj);
+        return fn_obj;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

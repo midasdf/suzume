@@ -1416,3 +1416,334 @@ test "eval: rest parameter basic" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
+
+// ── Object.keys/values/entries ──────────────────────────────────
+
+test "eval: Object.keys returns property count" {
+    const result = try evalExpr(
+        \\var obj = { a: 1, b: 2, c: 3 };
+        \\Object.keys(obj).length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.values returns values" {
+    const result = try evalExpr(
+        \\var obj = { x: 10, y: 20 };
+        \\var vals = Object.values(obj);
+        \\vals[0] + vals[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.entries returns pairs" {
+    const result = try evalExpr(
+        \\var obj = { a: 100 };
+        \\var entries = Object.entries(obj);
+        \\entries.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.entries pair structure" {
+    const result = try evalExpr(
+        \\var obj = { x: 42 };
+        \\var entries = Object.entries(obj);
+        \\entries[0][1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.assign copies properties" {
+    const result = try evalExpr(
+        \\var target = { a: 1 };
+        \\var source = { b: 2, c: 3 };
+        \\Object.assign(target, source);
+        \\target.a + target.b + target.c
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.assign overwrites" {
+    const result = try evalExpr(
+        \\var a = { x: 1 };
+        \\var b = { x: 99 };
+        \\Object.assign(a, b);
+        \\a.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.create with prototype" {
+    const result = try evalExpr(
+        \\var proto = { greet: function() { return 42; } };
+        \\var obj = Object.create(proto);
+        \\obj.greet()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.keys empty object" {
+    const result = try evalExpr(
+        \\Object.keys({}).length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.setPrototypeOf" {
+    const result = try evalExpr(
+        \\var proto = { val: 77 };
+        \\var obj = {};
+        \\Object.setPrototypeOf(obj, proto);
+        \\obj.val
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 77.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.getPrototypeOf" {
+    const result = try evalExpr(
+        \\var proto = { x: 5 };
+        \\var obj = Object.create(proto);
+        \\var p = Object.getPrototypeOf(obj);
+        \\p.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+// ── Array.isArray / Array.from ──────────────────────────────────
+
+test "eval: Array.isArray true" {
+    const result = try evalExpr(
+        \\Array.isArray([1, 2, 3])
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.isArray false for object" {
+    const result = try evalExpr(
+        \\Array.isArray({})
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: Array.isArray false for number" {
+    const result = try evalExpr(
+        \\Array.isArray(42)
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: Array.from copies array" {
+    const result = try evalExpr(
+        \\var src = [10, 20, 30];
+        \\var copy = Array.from(src);
+        \\copy.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+// ── Math ────────────────────────────────────────────────────────
+
+test "eval: Math.floor" {
+    const result = try evalExpr("Math.floor(3.7)");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.ceil" {
+    const result = try evalExpr("Math.ceil(3.2)");
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.abs negative" {
+    const result = try evalExpr("Math.abs(-5)");
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.max" {
+    const result = try evalExpr("Math.max(1, 5, 3)");
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.min" {
+    const result = try evalExpr("Math.min(1, 5, 3)");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.pow" {
+    const result = try evalExpr("Math.pow(2, 10)");
+    try std.testing.expectApproxEqAbs(@as(f64, 1024.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.sqrt" {
+    const result = try evalExpr("Math.sqrt(144)");
+    try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.trunc" {
+    const result = try evalExpr("Math.trunc(4.9)");
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.PI" {
+    const result = try evalExpr("Math.PI");
+    try std.testing.expectApproxEqAbs(std.math.pi, result.asNumber(), 0.0001);
+}
+
+test "eval: Math.random returns 0..1" {
+    const result = try evalExpr("Math.random()");
+    const n = result.asNumber();
+    try std.testing.expect(n >= 0.0 and n < 1.0);
+}
+
+// ── JSON ────────────────────────────────────────────────────────
+
+test "eval: JSON.stringify number" {
+    const result = try evalExpr("JSON.stringify(42)");
+    try std.testing.expect(result.isString());
+}
+
+test "eval: JSON.stringify object" {
+    const result = try evalExpr("JSON.stringify({a: 1})");
+    try std.testing.expect(result.isString());
+}
+
+test "eval: JSON.parse and access" {
+    const result = try evalExpr(
+        \\var obj = JSON.parse('{"x":99}');
+        \\obj.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: JSON.parse array" {
+    const result = try evalExpr(
+        \\var arr = JSON.parse('[1,2,3]');
+        \\arr[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: JSON roundtrip" {
+    const result = try evalExpr(
+        \\var obj = { a: 1, b: true };
+        \\var s = JSON.stringify(obj);
+        \\var obj2 = JSON.parse(s);
+        \\obj2.a
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+// ── parseInt / parseFloat / isNaN / isFinite ────────────────────
+
+test "eval: parseInt basic" {
+    const result = try evalExpr("parseInt(42)");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: isNaN true" {
+    const result = try evalExpr("isNaN(0/0)");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: isFinite number" {
+    const result = try evalExpr("isFinite(42)");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: isFinite infinity" {
+    const result = try evalExpr("isFinite(1/0)");
+    try std.testing.expect(!result.asBool());
+}
+
+// ── setTimeout / setInterval / clearTimeout ─────────────────────
+
+test "eval: setTimeout returns timer id" {
+    const result = try evalExpr(
+        \\var id = setTimeout(function() {}, 100);
+        \\id
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: multiple setTimeout gives unique ids" {
+    const result = try evalExpr(
+        \\var id1 = setTimeout(function() {}, 0);
+        \\var id2 = setTimeout(function() {}, 0);
+        \\id2 - id1
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: setTimeout callback fires on runPendingTimers" {
+    var compiler = kotori.Compiler.init(std.testing.allocator,
+        \\var x = 0;
+        \\setTimeout(function() { x = 42; }, 0);
+        \\x
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+
+    // Execute: x is still 0, timer is queued
+    const result1 = try vm_inst.execute();
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result1.asNumber(), 0.001);
+    try std.testing.expect(vm_inst.hasPendingTimers());
+
+    // Fire timers: callback sets x = 42
+    _ = try vm_inst.runPendingTimers();
+    try std.testing.expect(!vm_inst.hasPendingTimers());
+
+    // Read x from globals
+    const x_id = try compiler.parser.pool.intern("x");
+    const x_val = vm_inst.globals.get(x_id) orelse JsValue.undefined_val;
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), x_val.asNumber(), 0.001);
+}
+
+test "eval: clearTimeout cancels timer" {
+    var compiler = kotori.Compiler.init(std.testing.allocator,
+        \\var x = 0;
+        \\var id = setTimeout(function() { x = 99; }, 0);
+        \\clearTimeout(id);
+        \\x
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+
+    _ = try vm_inst.execute();
+    _ = try vm_inst.runPendingTimers();
+
+    // x should still be 0 because timer was cancelled
+    const x_id = try compiler.parser.pool.intern("x");
+    const x_val = vm_inst.globals.get(x_id) orelse JsValue.undefined_val;
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), x_val.asNumber(), 0.001);
+}
+
+test "eval: setInterval fires repeatedly" {
+    var compiler = kotori.Compiler.init(std.testing.allocator,
+        \\var count = 0;
+        \\setInterval(function() { count = count + 1; }, 0);
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = kotori.VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+
+    _ = try vm_inst.execute();
+    // Fire 3 rounds
+    _ = try vm_inst.runPendingTimers();
+    _ = try vm_inst.runPendingTimers();
+    _ = try vm_inst.runPendingTimers();
+
+    const count_id = try compiler.parser.pool.intern("count");
+    const count_val = vm_inst.globals.get(count_id) orelse JsValue.undefined_val;
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), count_val.asNumber(), 0.001);
+}

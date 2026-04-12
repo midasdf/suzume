@@ -96,6 +96,16 @@ pub const KotoriRuntime = struct {
         return .{ .ok = null };
     }
 
+    /// Fire pending timers. Returns true if any callbacks were executed.
+    pub fn runPendingTimers(self: *KotoriRuntime) bool {
+        return self.vm.runPendingTimers() catch false;
+    }
+
+    /// Check if any timers are pending.
+    pub fn hasPendingTimers(self: *KotoriRuntime) bool {
+        return self.vm.hasPendingTimers();
+    }
+
     /// Check and clear DOM dirty flag.
     pub fn checkDomDirty() bool {
         if (kotori_dom.dom_dirty) {
