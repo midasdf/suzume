@@ -25,6 +25,8 @@ pub const ObjType = enum(u8) {
     weak_map,
     weak_set,
     generator,
+    iterator,
+    async_generator,
 };
 
 pub const JsObject = struct {
@@ -79,6 +81,7 @@ pub const JsObject = struct {
         weak_map_data: std.AutoArrayHashMapUnmanaged(usize, JsValue),
         weak_set_data: std.AutoArrayHashMapUnmanaged(usize, void),
         generator_data: GeneratorData,
+        iterator_data: IteratorData,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -98,7 +101,7 @@ pub const JsObject = struct {
                 if (g.saved_stack.len > 0) allocator.free(g.saved_stack);
                 if (g.init_args.len > 0) allocator.free(g.init_args);
             },
-            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms => {},
+            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data => {},
         }
     }
 
@@ -113,11 +116,17 @@ pub const JsObject = struct {
     }
 };
 
+pub const IteratorData = struct {
+    source: JsValue,
+    index: u32 = 0,
+};
+
 pub const GeneratorState = enum(u8) {
     suspended_start,
     suspended_yield,
     executing,
     completed,
+    await_pending,
 };
 
 pub const GeneratorData = struct {
@@ -127,6 +136,7 @@ pub const GeneratorData = struct {
     saved_stack: []JsValue = &.{},
     this_val: JsValue = JsValue.undefined_val,
     init_args: []JsValue = &.{}, // arguments passed to generator function
+    delegate_iterator: ?JsValue = null, // active yield* inner iterator
 };
 
 pub const FunctionObj = struct {

@@ -5717,7 +5717,7 @@ pub const VM = struct {
             .completed => {
                 return try vm.createIterResult(JsValue.undefined_val, true);
             },
-            .executing => {
+            .executing, .await_pending => {
                 return JsValue.undefined_val;
             },
             .suspended_start => {
