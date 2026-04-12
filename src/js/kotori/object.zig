@@ -22,6 +22,8 @@ pub const ObjType = enum(u8) {
     regexp,
     promise,
     date,
+    weak_map,
+    weak_set,
 };
 
 pub const JsObject = struct {
@@ -73,6 +75,8 @@ pub const JsObject = struct {
         regexp_data: RegExpData,
         promise_data: PromiseData,
         date_ms: i64,
+        weak_map_data: std.AutoArrayHashMapUnmanaged(usize, JsValue),
+        weak_set_data: std.AutoArrayHashMapUnmanaged(usize, void),
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -86,6 +90,8 @@ pub const JsObject = struct {
             .map_data => |*m| m.deinit(allocator),
             .set_data => |*s| s.deinit(allocator),
             .promise_data => |*p| p.handlers.deinit(allocator),
+            .weak_map_data => |*wm| wm.deinit(allocator),
+            .weak_set_data => |*ws| ws.deinit(allocator),
             .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms => {},
         }
     }

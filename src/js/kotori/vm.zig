@@ -1799,6 +1799,14 @@ pub const VM = struct {
         try self.globals.put(self.allocator, nan_id, JsValue.nan_val);
         try self.globals.put(self.allocator, inf_id, JsValue.initNumber(std.math.inf(f64)));
 
+        // ── WeakMap / WeakSet ──
+        {
+            const wm_ctor = try self.createNativeFn(&nativeWeakMapConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("WeakMap"), JsValue.initObject(wm_ctor));
+            const ws_ctor = try self.createNativeFn(&nativeWeakSetConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("WeakSet"), JsValue.initObject(ws_ctor));
+        }
+
         // ── globalThis ──
         const global_this = try self.createObj(.{ .obj_type = .window_proxy });
         try self.globals.put(self.allocator, try self.pool.intern("globalThis"), JsValue.initObject(global_this));
@@ -5624,6 +5632,97 @@ pub const VM = struct {
             try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
         }
         return JsValue.initObject(err_obj);
+    }
+
+    // ── WeakMap / WeakSet native functions ───────────────────────────
+
+    fn nativeWeakMapConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const obj = try vm.createObj(.{ .obj_type = .weak_map });
+        obj.data = .{ .weak_map_data = .{} };
+        try vm.registerNativeMethod(obj, "set", &nativeWeakMapSet);
+        try vm.registerNativeMethod(obj, "get", &nativeWeakMapGet);
+        try vm.registerNativeMethod(obj, "has", &nativeWeakMapHas);
+        try vm.registerNativeMethod(obj, "delete", &nativeWeakMapDelete);
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeWeakMapSet(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject() or args.len < 2) return this;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_map) return this;
+        if (!args[0].isObject()) return error.TypeError;
+        const key = @intFromPtr(args[0].asObject());
+        try obj.data.weak_map_data.put(vm.allocator, key, args[1]);
+        return this;
+    }
+
+    fn nativeWeakMapGet(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_map) return JsValue.undefined_val;
+        if (!args[0].isObject()) return JsValue.undefined_val;
+        const key = @intFromPtr(args[0].asObject());
+        if (obj.data.weak_map_data.get(key)) |val| return val;
+        return JsValue.undefined_val;
+    }
+
+    fn nativeWeakMapHas(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_map) return JsValue.initBool(false);
+        if (!args[0].isObject()) return JsValue.initBool(false);
+        const key = @intFromPtr(args[0].asObject());
+        return JsValue.initBool(obj.data.weak_map_data.contains(key));
+    }
+
+    fn nativeWeakMapDelete(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_map) return JsValue.initBool(false);
+        if (!args[0].isObject()) return JsValue.initBool(false);
+        const key = @intFromPtr(args[0].asObject());
+        return JsValue.initBool(obj.data.weak_map_data.orderedRemove(key));
+    }
+
+    fn nativeWeakSetConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const obj = try vm.createObj(.{ .obj_type = .weak_set });
+        obj.data = .{ .weak_set_data = .{} };
+        try vm.registerNativeMethod(obj, "add", &nativeWeakSetAdd);
+        try vm.registerNativeMethod(obj, "has", &nativeWeakSetHas);
+        try vm.registerNativeMethod(obj, "delete", &nativeWeakSetDelete);
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeWeakSetAdd(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject() or args.len == 0) return this;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_set) return this;
+        if (!args[0].isObject()) return error.TypeError;
+        const key = @intFromPtr(args[0].asObject());
+        try obj.data.weak_set_data.put(vm.allocator, key, {});
+        return this;
+    }
+
+    fn nativeWeakSetHas(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_set) return JsValue.initBool(false);
+        if (!args[0].isObject()) return JsValue.initBool(false);
+        const key = @intFromPtr(args[0].asObject());
+        return JsValue.initBool(obj.data.weak_set_data.contains(key));
+    }
+
+    fn nativeWeakSetDelete(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .weak_set) return JsValue.initBool(false);
+        if (!args[0].isObject()) return JsValue.initBool(false);
+        const key = @intFromPtr(args[0].asObject());
+        return JsValue.initBool(obj.data.weak_set_data.orderedRemove(key));
     }
 
     // ── Symbol native functions ──────────────────────────────────────

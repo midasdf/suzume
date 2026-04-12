@@ -3225,3 +3225,48 @@ test "eval: class getter and setter" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
 }
+
+// ── WeakMap / WeakSet ───────────────────────────────────────────
+
+test "eval: WeakMap basic" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\let o = {};
+        \\wm.set(o, 42);
+        \\wm.get(o)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: WeakMap has and delete" {
+    const result = try evalExpr(
+        \\let wm = new WeakMap();
+        \\let o = {};
+        \\wm.set(o, 1);
+        \\wm.delete(o);
+        \\wm.has(o)
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: WeakSet basic" {
+    const result = try evalExpr(
+        \\let ws = new WeakSet();
+        \\let o = {};
+        \\ws.add(o);
+        \\ws.has(o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: WeakSet delete" {
+    const result = try evalExpr(
+        \\let ws = new WeakSet();
+        \\let o = {};
+        \\ws.add(o);
+        \\ws.delete(o);
+        \\ws.has(o)
+    );
+    try std.testing.expect(!result.asBool());
+}
