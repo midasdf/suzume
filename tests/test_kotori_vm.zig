@@ -3351,3 +3351,26 @@ test "eval: WeakSet delete" {
     );
     try std.testing.expect(!result.asBool());
 }
+
+// ── Iterator Protocol ───────────────────────────────────────────
+
+test "eval: array Symbol.iterator" {
+    const result = try evalExpr(
+        \\let a = [10, 20];
+        \\let it = a[Symbol.iterator]();
+        \\let v1 = it.next().value;
+        \\let v2 = it.next().value;
+        \\v1 + v2
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: array iterator done" {
+    const result = try evalExpr(
+        \\let a = [1];
+        \\let it = a[Symbol.iterator]();
+        \\it.next();
+        \\it.next().done
+    );
+    try std.testing.expect(result.asBool());
+}

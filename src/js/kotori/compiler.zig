@@ -957,6 +957,18 @@ pub const Compiler = struct {
                 }
                 try self.emitOpU16(.call_method, @intCast(arg_items.len));
             },
+            .computed_member => |m| {
+                // Computed method call: obj[key](args) → this binding
+                try self.compileNode(m.object); // push obj (this)
+                try self.emitOp(.dup); // dup for property lookup
+                try self.compileNode(m.property); // push key
+                try self.emitOp(.get_elem); // get method
+                // Stack: [obj, method_func]
+                for (arg_items) |arg| {
+                    try self.compileNode(arg);
+                }
+                try self.emitOpU16(.call_method, @intCast(arg_items.len));
+            },
             else => {
                 try self.compileNode(callee);
                 for (arg_items) |arg| {

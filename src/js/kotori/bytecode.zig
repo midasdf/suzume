@@ -101,6 +101,9 @@ pub const OpCode = enum(u8) {
     export_binding, // operand: u16 const index (exported name)
     export_default, // stack: [value] → [] — register default export
 
+    // Iterators
+    get_iterator, // stack: [iterable] → [iterator]
+
     // Generators
     yield_value, // pop value, suspend generator, return {value, done:false}
 

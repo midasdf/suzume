@@ -740,14 +740,12 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
-                        // Symbol property access
+                        // Symbol property access (walk prototype chain)
                         if (key.isSymbol()) {
                             const sym_id = key.asSymbolId();
-                            if (obj.symbol_props) |sp| {
-                                if (sp.get(sym_id)) |val| {
-                                    self.push(val);
-                                    continue;
-                                }
+                            if (self.findSymbolProp(obj, sym_id)) |val| {
+                                self.push(val);
+                                continue;
                             }
                             self.push(JsValue.undefined_val);
                             continue;
@@ -1146,6 +1144,19 @@ pub const VM = struct {
                 },
 
                 // ── Async / Promise ──────────────────────────────────
+                .get_iterator => {
+                    const iterable = self.pop();
+                    if (try self.resolveIterator(iterable)) |iterator| {
+                        self.push(iterator);
+                    } else {
+                        // Non-iterable: push a "done" iterator (empty loop, no crash)
+                        const done_iter = try self.createObj(.{ .obj_type = .iterator });
+                        done_iter.data = .{ .iterator_data = .{ .source = JsValue.undefined_val } };
+                        try self.registerNativeMethod(done_iter, "next", &nativeArrayIteratorNext);
+                        self.push(JsValue.initObject(done_iter));
+                    }
+                },
+
                 .yield_value => {
                     if (self.active_generator) |gen| {
                         const yield_val = self.pop();
@@ -1553,6 +1564,10 @@ pub const VM = struct {
         try self.registerNativeMethod(ap, "values", &nativeArrayValues);
         try self.registerNativeMethod(ap, "entries", &nativeArrayEntries);
         try self.registerNativeMethod(ap, "toString", &nativeArrayToString);
+        // Register Symbol.iterator on array prototype
+        if (ap.symbol_props == null) ap.symbol_props = .{};
+        const arr_iter_fn = try self.createNativeFn(&nativeArraySymbolIterator);
+        try ap.symbol_props.?.put(self.allocator, SYMBOL_ITERATOR, JsValue.initObject(arr_iter_fn));
 
         // ── String.prototype ──
         self.string_proto = try self.createObj(.{});
@@ -5682,6 +5697,132 @@ pub const VM = struct {
             try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
         }
         return JsValue.initObject(err_obj);
+    }
+
+    // ── Iterator support ──────────────────────────────────────────────
+
+    fn resolveIterator(self: *VM, iterable: JsValue) !?JsValue {
+        if (iterable.isObject()) {
+            const obj = iterable.asJsObject();
+            if (obj.obj_type == .generator) return iterable;
+            if (self.findSymbolProp(obj, SYMBOL_ITERATOR)) |iter_fn| {
+                return try self.callJsFunction(iter_fn, iterable, &.{});
+            }
+            if (obj.obj_type == .array) {
+                return JsValue.initObject(try self.createArrayIterator(iterable));
+            }
+        }
+        if (iterable.isString()) {
+            return JsValue.initObject(try self.createStringIterator(iterable));
+        }
+        return null;
+    }
+
+    fn findSymbolProp(_: *VM, obj: *JsObject, sym_id: u32) ?JsValue {
+        var current: ?*JsObject = obj;
+        while (current) |cur| {
+            if (cur.symbol_props) |sp| {
+                if (sp.get(sym_id)) |val| return val;
+            }
+            current = cur.prototype;
+        }
+        return null;
+    }
+
+    fn createArrayIterator(self: *VM, source: JsValue) !*JsObject {
+        const iter = try self.createObj(.{ .obj_type = .iterator });
+        iter.data = .{ .iterator_data = .{ .source = source } };
+        try self.registerNativeMethod(iter, "next", &nativeArrayIteratorNext);
+        return iter;
+    }
+
+    fn createStringIterator(self: *VM, source: JsValue) !*JsObject {
+        const iter = try self.createObj(.{ .obj_type = .iterator });
+        iter.data = .{ .iterator_data = .{ .source = source } };
+        try self.registerNativeMethod(iter, "next", &nativeStringIteratorNext);
+        return iter;
+    }
+
+    fn nativeArrayIteratorNext(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return try vm.createIterResult(JsValue.undefined_val, true);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .iterator) return try vm.createIterResult(JsValue.undefined_val, true);
+        var data = &obj.data.iterator_data;
+        if (!data.source.isObject()) return try vm.createIterResult(JsValue.undefined_val, true);
+        const src = data.source.asJsObject();
+        if (src.obj_type != .array) return try vm.createIterResult(JsValue.undefined_val, true);
+        if (data.index < src.data.array.items.len) {
+            const val = src.data.array.items[data.index];
+            data.index += 1;
+            return try vm.createIterResult(val, false);
+        }
+        return try vm.createIterResult(JsValue.undefined_val, true);
+    }
+
+    fn nativeStringIteratorNext(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return try vm.createIterResult(JsValue.undefined_val, true);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .iterator) return try vm.createIterResult(JsValue.undefined_val, true);
+        var data = &obj.data.iterator_data;
+        if (!data.source.isString()) return try vm.createIterResult(JsValue.undefined_val, true);
+        const s = vm.pool.get(data.source.asStringId()) orelse return try vm.createIterResult(JsValue.undefined_val, true);
+        if (data.index >= s.len) return try vm.createIterResult(JsValue.undefined_val, true);
+        const byte = s[data.index];
+        const cp_len: u32 = @intCast(std.unicode.utf8ByteSequenceLength(byte) catch 1);
+        const end = @min(data.index + cp_len, @as(u32, @intCast(s.len)));
+        const char_str = try vm.pool.intern(s[data.index..end]);
+        data.index = end;
+        return try vm.createIterResult(JsValue.initString(char_str), false);
+    }
+
+    fn nativeArraySymbolIterator(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        return JsValue.initObject(try vm.createArrayIterator(this));
+    }
+
+    fn callIteratorNext(self: *VM, iterator: JsValue, sent_value: JsValue) !JsValue {
+        const next_id = try self.pool.intern("next");
+        if (iterator.isObject()) {
+            const obj = iterator.asJsObject();
+            if (obj.getProperty(next_id)) |next_fn| {
+                return try self.callJsFunction(next_fn, iterator, &.{sent_value});
+            }
+        }
+        return try self.createIterResult(JsValue.undefined_val, true);
+    }
+
+    fn getIterResultDone(self: *VM, result: JsValue) !bool {
+        if (!result.isObject()) return true;
+        const done_id = try self.pool.intern("done");
+        const done = result.asJsObject().getProperty(done_id) orelse JsValue.initBool(true);
+        return done.isTruthy();
+    }
+
+    fn getIterResultValue(self: *VM, result: JsValue) !JsValue {
+        if (!result.isObject()) return JsValue.undefined_val;
+        const value_id = try self.pool.intern("value");
+        return result.asJsObject().getProperty(value_id) orelse JsValue.undefined_val;
+    }
+
+    fn drainIteratorIntoArray(self: *VM, iterator_val: JsValue, arr: *JsObject) !void {
+        const next_id = try self.pool.intern("next");
+        const done_id = try self.pool.intern("done");
+        const value_id = try self.pool.intern("value");
+        var iterations: u32 = 0;
+        while (iterations < 10000) : (iterations += 1) {
+            if (!iterator_val.isObject()) break;
+            const iter_obj = iterator_val.asJsObject();
+            const next_fn = iter_obj.getProperty(next_id) orelse break;
+            const result = try self.callJsFunction(next_fn, iterator_val, &.{});
+            if (!result.isObject()) break;
+            const result_obj = result.asJsObject();
+            const done = result_obj.getProperty(done_id) orelse JsValue.initBool(true);
+            if (done.isTruthy()) break;
+            const value = result_obj.getProperty(value_id) orelse JsValue.undefined_val;
+            try arr.data.array.append(self.allocator, value);
+        }
     }
 
     // ── Generator support ───────────────────────────────────────────
