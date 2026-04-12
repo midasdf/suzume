@@ -58,6 +58,11 @@ pub const VM = struct {
     error_proto: ?*JsObject = null,
     date_proto: ?*JsObject = null,
 
+    // Console state
+    console_timers: std.StringHashMapUnmanaged(i64) = .{},
+    console_counts: std.StringHashMapUnmanaged(u32) = .{},
+    console_indent: u32 = 0,
+
     // HTTP fetch callback (set by browser runtime)
     http_fetch_ctx: ?*anyopaque = null,
     http_fetch_fn: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, url: []const u8, method: []const u8, body: ?[]const u8) ?HttpFetchResult = null,
@@ -156,6 +161,8 @@ pub const VM = struct {
         }
         self.upvalue_cells.deinit(self.allocator);
         self.module_exports.deinit(self.allocator);
+        self.console_timers.deinit(self.allocator);
+        self.console_counts.deinit(self.allocator);
     }
 
     pub fn execute(self: *VM) !JsValue {
@@ -1233,6 +1240,23 @@ pub const VM = struct {
         // ── console ──
         const console_obj = try self.createObj(.{});
         try self.registerNativeMethod(console_obj, "log", &nativeConsoleLog);
+        try self.registerNativeMethod(console_obj, "warn", &nativeConsoleWarn);
+        try self.registerNativeMethod(console_obj, "error", &nativeConsoleError);
+        try self.registerNativeMethod(console_obj, "info", &nativeConsoleInfo);
+        try self.registerNativeMethod(console_obj, "debug", &nativeConsoleDebug);
+        try self.registerNativeMethod(console_obj, "dir", &nativeConsoleDir);
+        try self.registerNativeMethod(console_obj, "assert", &nativeConsoleAssert);
+        try self.registerNativeMethod(console_obj, "time", &nativeConsoleTime);
+        try self.registerNativeMethod(console_obj, "timeEnd", &nativeConsoleTimeEnd);
+        try self.registerNativeMethod(console_obj, "timeLog", &nativeConsoleTimeLog);
+        try self.registerNativeMethod(console_obj, "count", &nativeConsoleCount);
+        try self.registerNativeMethod(console_obj, "countReset", &nativeConsoleCountReset);
+        try self.registerNativeMethod(console_obj, "clear", &nativeConsoleNoOp);
+        try self.registerNativeMethod(console_obj, "trace", &nativeConsoleTrace);
+        try self.registerNativeMethod(console_obj, "group", &nativeConsoleGroup);
+        try self.registerNativeMethod(console_obj, "groupCollapsed", &nativeConsoleGroup);
+        try self.registerNativeMethod(console_obj, "groupEnd", &nativeConsoleGroupEnd);
+        try self.registerNativeMethod(console_obj, "table", &nativeConsoleTable);
 
         const console_id = try self.pool.intern("console");
         try self.globals.put(self.allocator, console_id, JsValue.initObject(console_obj));
@@ -1587,17 +1611,193 @@ pub const VM = struct {
         return @ptrCast(@alignCast(ctx));
     }
 
-    // ── console.log ─────────────────────────────────────────────────
+    // ── console methods ─────────────────────────────────────────────
 
-    fn nativeConsoleLog(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
-        const vm = vmFromCtx(ctx);
+    fn consoleWriteWithPrefix(vm: *VM, prefix: []const u8, args: []const JsValue) void {
         const stderr = std.fs.File.stderr();
+        var indent: u32 = 0;
+        while (indent < vm.console_indent) : (indent += 1) _ = stderr.write("  ") catch 0;
+        if (prefix.len > 0) {
+            _ = stderr.write(prefix) catch 0;
+            _ = stderr.write(" ") catch 0;
+        }
         for (args, 0..) |arg, i| {
             if (i > 0) _ = stderr.write(" ") catch 0;
             var buf: [64]u8 = undefined;
             _ = stderr.write(formatValue(vm.pool, arg, &buf)) catch 0;
         }
         _ = stderr.write("\n") catch 0;
+    }
+
+    fn nativeConsoleLog(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        consoleWriteWithPrefix(vmFromCtx(ctx), "", args);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleWarn(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        consoleWriteWithPrefix(vmFromCtx(ctx), "[WARN]", args);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleError(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        consoleWriteWithPrefix(vmFromCtx(ctx), "[ERROR]", args);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleInfo(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        consoleWriteWithPrefix(vmFromCtx(ctx), "[INFO]", args);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleDebug(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        consoleWriteWithPrefix(vmFromCtx(ctx), "[DEBUG]", args);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleAssert(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len > 0 and args[0].isTruthy()) return JsValue.undefined_val;
+        consoleWriteWithPrefix(vmFromCtx(ctx), "[ASSERT]", if (args.len > 1) args[1..] else &.{});
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleTrace(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        consoleWriteWithPrefix(vmFromCtx(ctx), "Trace:", args);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleNoOp(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleDir(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.undefined_val;
+        const val = args[0];
+        const stderr = std.fs.File.stderr();
+        if (val.isObject()) {
+            const obj = val.asJsObject();
+            _ = stderr.write("{ ") catch 0;
+            var first = true;
+            var it = obj.properties.iterator();
+            while (it.next()) |entry| {
+                if (!first) _ = stderr.write(", ") catch 0;
+                first = false;
+                if (vm.pool.get(entry.key_ptr.*)) |key_str| _ = stderr.write(key_str) catch 0;
+                _ = stderr.write(": ") catch 0;
+                var buf: [64]u8 = undefined;
+                _ = stderr.write(formatValue(vm.pool, entry.value_ptr.*, &buf)) catch 0;
+            }
+            _ = stderr.write(" }\n") catch 0;
+        } else {
+            var buf: [64]u8 = undefined;
+            _ = stderr.write(formatValue(vm.pool, val, &buf)) catch 0;
+            _ = stderr.write("\n") catch 0;
+        }
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleTime(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const label = if (args.len > 0 and args[0].isString())
+            vm.pool.get(args[0].asStringId()) orelse "default"
+        else
+            "default";
+        if (vm.console_timers.count() < 1024) {
+            vm.console_timers.put(vm.allocator, label, std.time.milliTimestamp()) catch {};
+        }
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleTimeEnd(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const label = if (args.len > 0 and args[0].isString())
+            vm.pool.get(args[0].asStringId()) orelse "default"
+        else
+            "default";
+        if (vm.console_timers.get(label)) |start| {
+            const elapsed = std.time.milliTimestamp() - start;
+            const stderr = std.fs.File.stderr();
+            var buf: [128]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{s}: {d}ms\n", .{ label, elapsed }) catch return JsValue.undefined_val;
+            _ = stderr.write(s) catch 0;
+            _ = vm.console_timers.remove(label);
+        }
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleTimeLog(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const label = if (args.len > 0 and args[0].isString())
+            vm.pool.get(args[0].asStringId()) orelse "default"
+        else
+            "default";
+        if (vm.console_timers.get(label)) |start| {
+            const elapsed = std.time.milliTimestamp() - start;
+            const stderr = std.fs.File.stderr();
+            var buf: [128]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{s}: {d}ms", .{ label, elapsed }) catch return JsValue.undefined_val;
+            _ = stderr.write(s) catch 0;
+            if (args.len > 1) {
+                for (args[1..]) |arg| {
+                    _ = stderr.write(" ") catch 0;
+                    var vbuf: [64]u8 = undefined;
+                    _ = stderr.write(formatValue(vm.pool, arg, &vbuf)) catch 0;
+                }
+            }
+            _ = stderr.write("\n") catch 0;
+        }
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleCount(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const label = if (args.len > 0 and args[0].isString())
+            vm.pool.get(args[0].asStringId()) orelse "default"
+        else
+            "default";
+        const entry = vm.console_counts.getOrPut(vm.allocator, label) catch return JsValue.undefined_val;
+        if (!entry.found_existing) {
+            if (vm.console_counts.count() > 1024) {
+                _ = vm.console_counts.remove(label);
+                return JsValue.undefined_val;
+            }
+            entry.value_ptr.* = 0;
+        }
+        entry.value_ptr.* += 1;
+        const stderr = std.fs.File.stderr();
+        var buf: [128]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{s}: {d}\n", .{ label, entry.value_ptr.* }) catch return JsValue.undefined_val;
+        _ = stderr.write(s) catch 0;
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleCountReset(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const label = if (args.len > 0 and args[0].isString())
+            vm.pool.get(args[0].asStringId()) orelse "default"
+        else
+            "default";
+        _ = vm.console_counts.remove(label);
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleGroup(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len > 0) consoleWriteWithPrefix(vm, "", args);
+        if (vm.console_indent < 16) vm.console_indent += 1;
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleGroupEnd(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (vm.console_indent > 0) vm.console_indent -= 1;
+        return JsValue.undefined_val;
+    }
+    fn nativeConsoleTable(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.undefined_val;
+        const val = args[0];
+        const stderr = std.fs.File.stderr();
+        if (val.isObject()) {
+            const obj = val.asJsObject();
+            if (obj.obj_type == .array) {
+                for (obj.data.array.items, 0..) |item, i| {
+                    var ibuf: [20]u8 = undefined;
+                    const idx_str = std.fmt.bufPrint(&ibuf, "{d}\t", .{i}) catch continue;
+                    _ = stderr.write(idx_str) catch 0;
+                    var buf: [64]u8 = undefined;
+                    _ = stderr.write(formatValue(vm.pool, item, &buf)) catch 0;
+                    _ = stderr.write("\n") catch 0;
+                }
+            } else {
+                return nativeConsoleDir(ctx, JsValue.undefined_val, args);
+            }
+        }
         return JsValue.undefined_val;
     }
 

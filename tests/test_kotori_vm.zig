@@ -2970,3 +2970,79 @@ test "Promise.any resolves first success" {
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
+
+// ---------------------------------------------------------------
+// Console expansion
+// ---------------------------------------------------------------
+
+test "console.warn exists" {
+    _ = try evalExpr(
+        \\console.warn("test warning"); 42;
+    );
+}
+
+test "console.error exists" {
+    _ = try evalExpr(
+        \\console.error("test error"); 42;
+    );
+}
+
+test "console.info exists" {
+    _ = try evalExpr(
+        \\console.info("test info"); 42;
+    );
+}
+
+test "console.debug exists" {
+    _ = try evalExpr(
+        \\console.debug("test debug"); 42;
+    );
+}
+
+test "console.assert no crash on true" {
+    _ = try evalExpr(
+        \\console.assert(true, "should not print"); 42;
+    );
+}
+
+test "console.time and timeEnd" {
+    _ = try evalExpr(
+        \\console.time("test"); console.timeEnd("test"); 42;
+    );
+}
+
+test "console.count" {
+    _ = try evalExpr(
+        \\console.count("a"); console.count("a"); console.countReset("a"); 42;
+    );
+}
+
+test "console.group and groupEnd" {
+    _ = try evalExpr(
+        \\console.group("g"); console.log("nested"); console.groupEnd(); 42;
+    );
+}
+
+test "console.clear no crash" {
+    _ = try evalExpr(
+        \\console.clear(); 42;
+    );
+}
+
+test "console.dir object" {
+    _ = try evalExpr(
+        \\console.dir({a: 1, b: 2}); 42;
+    );
+}
+
+test "console.table array" {
+    _ = try evalExpr(
+        \\console.table([1, 2, 3]); 42;
+    );
+}
+
+test "console.trace" {
+    _ = try evalExpr(
+        \\console.trace("trace test"); 42;
+    );
+}
