@@ -101,6 +101,12 @@ pub const OpCode = enum(u8) {
     export_binding, // operand: u16 const index (exported name)
     export_default, // stack: [value] → [] — register default export
 
+    // Spread
+    spread_into_array, // stack: [array, iterable] → [array]
+    call_spread, // stack: [func, args_array] → [result]
+    call_method_spread, // stack: [this, func, args_array] → [result]
+    construct_spread, // stack: [func, args_array] → [result]
+
     // Nullish coalescing / optional chaining
     jump_if_not_nullish, // pop TOS, jump if NOT null/undefined
     jump_if_nullish, // pop TOS, jump if null/undefined

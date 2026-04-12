@@ -905,6 +905,36 @@ pub const Compiler = struct {
         const callee_node = self.parser.ast.getNode(callee);
         const arg_items = self.parser.ast.getNodeList(args);
 
+        // Check if any arg is a spread node
+        var has_spread = false;
+        for (arg_items) |arg| {
+            if (self.parser.ast.getNode(arg) == .spread) {
+                has_spread = true;
+                break;
+            }
+        }
+
+        if (has_spread) {
+            switch (callee_node) {
+                .member => |m| {
+                    try self.compileNode(m.object); // [this]
+                    try self.emitOp(.dup); // [this, this]
+                    const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(m.property)));
+                    try self.emitOpU16(.get_prop, ci); // [this, func]
+                    try self.emitOpU16(.new_array, 0); // [this, func, args[]]
+                    try self.compileSpreadArgs(arg_items);
+                    try self.emitOp(.call_method_spread);
+                },
+                else => {
+                    try self.compileNode(callee); // [func]
+                    try self.emitOpU16(.new_array, 0); // [func, args[]]
+                    try self.compileSpreadArgs(arg_items);
+                    try self.emitOp(.call_spread);
+                },
+            }
+            return;
+        }
+
         switch (callee_node) {
             .member => |m| {
                 // Method call: obj.method(args) → this binding
@@ -925,6 +955,21 @@ pub const Compiler = struct {
                 }
                 try self.emitOpU16(.call, @intCast(arg_items.len));
             },
+        }
+    }
+
+    fn compileSpreadArgs(self: *Compiler, arg_items: []const NodeIndex) CompileError!void {
+        for (arg_items) |arg| {
+            switch (self.parser.ast.getNode(arg)) {
+                .spread => |inner| {
+                    try self.compileNode(inner);
+                    try self.emitOp(.spread_into_array);
+                },
+                else => {
+                    try self.compileNode(arg);
+                    try self.emitOp(.array_push);
+                },
+            }
         }
     }
 

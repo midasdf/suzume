@@ -1573,8 +1573,15 @@ pub const Parser = struct {
         var args = std.ArrayListUnmanaged(NodeIndex){};
         defer args.deinit(self.allocator);
         while (!self.check(.rparen) and !self.check(.eof)) {
-            const arg = try self.parsePrecedence(.assignment);
-            args.append(self.allocator, arg) catch return error.OutOfMemory;
+            if (self.current.type == .ellipsis) {
+                self.advance(); // consume ...
+                const operand = try self.parsePrecedence(.assignment);
+                const spread_node = self.ast.addNode(self.allocator, .{ .spread = operand }) catch return error.OutOfMemory;
+                args.append(self.allocator, spread_node) catch return error.OutOfMemory;
+            } else {
+                const arg = try self.parsePrecedence(.assignment);
+                args.append(self.allocator, arg) catch return error.OutOfMemory;
+            }
             if (!self.match(.comma)) break;
         }
         try self.expect(.rparen);

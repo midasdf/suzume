@@ -183,7 +183,7 @@ pub const VM = struct {
         self.try_depth = 0;
     }
 
-    fn run(self: *VM, until_frame: u32) !JsValue {
+    fn run(self: *VM, until_frame: u32) anyerror!JsValue {
         while (self.frame_count > until_frame) {
             const frame = &self.frames[self.frame_count - 1];
             if (frame.ip >= frame.bc.code.items.len) {
@@ -710,6 +710,99 @@ pub const VM = struct {
                         if (obj.obj_type == .array) {
                             try obj.data.array.append(self.allocator, val);
                         }
+                    }
+                },
+
+                .spread_into_array => {
+                    // Stack: [array, iterable] → [array]
+                    const iterable = self.pop();
+                    const arr_val = self.peek();
+                    if (arr_val.isObject()) {
+                        const arr = arr_val.asJsObject();
+                        if (arr.obj_type == .array) {
+                            if (iterable.isObject()) {
+                                const iter_obj = iterable.asJsObject();
+                                if (iter_obj.obj_type == .array) {
+                                    for (iter_obj.data.array.items) |item| {
+                                        try arr.data.array.append(self.allocator, item);
+                                    }
+                                }
+                            } else if (iterable.isString()) {
+                                // Spread string into chars
+                                if (self.pool.get(iterable.asStringId())) |s| {
+                                    for (s) |c| {
+                                        const char_str = try self.pool.intern(&.{c});
+                                        try arr.data.array.append(self.allocator, JsValue.initString(char_str));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+
+                .call_spread => {
+                    // Stack: [func, args_array] → [result]
+                    const args_val = self.pop();
+                    const func = self.pop();
+                    if (args_val.isObject()) {
+                        const args_obj = args_val.asJsObject();
+                        if (args_obj.obj_type == .array) {
+                            const result = try self.callJsFunction(func, JsValue.undefined_val, args_obj.data.array.items);
+                            self.push(result);
+                        } else {
+                            self.push(JsValue.undefined_val);
+                        }
+                    } else {
+                        self.push(JsValue.undefined_val);
+                    }
+                },
+
+                .call_method_spread => {
+                    // Stack: [this, func, args_array] → [result]
+                    const args_val = self.pop();
+                    const func = self.pop();
+                    const this_val = self.pop();
+                    if (args_val.isObject()) {
+                        const args_obj = args_val.asJsObject();
+                        if (args_obj.obj_type == .array) {
+                            const result = try self.callJsFunction(func, this_val, args_obj.data.array.items);
+                            self.push(result);
+                        } else {
+                            self.push(JsValue.undefined_val);
+                        }
+                    } else {
+                        self.push(JsValue.undefined_val);
+                    }
+                },
+
+                .construct_spread => {
+                    // Stack: [func, args_array] → [result]
+                    const args_val = self.pop();
+                    const func_val = self.pop();
+                    if (args_val.isObject()) {
+                        const args_obj = args_val.asJsObject();
+                        if (args_obj.obj_type == .array) {
+                            // Create new object, set prototype, call constructor
+                            if (func_val.isObject()) {
+                                const ctor = func_val.asJsObject();
+                                const new_obj = try self.createObj(.{});
+                                // Set prototype
+                                const proto_id = try self.pool.intern("prototype");
+                                if (ctor.getProperty(proto_id)) |proto_val| {
+                                    if (proto_val.isObject()) {
+                                        new_obj.prototype = proto_val.asJsObject();
+                                    }
+                                }
+                                _ = try self.callJsFunction(func_val, JsValue.initObject(new_obj), args_obj.data.array.items);
+                                self.push(JsValue.initObject(new_obj));
+                            } else {
+                                self.push(JsValue.undefined_val);
+                            }
+                        } else {
+                            self.push(JsValue.undefined_val);
+                        }
+                    } else {
+                        self.push(JsValue.undefined_val);
                     }
                 },
 

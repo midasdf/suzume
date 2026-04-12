@@ -3132,3 +3132,20 @@ test "eval: globalThis.isNaN" {
     const result = try evalExpr("globalThis.isNaN(NaN)");
     try std.testing.expect(result.asBool());
 }
+
+// ── Spread in function calls ────────────────────────────────────
+
+test "eval: spread in call Math.max" {
+    const result = try evalExpr("Math.max(...[1,2,3])");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread in call function" {
+    const result = try evalExpr("function f(a,b,c) { return a+b+c; } f(...[1,2,3])");
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread mixed args" {
+    const result = try evalExpr("function f(a,b,c,d) { return a+b+c+d; } f(0, ...[1,2], 3)");
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
