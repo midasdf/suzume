@@ -1211,48 +1211,68 @@ fn hasMatchingDescendant(sel: []const u8, element: ElementAdapter, depth: u32) b
     return false;
 }
 
-/// Match a simple selector string against an element (shared by :has() and :not())
+/// Match a compound selector string against an element (shared by :has() and :not()).
+/// Compound selectors are sequences of simple selectors without combinators,
+/// e.g. ".green:first-child", "div#id[attr]", ":enabled:not(.foo)".
 fn matchInnerSimple(sel: []const u8, element: ElementAdapter) bool {
     if (sel.len == 0) return false;
 
-    if (sel[0] == '.') {
-        const cls = sel[1..];
-        const class_attr = element.getAttribute("class") orelse return false;
-        return containsWord(class_attr, cls);
+    // Split compound selector into parts and match ALL parts.
+    // Each part starts with '.', '#', '[', ':' or is a tag name at the beginning.
+    var pos: usize = 0;
+
+    // Optional tag name at the start (before any '.', '#', '[', ':')
+    if (pos < sel.len and sel[pos] != '.' and sel[pos] != '#' and sel[pos] != '[' and sel[pos] != ':') {
+        // Consume tag name
+        var tag_end = pos;
+        while (tag_end < sel.len and sel[tag_end] != '.' and sel[tag_end] != '#' and sel[tag_end] != '[' and sel[tag_end] != ':') {
+            tag_end += 1;
+        }
+        if (tag_end > pos) {
+            const tag_part = sel[pos..tag_end];
+            if (tag_part.len > 0 and tag_part[0] != '*') {
+                const tag = element.tagName() orelse return false;
+                if (!eqlIgnoreCase(tag, tag_part)) return false;
+            }
+            pos = tag_end;
+        }
     }
-    if (sel[0] == '#') {
-        const id = sel[1..];
-        const id_attr = element.getAttribute("id") orelse return false;
-        return std.mem.eql(u8, id_attr, id);
-    }
-    if (sel[0] == '[') {
-        if (std.mem.indexOfScalar(u8, sel, ']')) |close| {
-            const attr_content = std.mem.trim(u8, sel[1..close], " \t");
+
+    // Match remaining simple selector parts
+    while (pos < sel.len) {
+        if (sel[pos] == '.') {
+            pos += 1;
+            var end = pos;
+            while (end < sel.len and sel[end] != '.' and sel[end] != '#' and sel[end] != '[' and sel[end] != ':') {
+                end += 1;
+            }
+            const cls = sel[pos..end];
+            const class_attr = element.getAttribute("class") orelse return false;
+            if (!containsWord(class_attr, cls)) return false;
+            pos = end;
+        } else if (sel[pos] == '#') {
+            pos += 1;
+            var end = pos;
+            while (end < sel.len and sel[end] != '.' and sel[end] != '#' and sel[end] != '[' and sel[end] != ':') {
+                end += 1;
+            }
+            const id = sel[pos..end];
+            const id_attr = element.getAttribute("id") orelse return false;
+            if (!std.mem.eql(u8, id_attr, id)) return false;
+            pos = end;
+        } else if (sel[pos] == '[') {
+            const close = std.mem.indexOfScalarPos(u8, sel, pos, ']') orelse return false;
+            const attr_content = std.mem.trim(u8, sel[pos + 1 .. close], " \t");
             if (std.mem.indexOfScalar(u8, attr_content, '=')) |eq_pos| {
                 var name_end = eq_pos;
                 var op: AttributeOp = .equals;
                 if (eq_pos > 0) {
                     switch (attr_content[eq_pos - 1]) {
-                        '^' => {
-                            name_end = eq_pos - 1;
-                            op = .starts_with;
-                        },
-                        '$' => {
-                            name_end = eq_pos - 1;
-                            op = .ends_with;
-                        },
-                        '*' => {
-                            name_end = eq_pos - 1;
-                            op = .contains;
-                        },
-                        '~' => {
-                            name_end = eq_pos - 1;
-                            op = .contains_word;
-                        },
-                        '|' => {
-                            name_end = eq_pos - 1;
-                            op = .starts_with_dash;
-                        },
+                        '^' => { name_end = eq_pos - 1; op = .starts_with; },
+                        '$' => { name_end = eq_pos - 1; op = .ends_with; },
+                        '*' => { name_end = eq_pos - 1; op = .contains; },
+                        '~' => { name_end = eq_pos - 1; op = .contains_word; },
+                        '|' => { name_end = eq_pos - 1; op = .starts_with_dash; },
                         else => {},
                     }
                 }
@@ -1261,37 +1281,62 @@ fn matchInnerSimple(sel: []const u8, element: ElementAdapter) bool {
                 if (attr_val.len >= 2 and (attr_val[0] == '"' or attr_val[0] == '\'')) {
                     attr_val = attr_val[1 .. attr_val.len - 1];
                 }
-                return matchAttribute(.{ .name = attr_name, .op = op, .value = attr_val }, element);
+                if (!matchAttribute(.{ .name = attr_name, .op = op, .value = attr_val }, element)) return false;
             } else {
-                return element.getAttribute(attr_content) != null;
+                if (!element.hasAttribute(attr_content)) return false;
             }
+            pos = close + 1;
+        } else if (sel[pos] == ':') {
+            pos += 1;
+            // Handle functional pseudo-classes like :nth-child(...)
+            var end = pos;
+            while (end < sel.len and sel[end] != '.' and sel[end] != '#' and sel[end] != '[' and sel[end] != ':') {
+                if (sel[end] == '(') {
+                    // Find matching ')'
+                    var depth: u32 = 1;
+                    end += 1;
+                    while (end < sel.len and depth > 0) {
+                        if (sel[end] == '(') depth += 1;
+                        if (sel[end] == ')') depth -= 1;
+                        end += 1;
+                    }
+                } else {
+                    end += 1;
+                }
+            }
+            const pseudo_str = sel[pos..end];
+            // Parse pseudo-class name and optional argument
+            if (std.mem.indexOfScalar(u8, pseudo_str, '(')) |paren| {
+                const pc_name = pseudo_str[0..paren];
+                const arg_end = if (pseudo_str.len > 0 and pseudo_str[pseudo_str.len - 1] == ')') pseudo_str.len - 1 else pseudo_str.len;
+                const arg = std.mem.trim(u8, pseudo_str[paren + 1 .. arg_end], " \t");
+                if (PseudoClass.fromString(pc_name)) |pc| {
+                    if (pc == .nth_child or pc == .nth_last_child or pc == .nth_of_type or pc == .nth_last_of_type) {
+                        if (!matchPseudoClass(.{ .pc = pc, .nth = parseAnB(arg) }, element)) return false;
+                    } else if (pc == .not) {
+                        if (!matchPseudoClass(.{ .pc = pc, .not_inner = arg }, element)) return false;
+                    } else if (pc == .is) {
+                        if (!matchPseudoClass(.{ .pc = pc, .is_inner = arg }, element)) return false;
+                    } else if (pc == .where) {
+                        if (!matchPseudoClass(.{ .pc = pc, .where_inner = arg }, element)) return false;
+                    } else if (pc == .has) {
+                        if (!matchPseudoClass(.{ .pc = pc, .has_inner = arg }, element)) return false;
+                    } else {
+                        if (!matchPseudoClass(.{ .pc = pc }, element)) return false;
+                    }
+                } else return false;
+            } else {
+                if (PseudoClass.fromString(pseudo_str)) |pc| {
+                    if (!matchPseudoClass(.{ .pc = pc }, element)) return false;
+                } else return false;
+            }
+            pos = end;
+        } else {
+            pos += 1; // skip unexpected character
         }
-        return false;
     }
-    if (sel[0] == ':') {
-        const pseudo_name = sel[1..];
-        if (PseudoClass.fromString(pseudo_name)) |pc| {
-            return matchPseudoClass(.{ .pc = pc }, element);
-        }
-        return false;
-    }
-    // Tag name, possibly compound (tag.class or tag#id)
-    const tag = element.tagName() orelse return false;
-    if (std.mem.indexOfScalar(u8, sel, '.')) |dot| {
-        const tag_part = sel[0..dot];
-        const cls_part = sel[dot + 1 ..];
-        if (tag_part.len > 0 and !eqlIgnoreCase(tag, tag_part)) return false;
-        const class_attr = element.getAttribute("class") orelse return false;
-        return containsWord(class_attr, cls_part);
-    }
-    if (std.mem.indexOfScalar(u8, sel, '#')) |hash| {
-        const tag_part = sel[0..hash];
-        const id_part = sel[hash + 1 ..];
-        if (tag_part.len > 0 and !eqlIgnoreCase(tag, tag_part)) return false;
-        const id_attr = element.getAttribute("id") orelse return false;
-        return std.mem.eql(u8, id_attr, id_part);
-    }
-    return eqlIgnoreCase(tag, sel);
+
+    return true; // all parts matched
 }
 
 fn containsWord(haystack: []const u8, needle: []const u8) bool {
