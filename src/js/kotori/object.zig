@@ -21,6 +21,7 @@ pub const ObjType = enum(u8) {
     set,
     regexp,
     promise,
+    date,
 };
 
 pub const JsObject = struct {
@@ -68,6 +69,7 @@ pub const JsObject = struct {
         set_data: std.ArrayListUnmanaged(value_mod.JsValue),
         regexp_data: RegExpData,
         promise_data: PromiseData,
+        date_ms: i64,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -78,7 +80,7 @@ pub const JsObject = struct {
             .map_data => |*m| m.deinit(allocator),
             .set_data => |*s| s.deinit(allocator),
             .promise_data => |*p| p.handlers.deinit(allocator),
-            .none, .native_fn, .dom_node, .dom_style, .regexp_data => {},
+            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms => {},
         }
     }
 

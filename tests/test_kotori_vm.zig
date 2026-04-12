@@ -2804,3 +2804,112 @@ test "Number valueOf" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.toNumber(), 0.001);
 }
+
+// ---------------------------------------------------------------
+// Date object
+// ---------------------------------------------------------------
+
+test "Date.now returns number" {
+    const result = try evalExpr(
+        \\Date.now();
+    );
+    try std.testing.expect(result.isNumber());
+    try std.testing.expect(result.asNumber() > 1577836800000.0);
+}
+
+test "new Date returns object with getTime" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date();
+        \\var result = d.getTime();
+    , "result");
+    try std.testing.expect(result.isNumber());
+    try std.testing.expect(result.asNumber() > 1577836800000.0);
+}
+
+test "new Date from ms" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(0);
+        \\var result = d.getTime();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "new Date from components" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(2026, 0, 1);
+        \\var result = d.getFullYear();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 2026.0), result.asNumber(), 0.001);
+}
+
+test "Date valueOf" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(1000);
+        \\var result = d.valueOf();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1000.0), result.asNumber(), 0.001);
+}
+
+test "Date toISOString" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(0);
+        \\var result = d.toISOString();
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Date getMonth zero-based" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(2026, 3, 12);
+        \\var result = d.getMonth();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "Date.parse ISO" {
+    const result = try evalExpr(
+        \\Date.parse("2026-04-12T00:00:00Z");
+    );
+    try std.testing.expect(result.isNumber());
+    try std.testing.expect(result.asNumber() > 0);
+}
+
+test "Date.UTC" {
+    const result = try evalExpr(
+        \\Date.UTC(2026, 0, 1);
+    );
+    try std.testing.expect(result.isNumber());
+}
+
+test "Date setFullYear" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(2026, 0, 1);
+        \\d.setFullYear(2030);
+        \\var result = d.getFullYear();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 2030.0), result.asNumber(), 0.001);
+}
+
+test "Date getUTCHours epoch" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(0);
+        \\var result = d.getUTCHours();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "Date toString returns string" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date(0);
+        \\var result = d.toString();
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Date instanceof Date" {
+    const result = try evalWithMicrotasks(
+        \\var d = new Date();
+        \\var result = d instanceof Date;
+    , "result");
+    try std.testing.expect(result.asBool() == true);
+}

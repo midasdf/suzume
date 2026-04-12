@@ -549,6 +549,7 @@ pub fn build(b: *std.Build) void {
     const kotori_tests = b.addTest(.{
         .root_module = kotori_all_test_mod,
     });
+    kotori_tests.linkLibC();
     const run_kotori_tests = b.addRunArtifact(kotori_tests);
     const test_kotori_step = b.step("test-kotori", "Run kotori JS engine tests");
     test_kotori_step.dependOn(&run_kotori_tests.step);

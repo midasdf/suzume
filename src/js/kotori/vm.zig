@@ -1,4 +1,7 @@
 const std = @import("std");
+const ctime = @cImport({
+    @cInclude("time.h");
+});
 const bytecode_mod = @import("bytecode.zig");
 const value_mod = @import("value.zig");
 const object_mod = @import("object.zig");
@@ -53,6 +56,7 @@ pub const VM = struct {
     continuations: std.ArrayListUnmanaged(*Continuation) = .{},
     promise_proto: ?*JsObject = null,
     error_proto: ?*JsObject = null,
+    date_proto: ?*JsObject = null,
 
     // HTTP fetch callback (set by browser runtime)
     http_fetch_ctx: ?*anyopaque = null,
@@ -1455,6 +1459,67 @@ pub const VM = struct {
             const fetch_obj = try self.createNativeFn(&nativeFetch);
             const fetch_id = try self.pool.intern("fetch");
             try self.globals.put(self.allocator, fetch_id, JsValue.initObject(fetch_obj));
+        }
+
+        // ── Date ──
+        {
+            const date_proto = try self.createObj(.{});
+            self.date_proto = date_proto;
+            // Getters (local)
+            try self.registerNativeMethod(date_proto, "getTime", &nativeDateGetTime);
+            try self.registerNativeMethod(date_proto, "getFullYear", &nativeDateGetFullYear);
+            try self.registerNativeMethod(date_proto, "getMonth", &nativeDateGetMonth);
+            try self.registerNativeMethod(date_proto, "getDate", &nativeDateGetDate);
+            try self.registerNativeMethod(date_proto, "getDay", &nativeDateGetDay);
+            try self.registerNativeMethod(date_proto, "getHours", &nativeDateGetHours);
+            try self.registerNativeMethod(date_proto, "getMinutes", &nativeDateGetMinutes);
+            try self.registerNativeMethod(date_proto, "getSeconds", &nativeDateGetSeconds);
+            try self.registerNativeMethod(date_proto, "getMilliseconds", &nativeDateGetMilliseconds);
+            try self.registerNativeMethod(date_proto, "getTimezoneOffset", &nativeDateGetTimezoneOffset);
+            // Getters (UTC)
+            try self.registerNativeMethod(date_proto, "getUTCFullYear", &nativeDateGetUTCFullYear);
+            try self.registerNativeMethod(date_proto, "getUTCMonth", &nativeDateGetUTCMonth);
+            try self.registerNativeMethod(date_proto, "getUTCDate", &nativeDateGetUTCDate);
+            try self.registerNativeMethod(date_proto, "getUTCDay", &nativeDateGetUTCDay);
+            try self.registerNativeMethod(date_proto, "getUTCHours", &nativeDateGetUTCHours);
+            try self.registerNativeMethod(date_proto, "getUTCMinutes", &nativeDateGetUTCMinutes);
+            try self.registerNativeMethod(date_proto, "getUTCSeconds", &nativeDateGetUTCSeconds);
+            try self.registerNativeMethod(date_proto, "getUTCMilliseconds", &nativeDateGetUTCMilliseconds);
+            // Setters (local)
+            try self.registerNativeMethod(date_proto, "setTime", &nativeDateSetTime);
+            try self.registerNativeMethod(date_proto, "setFullYear", &nativeDateSetFullYear);
+            try self.registerNativeMethod(date_proto, "setMonth", &nativeDateSetMonth);
+            try self.registerNativeMethod(date_proto, "setDate", &nativeDateSetDate);
+            try self.registerNativeMethod(date_proto, "setHours", &nativeDateSetHours);
+            try self.registerNativeMethod(date_proto, "setMinutes", &nativeDateSetMinutes);
+            try self.registerNativeMethod(date_proto, "setSeconds", &nativeDateSetSeconds);
+            try self.registerNativeMethod(date_proto, "setMilliseconds", &nativeDateSetMilliseconds);
+            // Setters (UTC)
+            try self.registerNativeMethod(date_proto, "setUTCFullYear", &nativeDateSetUTCFullYear);
+            try self.registerNativeMethod(date_proto, "setUTCMonth", &nativeDateSetUTCMonth);
+            try self.registerNativeMethod(date_proto, "setUTCDate", &nativeDateSetUTCDate);
+            try self.registerNativeMethod(date_proto, "setUTCHours", &nativeDateSetUTCHours);
+            try self.registerNativeMethod(date_proto, "setUTCMinutes", &nativeDateSetUTCMinutes);
+            try self.registerNativeMethod(date_proto, "setUTCSeconds", &nativeDateSetUTCSeconds);
+            try self.registerNativeMethod(date_proto, "setUTCMilliseconds", &nativeDateSetUTCMilliseconds);
+            // Conversion
+            try self.registerNativeMethod(date_proto, "toISOString", &nativeDateToISOString);
+            try self.registerNativeMethod(date_proto, "toJSON", &nativeDateToISOString);
+            try self.registerNativeMethod(date_proto, "toString", &nativeDateToString);
+            try self.registerNativeMethod(date_proto, "toDateString", &nativeDateToDateString);
+            try self.registerNativeMethod(date_proto, "toTimeString", &nativeDateToTimeString);
+            try self.registerNativeMethod(date_proto, "toUTCString", &nativeDateToUTCString);
+            try self.registerNativeMethod(date_proto, "toLocaleDateString", &nativeDateToLocaleDateString);
+            try self.registerNativeMethod(date_proto, "toLocaleTimeString", &nativeDateToLocaleTimeString);
+            try self.registerNativeMethod(date_proto, "toLocaleString", &nativeDateToLocaleString);
+            try self.registerNativeMethod(date_proto, "valueOf", &nativeDateValueOf);
+            // Constructor
+            const date_ctor = try self.createNativeFn(&nativeDateConstructor);
+            try date_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(date_proto));
+            try self.registerNativeMethod(date_ctor, "now", &nativeDateNow);
+            try self.registerNativeMethod(date_ctor, "parse", &nativeDateParse);
+            try self.registerNativeMethod(date_ctor, "UTC", &nativeDateUTC);
+            try self.globals.put(self.allocator, try self.pool.intern("Date"), JsValue.initObject(date_ctor));
         }
 
         // ── Error constructors ──
@@ -3995,6 +4060,629 @@ pub const VM = struct {
         const n = val.toNumber();
         if (std.math.isNan(n) or n < 0) return 0;
         return @intFromFloat(@min(n, 4294967295.0));
+    }
+
+    // ── Date helpers ──────────────────────────────────────────────
+
+    fn msToLocalTm(ms: i64) ctime.struct_tm {
+        const secs: ctime.time_t = @intCast(@divTrunc(ms, 1000));
+        var tm: ctime.struct_tm = undefined;
+        _ = ctime.localtime_r(&secs, &tm);
+        return tm;
+    }
+
+    fn msToUtcTm(ms: i64) ctime.struct_tm {
+        const secs: ctime.time_t = @intCast(@divTrunc(ms, 1000));
+        var tm: ctime.struct_tm = undefined;
+        _ = ctime.gmtime_r(&secs, &tm);
+        return tm;
+    }
+
+    fn tmToLocalMs(tm_ptr: *ctime.struct_tm, orig_ms: i64) i64 {
+        tm_ptr.tm_isdst = -1;
+        const secs = ctime.mktime(tm_ptr);
+        return @as(i64, secs) * 1000 + @rem(orig_ms, 1000);
+    }
+
+    fn getDateMs(this: JsValue) ?i64 {
+        if (!this.isObject()) return null;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .date) return null;
+        return obj.data.date_ms;
+    }
+
+    fn setDateMs(this: JsValue, ms: i64) void {
+        if (!this.isObject()) return;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .date) return;
+        obj.data = .{ .date_ms = ms };
+    }
+
+    fn getMsRemainder(ms: i64) u32 {
+        const r = @rem(ms, 1000);
+        return @intCast(if (r < 0) r + 1000 else r);
+    }
+
+    // ── Date constructor + static ───────────────────────────────────
+
+    fn nativeDateConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const obj = try vm.allocator.create(JsObject);
+        obj.* = .{ .obj_type = .date, .data = .{ .date_ms = 0 }, .prototype = vm.date_proto };
+        try vm.objects.append(vm.allocator, obj);
+        if (args.len == 0) {
+            obj.data = .{ .date_ms = std.time.milliTimestamp() };
+        } else if (args.len == 1) {
+            if (args[0].isNumber()) {
+                obj.data = .{ .date_ms = @intFromFloat(args[0].asNumber()) };
+            } else if (args[0].isInt()) {
+                obj.data = .{ .date_ms = args[0].asInt() };
+            } else if (args[0].isString()) {
+                const str = vm.pool.get(args[0].asStringId()) orelse "";
+                obj.data = .{ .date_ms = parseDateString(str) };
+            }
+        } else {
+            // new Date(y, m, d?, h?, min?, s?, ms?)
+            var tm: ctime.struct_tm = std.mem.zeroes(ctime.struct_tm);
+            tm.tm_year = @as(c_int, @intFromFloat(args[0].toNumber())) - 1900;
+            tm.tm_mon = if (args.len > 1) @intFromFloat(args[1].toNumber()) else 0;
+            tm.tm_mday = if (args.len > 2) @intFromFloat(args[2].toNumber()) else 1;
+            tm.tm_hour = if (args.len > 3) @intFromFloat(args[3].toNumber()) else 0;
+            tm.tm_min = if (args.len > 4) @intFromFloat(args[4].toNumber()) else 0;
+            tm.tm_sec = if (args.len > 5) @intFromFloat(args[5].toNumber()) else 0;
+            tm.tm_isdst = -1;
+            const secs = ctime.mktime(&tm);
+            const extra_ms: i64 = if (args.len > 6) @intFromFloat(args[6].toNumber()) else 0;
+            obj.data = .{ .date_ms = @as(i64, secs) * 1000 + extra_ms };
+        }
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeDateNow(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initNumber(@floatFromInt(std.time.milliTimestamp()));
+    }
+
+    fn nativeDateParse(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isString()) return JsValue.nan_val;
+        const vm = vmFromCtx(ctx);
+        const s = vm.pool.get(args[0].asStringId()) orelse return JsValue.nan_val;
+        const ms = parseDateString(s);
+        if (ms == std.math.minInt(i64)) return JsValue.nan_val;
+        return JsValue.initNumber(@floatFromInt(ms));
+    }
+
+    fn nativeDateUTC(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2) return JsValue.nan_val;
+        var tm: ctime.struct_tm = std.mem.zeroes(ctime.struct_tm);
+        tm.tm_year = @as(c_int, @intFromFloat(args[0].toNumber())) - 1900;
+        tm.tm_mon = @intFromFloat(args[1].toNumber());
+        tm.tm_mday = if (args.len > 2) @intFromFloat(args[2].toNumber()) else 1;
+        tm.tm_hour = if (args.len > 3) @intFromFloat(args[3].toNumber()) else 0;
+        tm.tm_min = if (args.len > 4) @intFromFloat(args[4].toNumber()) else 0;
+        tm.tm_sec = if (args.len > 5) @intFromFloat(args[5].toNumber()) else 0;
+        // Use timegm for UTC
+        const secs = timegm(&tm);
+        const extra_ms: i64 = if (args.len > 6) @intFromFloat(args[6].toNumber()) else 0;
+        return JsValue.initNumber(@floatFromInt(@as(i64, secs) * 1000 + extra_ms));
+    }
+
+    fn timegm(tm_ptr: *ctime.struct_tm) ctime.time_t {
+        // POSIX timegm — available on Linux/macOS
+        return ctime.timegm(tm_ptr);
+    }
+
+    // ── Date parsing ────────────────────────────────────────────────
+
+    fn parseDateString(s: []const u8) i64 {
+        if (parseISO8601(s)) |ms| return ms;
+        if (parseRFC2822(s)) |ms| return ms;
+        return std.math.minInt(i64); // invalid
+    }
+
+    fn parseISO8601(s: []const u8) ?i64 {
+        if (s.len < 10) return null;
+        const year = std.fmt.parseInt(i32, s[0..4], 10) catch return null;
+        if (s[4] != '-') return null;
+        const month = std.fmt.parseInt(u8, s[5..7], 10) catch return null;
+        if (s[7] != '-') return null;
+        const day = std.fmt.parseInt(u8, s[8..10], 10) catch return null;
+        var hour: u8 = 0;
+        var min: u8 = 0;
+        var sec: u8 = 0;
+        var ms: i64 = 0;
+        var tz_offset_min: i32 = 0;
+        var is_utc = false;
+        var pos: usize = 10;
+        if (pos < s.len and s[pos] == 'T') {
+            pos += 1;
+            if (pos + 2 <= s.len) { hour = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null; pos += 2; }
+            if (pos < s.len and s[pos] == ':') pos += 1;
+            if (pos + 2 <= s.len) { min = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null; pos += 2; }
+            if (pos < s.len and s[pos] == ':') pos += 1;
+            if (pos + 2 <= s.len) { sec = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null; pos += 2; }
+            if (pos < s.len and s[pos] == '.') {
+                pos += 1;
+                var frac: i64 = 0;
+                var digits: u32 = 0;
+                while (pos < s.len and s[pos] >= '0' and s[pos] <= '9') : (pos += 1) {
+                    frac = frac * 10 + (s[pos] - '0');
+                    digits += 1;
+                }
+                // Normalize to milliseconds
+                while (digits < 3) : (digits += 1) frac *= 10;
+                while (digits > 3) : (digits -= 1) frac = @divTrunc(frac, 10);
+                ms = frac;
+            }
+            if (pos < s.len) {
+                if (s[pos] == 'Z') { is_utc = true; } else if (s[pos] == '+' or s[pos] == '-') {
+                    const sign: i32 = if (s[pos] == '+') 1 else -1;
+                    pos += 1;
+                    if (pos + 2 <= s.len) {
+                        const tz_h = std.fmt.parseInt(i32, s[pos..][0..2], 10) catch return null;
+                        pos += 2;
+                        if (pos < s.len and s[pos] == ':') pos += 1;
+                        var tz_m: i32 = 0;
+                        if (pos + 2 <= s.len) {
+                            tz_m = std.fmt.parseInt(i32, s[pos..][0..2], 10) catch 0;
+                        }
+                        tz_offset_min = sign * (tz_h * 60 + tz_m);
+                    }
+                }
+            }
+        } else {
+            is_utc = true; // date-only forms are UTC per spec
+        }
+        var tm: ctime.struct_tm = std.mem.zeroes(ctime.struct_tm);
+        tm.tm_year = year - 1900;
+        tm.tm_mon = @as(c_int, @intCast(month)) - 1;
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        if (is_utc) {
+            const secs = timegm(&tm);
+            return @as(i64, secs) * 1000 + ms;
+        } else if (tz_offset_min != 0) {
+            const secs = timegm(&tm);
+            return @as(i64, secs) * 1000 + ms - @as(i64, tz_offset_min) * 60000;
+        } else {
+            tm.tm_isdst = -1;
+            const secs = ctime.mktime(&tm);
+            return @as(i64, secs) * 1000 + ms;
+        }
+    }
+
+    fn parseRFC2822(s: []const u8) ?i64 {
+        // Look for month names
+        const months = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+        var month_idx: ?usize = null;
+        var month_pos: usize = 0;
+        for (months, 0..) |m, i| {
+            if (std.mem.indexOf(u8, s, m)) |p| {
+                month_idx = i;
+                month_pos = p;
+                break;
+            }
+        }
+        if (month_idx == null) return null;
+        // Extract day before month name
+        var day: u8 = 0;
+        if (month_pos >= 2) {
+            const before = std.mem.trimRight(u8, std.mem.trimLeft(u8, s[0..month_pos], " ,"), " ,");
+            // Try last number token
+            var it = std.mem.splitBackwardsAny(u8, before, " ,");
+            if (it.next()) |tok| {
+                day = std.fmt.parseInt(u8, tok, 10) catch 0;
+            }
+        }
+        // Extract year after month name
+        var year: i32 = 0;
+        var pos = month_pos + 3;
+        while (pos < s.len and (s[pos] == ' ' or s[pos] == ',')) pos += 1;
+        // Next might be day or year
+        if (day == 0 and pos < s.len) {
+            const end = std.mem.indexOfAnyPos(u8, s, pos, " ,") orelse s.len;
+            day = std.fmt.parseInt(u8, s[pos..end], 10) catch 0;
+            pos = end;
+            while (pos < s.len and (s[pos] == ' ' or s[pos] == ',')) pos += 1;
+        }
+        if (pos < s.len) {
+            const end = std.mem.indexOfAnyPos(u8, s, pos, " ,") orelse s.len;
+            year = std.fmt.parseInt(i32, s[pos..end], 10) catch 0;
+            pos = end;
+        }
+        if (year == 0 or day == 0) return null;
+        // Try to find time HH:MM:SS
+        var hour: u8 = 0;
+        var min: u8 = 0;
+        var sec: u8 = 0;
+        if (std.mem.indexOf(u8, s[pos..], ":")) |colon_off| {
+            const time_start = pos + colon_off - 2;
+            if (time_start + 8 <= s.len) {
+                hour = std.fmt.parseInt(u8, s[time_start..][0..2], 10) catch 0;
+                min = std.fmt.parseInt(u8, s[time_start + 3 ..][0..2], 10) catch 0;
+                sec = std.fmt.parseInt(u8, s[time_start + 6 ..][0..2], 10) catch 0;
+            }
+        }
+        var tm: ctime.struct_tm = std.mem.zeroes(ctime.struct_tm);
+        tm.tm_year = year - 1900;
+        tm.tm_mon = @intCast(month_idx.?);
+        tm.tm_mday = day;
+        tm.tm_hour = hour;
+        tm.tm_min = min;
+        tm.tm_sec = sec;
+        // Check for GMT/UTC
+        if (std.mem.indexOf(u8, s, "GMT") != null or std.mem.indexOf(u8, s, "UTC") != null) {
+            return @as(i64, timegm(&tm)) * 1000;
+        }
+        tm.tm_isdst = -1;
+        return @as(i64, ctime.mktime(&tm)) * 1000;
+    }
+
+    // ── Date getters (local) ────────────────────────────────────────
+
+    fn nativeDateGetTime(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initNumber(@floatFromInt(getDateMs(this) orelse return JsValue.nan_val));
+    }
+    fn nativeDateGetFullYear(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(@as(i32, tm.tm_year) + 1900));
+    }
+    fn nativeDateGetMonth(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_mon));
+    }
+    fn nativeDateGetDate(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_mday));
+    }
+    fn nativeDateGetDay(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_wday));
+    }
+    fn nativeDateGetHours(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_hour));
+    }
+    fn nativeDateGetMinutes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_min));
+    }
+    fn nativeDateGetSeconds(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToLocalTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_sec));
+    }
+    fn nativeDateGetMilliseconds(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const ms = getDateMs(this) orelse return JsValue.nan_val;
+        return JsValue.initNumber(@floatFromInt(getMsRemainder(ms)));
+    }
+    fn nativeDateGetTimezoneOffset(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const ms = getDateMs(this) orelse return JsValue.nan_val;
+        const local = msToLocalTm(ms);
+        // tm_gmtoff is seconds east of UTC (POSIX extension, available on Linux/macOS)
+        return JsValue.initNumber(@floatFromInt(@divTrunc(-@as(i64, local.tm_gmtoff), 60)));
+    }
+
+    // ── Date getters (UTC) ──────────────────────────────────────────
+
+    fn nativeDateGetUTCFullYear(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(@as(i32, tm.tm_year) + 1900));
+    }
+    fn nativeDateGetUTCMonth(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_mon));
+    }
+    fn nativeDateGetUTCDate(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_mday));
+    }
+    fn nativeDateGetUTCDay(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_wday));
+    }
+    fn nativeDateGetUTCHours(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_hour));
+    }
+    fn nativeDateGetUTCMinutes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_min));
+    }
+    fn nativeDateGetUTCSeconds(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const tm = msToUtcTm(getDateMs(this) orelse return JsValue.nan_val);
+        return JsValue.initNumber(@floatFromInt(tm.tm_sec));
+    }
+    fn nativeDateGetUTCMilliseconds(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const ms = getDateMs(this) orelse return JsValue.nan_val;
+        return JsValue.initNumber(@floatFromInt(getMsRemainder(ms)));
+    }
+
+    // ── Date setters (local) ────────────────────────────────────────
+
+    fn nativeDateSetTime(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const ms: i64 = @intFromFloat(args[0].toNumber());
+        setDateMs(this, ms);
+        return JsValue.initNumber(@floatFromInt(ms));
+    }
+    fn nativeDateSetFullYear(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToLocalTm(orig);
+        tm.tm_year = @as(c_int, @intFromFloat(args[0].toNumber())) - 1900;
+        if (args.len > 1) tm.tm_mon = @intFromFloat(args[1].toNumber());
+        if (args.len > 2) tm.tm_mday = @intFromFloat(args[2].toNumber());
+        const new_ms = tmToLocalMs(&tm, orig);
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetMonth(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToLocalTm(orig);
+        tm.tm_mon = @intFromFloat(args[0].toNumber());
+        if (args.len > 1) tm.tm_mday = @intFromFloat(args[1].toNumber());
+        const new_ms = tmToLocalMs(&tm, orig);
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetDate(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToLocalTm(orig);
+        tm.tm_mday = @intFromFloat(args[0].toNumber());
+        const new_ms = tmToLocalMs(&tm, orig);
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetHours(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToLocalTm(orig);
+        tm.tm_hour = @intFromFloat(args[0].toNumber());
+        if (args.len > 1) tm.tm_min = @intFromFloat(args[1].toNumber());
+        if (args.len > 2) tm.tm_sec = @intFromFloat(args[2].toNumber());
+        var new_ms = tmToLocalMs(&tm, orig);
+        if (args.len > 3) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[3].toNumber())); }
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetMinutes(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToLocalTm(orig);
+        tm.tm_min = @intFromFloat(args[0].toNumber());
+        if (args.len > 1) tm.tm_sec = @intFromFloat(args[1].toNumber());
+        var new_ms = tmToLocalMs(&tm, orig);
+        if (args.len > 2) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[2].toNumber())); }
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetSeconds(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToLocalTm(orig);
+        tm.tm_sec = @intFromFloat(args[0].toNumber());
+        var new_ms = tmToLocalMs(&tm, orig);
+        if (args.len > 1) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[1].toNumber())); }
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetMilliseconds(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        const new_ms = orig - @rem(orig, 1000) + @as(i64, @intFromFloat(args[0].toNumber()));
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+
+    // ── Date setters (UTC) ──────────────────────────────────────────
+
+    fn nativeDateSetUTCFullYear(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToUtcTm(orig);
+        tm.tm_year = @as(c_int, @intFromFloat(args[0].toNumber())) - 1900;
+        if (args.len > 1) tm.tm_mon = @intFromFloat(args[1].toNumber());
+        if (args.len > 2) tm.tm_mday = @intFromFloat(args[2].toNumber());
+        const new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetUTCMonth(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToUtcTm(orig);
+        tm.tm_mon = @intFromFloat(args[0].toNumber());
+        if (args.len > 1) tm.tm_mday = @intFromFloat(args[1].toNumber());
+        const new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetUTCDate(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToUtcTm(orig);
+        tm.tm_mday = @intFromFloat(args[0].toNumber());
+        const new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetUTCHours(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToUtcTm(orig);
+        tm.tm_hour = @intFromFloat(args[0].toNumber());
+        if (args.len > 1) tm.tm_min = @intFromFloat(args[1].toNumber());
+        if (args.len > 2) tm.tm_sec = @intFromFloat(args[2].toNumber());
+        var new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
+        if (args.len > 3) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[3].toNumber())); }
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetUTCMinutes(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToUtcTm(orig);
+        tm.tm_min = @intFromFloat(args[0].toNumber());
+        if (args.len > 1) tm.tm_sec = @intFromFloat(args[1].toNumber());
+        var new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
+        if (args.len > 2) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[2].toNumber())); }
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetUTCSeconds(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        var tm = msToUtcTm(orig);
+        tm.tm_sec = @intFromFloat(args[0].toNumber());
+        var new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
+        if (args.len > 1) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[1].toNumber())); }
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+    fn nativeDateSetUTCMilliseconds(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const orig = getDateMs(this) orelse return JsValue.nan_val;
+        const new_ms = orig - @rem(orig, 1000) + @as(i64, @intFromFloat(args[0].toNumber()));
+        setDateMs(this, new_ms);
+        return JsValue.initNumber(@floatFromInt(new_ms));
+    }
+
+    // ── Date conversion methods ─────────────────────────────────────
+
+    fn nativeDateToISOString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.undefined_val;
+        const tm = msToUtcTm(ms);
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}:{d:0>2}:{d:0>2}.{d:0>3}Z", .{
+            @as(i32, tm.tm_year) + 1900,
+            @as(u32, @intCast(tm.tm_mon)) + 1,
+            @as(u32, @intCast(tm.tm_mday)),
+            @as(u32, @intCast(tm.tm_hour)),
+            @as(u32, @intCast(tm.tm_min)),
+            @as(u32, @intCast(tm.tm_sec)),
+            getMsRemainder(ms),
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateValueOf(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initNumber(@floatFromInt(getDateMs(this) orelse return JsValue.nan_val));
+    }
+
+    const day_names = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+    const month_names = [_][]const u8{ "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec" };
+
+    fn fmtTzOffset(buf: []u8, offset_sec: i64) []const u8 {
+        const offset_min = @divTrunc(offset_sec, 60);
+        const sign: u8 = if (offset_min >= 0) '+' else '-';
+        const abs_min: u64 = @intCast(@abs(offset_min));
+        const h: u32 = @intCast(@divTrunc(abs_min, 60));
+        const m: u32 = @intCast(@rem(abs_min, 60));
+        return std.fmt.bufPrint(buf, "{c}{d:0>2}{d:0>2}", .{ sign, h, m }) catch "+0000";
+    }
+
+    fn nativeDateToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToLocalTm(ms);
+        const wday: usize = @intCast(tm.tm_wday);
+        const mon: usize = @intCast(tm.tm_mon);
+        var tz_buf: [8]u8 = undefined;
+        const tz_str = fmtTzOffset(&tz_buf, tm.tm_gmtoff);
+        var buf: [64]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{s} {s} {d:0>2} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT{s}", .{
+            day_names[wday], month_names[mon],
+            @as(u32, @intCast(tm.tm_mday)), @as(i32, tm.tm_year) + 1900,
+            @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)),
+            tz_str,
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateToDateString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToLocalTm(ms);
+        const wday: usize = @intCast(tm.tm_wday);
+        const mon: usize = @intCast(tm.tm_mon);
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{s} {s} {d:0>2} {d}", .{
+            day_names[wday], month_names[mon], @as(u32, @intCast(tm.tm_mday)), @as(i32, tm.tm_year) + 1900,
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateToTimeString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToLocalTm(ms);
+        var tz_buf: [8]u8 = undefined;
+        const tz_str = fmtTzOffset(&tz_buf, tm.tm_gmtoff);
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d:0>2}:{d:0>2}:{d:0>2} GMT{s}", .{
+            @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)),
+            tz_str,
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateToUTCString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToUtcTm(ms);
+        const wday: usize = @intCast(tm.tm_wday);
+        const mon: usize = @intCast(tm.tm_mon);
+        var buf: [40]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{s}, {d:0>2} {s} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT", .{
+            day_names[wday], @as(u32, @intCast(tm.tm_mday)), month_names[mon],
+            @as(i32, tm.tm_year) + 1900,
+            @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)),
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateToLocaleDateString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToLocalTm(ms);
+        var buf: [16]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}/{d}/{d}", .{
+            @as(u32, @intCast(tm.tm_mon)) + 1, @as(u32, @intCast(tm.tm_mday)), @as(i32, tm.tm_year) + 1900,
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateToLocaleTimeString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToLocalTm(ms);
+        const h = @as(u32, @intCast(tm.tm_hour));
+        const ampm: []const u8 = if (h < 12) "AM" else "PM";
+        const h12 = if (h == 0) 12 else if (h > 12) h - 12 else h;
+        var buf: [16]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}:{d:0>2}:{d:0>2} {s}", .{
+            h12, @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)), ampm,
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeDateToLocaleString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const ms = getDateMs(this) orelse return JsValue.initString(try vm.pool.intern("Invalid Date"));
+        const tm = msToLocalTm(ms);
+        const h = @as(u32, @intCast(tm.tm_hour));
+        const ampm: []const u8 = if (h < 12) "AM" else "PM";
+        const h12 = if (h == 0) 12 else if (h > 12) h - 12 else h;
+        var buf: [32]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{d}/{d}/{d}, {d}:{d:0>2}:{d:0>2} {s}", .{
+            @as(u32, @intCast(tm.tm_mon)) + 1, @as(u32, @intCast(tm.tm_mday)), @as(i32, tm.tm_year) + 1900,
+            h12, @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)), ampm,
+        }) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
     }
 
     // ── Number methods ────────────────────────────────────────────
