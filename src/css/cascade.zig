@@ -32,6 +32,10 @@ const StyleCacheKey = struct {
     id_hash: u32,
     inline_hash: u32,
     parent_hash: u32,
+    // Structural pseudo-class info: elements at different sibling positions
+    // can match different selectors (:first-child, :last-child, :nth-child, etc.)
+    sibling_index: u16,
+    is_last_child: bool,
 };
 
 const StyleCacheEntry = struct {
@@ -50,6 +54,31 @@ fn optionalEql(a: ?[]const u8, b: ?[]const u8) bool {
     if (a == null and b == null) return true;
     if (a == null or b == null) return false;
     return std.mem.eql(u8, a.?, b.?);
+}
+
+/// Count previous element siblings for structural pseudo-class cache key.
+fn countPrevElementSiblings(n: anytype) u16 {
+    const lxb = @import("../bindings/lexbor.zig").c;
+    var count: u16 = 0;
+    var sib = n.prev;
+    while (sib != null) {
+        const s = sib.?;
+        if (s.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) count +|= 1;
+        sib = s.*.prev;
+    }
+    return count;
+}
+
+/// Check if node has a next element sibling.
+fn hasNextElementSibling(n: anytype) bool {
+    const lxb = @import("../bindings/lexbor.zig").c;
+    var sib = n.next;
+    while (sib != null) {
+        const s = sib.?;
+        if (s.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return true;
+        sib = s.*.next;
+    }
+    return false;
 }
 
 fn hashAttr(s: ?[]const u8) u32 {
@@ -574,6 +603,7 @@ fn makeDomAdapter(node: DomNode) selectors.ElementAdapter {
 const dom_vtable = selectors.ElementAdapter.VTable{
     .tagName = domTagName,
     .getAttribute = domGetAttribute,
+    .hasAttribute = domHasAttribute,
     .parent = domParent,
     .previousElementSibling = domPrevSibling,
     .nextElementSibling = domNextSibling,
@@ -591,6 +621,11 @@ fn domTagName(ptr: *const anyopaque) ?[]const u8 {
 fn domGetAttribute(ptr: *const anyopaque, name: []const u8) ?[]const u8 {
     const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
     return node.getAttribute(name);
+}
+
+fn domHasAttribute(ptr: *const anyopaque, name: []const u8) bool {
+    const node = DomNode{ .lxb_node = @ptrCast(@alignCast(@constCast(ptr))) };
+    return node.hasAttribute(name);
 }
 
 fn domParent(ptr: *const anyopaque) ?selectors.ElementAdapter {
@@ -701,12 +736,16 @@ fn walkAndCompute(
         const node_class = node.getAttribute("class");
         const node_id = node.getAttribute("id");
         const node_inline = node.getAttribute("style");
+        // Compute sibling position for structural pseudo-class correctness
+        const sibling_index = countPrevElementSiblings(node.lxb_node);
         const cache_key = StyleCacheKey{
             .tag_hash = hashAttr(node_tag),
             .class_hash = hashAttr(node_class),
             .id_hash = hashAttr(node_id),
             .inline_hash = hashAttr(node_inline),
             .parent_hash = hashParentStyle(parent_style),
+            .sibling_index = sibling_index,
+            .is_last_child = !hasNextElementSibling(node.lxb_node),
         };
         // Only use cache when no custom properties in scope and no HTML presentational attrs
         const has_presentational = node.getAttribute("bgcolor") != null or

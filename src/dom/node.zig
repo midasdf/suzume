@@ -82,13 +82,21 @@ pub const DomNode = struct {
     }
 
     /// Get attribute value by name.
+    /// Returns empty string for boolean attributes (e.g. disabled, hidden, checked).
     pub fn getAttribute(self: DomNode, name: []const u8) ?[]const u8 {
         if (self.nodeType() != .element) return null;
         const element: *lxb.lxb_dom_element_t = @ptrCast(self.lxb_node);
         var value_len: usize = 0;
         const val = lxb.lxb_dom_element_get_attribute(element, name.ptr, name.len, &value_len);
-        if (val == null or value_len == 0) return null;
+        if (val == null) return null;
         return val[0..value_len];
+    }
+
+    /// Check if an attribute exists (works for boolean/valueless attributes like disabled, hidden).
+    pub fn hasAttribute(self: DomNode, name: []const u8) bool {
+        if (self.nodeType() != .element) return false;
+        const element: *lxb.lxb_dom_element_t = @ptrCast(self.lxb_node);
+        return lxb.lxb_dom_element_has_attribute(element, name.ptr, name.len);
     }
 
     /// Returns the raw lxb_dom_node_t pointer as an opaque void pointer,

@@ -170,6 +170,7 @@ pub var restyle_fn: ?*const fn () void = null;
 /// Flush stale styles: if DOM is dirty, trigger synchronous restyle.
 pub fn flushStylesIfDirty() void {
     if (dom_dirty) {
+        dom_dirty = false;
         if (restyle_fn) |f| f();
     }
 }
@@ -3352,6 +3353,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const hiddenAtom = qjs.JS_NewAtom(ctx, "hidden");
         _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, hiddenAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetHidden, "get hidden", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetHidden, "set hidden", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, hiddenAtom);
+    }
+    {
+        const disabledAtom = qjs.JS_NewAtom(ctx, "disabled");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, disabledAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetDisabled, "get disabled", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetDisabled, "set disabled", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, disabledAtom);
+    }
+    {
+        const hrefAtom = qjs.JS_NewAtom(ctx, "href");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, hrefAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetHref, "get href", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetHref, "set href", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, hrefAtom);
     }
 
     // input.value / textarea.value / select.value

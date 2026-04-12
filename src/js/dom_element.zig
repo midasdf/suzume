@@ -1958,6 +1958,76 @@ pub fn elementSetHidden(
     return quickjs.JS_UNDEFINED();
 }
 
+// ── href property (reflected string attribute) ──────────────────────
+
+pub fn elementGetHref(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "href", 4, &attr_len);
+    if (attr_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, attr_ptr, attr_len);
+}
+
+pub fn elementSetHref(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const s = api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+    _ = lxb_dom_element_set_attribute(elem, "href", 4, s.ptr, s.len);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── disabled property (reflected boolean attribute) ─────────────────
+
+pub fn elementGetDisabled(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "disabled", 8, &attr_len);
+    return quickjs.JS_NewBool(attr_ptr != null);
+}
+
+pub fn elementSetDisabled(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const val = qjs.JS_ToBool(c, args[0]);
+    if (val > 0) {
+        _ = lxb_dom_element_set_attribute(elem, "disabled", 8, "", 0);
+    } else {
+        _ = lxb_dom_element_remove_attribute(elem, "disabled", 8);
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
 // ── Scroll getters ──────────────────────────────────────────────────
 
 pub fn elementGetScrollTop(

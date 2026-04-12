@@ -51,6 +51,13 @@ pub const PseudoClass = enum {
     focus_within,
     target,
     placeholder_shown,
+    defined,
+    any_link,
+    required,
+    optional,
+    read_only,
+    read_write,
+    indeterminate,
     // Internal-only: used by :has()/:not()/:is()/:where() selectors
     has,
     not,
@@ -78,6 +85,13 @@ pub const PseudoClass = enum {
         .{ "focus-within", .focus_within },
         .{ "target", .target },
         .{ "placeholder-shown", .placeholder_shown },
+        .{ "defined", .defined },
+        .{ "any-link", .any_link },
+        .{ "required", .required },
+        .{ "optional", .optional },
+        .{ "read-only", .read_only },
+        .{ "read-write", .read_write },
+        .{ "indeterminate", .indeterminate },
     });
 
     pub fn fromString(name: []const u8) ?PseudoClass {
@@ -438,7 +452,9 @@ const SelectorParser = struct {
                         self.specificity.b += 1;
                     }
                 } else {
-                    // Unknown pseudo-class, skip including any parenthesized args
+                    // Unknown pseudo-class: per CSS spec, a selector with an unknown
+                    // pseudo-class is invalid and must not match any element.
+                    // Skip any parenthesized args and invalidate this selector.
                     if (self.peek() == '(') {
                         var depth: u32 = 1;
                         self.advance();
@@ -448,8 +464,7 @@ const SelectorParser = struct {
                             self.pos += 1;
                         }
                     }
-                    // treat as specificity b (like a class)
-                    self.specificity.b += 1;
+                    return null; // invalidate entire selector
                 }
                 continue;
             }
@@ -609,6 +624,7 @@ pub const ElementAdapter = struct {
     pub const VTable = struct {
         tagName: *const fn (ptr: *const anyopaque) ?[]const u8,
         getAttribute: *const fn (ptr: *const anyopaque, name: []const u8) ?[]const u8,
+        hasAttribute: *const fn (ptr: *const anyopaque, name: []const u8) bool,
         parent: *const fn (ptr: *const anyopaque) ?ElementAdapter,
         previousElementSibling: *const fn (ptr: *const anyopaque) ?ElementAdapter,
         nextElementSibling: *const fn (ptr: *const anyopaque) ?ElementAdapter,
@@ -624,6 +640,10 @@ pub const ElementAdapter = struct {
 
     pub fn getAttribute(self: ElementAdapter, name: []const u8) ?[]const u8 {
         return self.vtable.getAttribute(self.ptr, name);
+    }
+
+    pub fn hasAttribute(self: ElementAdapter, name: []const u8) bool {
+        return self.vtable.hasAttribute(self.ptr, name);
     }
 
     pub fn parent(self: ElementAdapter) ?ElementAdapter {
@@ -783,7 +803,7 @@ fn matchSimple(simple: SimpleSelector, element: ElementAdapter) bool {
 fn matchAttribute(attr: AttributeSel, element: ElementAdapter) bool {
     switch (attr.op) {
         .exists => {
-            return element.getAttribute(attr.name) != null;
+            return element.hasAttribute(attr.name);
         },
         .equals => {
             const val = element.getAttribute(attr.name) orelse return false;
@@ -872,12 +892,10 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             return true;
         },
         .checked => {
-            if (element.getAttribute("checked")) |_| return true;
-            return false;
+            return element.hasAttribute("checked");
         },
         .disabled => {
-            if (element.getAttribute("disabled")) |_| return true;
-            return false;
+            return element.hasAttribute("disabled");
         },
         .enabled => {
             // enabled if not disabled and is a form element
@@ -885,7 +903,7 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "button") or
                 eqlIgnoreCase(tag, "select") or eqlIgnoreCase(tag, "textarea"))
             {
-                return element.getAttribute("disabled") == null;
+                return !element.hasAttribute("disabled");
             }
             return false;
         },
@@ -955,7 +973,7 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
         .link => {
             const tag = element.tagName() orelse "";
             if (eqlIgnoreCase(tag, "a") or eqlIgnoreCase(tag, "area")) {
-                return element.getAttribute("href") != null;
+                return element.hasAttribute("href");
             }
             return false;
         },
@@ -977,6 +995,53 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
                 return val.len == 0;
             }
             return false;
+        },
+        .any_link => {
+            // :any-link matches <a> or <area> with href attribute (= :link or :visited)
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "a") or eqlIgnoreCase(tag, "area")) {
+                return element.hasAttribute("href");
+            }
+            return false;
+        },
+        .required => {
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "select") or eqlIgnoreCase(tag, "textarea")) {
+                return element.hasAttribute("required");
+            }
+            return false;
+        },
+        .optional => {
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "select") or eqlIgnoreCase(tag, "textarea")) {
+                return !element.hasAttribute("required");
+            }
+            return false;
+        },
+        .read_only => {
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "textarea")) {
+                return element.hasAttribute("readonly") or element.hasAttribute("disabled");
+            }
+            return true; // non-editable elements are :read-only
+        },
+        .read_write => {
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "input") or eqlIgnoreCase(tag, "textarea")) {
+                return !element.hasAttribute("readonly") and !element.hasAttribute("disabled");
+            }
+            return element.hasAttribute("contenteditable");
+        },
+        .indeterminate => return false, // no indeterminate state tracking
+        .defined => {
+            // :defined matches standard HTML elements (no hyphen in tag name).
+            // Custom elements (tag with hyphen) are only :defined after customElements.define(),
+            // which we don't support — so custom elements never match.
+            const tag = element.tagName() orelse return false;
+            for (tag) |ch| {
+                if (ch == '-') return false; // custom element
+            }
+            return true;
         },
         // :has()/:not()/:is()/:where() are handled above via inner fields
         .has, .not, .is, .where => return false,
