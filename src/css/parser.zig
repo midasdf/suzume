@@ -154,7 +154,7 @@ pub const Parser = struct {
                     const peek = self.peekAfterWhitespace();
                     if (peek.type == .open_curly) {
                         // Nested rule: tag selector (e.g., "div { ... }")
-                        if (try self.parseNestedRule(t, parent_selector)) |rule| {
+                        if (try self.parseNestedRule(t, parent_selector, parent_rules)) |rule| {
                             try nested_rules.append(a, rule);
                         }
                     } else {
@@ -174,7 +174,7 @@ pub const Parser = struct {
                     // Check for nested rule selectors: ., #, &, [, :, >, +, ~, *
                     const text = t.text(self.source);
                     if (isNestedSelectorStart(t.type, text)) {
-                        if (try self.parseNestedRule(t, parent_selector)) |rule| {
+                        if (try self.parseNestedRule(t, parent_selector, parent_rules)) |rule| {
                             try nested_rules.append(a, rule);
                         }
                     } else {
@@ -213,7 +213,7 @@ pub const Parser = struct {
 
     /// Parse a nested rule: collect selector tokens until '{', then parse body.
     /// Prepend parent selector to create the full selector.
-    fn parseNestedRule(self: *Parser, first_token: Token, parent_selector: []const u8) ParseError!?ast.Rule {
+    fn parseNestedRule(self: *Parser, first_token: Token, parent_selector: []const u8, output_rules: ?*std.ArrayList(ast.Rule)) ParseError!?ast.Rule {
         const a = self.alloc();
         const sel_start = first_token.start;
         var sel_end = first_token.start + first_token.len;
@@ -229,10 +229,13 @@ pub const Parser = struct {
         if (brace.type != .open_curly) return null;
 
         const nested_sel = std.mem.trim(u8, self.sourceSlice(sel_start, sel_end), " \t\r\n");
-        const declarations = try self.parseDeclarationBlock();
 
         // Build combined selector: replace & with parent, or prepend "parent "
         const combined = try self.combineSelectors(parent_selector, nested_sel, a);
+
+        // Recursively parse declarations + deeper nesting using combined selector
+        const declarations = try self.parseDeclarationsAndNestedRules(combined, output_rules);
+
         const selectors = try self.splitSelectors(combined);
 
         self.source_order += 1;

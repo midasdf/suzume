@@ -274,3 +274,84 @@ test "empty stylesheet" {
     const stylesheet = try parser.parse();
     try std.testing.expectEqual(@as(usize, 0), stylesheet.rules.len);
 }
+
+// ---------------------------------------------------------------
+// CSS Nesting
+// ---------------------------------------------------------------
+
+test "nesting: & > child" {
+    const css = ".parent { color: red; & > .child { color: green; } }";
+    var parser = Parser.init(css, std.testing.allocator);
+    defer parser.deinit();
+    const stylesheet = try parser.parse();
+    // Should produce 2 rules: parent + nested
+    try std.testing.expectEqual(@as(usize, 2), stylesheet.rules.len);
+    // First rule: .parent { color: red; }
+    const parent_rule = stylesheet.rules[0].style;
+    try std.testing.expect(std.mem.indexOf(u8, parent_rule.selectors[0].source, ".parent") != null);
+    try std.testing.expectEqual(@as(usize, 1), parent_rule.declarations.len);
+    // Second rule: nested → .parent > .child { color: green; }
+    const nested_rule = stylesheet.rules[1].style;
+    const nested_sel = nested_rule.selectors[0].source;
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, ".parent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, ".child") != null);
+}
+
+test "nesting: implicit descendant (no &)" {
+    const css = ".parent { .child { color: blue; } }";
+    var parser = Parser.init(css, std.testing.allocator);
+    defer parser.deinit();
+    const stylesheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 2), stylesheet.rules.len);
+    const nested_sel = stylesheet.rules[1].style.selectors[0].source;
+    // Should be ".parent .child"
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, ".parent") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, ".child") != null);
+}
+
+test "nesting: &.modifier" {
+    const css = ".test { &.active { color: green; } }";
+    var parser = Parser.init(css, std.testing.allocator);
+    defer parser.deinit();
+    const stylesheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 2), stylesheet.rules.len);
+    const nested_sel = stylesheet.rules[1].style.selectors[0].source;
+    // Should be ".test.active"
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, ".test") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, ".active") != null);
+}
+
+test "nesting: & at end" {
+    const css = "span > b { .wrapper & { color: red; } }";
+    var parser = Parser.init(css, std.testing.allocator);
+    defer parser.deinit();
+    const stylesheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 2), stylesheet.rules.len);
+    const nested_sel = stylesheet.rules[1].style.selectors[0].source;
+    // Should contain "span > b" replacing &
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, "span") != null);
+}
+
+test "nesting: double nesting (2 levels deep)" {
+    const css = ".outer { & .middle { & .inner { color: red; } } }";
+    var parser = Parser.init(css, std.testing.allocator);
+    defer parser.deinit();
+    const stylesheet = try parser.parse();
+    // Should produce 3 rules: .outer, .outer .middle, .outer .middle .inner
+    try std.testing.expectEqual(@as(usize, 3), stylesheet.rules.len);
+    const inner_sel = stylesheet.rules[2].style.selectors[0].source;
+    try std.testing.expect(std.mem.indexOf(u8, inner_sel, ".outer") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_sel, ".middle") != null);
+    try std.testing.expect(std.mem.indexOf(u8, inner_sel, ".inner") != null);
+}
+
+test "nesting: :has() with nested &" {
+    const css = "#outer:has(.test) { & #subject { color: red; } }";
+    var parser = Parser.init(css, std.testing.allocator);
+    defer parser.deinit();
+    const stylesheet = try parser.parse();
+    try std.testing.expectEqual(@as(usize, 2), stylesheet.rules.len);
+    const nested_sel = stylesheet.rules[1].style.selectors[0].source;
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, "#outer:has(.test)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, nested_sel, "#subject") != null);
+}
