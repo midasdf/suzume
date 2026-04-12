@@ -10,6 +10,8 @@ pub const Response = struct {
     status_code: u32,
     body: []u8,
     content_type: []const u8,
+    etag: []const u8 = "",
+    last_modified: []const u8 = "",
     allocator: std.mem.Allocator,
 
     pub fn deinit(self: *Response) void {
@@ -17,8 +19,68 @@ pub const Response = struct {
         if (self.content_type.len > 0) {
             self.allocator.free(self.content_type);
         }
+        if (self.etag.len > 0) {
+            self.allocator.free(self.etag);
+        }
+        if (self.last_modified.len > 0) {
+            self.allocator.free(self.last_modified);
+        }
     }
 };
+
+/// Cache entry for conditional requests (ETag/Last-Modified).
+const CacheEntry = struct {
+    etag: []const u8,
+    last_modified: []const u8,
+    body: []u8,
+    content_type: []const u8,
+
+    fn deinit(self: *CacheEntry, allocator: std.mem.Allocator) void {
+        if (self.etag.len > 0) allocator.free(self.etag);
+        if (self.last_modified.len > 0) allocator.free(self.last_modified);
+        allocator.free(self.body);
+        if (self.content_type.len > 0) allocator.free(self.content_type);
+    }
+};
+
+/// Context for capturing response headers.
+const HeaderContext = struct {
+    etag: ?[]const u8 = null,
+    last_modified: ?[]const u8 = null,
+    allocator: std.mem.Allocator,
+};
+
+fn headerCallback(data: [*c]u8, size: usize, nmemb: usize, userdata: *anyopaque) callconv(.c) usize {
+    const total = size * nmemb;
+    const ctx: *HeaderContext = @ptrCast(@alignCast(userdata));
+    const line = data[0..total];
+
+    // Parse "ETag: ..." header
+    if (total > 6 and eqlIgnoreCaseN(line[0..5], "etag:")) {
+        const val = std.mem.trim(u8, line[5..], " \t\r\n");
+        if (val.len > 0) {
+            ctx.etag = ctx.allocator.dupe(u8, val) catch null;
+        }
+    }
+    // Parse "Last-Modified: ..." header
+    if (total > 15 and eqlIgnoreCaseN(line[0..14], "last-modified:")) {
+        const val = std.mem.trim(u8, line[14..], " \t\r\n");
+        if (val.len > 0) {
+            ctx.last_modified = ctx.allocator.dupe(u8, val) catch null;
+        }
+    }
+    return total;
+}
+
+fn eqlIgnoreCaseN(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ac, bc| {
+        const al = if (ac >= 'A' and ac <= 'Z') ac + 32 else ac;
+        const bl = if (bc >= 'A' and bc <= 'Z') bc + 32 else bc;
+        if (al != bl) return false;
+    }
+    return true;
+}
 
 const WriteContext = struct {
     buffer: std.ArrayListUnmanaged(u8),
@@ -35,6 +97,8 @@ fn writeCallback(data: [*c]u8, size: usize, nmemb: usize, userdata: *anyopaque) 
 pub const HttpClient = struct {
     handle: *c.CURL,
     cookie_file: ?[:0]const u8 = null,
+    cache: std.StringHashMapUnmanaged(CacheEntry) = .{},
+    cache_allocator: std.mem.Allocator = std.heap.c_allocator,
 
     pub fn init() !HttpClient {
         const global_rc = c.curl_global_init(c.CURL_GLOBAL_DEFAULT);
@@ -214,10 +278,17 @@ pub const HttpClient = struct {
         };
         errdefer wctx.buffer.deinit(allocator);
 
+        // Header capture context
+        var hdr_ctx = HeaderContext{ .allocator = allocator };
+
         // Reset handle for reuse
         c.curl_easy_reset(self.handle);
 
         self.setCommonOpts(url, &wctx, opts.timeout_secs, true);
+
+        // Set header callback to capture ETag/Last-Modified
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HEADERFUNCTION, @as(?*const fn ([*c]u8, usize, usize, *anyopaque) callconv(.c) usize, &headerCallback));
+        _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HEADERDATA, @as(*anyopaque, @ptrCast(&hdr_ctx)));
 
         // Set method and body
         if (opts.method) |method| {
@@ -228,26 +299,48 @@ pub const HttpClient = struct {
             _ = c.curl_easy_setopt(self.handle, c.CURLOPT_POSTFIELDSIZE, @as(c_long, @intCast(body.len)));
         }
 
-        // Set custom headers
+        // Set custom headers + conditional cache headers
         var header_list: ?*c.struct_curl_slist = null;
         defer if (header_list) |hl| c.curl_slist_free_all(hl);
 
         if (opts.headers) |headers| {
             for (headers) |hdr| {
-                // Format: "Name: Value"
                 const header_str = std.fmt.allocPrint(allocator, "{s}: {s}", .{ hdr[0], hdr[1] }) catch continue;
                 defer allocator.free(header_str);
-                // Need null-terminated for curl
-                const header_z = allocator.allocSentinel(u8, header_str.len, 0) catch {
-                    continue;
-                };
+                const header_z = allocator.allocSentinel(u8, header_str.len, 0) catch continue;
                 defer allocator.free(header_z);
                 @memcpy(header_z, header_str);
                 header_list = c.curl_slist_append(header_list, header_z.ptr);
             }
-            if (header_list) |hl| {
-                _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HTTPHEADER, hl);
+        }
+
+        // Add conditional headers from cache (only for GET requests)
+        const is_get = opts.method == null and opts.body == null;
+        if (is_get) {
+            if (self.cache.get(url)) |cached| {
+                if (cached.etag.len > 0) {
+                    const h = allocator.allocSentinel(u8, "If-None-Match: ".len + cached.etag.len, 0) catch null;
+                    if (h) |hz| {
+                        defer allocator.free(hz);
+                        @memcpy(hz[0.."If-None-Match: ".len], "If-None-Match: ");
+                        @memcpy(hz["If-None-Match: ".len..], cached.etag);
+                        header_list = c.curl_slist_append(header_list, hz.ptr);
+                    }
+                }
+                if (cached.last_modified.len > 0) {
+                    const h = allocator.allocSentinel(u8, "If-Modified-Since: ".len + cached.last_modified.len, 0) catch null;
+                    if (h) |hz| {
+                        defer allocator.free(hz);
+                        @memcpy(hz[0.."If-Modified-Since: ".len], "If-Modified-Since: ");
+                        @memcpy(hz["If-Modified-Since: ".len..], cached.last_modified);
+                        header_list = c.curl_slist_append(header_list, hz.ptr);
+                    }
+                }
             }
+        }
+
+        if (header_list) |hl| {
+            _ = c.curl_easy_setopt(self.handle, c.CURLOPT_HTTPHEADER, hl);
         }
 
         var rc = c.curl_easy_perform(self.handle);
@@ -278,6 +371,24 @@ pub const HttpClient = struct {
         var status_code: c_long = 0;
         _ = c.curl_easy_getinfo(self.handle, c.CURLINFO_RESPONSE_CODE, &status_code);
 
+        // Handle 304 Not Modified — return cached body
+        if (status_code == 304 and is_get) {
+            wctx.buffer.deinit(allocator);
+            if (hdr_ctx.etag) |e| allocator.free(e);
+            if (hdr_ctx.last_modified) |lm| allocator.free(lm);
+            if (self.cache.get(url)) |cached| {
+                const body_copy = try allocator.dupe(u8, cached.body);
+                const ct_copy = if (cached.content_type.len > 0) try allocator.dupe(u8, cached.content_type) else @as([]const u8, "");
+                std.debug.print("[HTTP cache] 304 Not Modified: {s}\n", .{url});
+                return Response{
+                    .status_code = 200, // Present as 200 to callers
+                    .body = body_copy,
+                    .content_type = ct_copy,
+                    .allocator = allocator,
+                };
+            }
+        }
+
         // Get content type
         var ct_ptr: [*c]const u8 = null;
         _ = c.curl_easy_getinfo(self.handle, c.CURLINFO_CONTENT_TYPE, &ct_ptr);
@@ -291,10 +402,48 @@ pub const HttpClient = struct {
 
         const body = try wctx.buffer.toOwnedSlice(allocator);
 
+        // Store in cache if response has ETag or Last-Modified (only for GET 200)
+        if (is_get and status_code == 200 and (hdr_ctx.etag != null or hdr_ctx.last_modified != null)) {
+            const ca = self.cache_allocator;
+            // Remove old entry if exists
+            if (self.cache.fetchRemove(url)) |old| {
+                var entry = old.value;
+                entry.deinit(ca);
+                ca.free(old.key);
+            }
+            // Store new entry (copy to cache allocator)
+            const url_key = ca.dupe(u8, url) catch null;
+            if (url_key) |key| {
+                const cache_body = ca.dupe(u8, body) catch null;
+                const cache_ct = if (content_type.len > 0) (ca.dupe(u8, content_type) catch null) else @as(?[]u8, null);
+                const cache_etag = if (hdr_ctx.etag) |e| (ca.dupe(u8, e) catch null) else @as(?[]u8, null);
+                const cache_lm = if (hdr_ctx.last_modified) |lm| (ca.dupe(u8, lm) catch null) else @as(?[]u8, null);
+                if (cache_body) |cb| {
+                    self.cache.put(ca, key, .{
+                        .etag = cache_etag orelse "",
+                        .last_modified = cache_lm orelse "",
+                        .body = cb,
+                        .content_type = cache_ct orelse "",
+                    }) catch {};
+                    std.debug.print("[HTTP cache] Stored: {s} (etag={s}, lm={s})\n", .{
+                        url,
+                        cache_etag orelse "none",
+                        cache_lm orelse "none",
+                    });
+                }
+            }
+        }
+
+        // Transfer captured headers to response
+        const resp_etag = hdr_ctx.etag orelse "";
+        const resp_lm = hdr_ctx.last_modified orelse "";
+
         return Response{
             .status_code = @intCast(status_code),
             .body = body,
             .content_type = content_type,
+            .etag = resp_etag,
+            .last_modified = resp_lm,
             .allocator = allocator,
         };
     }
