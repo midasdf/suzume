@@ -1585,6 +1585,8 @@ fn binaryOpToOpCode(op: BinaryOp) OpCode {
         .shl => .shl,
         .shr => .shr,
         .ushr => .ushr,
+        .instanceof => .instanceof_,
+        .in_ => .in_,
         else => .add,
     };
 }

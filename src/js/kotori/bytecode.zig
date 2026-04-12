@@ -41,6 +41,8 @@ pub const OpCode = enum(u8) {
     shl,
     shr,
     ushr,
+    instanceof_,
+    in_,
 
     // Variables
     load_local,

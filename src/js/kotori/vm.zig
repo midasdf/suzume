@@ -232,6 +232,60 @@ pub const VM = struct {
                 .shr => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsShr(a, b)); },
                 .ushr => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsUshr(a, b)); },
 
+                .instanceof_ => {
+                    const rhs = self.pop(); // constructor (right)
+                    const lhs = self.pop(); // instance (left)
+                    if (!rhs.isObject()) {
+                        self.push(JsValue.initBool(false));
+                        continue;
+                    }
+                    const ctor = rhs.asJsObject();
+                    const proto_sid = try self.pool.intern("prototype");
+                    const target_proto_val = ctor.getProperty(proto_sid);
+                    if (target_proto_val == null or !target_proto_val.?.isObject()) {
+                        self.push(JsValue.initBool(false));
+                        continue;
+                    }
+                    const target_proto = target_proto_val.?.asJsObject();
+                    if (lhs.isObject()) {
+                        var cur: ?*JsObject = lhs.asJsObject().prototype;
+                        var found = false;
+                        while (cur) |p| {
+                            if (p == target_proto) {
+                                found = true;
+                                break;
+                            }
+                            cur = p.prototype;
+                        }
+                        self.push(JsValue.initBool(found));
+                    } else {
+                        self.push(JsValue.initBool(false));
+                    }
+                },
+
+                .in_ => {
+                    const rhs = self.pop(); // object (right)
+                    const lhs = self.pop(); // key (left)
+                    if (!rhs.isObject()) {
+                        self.push(JsValue.initBool(false));
+                        continue;
+                    }
+                    const obj = rhs.asJsObject();
+                    if (lhs.isString()) {
+                        self.push(JsValue.initBool(obj.getProperty(lhs.asStringId()) != null));
+                    } else if (lhs.isInt()) {
+                        var buf: [20]u8 = undefined;
+                        const key_str = std.fmt.bufPrint(&buf, "{d}", .{lhs.asInt()}) catch {
+                            self.push(JsValue.initBool(false));
+                            continue;
+                        };
+                        const key_id = try self.pool.intern(key_str);
+                        self.push(JsValue.initBool(obj.getProperty(key_id) != null));
+                    } else {
+                        self.push(JsValue.initBool(false));
+                    }
+                },
+
                 // ── Variables ────────────────────────────────────────
                 .load_local => {
                     const slot = self.readU16(frame);
@@ -327,6 +381,12 @@ pub const VM = struct {
 
                     if (func_data.upvalue_count == 0) {
                         // No upvalues — just push the template directly
+                        // Ensure function has a .prototype property for instanceof/new
+                        const proto_sid = try self.pool.intern("prototype");
+                        if (template_obj.getProperty(proto_sid) == null) {
+                            const fn_proto = try self.createObj(.{});
+                            try template_obj.setProperty(self.allocator, proto_sid, JsValue.initObject(fn_proto));
+                        }
                         self.push(template_val);
                     } else {
                         // Create a closure object referencing (not owning) template's bytecode
@@ -345,6 +405,10 @@ pub const VM = struct {
                             } },
                         };
                         try self.objects.append(self.allocator, closure);
+                        // Ensure closure has a .prototype property for instanceof/new
+                        const c_proto_sid = try self.pool.intern("prototype");
+                        const fn_proto = try self.createObj(.{});
+                        try closure.setProperty(self.allocator, c_proto_sid, JsValue.initObject(fn_proto));
                         self.push(JsValue.initObject(closure));
                         try self.storeClosureUpvalues(closure, uv_array);
                     }

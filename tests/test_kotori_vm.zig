@@ -2635,3 +2635,45 @@ test "import binding resolves from module_exports" {
     const val = vm_inst.globals.get(r_sid) orelse JsValue.undefined_val;
     try std.testing.expectApproxEqAbs(@as(f64, 999.0), val.asNumber(), 0.001);
 }
+
+// ---------------------------------------------------------------
+// instanceof / in operators
+// ---------------------------------------------------------------
+
+test "instanceof with array" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1,2,3];
+        \\var result = a instanceof Array;
+    , "result");
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "instanceof non-instance returns false" {
+    const result = try evalExpr(
+        \\var a = 42; a instanceof Array;
+    );
+    try std.testing.expect(result.asBool() == false);
+}
+
+test "instanceof with constructor" {
+    const result = try evalWithMicrotasks(
+        \\function Dog() {}
+        \\var d = new Dog();
+        \\var result = d instanceof Dog;
+    , "result");
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "in operator with object" {
+    const result = try evalExpr(
+        \\var obj = {a: 1, b: 2}; "a" in obj;
+    );
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "in operator missing property" {
+    const result = try evalExpr(
+        \\var obj = {a: 1}; "b" in obj;
+    );
+    try std.testing.expect(result.asBool() == false);
+}
