@@ -5432,6 +5432,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\
             \\  // ── CSSStyleSheet ──
             \\  function _Sheet(){this.cssRules=[];this.disabled=false;this.ownerNode=null;this.type='text/css';}
+            \\  function _syncToDOM(sheet){
+            \\    if(!sheet.ownerNode)return;
+            \\    var css='';
+            \\    for(var i=0;i<sheet.cssRules.length;i++){
+            \\      var r=sheet.cssRules[i];
+            \\      if(r.cssText)css+=r.cssText+'\n';
+            \\    }
+            \\    sheet.ownerNode.textContent=css;
+            \\  }
             \\  _Sheet.prototype.insertRule=function(rule,index){
             \\    if(index===void 0)index=0;
             \\    var bi=rule.indexOf('{');
@@ -5445,14 +5454,16 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var ro=new CSSStyleRule(canon,body);
             \\    if(index<0||index>this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
             \\    this.cssRules.splice(index,0,ro);
+            \\    _syncToDOM(this);
             \\    return index;
             \\  };
             \\  _Sheet.prototype.deleteRule=function(index){
             \\    if(index<0||index>=this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
             \\    this.cssRules.splice(index,1);
+            \\    _syncToDOM(this);
             \\  };
-            \\  _Sheet.prototype.replaceSync=function(css){this._css=css;};
-            \\  _Sheet.prototype.replace=function(css){this._css=css;return Promise.resolve(this);};
+            \\  _Sheet.prototype.replaceSync=function(css){this._css=css;this.cssRules=_parseStyleRules(css);_syncToDOM(this);};
+            \\  _Sheet.prototype.replace=function(css){this._css=css;this.cssRules=_parseStyleRules(css);_syncToDOM(this);return Promise.resolve(this);};
             \\  globalThis.CSSStyleSheet=_Sheet;
             \\
             \\  // ── style.sheet property via Element prototype getter ──
