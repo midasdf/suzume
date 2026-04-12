@@ -2671,9 +2671,69 @@ test "in operator with object" {
     try std.testing.expect(result.asBool() == true);
 }
 
-test "in operator missing property" {
+test "in operator missing property returns false" {
     const result = try evalExpr(
         \\var obj = {a: 1}; "b" in obj;
     );
     try std.testing.expect(result.asBool() == false);
+}
+
+// ---------------------------------------------------------------
+// Error objects
+// ---------------------------------------------------------------
+
+test "Error constructor with message" {
+    const result = try evalWithMicrotasks(
+        \\var e = new Error("oops");
+        \\var result = e.message;
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "TypeError name property" {
+    const result = try evalWithMicrotasks(
+        \\var e = new TypeError("bad");
+        \\var result = e.name;
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "TypeError instanceof Error" {
+    const result = try evalWithMicrotasks(
+        \\var e = new TypeError("x");
+        \\var result = e instanceof Error;
+    , "result");
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "TypeError instanceof TypeError" {
+    const result = try evalWithMicrotasks(
+        \\var e = new TypeError("x");
+        \\var result = e instanceof TypeError;
+    , "result");
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "Error without new" {
+    const result = try evalWithMicrotasks(
+        \\var e = Error("no new");
+        \\var result = e.message;
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Error toString" {
+    const result = try evalWithMicrotasks(
+        \\var e = new RangeError("out of range");
+        \\var result = e.toString();
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Error toString empty message" {
+    const result = try evalWithMicrotasks(
+        \\var e = new Error();
+        \\var result = e.toString();
+    , "result");
+    try std.testing.expect(result.isString());
 }

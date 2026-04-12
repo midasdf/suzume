@@ -51,6 +51,7 @@ pub const VM = struct {
     microtasks: std.ArrayListUnmanaged(MicrotaskEntry) = .{},
     continuations: std.ArrayListUnmanaged(*Continuation) = .{},
     promise_proto: ?*JsObject = null,
+    error_proto: ?*JsObject = null,
 
     // HTTP fetch callback (set by browser runtime)
     http_fetch_ctx: ?*anyopaque = null,
@@ -751,11 +752,21 @@ pub const VM = struct {
 
                     const obj = func_val.asJsObject();
 
-                    // Native function construct (e.g. new Map(), new Set())
+                    // Native function construct (e.g. new Map(), new Set(), new Error())
                     if (obj.obj_type == .native_function) {
                         const native = obj.data.native_fn;
                         const base = self.sp - arg_count;
                         const result = try native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]);
+                        // Set prototype from constructor's .prototype property
+                        if (result.isObject()) {
+                            const result_obj = result.asJsObject();
+                            const p_sid = try self.pool.intern("prototype");
+                            if (obj.getProperty(p_sid)) |proto_val| {
+                                if (proto_val.isObject()) {
+                                    result_obj.prototype = proto_val.asJsObject();
+                                }
+                            }
+                        }
                         self.sp = base - 1; // pop func
                         self.push(result);
                         continue;
@@ -1405,6 +1416,36 @@ pub const VM = struct {
             const fetch_obj = try self.createNativeFn(&nativeFetch);
             const fetch_id = try self.pool.intern("fetch");
             try self.globals.put(self.allocator, fetch_id, JsValue.initObject(fetch_obj));
+        }
+
+        // ── Error constructors ──
+        {
+            const error_proto = try self.createObj(.{});
+            self.error_proto = error_proto;
+            const name_sid = try self.pool.intern("name");
+            const msg_sid = try self.pool.intern("message");
+            try error_proto.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern("Error")));
+            try error_proto.setProperty(self.allocator, msg_sid, JsValue.initString(try self.pool.intern("")));
+            try self.registerNativeMethod(error_proto, "toString", &nativeErrorToString);
+
+            const error_ctor = try self.createNativeFn(&nativeErrorConstructor);
+            const ctor_proto_sid = try self.pool.intern("prototype");
+            try error_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(error_proto));
+            try self.globals.put(self.allocator, try self.pool.intern("Error"), JsValue.initObject(error_ctor));
+
+            // Sub-error types
+            const error_types = [_][]const u8{ "TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "AggregateError" };
+            for (error_types) |err_name| {
+                const sub_proto = try self.createObj(.{});
+                sub_proto.prototype = error_proto;
+                try sub_proto.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern(err_name)));
+                try sub_proto.setProperty(self.allocator, msg_sid, JsValue.initString(try self.pool.intern("")));
+                try self.registerNativeMethod(sub_proto, "toString", &nativeErrorToString);
+
+                const sub_ctor = try self.createNativeFn(&nativeErrorConstructor);
+                try sub_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(sub_proto));
+                try self.globals.put(self.allocator, try self.pool.intern(err_name), JsValue.initObject(sub_ctor));
+            }
         }
 
         // ── Global constants ──
@@ -3915,5 +3956,49 @@ pub const VM = struct {
         const n = val.toNumber();
         if (std.math.isNan(n) or n < 0) return 0;
         return @intFromFloat(@min(n, 4294967295.0));
+    }
+
+    // ── Error methods ───────────────────────────────────────────────
+
+    fn nativeErrorConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const err_obj = try vm.createObj(.{});
+        // Prototype is set by construct opcode when called with `new`.
+        // When called without `new`, we default to Error.prototype.
+        if (vm.error_proto) |ep| {
+            err_obj.prototype = ep;
+        }
+        const msg_sid = try vm.pool.intern("message");
+        if (args.len > 0 and args[0].isString()) {
+            try err_obj.setProperty(vm.allocator, msg_sid, args[0]);
+        } else if (args.len > 0) {
+            var buf: [64]u8 = undefined;
+            const s = formatValue(vm.pool, args[0], &buf);
+            try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern(s)));
+        } else {
+            try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
+        }
+        return JsValue.initObject(err_obj);
+    }
+
+    fn nativeErrorToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        const name_sid = try vm.pool.intern("name");
+        const msg_sid = try vm.pool.intern("message");
+        const name_val = obj.getProperty(name_sid) orelse JsValue.initString(try vm.pool.intern("Error"));
+        const msg_val = obj.getProperty(msg_sid) orelse JsValue.initString(try vm.pool.intern(""));
+        const name_str = if (name_val.isString()) vm.pool.get(name_val.asStringId()) orelse "Error" else "Error";
+        const msg_str = if (msg_val.isString()) vm.pool.get(msg_val.asStringId()) orelse "" else "";
+        if (msg_str.len == 0) {
+            return JsValue.initString(try vm.pool.intern(name_str));
+        }
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        try buf.appendSlice(vm.allocator, name_str);
+        try buf.appendSlice(vm.allocator, ": ");
+        try buf.appendSlice(vm.allocator, msg_str);
+        return JsValue.initString(try vm.pool.intern(buf.items));
     }
 };
