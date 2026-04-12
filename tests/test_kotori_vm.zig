@@ -3120,3 +3120,15 @@ test "eval: arr?.[1]" {
     const result = try evalExpr("[10,20,30]?.[1]");
     try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
 }
+
+// ── globalThis ──────────────────────────────────────────────────
+
+test "eval: globalThis.parseInt" {
+    const result = try evalExpr("globalThis.parseInt(\"42\")");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: globalThis.isNaN" {
+    const result = try evalExpr("globalThis.isNaN(NaN)");
+    try std.testing.expect(result.asBool());
+}

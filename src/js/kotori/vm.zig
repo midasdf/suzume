@@ -554,6 +554,13 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // globalThis proxy — forward property access to globals
+                        if (obj.obj_type == .window_proxy) {
+                            if (self.globals.get(name_id)) |global_val| {
+                                self.push(global_val);
+                                continue;
+                            }
+                        }
                         // DOM node/style property interception
                         if ((obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_get_prop != null) {
                             if (self.dom_get_prop.?(self, obj, name_id)) |val| {
@@ -1602,6 +1609,10 @@ pub const VM = struct {
         const nan_id = try self.pool.intern("NaN");
         try self.globals.put(self.allocator, nan_id, JsValue.nan_val);
         try self.globals.put(self.allocator, inf_id, JsValue.initNumber(std.math.inf(f64)));
+
+        // ── globalThis ──
+        const global_this = try self.createObj(.{ .obj_type = .window_proxy });
+        try self.globals.put(self.allocator, try self.pool.intern("globalThis"), JsValue.initObject(global_this));
     }
 
     const NativeFn = object_mod.JsObject.NativeFn;
