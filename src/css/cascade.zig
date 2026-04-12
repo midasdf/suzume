@@ -392,9 +392,110 @@ fn flattenRules(
                     try flattenRules(mr.rules, vw, vh, out, arena);
                 }
             },
+            .container => |cr| {
+                // Evaluate container query conditions against viewport width as approximation.
+                // Full container query support would require layout-time evaluation.
+                if (evaluateContainerQuery(cr.query.raw, vw, vh)) {
+                    try flattenRules(cr.rules, vw, vh, out, arena);
+                }
+            },
             else => {},
         }
     }
+}
+
+/// Evaluate a container query condition string against container dimensions.
+/// Uses viewport dimensions as approximation (full support would need layout-time evaluation).
+/// Handles: (min-width: Npx), (max-width: Npx), (width > Npx), (width < Npx),
+///           and combinations with "and".
+fn evaluateContainerQuery(raw: []const u8, container_w: f32, container_h: f32) bool {
+    if (raw.len == 0) return true;
+
+    // Split on " and " and evaluate each part
+    var rest = raw;
+    while (rest.len > 0) {
+        // Find " and " separator (case insensitive)
+        var and_pos: ?usize = null;
+        if (rest.len >= 5) {
+            for (0..rest.len - 4) |i| {
+                if (eqlIgnoreCase(rest[i .. i + 5], " and ")) {
+                    and_pos = i;
+                    break;
+                }
+            }
+        }
+
+        const part = if (and_pos) |pos| rest[0..pos] else rest;
+        rest = if (and_pos) |pos| rest[pos + 5 ..] else "";
+
+        if (!evaluateContainerCondition(std.mem.trim(u8, part, " \t()"), container_w, container_h)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn evaluateContainerCondition(cond: []const u8, w: f32, h: f32) bool {
+    if (cond.len == 0) return true;
+
+    // min-width: Npx
+    if (cond.len > 10 and eqlIgnoreCase(cond[0..10], "min-width:")) {
+        const val = parsePxValue(std.mem.trim(u8, cond[10..], " \t"));
+        return if (val) |v| w >= v else true;
+    }
+    // max-width: Npx
+    if (cond.len > 10 and eqlIgnoreCase(cond[0..10], "max-width:")) {
+        const val = parsePxValue(std.mem.trim(u8, cond[10..], " \t"));
+        return if (val) |v| w <= v else true;
+    }
+    // min-height: Npx
+    if (cond.len > 11 and eqlIgnoreCase(cond[0..11], "min-height:")) {
+        const val = parsePxValue(std.mem.trim(u8, cond[11..], " \t"));
+        return if (val) |v| h >= v else true;
+    }
+    // max-height: Npx
+    if (cond.len > 11 and eqlIgnoreCase(cond[0..11], "max-height:")) {
+        const val = parsePxValue(std.mem.trim(u8, cond[11..], " \t"));
+        return if (val) |v| h <= v else true;
+    }
+    // width > N, width < N, width >= N, width <= N
+    if (cond.len > 5 and eqlIgnoreCase(cond[0..5], "width")) {
+        return evaluateComparison(std.mem.trim(u8, cond[5..], " \t"), w);
+    }
+    if (cond.len > 6 and eqlIgnoreCase(cond[0..6], "height")) {
+        return evaluateComparison(std.mem.trim(u8, cond[6..], " \t"), h);
+    }
+    // Unknown condition — pass through
+    return true;
+}
+
+fn evaluateComparison(expr: []const u8, actual: f32) bool {
+    if (expr.len < 2) return true;
+    if (expr[0] == '>' and expr[1] == '=') {
+        const val = parsePxValue(std.mem.trim(u8, expr[2..], " \t"));
+        return if (val) |v| actual >= v else true;
+    } else if (expr[0] == '<' and expr[1] == '=') {
+        const val = parsePxValue(std.mem.trim(u8, expr[2..], " \t"));
+        return if (val) |v| actual <= v else true;
+    } else if (expr[0] == '>') {
+        const val = parsePxValue(std.mem.trim(u8, expr[1..], " \t"));
+        return if (val) |v| actual > v else true;
+    } else if (expr[0] == '<') {
+        const val = parsePxValue(std.mem.trim(u8, expr[1..], " \t"));
+        return if (val) |v| actual < v else true;
+    }
+    return true;
+}
+
+fn parsePxValue(s: []const u8) ?f32 {
+    // Strip "px" suffix if present
+    const num_str = if (s.len >= 2 and eqlIgnoreCase(s[s.len - 2 ..], "px"))
+        s[0 .. s.len - 2]
+    else if (s.len >= 2 and eqlIgnoreCase(s[s.len - 2 ..], "em"))
+        s[0 .. s.len - 2] // treat em as px approximation
+    else
+        s;
+    return std.fmt.parseFloat(f32, std.mem.trim(u8, num_str, " \t")) catch null;
 }
 
 /// Extract @font-face rules from the stylesheet, collecting family names and src URLs.
@@ -431,6 +532,9 @@ fn extractFontFaces(rules: []const ast.Rule, out: *std.ArrayListUnmanaged(FontFa
                 // Recurse into media rules (some @font-face may be inside @media)
                 extractFontFaces(mr.rules, out, arena);
             },
+            .container => |cr| {
+                extractFontFaces(cr.rules, out, arena);
+            },
             else => {},
         }
     }
@@ -447,6 +551,9 @@ fn extractKeyframes(rules: []const ast.Rule, out: *std.StringHashMapUnmanaged(as
             },
             .media => |mr| {
                 extractKeyframes(mr.rules, out, arena);
+            },
+            .container => |cr| {
+                extractKeyframes(cr.rules, out, arena);
             },
             else => {},
         }
@@ -1830,6 +1937,34 @@ fn applyDeclaration(
             } else if (std.fmt.parseFloat(f32, trimmed)) |v| {
                 if (v > 0) style.aspect_ratio = v;
             } else |_| {}
+        },
+        .container_type => {
+            if (eqlIgnoreCase(trimmed, "normal") or eqlIgnoreCase(trimmed, "none"))
+                style.container_type = .normal
+            else if (eqlIgnoreCase(trimmed, "size"))
+                style.container_type = .size
+            else if (eqlIgnoreCase(trimmed, "inline-size"))
+                style.container_type = .inline_size;
+        },
+        .container_name => {
+            // container shorthand: name / type  OR  just container-name
+            if (std.mem.indexOf(u8, trimmed, "/")) |slash| {
+                // Shorthand: container: name / type
+                style.container_name = std.mem.trim(u8, trimmed[0..slash], " \t");
+                const type_str = std.mem.trim(u8, trimmed[slash + 1 ..], " \t");
+                if (eqlIgnoreCase(type_str, "size"))
+                    style.container_type = .size
+                else if (eqlIgnoreCase(type_str, "inline-size"))
+                    style.container_type = .inline_size
+                else
+                    style.container_type = .normal;
+            } else {
+                if (eqlIgnoreCase(trimmed, "none")) {
+                    style.container_name = "";
+                } else {
+                    style.container_name = trimmed;
+                }
+            }
         },
         .justify_items => {
             // justify-items maps to align-items for our purposes

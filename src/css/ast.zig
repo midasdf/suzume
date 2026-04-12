@@ -166,6 +166,8 @@ pub const PropertyId = enum(u16) {
     // Containment
     will_change,
     contain,
+    container_type,
+    container_name,
     // Color scheme
     color_scheme,
     accent_color,
@@ -249,8 +251,9 @@ pub const PropertyId = enum(u16) {
         .{ "touch-action", .touch_action },
         .{ "will-change", .will_change },
         .{ "contain", .contain },
-        .{ "container-type", .unknown },
-        .{ "container-name", .unknown },
+        .{ "container-type", .container_type },
+        .{ "container-name", .container_name },
+        .{ "container", .container_name }, // shorthand: container-name / container-type
         .{ "color-scheme", .color_scheme },
         .{ "accent-color", .accent_color },
         .{ "caret-color", .caret_color },
@@ -366,6 +369,7 @@ pub const MediaQuery = struct {
 pub const Rule = union(enum) {
     style: StyleRule,
     media: MediaRule,
+    container: ContainerRule,
     keyframes: KeyframesRule,
     font_face: FontFaceRule,
     import: ImportRule,
@@ -378,6 +382,16 @@ pub const ImportRule = struct {
 
 pub const MediaRule = struct {
     query: MediaQuery,
+    rules: []Rule,
+};
+
+pub const ContainerQuery = struct {
+    name: []const u8, // container name filter ("" = any)
+    raw: []const u8, // raw condition string e.g. "(min-width: 700px)"
+};
+
+pub const ContainerRule = struct {
+    query: ContainerQuery,
     rules: []Rule,
 };
 

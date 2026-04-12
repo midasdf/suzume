@@ -122,6 +122,10 @@ pub const ComputedStyle = struct {
     // Aspect ratio (0 = auto/none, positive = width/height ratio)
     aspect_ratio: f32 = 0,
 
+    // Container queries
+    container_type: ContainerType = .normal,
+    container_name: []const u8 = "",
+
     // Overflow
     overflow_x: Overflow = .visible,
     overflow_y: Overflow = .visible,
@@ -530,6 +534,8 @@ pub const ComputedStyle = struct {
     };
 
     pub const ObjectFit = enum { fill, contain, cover, none, scale_down };
+
+    pub const ContainerType = enum { normal, size, inline_size };
 
     pub const TransitionProperty = enum {
         all,

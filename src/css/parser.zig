@@ -480,6 +480,8 @@ pub const Parser = struct {
             return try self.parseSupportsRule();
         } else if (eqlIgnoreCase(name, "import")) {
             return try self.parseImportRule();
+        } else if (eqlIgnoreCase(name, "container")) {
+            return try self.parseContainerRule();
         } else if (eqlIgnoreCase(name, "layer")) {
             // CSS Layers (@layer): parse inner rules as if unwrapped.
             // We don't implement layer ordering, but we need to parse the content.
@@ -521,6 +523,59 @@ pub const Parser = struct {
 
         return .{ .media = .{
             .query = .{ .raw = query_raw },
+            .rules = rules,
+        } };
+    }
+
+    fn parseContainerRule(self: *Parser) ParseError!?ast.Rule {
+        // @container [name] (condition) { rules }
+        // Collect everything before '{' as the query text, then split name vs condition.
+        const first_t = self.skipWhitespace();
+        if (first_t.type == .open_curly or first_t.type == .eof) {
+            if (first_t.type == .open_curly) {
+                const rules = try self.parseRuleList();
+                return .{ .container = .{
+                    .query = .{ .name = "", .raw = "" },
+                    .rules = rules,
+                } };
+            }
+            return null;
+        }
+
+        const query_start = first_t.start;
+        var query_end = first_t.start + first_t.len;
+
+        while (true) {
+            const t = self.peekToken();
+            if (t.type == .open_curly or t.type == .eof) break;
+            _ = self.nextToken();
+            query_end = t.start + t.len;
+        }
+
+        const brace = self.nextToken();
+        if (brace.type != .open_curly) return null;
+
+        const full_query = std.mem.trim(u8, self.sourceSlice(query_start, query_end), " \t\r\n");
+
+        // Split into optional name and condition.
+        // If query starts with '(' it's anonymous: condition only.
+        // Otherwise, text before first '(' is the container name.
+        var name: []const u8 = "";
+        var condition: []const u8 = full_query;
+        if (full_query.len > 0 and full_query[0] != '(') {
+            if (std.mem.indexOfScalar(u8, full_query, '(')) |paren| {
+                name = std.mem.trim(u8, full_query[0..paren], " \t\r\n");
+                condition = std.mem.trim(u8, full_query[paren..], " \t\r\n");
+            } else {
+                name = full_query;
+                condition = "";
+            }
+        }
+
+        const rules = try self.parseRuleList();
+
+        return .{ .container = .{
+            .query = .{ .name = name, .raw = condition },
             .rules = rules,
         } };
     }
