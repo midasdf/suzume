@@ -437,6 +437,9 @@ pub const Compiler = struct {
             .member => |m| try self.compileMemberAccess(m.object, m.property),
             .computed_member => |m| try self.compileComputedMember(m.object, m.property),
 
+            // ── Classes ──────────────────────────────────────────────
+            .class_decl => |cls| try self.compileClassDecl(cls),
+
             // ── This / Update ────────────────────────────────────────
             .this => try self.emitOp(.load_this),
             .update => |u| try self.compileUpdate(u.operand, u.op),
@@ -452,30 +455,197 @@ pub const Compiler = struct {
     // ── Variable compilation ─────────────────────────────────────────
 
     fn compileVarDeclarator(self: *Compiler, name_node: NodeIndex, init_node: NodeIndex) CompileError!void {
-        const name_id = switch (self.parser.ast.getNode(name_node)) {
-            .identifier => |id| id,
-            else => return, // destructuring not yet supported
-        };
-
-        // Compile initializer (or undefined)
-        if (init_node != null_node) {
-            try self.compileNode(init_node);
-        } else {
-            try self.emitConstant(JsValue.undefined_val);
+        switch (self.parser.ast.getNode(name_node)) {
+            .identifier => |name_id| {
+                // Simple: const x = expr
+                if (init_node != null_node) {
+                    try self.compileNode(init_node);
+                } else {
+                    try self.emitConstant(JsValue.undefined_val);
+                }
+                try self.storeBinding(name_id);
+            },
+            .array_pattern => |list| {
+                // const [a, b, c] = expr
+                if (init_node != null_node) {
+                    try self.compileNode(init_node);
+                } else {
+                    try self.emitConstant(JsValue.undefined_val);
+                }
+                try self.compileArrayDestructure(list);
+                try self.emitOp(.pop); // pop the source array
+            },
+            .object_pattern => |list| {
+                // const {x, y} = expr
+                if (init_node != null_node) {
+                    try self.compileNode(init_node);
+                } else {
+                    try self.emitConstant(JsValue.undefined_val);
+                }
+                try self.compileObjectDestructure(list);
+                try self.emitOp(.pop); // pop the source object
+            },
+            else => {
+                // Unknown pattern — push undefined as fallback
+                try self.emitConstant(JsValue.undefined_val);
+            },
         }
+    }
 
+    fn storeBinding(self: *Compiler, name_id: StringId) CompileError!void {
         if (self.current.scope_depth > 0 or !self.current.is_script) {
             const slot = try self.addLocal(name_id);
             if (!self.current.is_script and self.current.scope_depth == 0) {
-                // Function-level local: slot pre-allocated by VM, store pops the init value
                 try self.emitOpU16(.store_local, slot);
             }
-            // Block-scope locals (depth > 0): the pushed init value IS the slot.
-            // It stays on the stack; endScope will pop it when the block exits.
         } else {
-            // Global variable
             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
             try self.emitOpU16(.store_global, ci);
+        }
+    }
+
+    fn compileArrayDestructure(self: *Compiler, list: NodeList) CompileError!void {
+        const elements = self.parser.ast.getNodeList(list);
+        for (elements, 0..) |elem, i| {
+            if (elem == null_node) continue; // skip holes: [a, , b]
+            const node = self.parser.ast.getNode(elem);
+            switch (node) {
+                .identifier => |name_id| {
+                    // dup source, push index, get_elem, store
+                    try self.emitOp(.dup);
+                    try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
+                    try self.emitOp(.get_elem);
+                    try self.storeBinding(name_id);
+                },
+                .assign_pattern => |ap| {
+                    // [a = default] — get element, if undefined use default
+                    try self.emitOp(.dup);
+                    try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
+                    try self.emitOp(.get_elem);
+                    try self.compileDefaultValue(ap.left, ap.right);
+                },
+                .rest_element => |rest_target| {
+                    // [...rest] — slice from index i to end
+                    const rest_node = self.parser.ast.getNode(rest_target);
+                    switch (rest_node) {
+                        .identifier => |name_id| {
+                            // dup source, call slice(i)
+                            try self.emitOp(.dup);
+                            // We need to get .slice method and call it
+                            // Simpler approach: push index, emit a special sequence
+                            // For now, generate: source.slice(i)
+                            const slice_id = try self.parser.pool.intern("slice");
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(slice_id)));
+                            try self.emitOp(.dup); // dup for method call (this)
+                            try self.emitOpU16(.get_prop, ci); // get .slice
+                            try self.emitOp(.swap); // [slice, source] for call
+                            try self.emitConstant(JsValue.initNumber(@floatFromInt(i))); // arg: start index
+                            try self.emitOpU16(.call, 1);
+                            try self.storeBinding(name_id);
+                        },
+                        else => {},
+                    }
+                },
+                .array_pattern => |nested| {
+                    // Nested: const [[a, b]] = expr
+                    try self.emitOp(.dup);
+                    try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
+                    try self.emitOp(.get_elem);
+                    try self.compileArrayDestructure(nested);
+                    try self.emitOp(.pop);
+                },
+                .object_pattern => |nested| {
+                    // Nested: const [{x}] = expr
+                    try self.emitOp(.dup);
+                    try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
+                    try self.emitOp(.get_elem);
+                    try self.compileObjectDestructure(nested);
+                    try self.emitOp(.pop);
+                },
+                else => {
+                    // Skip holes (elision)
+                },
+            }
+        }
+    }
+
+    fn compileObjectDestructure(self: *Compiler, list: NodeList) CompileError!void {
+        const props = self.parser.ast.getNodeList(list);
+        for (props) |prop_idx| {
+            const prop_node = self.parser.ast.getNode(prop_idx);
+            switch (prop_node) {
+                .property => |prop| {
+                    // Get the property key name
+                    const key_name = switch (self.parser.ast.getNode(prop.key)) {
+                        .identifier => |id| id,
+                        else => continue,
+                    };
+                    const value_node = self.parser.ast.getNode(prop.value);
+                    switch (value_node) {
+                        .identifier => |target_id| {
+                            // {key: target} or shorthand {x}
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
+                            try self.emitOpU16(.get_prop, ci);
+                            try self.storeBinding(target_id);
+                        },
+                        .assign_pattern => |ap| {
+                            // {key = default} or {key: target = default}
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
+                            try self.emitOpU16(.get_prop, ci);
+                            try self.compileDefaultValue(ap.left, ap.right);
+                        },
+                        .array_pattern => |nested| {
+                            // {key: [a, b]}
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
+                            try self.emitOpU16(.get_prop, ci);
+                            try self.compileArrayDestructure(nested);
+                            try self.emitOp(.pop);
+                        },
+                        .object_pattern => |nested| {
+                            // {key: {a, b}}
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
+                            try self.emitOpU16(.get_prop, ci);
+                            try self.compileObjectDestructure(nested);
+                            try self.emitOp(.pop);
+                        },
+                        else => {},
+                    }
+                },
+                .rest_element => |rest_target| {
+                    // {...rest} — for now, just assign the whole object
+                    const rest_node = self.parser.ast.getNode(rest_target);
+                    switch (rest_node) {
+                        .identifier => |name_id| {
+                            try self.emitOp(.dup);
+                            try self.storeBinding(name_id);
+                        },
+                        else => {},
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
+    fn compileDefaultValue(self: *Compiler, target_node: NodeIndex, default_node: NodeIndex) CompileError!void {
+        // Stack has the value. If undefined, replace with default.
+        // dup, push undefined, strict_eq, jump_if_false skip, pop, compile default, skip:
+        try self.emitOp(.dup);
+        try self.emitConstant(JsValue.undefined_val);
+        try self.emitOp(.strict_eq);
+        const skip_default = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+        try self.emitOp(.pop); // pop the undefined value
+        try self.compileNode(default_node); // push default
+        self.current.bc.patchJump(skip_default);
+        // Now store the value
+        const target = self.parser.ast.getNode(target_node);
+        switch (target) {
+            .identifier => |name_id| try self.storeBinding(name_id),
+            else => {},
         }
     }
 
@@ -764,6 +934,190 @@ pub const Compiler = struct {
                 },
                 else => {},
             }
+        }
+    }
+
+    fn compileClassDecl(self: *Compiler, cls: ast_mod.Class) CompileError!void {
+        const methods = self.parser.ast.getNodeList(cls.body);
+
+        // Find constructor method
+        var constructor_func: ?ast_mod.Function = null;
+        for (methods) |m_idx| {
+            const m = self.parser.ast.getNode(m_idx);
+            switch (m) {
+                .property => |prop| {
+                    if (!prop.is_static) {
+                        const key = self.parser.ast.getNode(prop.key);
+                        switch (key) {
+                            .identifier => |id| {
+                                const name = self.parser.pool.get(id) orelse "";
+                                if (std.mem.eql(u8, name, "constructor")) {
+                                    const val = self.parser.ast.getNode(prop.value);
+                                    switch (val) {
+                                        .function_decl => |f| {
+                                            constructor_func = f;
+                                        },
+                                        else => {},
+                                    }
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+
+        // 1. Compile constructor function (or default empty constructor)
+        if (constructor_func) |func| {
+            // Use the constructor body but with the class name
+            var ctor = func;
+            ctor.name = cls.name;
+            try self.compileFunctionBody(ctor);
+        } else {
+            // Default constructor: function ClassName() {}
+            // If extends, default should call super(...args), but we'll keep it simple
+            const empty_body = self.parser.ast.addNodeList(self.allocator, &.{}) catch return error.OutOfMemory;
+            const empty_block = self.parser.ast.addNode(self.allocator, .{ .block = empty_body }) catch return error.OutOfMemory;
+            const empty_params = self.parser.ast.addNodeList(self.allocator, &.{}) catch return error.OutOfMemory;
+            try self.compileFunctionBody(.{
+                .name = cls.name,
+                .params = empty_params,
+                .body = empty_block,
+            });
+        }
+        // Stack: [ctor]
+
+        // 2. Create prototype object and set on constructor
+        //    ctor.prototype = {}
+        const proto_id = try self.parser.pool.intern("prototype");
+        const proto_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(proto_id)));
+        try self.emitOp(.dup); // [ctor, ctor]
+        try self.emitOpU16(.new_object, 0); // [ctor, ctor, proto]
+        try self.emitOpU16(.set_prop, proto_ci); // [ctor, proto] (set_prop pops ctor+proto, pushes proto)
+        try self.emitOp(.pop); // [ctor]
+
+        // 3. If extends, set up prototype chain before adding methods
+        if (cls.super_class != null_node) {
+            // ctor.prototype.__proto__ = SuperClass.prototype
+            try self.emitOp(.dup); // [ctor, ctor]
+            try self.emitOpU16(.get_prop, proto_ci); // [ctor, ctor_proto]
+
+            try self.compileNode(cls.super_class); // [ctor, ctor_proto, Super]
+            const super_proto_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(proto_id)));
+            try self.emitOpU16(.get_prop, super_proto_ci); // [ctor, ctor_proto, super_proto]
+
+            const dunder_id = try self.parser.pool.intern("__proto__");
+            const dunder_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(dunder_id)));
+            try self.emitOpU16(.set_prop, dunder_ci); // [ctor, set_result]
+            try self.emitOp(.pop); // [ctor]
+        }
+
+        // 4. Add methods
+        // Check if there are any instance methods to add
+        var has_instance_methods = false;
+        for (methods) |m_idx| {
+            const m = self.parser.ast.getNode(m_idx);
+            switch (m) {
+                .property => |prop| {
+                    if (!prop.is_static) {
+                        const key = self.parser.ast.getNode(prop.key);
+                        switch (key) {
+                            .identifier => |id| {
+                                const kname = self.parser.pool.get(id) orelse "";
+                                if (!std.mem.eql(u8, kname, "constructor")) {
+                                    has_instance_methods = true;
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+            if (has_instance_methods) break;
+        }
+
+        // Get prototype once if needed: [ctor] → [ctor, proto]
+        if (has_instance_methods) {
+            try self.emitOp(.dup); // [ctor, ctor]
+            try self.emitOpU16(.get_prop, proto_ci); // [ctor, proto]
+        }
+
+        for (methods) |m_idx| {
+            const m = self.parser.ast.getNode(m_idx);
+            switch (m) {
+                .property => |prop| {
+                    const key = self.parser.ast.getNode(prop.key);
+                    const key_id: StringId = switch (key) {
+                        .identifier => |id| id,
+                        else => continue,
+                    };
+
+                    const kname = self.parser.pool.get(key_id) orelse "";
+                    if (std.mem.eql(u8, kname, "constructor")) continue;
+
+                    if (prop.is_static) {
+                        // Static method: set on constructor directly
+                        // Stack is [ctor, proto] or [ctor] — need to reach ctor
+                        // We'll handle static methods in a second pass
+                        continue;
+                    }
+
+                    // Instance method: proto.methodName = function
+                    // Stack: [ctor, proto]
+                    try self.emitOp(.dup); // [ctor, proto, proto]
+                    const val = self.parser.ast.getNode(prop.value);
+                    switch (val) {
+                        .function_decl => |f| try self.compileFunctionBody(f),
+                        else => try self.compileNode(prop.value),
+                    }
+                    // [ctor, proto, proto, method_fn]
+                    const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_id)));
+                    try self.emitOpU16(.set_prop, ci); // [ctor, proto, method_fn]
+                    try self.emitOp(.pop); // [ctor, proto]
+                },
+                else => {},
+            }
+        }
+
+        // Pop proto if we pushed it
+        if (has_instance_methods) {
+            try self.emitOp(.pop); // [ctor]
+        }
+
+        // 5. Static methods: set on constructor
+        for (methods) |m_idx| {
+            const m = self.parser.ast.getNode(m_idx);
+            switch (m) {
+                .property => |prop| {
+                    if (!prop.is_static) continue;
+                    const key = self.parser.ast.getNode(prop.key);
+                    const key_id: StringId = switch (key) {
+                        .identifier => |id| id,
+                        else => continue,
+                    };
+
+                    // Stack: [ctor]
+                    try self.emitOp(.dup); // [ctor, ctor]
+                    const val = self.parser.ast.getNode(prop.value);
+                    switch (val) {
+                        .function_decl => |f| try self.compileFunctionBody(f),
+                        else => try self.compileNode(prop.value),
+                    }
+                    // [ctor, ctor, static_fn]
+                    const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_id)));
+                    try self.emitOpU16(.set_prop, ci); // [ctor, static_fn]
+                    try self.emitOp(.pop); // [ctor]
+                },
+                else => {},
+            }
+        }
+
+        // 6. Store constructor as class name (stack: [ctor])
+        if (cls.name) |name_id| {
+            try self.storeBinding(name_id);
         }
     }
 
