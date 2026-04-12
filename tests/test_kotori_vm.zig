@@ -3365,6 +3365,34 @@ test "eval: array Symbol.iterator" {
     try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
 }
 
+test "eval: for-of with generator" {
+    const result = try evalExpr(
+        \\function* g() { yield 10; yield 20; }
+        \\let sum = 0;
+        \\for (let x of g()) sum += x;
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-of with string" {
+    const result = try evalExpr(
+        \\let s = "";
+        \\for (let c of "hi") s += c;
+        \\s
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: for-of array regression" {
+    const result = try evalExpr(
+        \\let sum = 0;
+        \\for (let x of [1,2,3]) sum += x;
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
 test "eval: array iterator done" {
     const result = try evalExpr(
         \\let a = [1];

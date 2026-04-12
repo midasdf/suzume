@@ -1405,11 +1405,52 @@ pub const Compiler = struct {
         // Compile the right-hand expression (iterable/object)
         try self.compileNode(right);
 
-        if (is_for_in) {
-            try self.emitOp(.get_keys);
+        if (!is_for_in) {
+            // ── for-of: iterator protocol ──────────────────────────────
+            try self.emitOp(.get_iterator);
+            const iter_name = self.parser.pool.intern("__iter") catch return error.OutOfMemory;
+            _ = try self.addLocal(iter_name);
+
+            const loop_start = self.current.bc.currentOffset();
+
+            // Load iterator, dup for call_method consumption
+            try self.compileIdentifierLoad(iter_name);
+            try self.emitOp(.dup);
+            // Get .next method
+            const next_id = try self.parser.pool.intern("next");
+            const next_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(next_id)));
+            try self.emitOpU16(.get_prop, next_ci);
+            // call_method 0: consumes iter+next_fn, pushes result
+            try self.emitOpU16(.call_method, 0);
+            // dup result, check .done
+            try self.emitOp(.dup);
+            const done_id = try self.parser.pool.intern("done");
+            const done_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(done_id)));
+            try self.emitOpU16(.get_prop, done_ci);
+            const exit_jump = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+            // Not done: get .value
+            const value_id = try self.parser.pool.intern("value");
+            const value_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(value_id)));
+            try self.emitOpU16(.get_prop, value_ci);
+            // Store to loop variable (matches existing for-in pattern: no pop after store)
+            try self.compileStoreVar(var_name.?);
+
+            self.pushLoopCtx(self.current.scope_depth, false);
+            try self.compileNode(body);
+            const continue_target = self.current.bc.currentOffset();
+            self.patchContinueJumps(continue_target);
+            try self.emitLoop(loop_start);
+
+            self.current.bc.patchJump(exit_jump);
+            try self.emitOp(.pop); // discard final result object
+            self.patchBreakJumps();
+            self.popLoopCtx();
+            try self.endScope();
+            return;
         }
-        // Stack: [..., iterable_array]
-        // Store iterable in a hidden local
+
+        // ── for-in: index-based (unchanged) ───────────────────────
+        try self.emitOp(.get_keys);
         const iterable_name = self.parser.pool.intern("__iter") catch return error.OutOfMemory;
         _ = try self.addLocal(iterable_name);
 
