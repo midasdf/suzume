@@ -31,6 +31,7 @@ pub const JsObject = struct {
     data: ObjData = .none,
     getters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
     setters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
+    symbol_props: ?std.AutoArrayHashMapUnmanaged(u32, JsValue) = null,
 
     pub const NativeFn = *const fn (ctx: *anyopaque, this: value_mod.JsValue, args: []const value_mod.JsValue) anyerror!value_mod.JsValue;
 
@@ -78,6 +79,7 @@ pub const JsObject = struct {
         self.properties.deinit(allocator);
         if (self.getters) |*g| g.deinit(allocator);
         if (self.setters) |*s| s.deinit(allocator);
+        if (self.symbol_props) |*sp| sp.deinit(allocator);
         switch (self.data) {
             .function => |*f| f.deinit(allocator),
             .array => |*a| a.deinit(allocator),

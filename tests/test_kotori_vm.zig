@@ -3180,6 +3180,38 @@ test "eval: class getter" {
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
 
+// ── Symbol ──────────────────────────────────────────────────────
+
+test "eval: typeof Symbol()" {
+    const result = try evalExpr("typeof Symbol()");
+    try std.testing.expect(result.isString());
+}
+
+test "eval: Symbol uniqueness" {
+    const result = try evalExpr("Symbol('a') !== Symbol('a')");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Symbol.for registry" {
+    const result = try evalExpr("Symbol.for('x') === Symbol.for('x')");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Symbol as property key" {
+    const result = try evalExpr(
+        \\let s = Symbol();
+        \\let o = {};
+        \\o[s] = 42;
+        \\o[s]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: Symbol.iterator exists" {
+    const result = try evalExpr("typeof Symbol.iterator");
+    try std.testing.expect(result.isString());
+}
+
 test "eval: class getter and setter" {
     const result = try evalExpr(
         \\class C {

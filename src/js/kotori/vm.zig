@@ -56,6 +56,10 @@ pub const VM = struct {
     continuations: std.ArrayListUnmanaged(*Continuation) = .{},
     promise_proto: ?*JsObject = null,
     error_proto: ?*JsObject = null,
+
+    // Symbol support
+    next_symbol_id: u32 = 4, // 0-3 reserved for well-known symbols
+    symbol_descriptions: std.AutoArrayHashMapUnmanaged(u32, ?StringId) = .{},
     date_proto: ?*JsObject = null,
 
     // Console state
@@ -123,6 +127,12 @@ pub const VM = struct {
         sp: u32,
     };
 
+    // Well-known Symbol IDs
+    pub const SYMBOL_ITERATOR: u32 = 0;
+    pub const SYMBOL_TO_PRIMITIVE: u32 = 1;
+    pub const SYMBOL_HAS_INSTANCE: u32 = 2;
+    pub const SYMBOL_TO_STRING_TAG: u32 = 3;
+
     pub fn init(allocator: std.mem.Allocator, bc: *const Bytecode, pool: *StringPool) VM {
         var self = VM{ .allocator = allocator, .pool = pool };
         // Push the top-level frame
@@ -147,6 +157,7 @@ pub const VM = struct {
             self.allocator.destroy(cont);
         }
         self.continuations.deinit(self.allocator);
+        self.symbol_descriptions.deinit(self.allocator);
         for (self.closure_entries.items) |entry| {
             self.allocator.free(entry.upvalues);
         }
@@ -709,6 +720,18 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Symbol property access
+                        if (key.isSymbol()) {
+                            const sym_id = key.asSymbolId();
+                            if (obj.symbol_props) |sp| {
+                                if (sp.get(sym_id)) |val| {
+                                    self.push(val);
+                                    continue;
+                                }
+                            }
+                            self.push(JsValue.undefined_val);
+                            continue;
+                        }
                         if (obj.obj_type == .array) {
                             const idx = self.toArrayIndex(key);
                             if (idx) |i| {
@@ -735,6 +758,16 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Symbol property access
+                        if (key.isSymbol()) {
+                            const sym_id = key.asSymbolId();
+                            if (obj.symbol_props == null) {
+                                obj.symbol_props = .{};
+                            }
+                            try obj.symbol_props.?.put(self.allocator, sym_id, val);
+                            self.push(val);
+                            continue;
+                        }
                         if (obj.obj_type == .array) {
                             if (self.toArrayIndex(key)) |i| {
                                 // Grow array if needed
@@ -1213,6 +1246,8 @@ pub const VM = struct {
                         "number"
                     else if (val.isString())
                         "string"
+                    else if (val.isSymbol())
+                        "symbol"
                     else if (val.isObject()) blk: {
                         const o = val.asJsObject();
                         break :blk if (o.obj_type == .function or o.obj_type == .native_function) "function" else "object";
@@ -1767,6 +1802,22 @@ pub const VM = struct {
         // ── globalThis ──
         const global_this = try self.createObj(.{ .obj_type = .window_proxy });
         try self.globals.put(self.allocator, try self.pool.intern("globalThis"), JsValue.initObject(global_this));
+
+        // ── Symbol ──
+        {
+            const symbol_fn = try self.createNativeFn(&nativeSymbolConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("Symbol"), JsValue.initObject(symbol_fn));
+
+            // Symbol.for, Symbol.keyFor
+            try self.registerNativeMethod(symbol_fn, "for", &nativeSymbolFor);
+            try self.registerNativeMethod(symbol_fn, "keyFor", &nativeSymbolKeyFor);
+
+            // Well-known symbols as static properties
+            try symbol_fn.setProperty(self.allocator, try self.pool.intern("iterator"), JsValue.initSymbol(SYMBOL_ITERATOR));
+            try symbol_fn.setProperty(self.allocator, try self.pool.intern("toPrimitive"), JsValue.initSymbol(SYMBOL_TO_PRIMITIVE));
+            try symbol_fn.setProperty(self.allocator, try self.pool.intern("hasInstance"), JsValue.initSymbol(SYMBOL_HAS_INSTANCE));
+            try symbol_fn.setProperty(self.allocator, try self.pool.intern("toStringTag"), JsValue.initSymbol(SYMBOL_TO_STRING_TAG));
+        }
     }
 
     const NativeFn = object_mod.JsObject.NativeFn;
@@ -5573,6 +5624,53 @@ pub const VM = struct {
             try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
         }
         return JsValue.initObject(err_obj);
+    }
+
+    // ── Symbol native functions ──────────────────────────────────────
+
+    fn nativeSymbolConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const id = vm.next_symbol_id;
+        vm.next_symbol_id += 1;
+        var desc: ?StringId = null;
+        if (args.len > 0 and args[0].isString()) {
+            desc = args[0].asStringId();
+        }
+        try vm.symbol_descriptions.put(vm.allocator, id, desc);
+        return JsValue.initSymbol(id);
+    }
+
+    fn nativeSymbolFor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
+        const key_str = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+        // Check if already in global registry
+        for (vm.symbol_descriptions.keys(), vm.symbol_descriptions.values()) |sym_id, desc| {
+            if (desc) |d| {
+                if (vm.pool.get(d)) |s| {
+                    if (std.mem.eql(u8, s, key_str)) {
+                        return JsValue.initSymbol(sym_id);
+                    }
+                }
+            }
+        }
+        // Create new symbol in registry
+        const id = vm.next_symbol_id;
+        vm.next_symbol_id += 1;
+        try vm.symbol_descriptions.put(vm.allocator, id, args[0].asStringId());
+        return JsValue.initSymbol(id);
+    }
+
+    fn nativeSymbolKeyFor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0 or !args[0].isSymbol()) return JsValue.undefined_val;
+        const sym_id = args[0].asSymbolId();
+        if (vm.symbol_descriptions.get(sym_id)) |desc| {
+            if (desc) |d| {
+                return JsValue.initString(d);
+            }
+        }
+        return JsValue.undefined_val;
     }
 
     fn nativeErrorToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {

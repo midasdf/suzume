@@ -111,6 +111,20 @@ pub const JsValue = packed struct {
         return tag == TAG_UNDEFINED;
     }
 
+    pub fn isSymbol(self: JsValue) bool {
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_SYMBOL;
+    }
+
+    pub fn initSymbol(id: u32) JsValue {
+        const tag: u64 = @as(u64, TAG_SYMBOL) << 48;
+        return .{ .bits = tag | @as(u64, id) };
+    }
+
+    pub fn asSymbolId(self: JsValue) u32 {
+        return @intCast(self.bits & 0xFFFFFFFF);
+    }
+
     // ── Extraction ───────────────────────────────────────────────────
 
     pub fn asInt(self: JsValue) i32 {
