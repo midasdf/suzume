@@ -1202,6 +1202,12 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "repeat", &nativeStringRepeat);
         try self.registerNativeMethod(sp, "padStart", &nativeStringPadStart);
         try self.registerNativeMethod(sp, "padEnd", &nativeStringPadEnd);
+        try self.registerNativeMethod(sp, "trimStart", &nativeStringTrimStart);
+        try self.registerNativeMethod(sp, "trimEnd", &nativeStringTrimEnd);
+        try self.registerNativeMethod(sp, "replaceAll", &nativeStringReplaceAll);
+        try self.registerNativeMethod(sp, "lastIndexOf", &nativeStringLastIndexOf);
+        try self.registerNativeMethod(sp, "concat", &nativeStringConcat);
+        try self.registerNativeMethod(sp, "at", &nativeStringAt);
 
         // ── Object ──
         const obj_constructor = try self.createObj(.{});
@@ -3730,6 +3736,86 @@ pub const VM = struct {
             try buf.append(vm.allocator, pad_str[i % pad_str.len]);
         }
         return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn nativeStringTrimStart(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const trimmed = std.mem.trimLeft(u8, s, " \t\r\n");
+        return JsValue.initString(try vm.pool.intern(trimmed));
+    }
+
+    fn nativeStringTrimEnd(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const trimmed = std.mem.trimRight(u8, s, " \t\r\n");
+        return JsValue.initString(try vm.pool.intern(trimmed));
+    }
+
+    fn nativeStringReplaceAll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        if (args.len < 2) return this;
+        const search = if (args[0].isString()) vm.pool.get(args[0].asStringId()) orelse return this else return this;
+        const replacement = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse "" else "";
+        if (search.len == 0) return this;
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        var i: usize = 0;
+        while (i < s.len) {
+            if (i + search.len <= s.len and std.mem.eql(u8, s[i..][0..search.len], search)) {
+                try buf.appendSlice(vm.allocator, replacement);
+                i += search.len;
+            } else {
+                try buf.append(vm.allocator, s[i]);
+                i += 1;
+            }
+        }
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn nativeStringLastIndexOf(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.initNumber(-1);
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.initNumber(-1);
+        const search = if (args[0].isString()) vm.pool.get(args[0].asStringId()) orelse return JsValue.initNumber(-1) else return JsValue.initNumber(-1);
+        if (search.len > s.len) return JsValue.initNumber(-1);
+        var last: i32 = -1;
+        var i: usize = 0;
+        while (i + search.len <= s.len) : (i += 1) {
+            if (std.mem.eql(u8, s[i..][0..search.len], search)) {
+                last = @intCast(i);
+            }
+        }
+        return JsValue.initNumber(@floatFromInt(last));
+    }
+
+    fn nativeStringConcat(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        var buf = std.ArrayListUnmanaged(u8){};
+        defer buf.deinit(vm.allocator);
+        try buf.appendSlice(vm.allocator, s);
+        for (args) |arg| {
+            if (arg.isString()) {
+                if (vm.pool.get(arg.asStringId())) |str| {
+                    try buf.appendSlice(vm.allocator, str);
+                }
+            }
+        }
+        return JsValue.initString(try vm.pool.intern(buf.items));
+    }
+
+    fn nativeStringAt(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0 or s.len == 0) return JsValue.undefined_val;
+        const len: i64 = @intCast(s.len);
+        var idx: i64 = clampToI64(args[0]);
+        if (idx < 0) idx += len;
+        if (idx < 0 or idx >= len) return JsValue.undefined_val;
+        const uidx: usize = @intCast(idx);
+        return JsValue.initString(try vm.pool.intern(s[uidx .. uidx + 1]));
     }
 
     // ── Helper: create array ───────────────────────────────────────

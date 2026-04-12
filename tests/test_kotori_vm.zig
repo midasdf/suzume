@@ -2604,6 +2604,17 @@ test "import side-effect only (no crash)" {
     try std.testing.expectApproxEqAbs(@as(f64, 1.0), val.asNumber(), 0.001);
 }
 
+// ---------------------------------------------------------------
+// String methods
+// ---------------------------------------------------------------
+
+test "string lastIndexOf" {
+    const result = try evalWithMicrotasks(
+        \\var result = "hello world hello".lastIndexOf("hello");
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
+}
+
 test "import binding resolves from module_exports" {
     // Pre-populate module_exports, then import should pick them up
     var compiler = Compiler.init(std.testing.allocator,
