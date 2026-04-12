@@ -20,6 +20,7 @@ pub const ObjType = enum(u8) {
     map,
     set,
     regexp,
+    promise,
 };
 
 pub const JsObject = struct {
@@ -42,6 +43,20 @@ pub const JsObject = struct {
         val: value_mod.JsValue,
     };
 
+    pub const PromiseState = enum(u8) { pending, fulfilled, rejected };
+
+    pub const PromiseHandler = struct {
+        on_fulfilled: value_mod.JsValue, // function or undefined
+        on_rejected: value_mod.JsValue, // function or undefined
+        result_promise: *JsObject, // the promise returned by .then()
+    };
+
+    pub const PromiseData = struct {
+        state: PromiseState = .pending,
+        result: value_mod.JsValue = value_mod.JsValue.undefined_val,
+        handlers: std.ArrayListUnmanaged(PromiseHandler) = .{},
+    };
+
     pub const ObjData = union(enum) {
         none,
         function: FunctionObj,
@@ -52,6 +67,7 @@ pub const JsObject = struct {
         map_data: std.ArrayListUnmanaged(MapEntry),
         set_data: std.ArrayListUnmanaged(value_mod.JsValue),
         regexp_data: RegExpData,
+        promise_data: PromiseData,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -61,6 +77,7 @@ pub const JsObject = struct {
             .array => |*a| a.deinit(allocator),
             .map_data => |*m| m.deinit(allocator),
             .set_data => |*s| s.deinit(allocator),
+            .promise_data => |*p| p.handlers.deinit(allocator),
             .none, .native_fn, .dom_node, .dom_style, .regexp_data => {},
         }
     }
@@ -84,6 +101,7 @@ pub const FunctionObj = struct {
     upvalue_count: u16 = 0,
     upvalue_defs: []UpvalueDef = &.{},
     owns_bytecode: bool = true,
+    is_async: bool = false,
 
     pub fn deinit(self: *FunctionObj, allocator: std.mem.Allocator) void {
         if (self.owns_bytecode) {

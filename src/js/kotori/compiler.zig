@@ -66,6 +66,7 @@ const FunctionScope = struct {
     bc: Bytecode = Bytecode.init(),
     parent: ?*FunctionScope = null,
     is_script: bool = true, // true for top-level, false for functions
+    is_async: bool = false, // true for async functions
     loop_stack: [16]LoopContext = undefined,
     loop_depth: u8 = 0,
 };
@@ -397,11 +398,20 @@ pub const Compiler = struct {
             },
 
             .return_stmt => |expr_idx| {
-                if (expr_idx != null_node) {
-                    try self.compileNode(expr_idx);
-                    try self.emitOp(.return_);
+                if (self.current.is_async) {
+                    if (expr_idx != null_node) {
+                        try self.compileNode(expr_idx);
+                    } else {
+                        try self.emitConstant(JsValue.undefined_val);
+                    }
+                    try self.emitOp(.async_return);
                 } else {
-                    try self.emitOp(.return_undefined);
+                    if (expr_idx != null_node) {
+                        try self.compileNode(expr_idx);
+                        try self.emitOp(.return_);
+                    } else {
+                        try self.emitOp(.return_undefined);
+                    }
                 }
             },
 
@@ -430,7 +440,10 @@ pub const Compiler = struct {
             // ── This / Update ────────────────────────────────────────
             .this => try self.emitOp(.load_this),
             .update => |u| try self.compileUpdate(u.operand, u.op),
-            .await_expr => |operand| try self.compileNode(operand), // no async — just evaluate
+            .await_expr => |operand| {
+                try self.compileNode(operand);
+                try self.emitOp(.await_);
+            },
 
             else => try self.emitConstant(JsValue.undefined_val),
         }
@@ -558,6 +571,7 @@ pub const Compiler = struct {
         self.current = .{
             .parent = &saved,
             .is_script = false,
+            .is_async = func.is_async,
         };
 
         // Add params as locals
@@ -624,12 +638,21 @@ pub const Compiler = struct {
             else => {
                 // Arrow function expression body
                 try self.compileNode(func.body);
-                try self.emitOp(.return_);
+                if (self.current.is_async) {
+                    try self.emitOp(.async_return);
+                } else {
+                    try self.emitOp(.return_);
+                }
             },
         }
 
         // Implicit return undefined
-        try self.emitOp(.return_undefined);
+        if (self.current.is_async) {
+            try self.emitConstant(JsValue.undefined_val);
+            try self.emitOp(.async_return);
+        } else {
+            try self.emitOp(.return_undefined);
+        }
 
         // Build the FunctionObj
         self.current.bc.local_count = @intCast(self.current.locals.len);
@@ -661,6 +684,7 @@ pub const Compiler = struct {
                 .name = func.name,
                 .upvalue_count = upvalue_count,
                 .upvalue_defs = uv_defs,
+                .is_async = func.is_async,
             } },
         };
 

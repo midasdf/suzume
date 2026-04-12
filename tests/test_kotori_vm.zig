@@ -68,6 +68,26 @@ fn evalExpr(source: []const u8) !JsValue {
     return result;
 }
 
+/// Execute JS source, drain microtasks, and return a named global variable.
+fn evalWithMicrotasks(source: []const u8, global_name: []const u8) !JsValue {
+    var compiler = Compiler.init(std.testing.allocator, source);
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    _ = try vm_inst.execute();
+    // Drain microtasks (multiple rounds for chained promises)
+    var rounds: u32 = 0;
+    while (rounds < 10) : (rounds += 1) {
+        const ran = try vm_inst.runMicrotasks();
+        if (!ran) break;
+    }
+    const name_id = try compiler.parser.pool.intern(global_name);
+    return vm_inst.globals.get(name_id) orelse JsValue.undefined_val;
+}
+
 test "eval: 42" {
     const result = try evalExpr("42");
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
@@ -2004,4 +2024,122 @@ test "eval: setInterval fires repeatedly" {
     const count_id = try compiler.parser.pool.intern("count");
     const count_val = vm_inst.globals.get(count_id) orelse JsValue.undefined_val;
     try std.testing.expectApproxEqAbs(@as(f64, 3.0), count_val.asNumber(), 0.001);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Promise tests
+// ═══════════════════════════════════════════════════════════════════
+
+test "Promise.resolve returns fulfilled promise" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(42).then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "Promise.reject calls catch handler" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.reject(99).catch(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "Promise constructor with resolve" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\new Promise(function(resolve, reject) {
+        \\    resolve(10);
+        \\}).then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "Promise constructor with reject" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\new Promise(function(resolve, reject) {
+        \\    reject(55);
+        \\}).catch(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 55.0), result.asNumber(), 0.001);
+}
+
+test "Promise then chaining" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.resolve(5)
+        \\    .then(function(v) { return v * 2; })
+        \\    .then(function(v) { return v + 3; })
+        \\    .then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 13.0), result.asNumber(), 0.001);
+}
+
+test "Promise catch then chain" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\Promise.reject(7)
+        \\    .catch(function(v) { return v + 1; })
+        \\    .then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "async function returns promise that resolves" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\async function foo() { return 42; }
+        \\foo().then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "await on Promise.resolve" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\async function foo() {
+        \\    var x = await Promise.resolve(10);
+        \\    return x + 5;
+        \\}
+        \\foo().then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "await on non-promise passes through" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\async function foo() {
+        \\    var x = await 7;
+        \\    return x + 3;
+        \\}
+        \\foo().then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "multiple awaits in sequence" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\async function foo() {
+        \\    var a = await Promise.resolve(10);
+        \\    var b = await Promise.resolve(20);
+        \\    return a + b;
+        \\}
+        \\foo().then(function(v) { result = v; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "async function with no return resolves undefined" {
+    const result = try evalWithMicrotasks(
+        \\var result = 99;
+        \\async function foo() { var x = 1; }
+        \\foo().then(function(v) {
+        \\    if (v === undefined) result = 0;
+        \\});
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }

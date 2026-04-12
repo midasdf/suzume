@@ -90,6 +90,10 @@ pub const OpCode = enum(u8) {
     try_end,
     throw_,
 
+    // Async / Promise
+    await_, // stack: [value] → [resolved_value] (suspends if pending)
+    async_return, // stack: [value] → resolve async function's promise, return
+
     // Special
     typeof_,
     void_,

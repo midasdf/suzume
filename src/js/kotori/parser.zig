@@ -53,6 +53,7 @@ pub const Parser = struct {
     prev_line: u32,
     owns_pool: bool = true,
     no_in: bool = false, // suppress 'in' as binary op (for-statement init)
+    pending_async: bool = false, // next function is async
 
     pub fn init(allocator: std.mem.Allocator, source: []const u8) Parser {
         var lex = lexer_mod.Lexer.init(source);
@@ -198,6 +199,7 @@ pub const Parser = struct {
             .kw_async => {
                 if (self.peek_token.type == .kw_function) {
                     self.advance(); // consume 'async'
+                    self.pending_async = true;
                     return self.parseFunctionExpr();
                 }
                 // Treat as identifier
@@ -720,11 +722,14 @@ pub const Parser = struct {
 
         const params_list = self.ast.addNodeList(self.allocator, params.items) catch return error.OutOfMemory;
 
+        const is_async = self.pending_async;
+        self.pending_async = false;
         return self.ast.addNode(self.allocator, .{ .function_expr = .{
             .name = name,
             .params = params_list,
             .body = body,
             .is_expression = true,
+            .is_async = is_async,
         } }) catch return error.OutOfMemory;
     }
 
@@ -762,6 +767,7 @@ pub const Parser = struct {
                 // Check for 'async function' declaration
                 if (self.current.type == .kw_async and self.peek_token.type == .kw_function) {
                     self.advance(); // consume 'async'
+                    self.pending_async = true;
                     return self.parseFunctionDecl();
                 }
                 // Expression statement
@@ -1228,11 +1234,14 @@ pub const Parser = struct {
         // Body
         const body = try self.parseBlock();
 
+        const is_async = self.pending_async;
+        self.pending_async = false;
         const params_list = self.ast.addNodeList(self.allocator, params.items) catch return error.OutOfMemory;
         return self.ast.addNode(self.allocator, .{ .function_decl = .{
             .name = name,
             .params = params_list,
             .body = body,
+            .is_async = is_async,
         } }) catch return error.OutOfMemory;
     }
 

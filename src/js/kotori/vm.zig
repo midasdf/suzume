@@ -21,6 +21,7 @@ const CallFrame = struct {
     this_val: JsValue = JsValue.undefined_val,
     has_this_on_stack: bool = false,
     is_construct: bool = false,
+    async_promise: ?*JsObject = null, // Promise to resolve when async function returns
 };
 
 pub const VM = struct {
@@ -46,6 +47,11 @@ pub const VM = struct {
     timers: std.ArrayListUnmanaged(TimerEntry) = .{},
     next_timer_id: u32 = 1,
 
+    // Promise / microtask queue
+    microtasks: std.ArrayListUnmanaged(MicrotaskEntry) = .{},
+    continuations: std.ArrayListUnmanaged(*Continuation) = .{},
+    promise_proto: ?*JsObject = null,
+
     // Exception handling
     try_stack: [32]TryContext = undefined,
     try_depth: u32 = 0,
@@ -57,6 +63,32 @@ pub const VM = struct {
         is_interval: bool,
         fired: bool = false,
         cancelled: bool = false,
+    };
+
+    pub const MicrotaskEntry = union(enum) {
+        /// Promise .then/.catch handler: call handler(arg), resolve result_promise
+        promise_reaction: struct {
+            handler: JsValue, // function to call (or undefined = passthrough)
+            arg: JsValue, // resolved/rejected value
+            result_promise: *JsObject, // promise returned by .then()
+            is_reject: bool, // true if this is a rejection handler
+        },
+        /// Resume a suspended async function with a resolved value
+        resume_async: struct {
+            cont: *Continuation,
+            value: JsValue,
+            is_reject: bool,
+        },
+    };
+
+    pub const Continuation = struct {
+        bc: *const Bytecode,
+        ip: u32, // IP after the await_ opcode
+        saved_stack: []JsValue, // locals + temporaries from base_sp to sp
+        upvalues: []?*UpvalueCell,
+        this_val: JsValue,
+        async_promise: *JsObject, // the async function's promise
+        has_this_on_stack: bool,
     };
 
     const TryContext = struct {
@@ -83,6 +115,12 @@ pub const VM = struct {
     pub fn deinit(self: *VM) void {
         self.globals.deinit(self.allocator);
         self.timers.deinit(self.allocator);
+        self.microtasks.deinit(self.allocator);
+        for (self.continuations.items) |cont| {
+            self.allocator.free(cont.saved_stack);
+            self.allocator.destroy(cont);
+        }
+        self.continuations.deinit(self.allocator);
         for (self.closure_entries.items) |entry| {
             self.allocator.free(entry.upvalues);
         }
@@ -287,6 +325,7 @@ pub const VM = struct {
                                 .upvalue_count = func_data.upvalue_count,
                                 .upvalue_defs = func_data.upvalue_defs,
                                 .owns_bytecode = false,
+                                .is_async = func_data.is_async,
                             } },
                         };
                         try self.objects.append(self.allocator, closure);
@@ -344,12 +383,16 @@ pub const VM = struct {
                     // Look up closure upvalues
                     const uv_array = self.getClosureUpvalues(obj);
 
+                    // For async functions: create a Promise
+                    const async_p: ?*JsObject = if (func.is_async) try self.createPromiseObj() else null;
+
                     // Push call frame
                     self.frames[self.frame_count] = .{
                         .bc = &func.bytecode,
                         .ip = 0,
                         .base_sp = base,
                         .upvalues = uv_array,
+                        .async_promise = async_p,
                     };
                     self.frame_count += 1;
                 },
@@ -602,6 +645,8 @@ pub const VM = struct {
 
                     const uv_array = self.getClosureUpvalues(obj);
 
+                    const async_p: ?*JsObject = if (func.is_async) try self.createPromiseObj() else null;
+
                     self.frames[self.frame_count] = .{
                         .bc = &func.bytecode,
                         .ip = 0,
@@ -609,6 +654,7 @@ pub const VM = struct {
                         .upvalues = uv_array,
                         .this_val = this_val,
                         .has_this_on_stack = true,
+                        .async_promise = async_p,
                     };
                     self.frame_count += 1;
                 },
@@ -759,6 +805,114 @@ pub const VM = struct {
                     self.frames[self.frame_count - 1].ip = tc.catch_offset;
                 },
 
+                // ── Async / Promise ──────────────────────────────────
+                .await_ => {
+                    const val = self.pop();
+                    // Non-promise or non-object: pass through synchronously
+                    if (!val.isObject()) {
+                        self.push(val);
+                        continue;
+                    }
+                    const obj = val.asJsObject();
+                    if (obj.obj_type != .promise) {
+                        self.push(val);
+                        continue;
+                    }
+                    const pd = &obj.data.promise_data;
+                    switch (pd.state) {
+                        .fulfilled => {
+                            // Already resolved: push result synchronously
+                            self.push(pd.result);
+                        },
+                        .rejected => {
+                            // Already rejected: throw
+                            self.push(pd.result);
+                            // Re-use throw logic
+                            if (self.try_depth == 0) return JsValue.undefined_val;
+                            self.try_depth -= 1;
+                            const tc = self.try_stack[self.try_depth];
+                            while (self.frame_count > tc.frame_idx + 1) {
+                                const f = self.frames[self.frame_count - 1];
+                                self.closeUpvaluesAbove(f.base_sp);
+                                self.frame_count -= 1;
+                            }
+                            self.sp = tc.sp;
+                            self.push(pd.result);
+                            self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                        },
+                        .pending => {
+                            // Suspend: save frame as continuation
+                            const cur_frame = self.frames[self.frame_count - 1];
+                            const async_promise = cur_frame.async_promise orelse {
+                                // Not in an async function — just push undefined
+                                self.push(JsValue.undefined_val);
+                                continue;
+                            };
+                            const stack_size = self.sp - cur_frame.base_sp;
+                            const saved = try self.allocator.alloc(JsValue, stack_size);
+                            @memcpy(saved, self.stack[cur_frame.base_sp..self.sp]);
+
+                            const cont = try self.allocator.create(Continuation);
+                            cont.* = .{
+                                .bc = cur_frame.bc,
+                                .ip = cur_frame.ip, // already past await_ opcode
+                                .saved_stack = saved,
+                                .upvalues = cur_frame.upvalues,
+                                .this_val = cur_frame.this_val,
+                                .async_promise = async_promise,
+                                .has_this_on_stack = cur_frame.has_this_on_stack,
+                            };
+                            try self.continuations.append(self.allocator, cont);
+
+                            // Add continuation as handler on the awaited promise
+                            const handler_promise = try self.createPromiseObj();
+                            try obj.data.promise_data.handlers.append(self.allocator, .{
+                                .on_fulfilled = JsValue.undefined_val, // marker: use resume_async
+                                .on_rejected = JsValue.undefined_val,
+                                .result_promise = handler_promise,
+                            });
+                            // Store continuation ref on the handler promise for lookup
+                            const cont_id = try self.pool.intern("__continuation");
+                            // Encode continuation pointer as a number
+                            try handler_promise.setProperty(self.allocator, cont_id, JsValue.initNumber(@floatFromInt(@intFromPtr(cont))));
+
+                            // Pop current frame (suspend)
+                            self.closeUpvaluesAbove(cur_frame.base_sp);
+                            self.sp = cur_frame.base_sp - 1; // pop function slot
+                            if (cur_frame.has_this_on_stack) self.sp -= 1;
+                            self.frame_count -= 1;
+                            // Push async promise as result to caller
+                            self.push(JsValue.initObject(async_promise));
+                        },
+                    }
+                },
+
+                .async_return => {
+                    const result = self.pop();
+                    const ret_frame = self.frames[self.frame_count - 1];
+                    self.closeUpvaluesAbove(ret_frame.base_sp);
+
+                    const async_p = ret_frame.async_promise;
+                    // Resolve the async function's promise
+                    if (async_p) |ap| {
+                        try self.resolvePromise(ap, result);
+                    }
+
+                    self.sp = ret_frame.base_sp - 1;
+                    if (ret_frame.has_this_on_stack) self.sp -= 1;
+                    self.frame_count -= 1;
+
+                    if (self.frame_count <= until_frame) {
+                        break;
+                    }
+                    // Push the async function's promise as return value to caller
+                    if (async_p) |ap| {
+                        self.push(JsValue.initObject(ap));
+                    } else {
+                        self.push(JsValue.undefined_val);
+                    }
+                },
+
                 // ── Special ──────────────────────────────────────────
                 .typeof_ => {
                     const val = self.pop();
@@ -899,6 +1053,7 @@ pub const VM = struct {
             if (obj.obj_type == .array) return "[Array]";
             if (obj.obj_type == .dom_node) return "[object HTMLElement]";
             if (obj.obj_type == .dom_style) return "[object CSSStyleDeclaration]";
+            if (obj.obj_type == .promise) return "[object Promise]";
             return "[object Object]";
         }
         return "";
@@ -1087,6 +1242,25 @@ pub const VM = struct {
         const clear_interval_obj = try self.createNativeFn(&nativeClearTimer);
         const clear_interval_id = try self.pool.intern("clearInterval");
         try self.globals.put(self.allocator, clear_interval_id, JsValue.initObject(clear_interval_obj));
+
+        // ── Promise ──
+        {
+            // Promise prototype with then/catch/finally
+            const proto = try self.createObj(.{});
+            self.promise_proto = proto;
+            try self.registerNativeMethod(proto, "then", &nativePromiseThen);
+            try self.registerNativeMethod(proto, "catch", &nativePromiseCatch);
+            try self.registerNativeMethod(proto, "finally", &nativePromiseFinally);
+
+            // Promise constructor
+            const promise_ctor = try self.createNativeFn(&nativePromiseConstructor);
+            const promise_id = try self.pool.intern("Promise");
+            try self.globals.put(self.allocator, promise_id, JsValue.initObject(promise_ctor));
+
+            // Promise.resolve / Promise.reject (static methods on constructor)
+            try self.registerNativeMethod(promise_ctor, "resolve", &nativePromiseResolve);
+            try self.registerNativeMethod(promise_ctor, "reject", &nativePromiseReject);
+        }
 
         // ── Global constants ──
         const undef_id = try self.pool.intern("undefined");
@@ -1590,6 +1764,346 @@ pub const VM = struct {
             if (!entry.cancelled and (!entry.fired or entry.is_interval)) return true;
         }
         return false;
+    }
+
+    // ── Promise helpers ──────────────────────────────────────────────
+
+    fn createPromiseObj(self: *VM) !*JsObject {
+        const obj = try self.allocator.create(JsObject);
+        obj.* = .{
+            .obj_type = .promise,
+            .data = .{ .promise_data = .{} },
+            .prototype = self.promise_proto,
+        };
+        try self.objects.append(self.allocator, obj);
+        return obj;
+    }
+
+    fn resolvePromise(self: *VM, promise: *JsObject, value: JsValue) !void {
+        if (promise.obj_type != .promise) return;
+        var pd = &promise.data.promise_data;
+        if (pd.state != .pending) return; // already settled
+
+        // Resolution with a thenable (another promise)
+        if (value.isObject()) {
+            const val_obj = value.asJsObject();
+            if (val_obj.obj_type == .promise) {
+                const inner_pd = &val_obj.data.promise_data;
+                switch (inner_pd.state) {
+                    .fulfilled => return self.resolvePromise(promise, inner_pd.result),
+                    .rejected => return self.rejectPromise(promise, inner_pd.result),
+                    .pending => {
+                        // Chain: when inner resolves, resolve outer
+                        try inner_pd.handlers.append(self.allocator, .{
+                            .on_fulfilled = JsValue.undefined_val,
+                            .on_rejected = JsValue.undefined_val,
+                            .result_promise = promise,
+                        });
+                        return;
+                    },
+                }
+            }
+        }
+
+        pd.state = .fulfilled;
+        pd.result = value;
+        // Queue handlers as microtasks
+        for (pd.handlers.items) |handler| {
+            // Check if this is a continuation resume
+            const cont_id = self.pool.intern("__continuation") catch continue;
+            if (handler.result_promise.getProperty(cont_id)) |cont_val| {
+                if (cont_val.isNumber()) {
+                    const ptr_int: usize = @intFromFloat(cont_val.asNumber());
+                    const cont: *Continuation = @ptrFromInt(ptr_int);
+                    try self.microtasks.append(self.allocator, .{ .resume_async = .{
+                        .cont = cont,
+                        .value = value,
+                        .is_reject = false,
+                    } });
+                    continue;
+                }
+            }
+            try self.microtasks.append(self.allocator, .{ .promise_reaction = .{
+                .handler = handler.on_fulfilled,
+                .arg = value,
+                .result_promise = handler.result_promise,
+                .is_reject = false,
+            } });
+        }
+        pd.handlers.items.len = 0; // clear handlers
+    }
+
+    fn rejectPromise(self: *VM, promise: *JsObject, reason: JsValue) !void {
+        if (promise.obj_type != .promise) return;
+        var pd = &promise.data.promise_data;
+        if (pd.state != .pending) return;
+
+        pd.state = .rejected;
+        pd.result = reason;
+        for (pd.handlers.items) |handler| {
+            const cont_id = self.pool.intern("__continuation") catch continue;
+            if (handler.result_promise.getProperty(cont_id)) |cont_val| {
+                if (cont_val.isNumber()) {
+                    const ptr_int: usize = @intFromFloat(cont_val.asNumber());
+                    const cont: *Continuation = @ptrFromInt(ptr_int);
+                    try self.microtasks.append(self.allocator, .{ .resume_async = .{
+                        .cont = cont,
+                        .value = reason,
+                        .is_reject = true,
+                    } });
+                    continue;
+                }
+            }
+            try self.microtasks.append(self.allocator, .{ .promise_reaction = .{
+                .handler = handler.on_rejected,
+                .arg = reason,
+                .result_promise = handler.result_promise,
+                .is_reject = true,
+            } });
+        }
+        pd.handlers.items.len = 0;
+    }
+
+    /// Drain the microtask queue. Called from the browser event loop
+    /// (always before processing macrotasks/timers).
+    pub fn runMicrotasks(self: *VM) !bool {
+        if (self.microtasks.items.len == 0) return false;
+        var ran_any = false;
+        // Process until empty (handlers can enqueue more microtasks)
+        while (self.microtasks.items.len > 0) {
+            const task = self.microtasks.orderedRemove(0);
+            ran_any = true;
+            switch (task) {
+                .promise_reaction => |reaction| {
+                    if (reaction.handler.isObject()) {
+                        // Call the handler function
+                        const result = self.callJsFunction(reaction.handler, JsValue.undefined_val, &.{reaction.arg}) catch JsValue.undefined_val;
+                        if (reaction.is_reject) {
+                            // .catch handler: resolve the result promise (not reject)
+                            try self.resolvePromise(reaction.result_promise, result);
+                        } else {
+                            try self.resolvePromise(reaction.result_promise, result);
+                        }
+                    } else {
+                        // No handler: pass through value
+                        if (reaction.is_reject) {
+                            try self.rejectPromise(reaction.result_promise, reaction.arg);
+                        } else {
+                            try self.resolvePromise(reaction.result_promise, reaction.arg);
+                        }
+                    }
+                },
+                .resume_async => |res| {
+                    if (res.is_reject) {
+                        // Rejection in async function — reject the async promise
+                        try self.rejectPromise(res.cont.async_promise, res.value);
+                        continue;
+                    }
+                    // Restore the suspended frame
+                    const cont = res.cont;
+                    const base = self.sp + 1; // +1 for function slot
+                    self.push(JsValue.undefined_val); // function slot placeholder
+                    // Restore saved stack (locals + temporaries)
+                    for (cont.saved_stack) |val| self.push(val);
+                    // Push the resolved value (result of await)
+                    self.push(res.value);
+
+                    const target = self.frame_count;
+                    self.frames[self.frame_count] = .{
+                        .bc = cont.bc,
+                        .ip = cont.ip,
+                        .base_sp = base,
+                        .upvalues = cont.upvalues,
+                        .this_val = cont.this_val,
+                        .has_this_on_stack = cont.has_this_on_stack,
+                        .async_promise = cont.async_promise,
+                    };
+                    self.frame_count += 1;
+                    _ = self.run(target) catch {};
+                },
+            }
+        }
+        return ran_any;
+    }
+
+    /// Check if any microtasks are pending.
+    pub fn hasPendingMicrotasks(self: *VM) bool {
+        return self.microtasks.items.len > 0;
+    }
+
+    // ── Promise native functions ────────────────────────────────────
+
+    /// new Promise(function(resolve, reject) { ... })
+    fn nativePromiseConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const promise = try vm.createPromiseObj();
+        const promise_val = JsValue.initObject(promise);
+
+        if (args.len == 0 or !args[0].isObject()) return promise_val;
+        const executor = args[0];
+
+        // Create resolve/reject native functions that capture this promise
+        const resolve_fn = try vm.createPromiseSetter(promise, false);
+        const reject_fn = try vm.createPromiseSetter(promise, true);
+
+        // Call executor(resolve, reject) synchronously
+        _ = vm.callJsFunction(executor, JsValue.undefined_val, &.{
+            JsValue.initObject(resolve_fn),
+            JsValue.initObject(reject_fn),
+        }) catch {};
+
+        return promise_val;
+    }
+
+    /// Promise.resolve(value)
+    fn nativePromiseResolve(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const value = if (args.len > 0) args[0] else JsValue.undefined_val;
+        // If already a promise, return it
+        if (value.isObject()) {
+            if (value.asJsObject().obj_type == .promise) return value;
+        }
+        const promise = try vm.createPromiseObj();
+        try vm.resolvePromise(promise, value);
+        return JsValue.initObject(promise);
+    }
+
+    /// Promise.reject(reason)
+    fn nativePromiseReject(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const reason = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const promise = try vm.createPromiseObj();
+        try vm.rejectPromise(promise, reason);
+        return JsValue.initObject(promise);
+    }
+
+    /// promise.then(onFulfilled, onRejected)
+    fn nativePromiseThen(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const promise = this.asJsObject();
+        if (promise.obj_type != .promise) return JsValue.undefined_val;
+
+        const on_fulfilled = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const on_rejected = if (args.len > 1) args[1] else JsValue.undefined_val;
+        const result_promise = try vm.createPromiseObj();
+
+        const pd = &promise.data.promise_data;
+        switch (pd.state) {
+            .pending => {
+                // Enqueue handler
+                try pd.handlers.append(vm.allocator, .{
+                    .on_fulfilled = on_fulfilled,
+                    .on_rejected = on_rejected,
+                    .result_promise = result_promise,
+                });
+            },
+            .fulfilled => {
+                // Already resolved: queue microtask
+                try vm.microtasks.append(vm.allocator, .{ .promise_reaction = .{
+                    .handler = on_fulfilled,
+                    .arg = pd.result,
+                    .result_promise = result_promise,
+                    .is_reject = false,
+                } });
+            },
+            .rejected => {
+                try vm.microtasks.append(vm.allocator, .{ .promise_reaction = .{
+                    .handler = on_rejected,
+                    .arg = pd.result,
+                    .result_promise = result_promise,
+                    .is_reject = true,
+                } });
+            },
+        }
+        return JsValue.initObject(result_promise);
+    }
+
+    /// promise.catch(onRejected) — sugar for .then(undefined, onRejected)
+    fn nativePromiseCatch(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const on_rejected = if (args.len > 0) args[0] else JsValue.undefined_val;
+        return nativePromiseThen(ctx, this, &.{ JsValue.undefined_val, on_rejected });
+    }
+
+    /// promise.finally(onFinally)
+    fn nativePromiseFinally(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        // Simplified: just call .then with same callback for both paths
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        return nativePromiseThen(ctx, this, &.{ callback, callback });
+    }
+
+    /// Helper: create a native function that resolves or rejects a specific promise.
+    /// Used by the Promise constructor for the resolve/reject callbacks.
+    fn createPromiseSetter(self: *VM, promise: *JsObject, is_reject: bool) !*JsObject {
+        // Store the target promise + mode in a wrapper object's properties
+        const wrapper = try self.allocator.create(JsObject);
+        wrapper.* = .{ .obj_type = .native_function, .data = .{ .native_fn = if (is_reject) &nativeRejectCb else &nativeResolveCb } };
+        try self.objects.append(self.allocator, wrapper);
+        // Store the target promise reference as a property
+        const target_id = try self.pool.intern("__target");
+        try wrapper.setProperty(self.allocator, target_id, JsValue.initObject(promise));
+        return wrapper;
+    }
+
+    fn nativeResolveCb(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        // Find the target promise from our function object
+        // The function object is on the stack just before the args
+        const target = getCallbackTarget(vm) orelse return JsValue.undefined_val;
+        const value = if (args.len > 0) args[0] else JsValue.undefined_val;
+        try vm.resolvePromise(target, value);
+        return JsValue.undefined_val;
+    }
+
+    fn nativeRejectCb(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const target = getCallbackTarget(vm) orelse return JsValue.undefined_val;
+        const reason = if (args.len > 0) args[0] else JsValue.undefined_val;
+        try vm.rejectPromise(target, reason);
+        return JsValue.undefined_val;
+    }
+
+    fn getCallbackTarget(vm: *VM) ?*JsObject {
+        // In a native call, the function object is at stack[sp - arg_count - 1]
+        // But we don't have arg_count here. Instead, look up from the call site:
+        // The function was stored at base - 1 of the caller's perspective.
+        // For native calls in .call opcode: func is at stack[sp - 1 - arg_count] before call.
+        // After args are consumed, func_val was popped. We need another approach.
+        //
+        // Alternative: scan recent native_function objects for __target property
+        // Simplest: use the pool to look up __target on recently called functions.
+        //
+        // Actually, for .call opcode, the func_val is at stack[self.sp - 1 - arg_count]
+        // and after the native call, sp is adjusted. But during the native call,
+        // the stack hasn't been adjusted yet.
+        //
+        // Let's look at the call opcode: `const func_val = self.stack[self.sp - 1 - arg_count]`
+        // then native is called, then `self.sp = base - 1; self.push(result);`
+        // So during the native call, func_val is still on the stack.
+        // But we can't easily know arg_count from inside the native.
+        //
+        // Pragmatic solution: store target promise as a global with unique key.
+        // Or better: we can walk back from sp to find a native_function with __target.
+        // Let's check the stack below current args.
+        const target_id = vm.pool.intern("__target") catch return null;
+        // Walk stack backwards to find the function object
+        var i = vm.sp;
+        while (i > 0) {
+            i -= 1;
+            const val = vm.stack[i];
+            if (val.isObject()) {
+                const obj = val.asJsObject();
+                if (obj.obj_type == .native_function) {
+                    if (obj.getProperty(target_id)) |target_val| {
+                        if (target_val.isObject()) {
+                            const target = target_val.asJsObject();
+                            if (target.obj_type == .promise) return target;
+                        }
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     // ── Object methods ─────────────────────────────────────────────

@@ -96,14 +96,31 @@ pub const KotoriRuntime = struct {
         return .{ .ok = null };
     }
 
-    /// Fire pending timers. Returns true if any callbacks were executed.
+    /// Drain the microtask queue (Promise reactions, async/await resumptions).
+    /// Must be called before processing timers (spec: microtasks have priority).
+    pub fn runMicrotasks(self: *KotoriRuntime) bool {
+        return self.vm.runMicrotasks() catch false;
+    }
+
+    /// Check if any microtasks are pending.
+    pub fn hasPendingMicrotasks(self: *KotoriRuntime) bool {
+        return self.vm.hasPendingMicrotasks();
+    }
+
+    /// Fire pending timers. Drains microtasks first (per spec).
+    /// Returns true if any callbacks were executed.
     pub fn runPendingTimers(self: *KotoriRuntime) bool {
-        return self.vm.runPendingTimers() catch false;
+        // Microtasks always run before macrotasks
+        _ = self.vm.runMicrotasks() catch {};
+        const fired = self.vm.runPendingTimers() catch false;
+        // Drain microtasks enqueued by timer callbacks
+        _ = self.vm.runMicrotasks() catch {};
+        return fired;
     }
 
     /// Check if any timers are pending.
     pub fn hasPendingTimers(self: *KotoriRuntime) bool {
-        return self.vm.hasPendingTimers();
+        return self.vm.hasPendingTimers() or self.vm.hasPendingMicrotasks();
     }
 
     /// Check and clear DOM dirty flag.
