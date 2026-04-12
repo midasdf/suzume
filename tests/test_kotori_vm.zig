@@ -3393,6 +3393,29 @@ test "eval: for-of array regression" {
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
+// ── yield* delegation ────────────────────────────────────────────
+
+test "eval: yield* generator delegation" {
+    const result = try evalExpr(
+        \\function* a() { yield 1; yield 2; }
+        \\function* b() { yield* a(); yield 3; }
+        \\let sum = 0;
+        \\for (let x of b()) sum += x;
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: yield* array" {
+    const result = try evalExpr(
+        \\function* g() { yield* [10, 20]; yield 30; }
+        \\let sum = 0;
+        \\for (let x of g()) sum += x;
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
 test "eval: array iterator done" {
     const result = try evalExpr(
         \\let a = [1];

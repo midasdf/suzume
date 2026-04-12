@@ -223,6 +223,12 @@ pub const Parser = struct {
             },
             .kw_yield => {
                 self.advance();
+                // Check for yield* (delegation)
+                var is_delegate = false;
+                if (self.current.type == .star) {
+                    is_delegate = true;
+                    self.advance(); // consume *
+                }
                 // yield with no argument (next token is ; or } or , etc.)
                 var argument: NodeIndex = null_node;
                 if (!self.check(.semicolon) and !self.check(.rbrace) and !self.check(.rparen) and !self.check(.rbracket) and !self.check(.comma) and !self.check(.eof)) {
@@ -230,7 +236,7 @@ pub const Parser = struct {
                 }
                 return self.ast.addNode(self.allocator, .{ .yield_expr = .{
                     .argument = argument,
-                    .delegate = false,
+                    .delegate = is_delegate,
                 } }) catch return error.OutOfMemory;
             },
             .kw_this => return self.parseThis(),

@@ -474,7 +474,11 @@ pub const Compiler = struct {
                 } else {
                     try self.emitConstant(JsValue.undefined_val);
                 }
-                try self.emitOp(.yield_value);
+                if (y.delegate) {
+                    try self.emitOp(.yield_delegate);
+                } else {
+                    try self.emitOp(.yield_value);
+                }
             },
 
             // ── ES Modules ──────────────────────────────────────────

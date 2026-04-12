@@ -1157,6 +1157,44 @@ pub const VM = struct {
                     }
                 },
 
+                .yield_delegate => {
+                    if (self.active_generator) |gen| {
+                        const iterable = self.pop();
+                        const iterator = try self.resolveIterator(iterable) orelse {
+                            self.push(JsValue.undefined_val);
+                            continue;
+                        };
+                        // First call to inner iterator
+                        const result = try self.callIteratorNext(iterator, JsValue.undefined_val);
+                        const done = try self.getIterResultDone(result);
+                        if (done) {
+                            const value = try self.getIterResultValue(result);
+                            self.push(value); // yield* expression result
+                            continue;
+                        }
+                        // Not done: store delegate, suspend like yield_value
+                        gen.delegate_iterator = iterator;
+                        const yield_val = try self.getIterResultValue(result);
+                        // Save state
+                        const f = &self.frames[self.frame_count - 1];
+                        const base = f.base_sp;
+                        const stack_len = self.sp - base;
+                        if (gen.saved_stack.len > 0) self.allocator.free(gen.saved_stack);
+                        const saved = try self.allocator.alloc(JsValue, stack_len);
+                        @memcpy(saved, self.stack[base..self.sp]);
+                        gen.saved_ip = f.ip;
+                        gen.saved_stack = saved;
+                        gen.state = .suspended_yield;
+                        self.frame_count -= 1;
+                        self.sp = base;
+                        if (self.sp > 0) self.sp -= 1;
+                        return try self.createIterResult(yield_val, false);
+                    } else {
+                        _ = self.pop();
+                        self.push(JsValue.undefined_val);
+                    }
+                },
+
                 .yield_value => {
                     if (self.active_generator) |gen| {
                         const yield_val = self.pop();
@@ -5853,6 +5891,23 @@ pub const VM = struct {
         const obj = this.asJsObject();
         if (obj.obj_type != .generator) return JsValue.undefined_val;
         var gen = &obj.data.generator_data;
+
+        // yield* delegation active
+        if (gen.delegate_iterator) |delegate| {
+            const sent = if (args.len > 0) args[0] else JsValue.undefined_val;
+            const result = try vm.callIteratorNext(delegate, sent);
+            const done = try vm.getIterResultDone(result);
+            if (done) {
+                gen.delegate_iterator = null;
+                // Resume generator with inner return value as yield* expression result
+                gen.state = .executing;
+                const final_value = try vm.getIterResultValue(result);
+                return try vm.executeGenerator(gen, final_value, true);
+            } else {
+                const value = try vm.getIterResultValue(result);
+                return try vm.createIterResult(value, false);
+            }
+        }
 
         switch (gen.state) {
             .completed => {

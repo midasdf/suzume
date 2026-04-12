@@ -106,6 +106,7 @@ pub const OpCode = enum(u8) {
 
     // Generators
     yield_value, // pop value, suspend generator, return {value, done:false}
+    yield_delegate, // yield*: delegate to sub-iterator
 
     // Getters/Setters
     define_getter, // operand: u16 (property name), stack: [obj, func] → [obj]
