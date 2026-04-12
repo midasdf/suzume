@@ -22,21 +22,23 @@ Parser recognizes `instanceof` and `in_` as AST nodes, but `binaryOpToOpCode()` 
 .in_ => .in_,
 ```
 
-**vm.zig execution**:
+**vm.zig execution** (compiler pushes lhs then rhs, so pop yields rhs first):
 ```
 // instanceof:
-constructor = pop()  // right operand
-obj = pop()          // left operand
+constructor = pop()  // right operand (pushed second)
+obj = pop()          // left operand (pushed first)
 target_proto = constructor.prototype
 walk obj.__proto__ chain:
   if current == target_proto → push true, done
 push false
 
 // in:
-obj = pop()   // right operand
-key = pop()   // left operand (string)
+obj = pop()   // right operand (pushed second)
+key = pop()   // left operand (string, pushed first)
 push obj.hasProperty(key)  // includes prototype chain
 ```
+
+> **Note**: `Symbol.hasInstance` override for `instanceof` is deferred until Symbol support is implemented.
 
 ---
 
@@ -89,7 +91,7 @@ Both `new Error("msg")` and `Error("msg")` (without new) return an Error object 
 
 | Method | Behavior |
 |--------|----------|
-| `Number.isNaN(v)` | `true` only if v is exactly NaN (no coercion) |
+| `Number.isNaN(v)` | `true` only if v is the JS NaN value (not any NaN-boxing tag pattern; check via `value.isNan()` not raw bit test) |
 | `Number.isFinite(v)` | `true` if number and finite (no coercion) |
 | `Number.isInteger(v)` | `true` if number and has no fractional part |
 | `Number.parseInt(s, radix)` | Delegates to global `parseInt` |
@@ -167,13 +169,27 @@ Both `new Error("msg")` and `Error("msg")` (without new) return an Error object 
 | `valueOf()` | Unix ms as number |
 
 ### `getTimezoneOffset()`
-Returns minutes difference between UTC and local. Uses `std.time` or POSIX `localtime_r` for system timezone.
+Returns minutes difference between UTC and local.
+
+### Timezone / Calendar Decomposition Strategy
+Zig's `std.time` provides epoch timestamps but not calendar decomposition with TZ awareness. Implementation uses `@cImport` of `<time.h>` for:
+- `localtime_r(&time_t, &tm)` — epoch → local calendar fields (DST-aware)
+- `gmtime_r(&time_t, &tm)` — epoch → UTC calendar fields
+- `mktime(&tm)` — local calendar fields → epoch (for setters)
+- `timegm(&tm)` or manual calculation — UTC calendar fields → epoch
+
+All 14 local getters/setters need `localtime_r` → decompose → extract field. All UTC getters/setters use `gmtime_r` or direct arithmetic (simpler). Setters decompose current time, modify field(s), recompose via `mktime`/`timegm`.
+
+DST transitions: `localtime_r` handles DST automatically via system tzdata. Edge cases (ambiguous/skipped hours) follow C library behavior — this is what V8 and SpiderMonkey do too.
 
 ### Date.parse() Format Support
-1. **ISO 8601**: `2026-04-12T10:30:00.000Z`, `2026-04-12`, `2026-04-12T10:30:00+09:00`
-2. **RFC 2822**: `Sat, 12 Apr 2026 06:30:00 GMT`
-3. **Casual**: `"Apr 12, 2026"`, `"April 12 2026"`, `"12/04/2026"` — best effort
-4. Returns `NaN` for unparseable strings
+1. **ISO 8601** (primary): `2026-04-12T10:30:00.000Z`, `2026-04-12`, `2026-04-12T10:30:00+09:00`
+2. **RFC 2822**: `Sat, 12 Apr 2026 06:30:00 GMT` — month name lookup + field extraction
+3. **Casual**: `"Apr 12, 2026"`, `"April 12 2026"` — month name + numeric fields heuristic
+4. **Ambiguous numeric**: `"12/04/2026"` — treat as MM/DD/YYYY (US convention, matches V8 behavior)
+5. Returns `NaN` for unparseable strings
+
+Parsing is implemented as a chain: try ISO 8601 first, then RFC 2822, then casual heuristic. Each parser is a separate function for testability.
 
 ### Locale Handling
 `toLocaleXxx` methods produce en-US format by default. Structure allows future replacement when Intl support is added.
@@ -193,7 +209,8 @@ All added as static methods on the Promise constructor.
 
 ### Promise.race(iterable)
 - First promise to settle (resolve or reject) determines result
-- Empty array → never settles (pending forever)
+- Empty array → never settles (pending forever, per JS spec)
+- **Memory note**: on 512MB device, orphaned pending promises from `Promise.race([])` are a leak risk. Acceptable for now since this pattern is rare in real code; revisit if GC/weak-ref support is added later
 
 ### Promise.allSettled(iterable)
 - Waits for all to settle
@@ -235,11 +252,11 @@ Each method creates a result promise, iterates the input array, and attaches `th
 | `console.table` | (none) | Simple tabular format for arrays/objects |
 
 ### VM Additions
-- `console_timers: std.StringHashMapUnmanaged(i64)` — for time/timeEnd/timeLog
-- `console_counts: std.StringHashMapUnmanaged(u32)` — for count/countReset
-- `console_indent: u32 = 0` — for group/groupEnd
+- `console_timers: std.StringHashMapUnmanaged(i64)` — for time/timeEnd/timeLog (capped at 1024 entries)
+- `console_counts: std.StringHashMapUnmanaged(u32)` — for count/countReset (capped at 1024 entries)
+- `console_indent: u32 = 0` — for group/groupEnd (capped at 16 levels)
 
-All output goes to stderr.
+All output goes to stderr. Timer/counter maps silently ignore new entries once cap is reached to prevent unbounded growth from pathological JS.
 
 ---
 
