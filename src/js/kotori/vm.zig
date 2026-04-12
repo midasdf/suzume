@@ -56,6 +56,11 @@ pub const VM = struct {
     http_fetch_ctx: ?*anyopaque = null,
     http_fetch_fn: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, url: []const u8, method: []const u8, body: ?[]const u8) ?HttpFetchResult = null,
 
+    // Module system
+    module_exports: std.AutoArrayHashMapUnmanaged(StringId, JsValue) = .{},
+    module_loader_ctx: ?*anyopaque = null,
+    module_loader_fn: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, specifier: []const u8) ?[]const u8 = null,
+
     // Exception handling
     try_stack: [32]TryContext = undefined,
     try_depth: u32 = 0,
@@ -144,6 +149,7 @@ pub const VM = struct {
             self.allocator.destroy(cell);
         }
         self.upvalue_cells.deinit(self.allocator);
+        self.module_exports.deinit(self.allocator);
     }
 
     pub fn execute(self: *VM) !JsValue {
@@ -947,6 +953,41 @@ pub const VM = struct {
                     _ = self.pop();
                     self.push(JsValue.undefined_val);
                 },
+                // ── Modules ──────────────────────────────────────────
+                .import_binding => {
+                    const module_ci = self.readU16(frame);
+                    const name_ci = self.readU16(frame);
+                    const module_sid = frame.bc.constants.items[module_ci].asStringId();
+                    const binding_sid = frame.bc.constants.items[name_ci].asStringId();
+                    // Try to load from module_exports (pre-linked) or trigger module load
+                    if (self.module_exports.get(binding_sid)) |val| {
+                        self.push(val);
+                    } else {
+                        // Module not loaded yet — try loader callback
+                        if (self.module_loader_fn) |loader| {
+                            if (self.pool.get(module_sid)) |specifier| {
+                                if (loader(self.module_loader_ctx.?, self.allocator, specifier)) |_source| {
+                                    _ = _source; // TODO: compile and execute module, then retry
+                                }
+                            }
+                        }
+                        // Fallback: push undefined for unresolved import
+                        self.push(JsValue.undefined_val);
+                    }
+                },
+                .export_binding => {
+                    const name_ci = self.readU16(frame);
+                    const name_sid = frame.bc.constants.items[name_ci].asStringId();
+                    // The exported value is the current global with this name
+                    const val = self.globals.get(name_sid) orelse JsValue.undefined_val;
+                    self.module_exports.put(self.allocator, name_sid, val) catch {};
+                },
+                .export_default => {
+                    const val = self.pop();
+                    const default_sid = self.pool.intern("default") catch unreachable;
+                    self.module_exports.put(self.allocator, default_sid, val) catch {};
+                },
+
                 .halt => {
                     if (self.sp > 0) return self.pop();
                     return JsValue.undefined_val;

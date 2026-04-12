@@ -152,6 +152,13 @@ pub const Parser = struct {
         return tok.slice(self.lexer.source);
     }
 
+    /// Intern current string token content, stripping surrounding quotes.
+    fn internStringToken(self: *Parser) ParseError!pool_mod.StringId {
+        const text = self.tokenSlice(self.current);
+        const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
+        return self.pool.intern(content) catch return error.OutOfMemory;
+    }
+
     // ---------------------------------------------------------------
     // Public API
     // ---------------------------------------------------------------
@@ -752,6 +759,8 @@ pub const Parser = struct {
             .kw_continue => return self.parseContinueStatement(),
             .kw_function => return self.parseFunctionDecl(),
             .kw_class => return self.parseClassDecl(),
+            .kw_import => return self.parseImportDeclaration(),
+            .kw_export => return self.parseExportDeclaration(),
             .kw_with => return self.parseWithStatement(),
             .kw_debugger => return self.parseDebuggerStatement(),
             .lbrace => return self.parseBlock(),
@@ -1645,5 +1654,256 @@ pub const Parser = struct {
             .comma => .comma,
             else => .add, // fallback, should not happen
         };
+    }
+
+    // ---------------------------------------------------------------
+    // ES Modules: import / export
+    // ---------------------------------------------------------------
+
+    /// Parse import declaration.
+    /// Forms:
+    ///   import "module"                         (side-effect)
+    ///   import defaultExport from "module"
+    ///   import { a, b as c } from "module"
+    ///   import * as ns from "module"
+    ///   import defaultExport, { a } from "module"
+    ///   import defaultExport, * as ns from "module"
+    fn parseImportDeclaration(self: *Parser) ParseError!NodeIndex {
+        self.advance(); // consume 'import'
+
+        // Side-effect import: import "module"
+        if (self.check(.string)) {
+            const source = try self.internStringToken();
+            self.advance();
+            try self.expectSemicolon();
+            const empty_list = self.ast.addNodeList(self.allocator, &.{}) catch return error.OutOfMemory;
+            return self.ast.addNode(self.allocator, .{ .import_decl = .{
+                .specifiers = empty_list,
+                .source = source,
+            } }) catch return error.OutOfMemory;
+        }
+
+        var specifiers = std.ArrayListUnmanaged(ast_mod.NodeIndex){};
+        defer specifiers.deinit(self.allocator);
+
+        // Default import: import foo from "..."
+        if (self.check(.identifier)) {
+            const local = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+            self.advance();
+            const spec = self.ast.addNode(self.allocator, .{ .import_specifier = .{
+                .imported = null,
+                .local = local,
+                .kind = .default_,
+            } }) catch return error.OutOfMemory;
+            specifiers.append(self.allocator, spec) catch return error.OutOfMemory;
+
+            // import default, { ... } or import default, * as ns
+            if (self.match(.comma)) {
+                if (self.check(.lbrace)) {
+                    try self.parseNamedImports(&specifiers);
+                } else if (self.check(.star)) {
+                    const ns_spec = try self.parseNamespaceImport();
+                    specifiers.append(self.allocator, ns_spec) catch return error.OutOfMemory;
+                } else {
+                    return error.UnexpectedToken;
+                }
+            }
+        } else if (self.check(.lbrace)) {
+            // Named imports: import { a, b as c } from "..."
+            try self.parseNamedImports(&specifiers);
+        } else if (self.check(.star)) {
+            // Namespace import: import * as ns from "..."
+            const ns_spec = try self.parseNamespaceImport();
+            specifiers.append(self.allocator, ns_spec) catch return error.OutOfMemory;
+        } else {
+            return error.UnexpectedToken;
+        }
+
+        // Expect 'from'
+        if (!self.checkIdentText("from")) return error.UnexpectedToken;
+        self.advance();
+
+        // Module specifier string
+        if (!self.check(.string)) return error.UnexpectedToken;
+        const source = try self.internStringToken();
+        self.advance();
+        try self.expectSemicolon();
+
+        const spec_list = self.ast.addNodeList(self.allocator, specifiers.items) catch return error.OutOfMemory;
+        return self.ast.addNode(self.allocator, .{ .import_decl = .{
+            .specifiers = spec_list,
+            .source = source,
+        } }) catch return error.OutOfMemory;
+    }
+
+    fn parseNamedImports(self: *Parser, specifiers: *std.ArrayListUnmanaged(ast_mod.NodeIndex)) ParseError!void {
+        try self.expect(.lbrace);
+        while (!self.check(.rbrace) and !self.check(.eof)) {
+            if (!self.check(.identifier)) return error.UnexpectedToken;
+            const imported = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+            self.advance();
+
+            var local = imported;
+            if (self.checkIdentText("as")) {
+                self.advance();
+                if (!self.check(.identifier)) return error.UnexpectedToken;
+                local = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+                self.advance();
+            }
+
+            const spec = self.ast.addNode(self.allocator, .{ .import_specifier = .{
+                .imported = imported,
+                .local = local,
+                .kind = .named,
+            } }) catch return error.OutOfMemory;
+            specifiers.append(self.allocator, spec) catch return error.OutOfMemory;
+
+            if (!self.match(.comma)) break;
+        }
+        try self.expect(.rbrace);
+    }
+
+    fn parseNamespaceImport(self: *Parser) ParseError!ast_mod.NodeIndex {
+        self.advance(); // consume '*'
+        if (!self.checkIdentText("as")) return error.UnexpectedToken;
+        self.advance();
+        if (!self.check(.identifier)) return error.UnexpectedToken;
+        const local = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+        self.advance();
+        return self.ast.addNode(self.allocator, .{ .import_specifier = .{
+            .imported = null,
+            .local = local,
+            .kind = .namespace,
+        } }) catch return error.OutOfMemory;
+    }
+
+    /// Parse export declaration.
+    /// Forms:
+    ///   export default expr
+    ///   export const/let/var ...
+    ///   export function name() {}
+    ///   export class Name {}
+    ///   export { a, b as c }
+    ///   export { a } from "module"
+    ///   export * from "module"
+    ///   export * as ns from "module"
+    fn parseExportDeclaration(self: *Parser) ParseError!NodeIndex {
+        self.advance(); // consume 'export'
+
+        // export default ...
+        if (self.check(.kw_default)) {
+            self.advance();
+            // export default function / class / expression
+            const value = if (self.check(.kw_function))
+                try self.parseFunctionDecl()
+            else if (self.check(.kw_class))
+                try self.parseClassDecl()
+            else if (self.check(.kw_async) and self.peek_token.type == .kw_function) blk: {
+                self.advance();
+                self.pending_async = true;
+                break :blk try self.parseFunctionDecl();
+            } else blk: {
+                const expr = try self.parseExpression();
+                try self.expectSemicolon();
+                break :blk expr;
+            };
+            return self.ast.addNode(self.allocator, .{ .export_default = value }) catch return error.OutOfMemory;
+        }
+
+        // export * from "module" or export * as ns from "module"
+        if (self.check(.star)) {
+            self.advance();
+            var alias: ?pool_mod.StringId = null;
+            if (self.checkIdentText("as")) {
+                self.advance();
+                if (!self.check(.identifier)) return error.UnexpectedToken;
+                alias = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+                self.advance();
+            }
+            if (!self.checkIdentText("from")) return error.UnexpectedToken;
+            self.advance();
+            if (!self.check(.string)) return error.UnexpectedToken;
+            const source = try self.internStringToken();
+            self.advance();
+            try self.expectSemicolon();
+            return self.ast.addNode(self.allocator, .{ .export_all = .{
+                .source = source,
+                .alias = alias,
+            } }) catch return error.OutOfMemory;
+        }
+
+        // export var/let/const/function/class
+        if (self.check(.kw_var) or self.check(.kw_let) or self.check(.kw_const)) {
+            const decl = try self.parseVarDecl();
+            return self.ast.addNode(self.allocator, .{ .export_decl = decl }) catch return error.OutOfMemory;
+        }
+        if (self.check(.kw_function)) {
+            const decl = try self.parseFunctionDecl();
+            return self.ast.addNode(self.allocator, .{ .export_decl = decl }) catch return error.OutOfMemory;
+        }
+        if (self.check(.kw_class)) {
+            const decl = try self.parseClassDecl();
+            return self.ast.addNode(self.allocator, .{ .export_decl = decl }) catch return error.OutOfMemory;
+        }
+        if (self.check(.kw_async) and self.peek_token.type == .kw_function) {
+            self.advance();
+            self.pending_async = true;
+            const decl = try self.parseFunctionDecl();
+            return self.ast.addNode(self.allocator, .{ .export_decl = decl }) catch return error.OutOfMemory;
+        }
+
+        // export { a, b as c } or export { a } from "module"
+        if (self.check(.lbrace)) {
+            var specifiers = std.ArrayListUnmanaged(ast_mod.NodeIndex){};
+            defer specifiers.deinit(self.allocator);
+
+            try self.expect(.lbrace);
+            while (!self.check(.rbrace) and !self.check(.eof)) {
+                if (!self.check(.identifier)) return error.UnexpectedToken;
+                const local = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+                self.advance();
+
+                var exported = local;
+                if (self.checkIdentText("as")) {
+                    self.advance();
+                    if (!self.check(.identifier) and !self.check(.kw_default)) return error.UnexpectedToken;
+                    exported = self.pool.intern(self.current.slice(self.lexer.source)) catch return error.OutOfMemory;
+                    self.advance();
+                }
+
+                const spec = self.ast.addNode(self.allocator, .{ .export_specifier = .{
+                    .local = local,
+                    .exported = exported,
+                } }) catch return error.OutOfMemory;
+                specifiers.append(self.allocator, spec) catch return error.OutOfMemory;
+
+                if (!self.match(.comma)) break;
+            }
+            try self.expect(.rbrace);
+
+            // Check for re-export: export { a } from "module"
+            var source: ?pool_mod.StringId = null;
+            if (self.checkIdentText("from")) {
+                self.advance();
+                if (!self.check(.string)) return error.UnexpectedToken;
+                source = try self.internStringToken();
+                self.advance();
+            }
+            try self.expectSemicolon();
+
+            const spec_list = self.ast.addNodeList(self.allocator, specifiers.items) catch return error.OutOfMemory;
+            return self.ast.addNode(self.allocator, .{ .export_named = .{
+                .specifiers = spec_list,
+                .source = source,
+            } }) catch return error.OutOfMemory;
+        }
+
+        return error.UnexpectedToken;
+    }
+
+    /// Check if current token is an identifier with specific text (for contextual keywords like "from", "as").
+    fn checkIdentText(self: *Parser, text: []const u8) bool {
+        if (self.current.type != .identifier) return false;
+        return std.mem.eql(u8, self.current.slice(self.lexer.source), text);
     }
 };

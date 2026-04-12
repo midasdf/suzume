@@ -94,6 +94,15 @@ pub const Node = union(enum) {
     object_pattern: NodeList,
     assign_pattern: struct { left: NodeIndex, right: NodeIndex },
     rest_element: NodeIndex,
+
+    // Modules (ES Modules)
+    import_decl: ImportDecl,
+    import_specifier: ImportSpecifier,
+    export_default: NodeIndex, // expression or declaration
+    export_named: ExportDecl,
+    export_decl: NodeIndex, // wraps var_decl / function_decl / class_decl
+    export_all: struct { source: StringId, alias: ?StringId }, // export * from "mod"
+    export_specifier: ExportSpecifier,
 };
 
 pub const Property = struct {
@@ -125,6 +134,28 @@ pub const Class = struct {
     name: ?StringId = null,
     super_class: NodeIndex = null_node,
     body: NodeList,
+};
+
+pub const ImportDecl = struct {
+    specifiers: NodeList, // list of import_specifier nodes
+    source: StringId, // module path string literal
+};
+
+pub const ImportSpecifier = struct {
+    imported: ?StringId, // original name (null for default import)
+    local: StringId, // local binding name
+    kind: Kind,
+    pub const Kind = enum { default_, named, namespace };
+};
+
+pub const ExportDecl = struct {
+    specifiers: NodeList, // list of export_specifier nodes
+    source: ?StringId, // re-export source (null if local export)
+};
+
+pub const ExportSpecifier = struct {
+    local: StringId,
+    exported: StringId,
 };
 
 pub const Ast = struct {

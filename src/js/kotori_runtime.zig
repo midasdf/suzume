@@ -96,6 +96,56 @@ pub const KotoriRuntime = struct {
         return .{ .ok = null };
     }
 
+    /// Evaluate a JS source string as an ES module.
+    /// Module code runs in the same global scope but populates module_exports.
+    pub fn evalModule(self: *KotoriRuntime, source: []const u8, _: []const u8) EvalResult {
+        if (source.len == 0) return .{ .ok = null };
+
+        // Compile with the shared pool
+        var compiler = Compiler.initWithPool(self.allocator, source, self.pool);
+        const bc = compiler.compile() catch |e| {
+            compiler.deinit();
+            return .{ .err = @errorName(e) };
+        };
+        for (compiler.functions.items) |obj| {
+            self.vm.objects.append(self.allocator, obj) catch {};
+        }
+        compiler.functions.items.len = 0;
+        compiler.deinit();
+
+        self.bytecodes.append(self.allocator, bc) catch {
+            return .{ .err = "OutOfMemory" };
+        };
+        const bc_ref = &self.bytecodes.items[self.bytecodes.items.len - 1];
+
+        self.vm.loadCode(bc_ref);
+        const result = self.vm.execute() catch |e| {
+            return .{ .err = @errorName(e) };
+        };
+
+        if (result.isString()) {
+            if (self.pool.get(result.asStringId())) |s| {
+                return .{ .ok = s };
+            }
+        }
+        return .{ .ok = null };
+    }
+
+    /// Get module exports after evalModule. Returns the exports map.
+    pub fn getModuleExports(self: *KotoriRuntime) *std.AutoArrayHashMapUnmanaged(kotori.StringPool.StringId, kotori.JsValue) {
+        return &self.vm.module_exports;
+    }
+
+    /// Set the module loader callback for resolving import specifiers.
+    pub fn setModuleLoader(
+        self: *KotoriRuntime,
+        ctx: *anyopaque,
+        loader_fn: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator, specifier: []const u8) ?[]const u8,
+    ) void {
+        self.vm.module_loader_ctx = ctx;
+        self.vm.module_loader_fn = loader_fn;
+    }
+
     /// Drain the microtask queue (Promise reactions, async/await resumptions).
     /// Must be called before processing timers (spec: microtasks have priority).
     pub fn runMicrotasks(self: *KotoriRuntime) bool {

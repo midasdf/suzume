@@ -448,6 +448,21 @@ pub const Compiler = struct {
                 try self.emitOp(.await_);
             },
 
+            // ── ES Modules ──────────────────────────────────────────
+            .import_decl => |decl| try self.compileImportDecl(decl),
+            .export_default => |inner| {
+                try self.compileNode(inner);
+                try self.emitOp(.export_default);
+            },
+            .export_decl => |inner| try self.compileExportDecl(inner),
+            .export_named => |decl| try self.compileExportNamed(decl),
+            .export_all => {
+                // export * from "mod" — handled at module linking time, nothing to emit
+            },
+            .import_specifier, .export_specifier => {
+                // Internal nodes, compiled via parent
+            },
+
             else => try self.emitConstant(JsValue.undefined_val),
         }
     }
@@ -1468,6 +1483,83 @@ pub const Compiler = struct {
 
         self.patchBreakJumps();
         self.popLoopCtx();
+    }
+
+    // ── ES Modules ──────────────────────────────────────────────
+
+    fn compileImportDecl(self: *Compiler, decl: ast_mod.ImportDecl) CompileError!void {
+        // Emit import_binding for each specifier so the VM can resolve them.
+        const source_ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(decl.source));
+        const specs = self.parser.ast.getNodeList(decl.specifiers);
+        for (specs) |spec_idx| {
+            const spec = self.parser.ast.getNode(spec_idx).import_specifier;
+            // Emit: import_binding <module_ci> <binding_name_ci>
+            // The VM will load module, get the exported value, and store as global
+            const binding_name = if (spec.kind == .named) spec.imported.? else spec.local;
+            const name_ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(binding_name));
+            try self.emitOpU16(.import_binding, source_ci);
+            try self.current.bc.code.append(self.allocator, @intCast(name_ci & 0xFF));
+            try self.current.bc.code.append(self.allocator, @intCast((name_ci >> 8) & 0xFF));
+            // Store as local binding name
+            try self.storeBinding(spec.local);
+        }
+        // Side-effect imports (no specifiers) still need to trigger module load
+        if (specs.len == 0) {
+            // Push module specifier and pop — VM import_binding with special "no-binding" marker
+            try self.emitConstant(JsValue.initString(decl.source));
+            try self.emitOp(.pop);
+        }
+    }
+
+    fn compileExportDecl(self: *Compiler, inner: NodeIndex) CompileError!void {
+        // Compile the declaration normally
+        try self.compileNode(inner);
+        // Then emit export_binding for each declared name
+        const inner_node = self.parser.ast.getNode(inner);
+        switch (inner_node) {
+            .var_decl => |vd| {
+                const declarators = self.parser.ast.getNodeList(vd.declarators);
+                for (declarators) |d_idx| {
+                    const d = self.parser.ast.getNode(d_idx).var_declarator;
+                    const name_node = self.parser.ast.getNode(d.name);
+                    if (name_node == .identifier) {
+                        const ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(name_node.identifier));
+                        try self.emitOpU16(.export_binding, ci);
+                    }
+                }
+            },
+            .function_decl => |f| {
+                if (f.name) |name| {
+                    const ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(name));
+                    try self.emitOpU16(.export_binding, ci);
+                }
+            },
+            .class_decl => |cls| {
+                if (cls.name) |name| {
+                    const ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(name));
+                    try self.emitOpU16(.export_binding, ci);
+                }
+            },
+            else => {},
+        }
+    }
+
+    fn compileExportNamed(self: *Compiler, decl: ast_mod.ExportDecl) CompileError!void {
+        if (decl.source != null) {
+            // Re-export: export { a } from "mod" — handled at module linking time
+            return;
+        }
+        // Local export: export { a, b as c }
+        // Load each local value and emit export_binding with exported name
+        const specs = self.parser.ast.getNodeList(decl.specifiers);
+        for (specs) |spec_idx| {
+            const spec = self.parser.ast.getNode(spec_idx).export_specifier;
+            // Load the local variable
+            try self.compileIdentifierLoad(spec.local);
+            // Export under the exported name
+            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initString(spec.exported));
+            try self.emitOpU16(.export_binding, ci);
+        }
     }
 };
 

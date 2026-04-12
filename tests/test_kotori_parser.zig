@@ -306,3 +306,164 @@ test "parse modern JS patterns" {
     defer p.deinit();
     _ = try p.parse();
 }
+
+// ---------------------------------------------------------------
+// ES Modules
+// ---------------------------------------------------------------
+
+test "import side-effect" {
+    var p = Parser.init(std.testing.allocator, "import \"./module.js\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const prog = p.ast.getNode(idx).program;
+    const stmts = p.ast.getNodeList(prog);
+    try std.testing.expectEqual(@as(usize, 1), stmts.len);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .import_decl);
+    const decl = p.ast.getNode(stmts[0]).import_decl;
+    try std.testing.expectEqual(@as(u32, 0), decl.specifiers.len);
+    // source should be "./module.js" (without quotes)
+    try std.testing.expectEqualStrings("./module.js", p.pool.get(decl.source).?);
+}
+
+test "import default" {
+    var p = Parser.init(std.testing.allocator, "import foo from \"bar\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    const decl = p.ast.getNode(stmts[0]).import_decl;
+    try std.testing.expectEqualStrings("bar", p.pool.get(decl.source).?);
+    const specs = p.ast.getNodeList(decl.specifiers);
+    try std.testing.expectEqual(@as(usize, 1), specs.len);
+    const spec = p.ast.getNode(specs[0]).import_specifier;
+    try std.testing.expect(spec.kind == .default_);
+    try std.testing.expectEqualStrings("foo", p.pool.get(spec.local).?);
+}
+
+test "import named" {
+    var p = Parser.init(std.testing.allocator, "import { a, b as c } from \"mod\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    const decl = p.ast.getNode(stmts[0]).import_decl;
+    const specs = p.ast.getNodeList(decl.specifiers);
+    try std.testing.expectEqual(@as(usize, 2), specs.len);
+    const s0 = p.ast.getNode(specs[0]).import_specifier;
+    try std.testing.expect(s0.kind == .named);
+    try std.testing.expectEqualStrings("a", p.pool.get(s0.local).?);
+    const s1 = p.ast.getNode(specs[1]).import_specifier;
+    try std.testing.expectEqualStrings("c", p.pool.get(s1.local).?);
+    try std.testing.expectEqualStrings("b", p.pool.get(s1.imported.?).?);
+}
+
+test "import namespace" {
+    var p = Parser.init(std.testing.allocator, "import * as ns from \"mod\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    const decl = p.ast.getNode(stmts[0]).import_decl;
+    const specs = p.ast.getNodeList(decl.specifiers);
+    try std.testing.expectEqual(@as(usize, 1), specs.len);
+    const spec = p.ast.getNode(specs[0]).import_specifier;
+    try std.testing.expect(spec.kind == .namespace);
+    try std.testing.expectEqualStrings("ns", p.pool.get(spec.local).?);
+}
+
+test "import default and named" {
+    var p = Parser.init(std.testing.allocator, "import React, { useState } from \"react\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    const decl = p.ast.getNode(stmts[0]).import_decl;
+    const specs = p.ast.getNodeList(decl.specifiers);
+    try std.testing.expectEqual(@as(usize, 2), specs.len);
+    try std.testing.expect(p.ast.getNode(specs[0]).import_specifier.kind == .default_);
+    try std.testing.expect(p.ast.getNode(specs[1]).import_specifier.kind == .named);
+}
+
+test "export default expression" {
+    var p = Parser.init(std.testing.allocator, "export default 42;");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .export_default);
+    const inner = p.ast.getNode(p.ast.getNode(stmts[0]).export_default);
+    try std.testing.expect(inner == .number_literal);
+}
+
+test "export const declaration" {
+    var p = Parser.init(std.testing.allocator, "export const x = 1;");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .export_decl);
+    const inner = p.ast.getNode(p.ast.getNode(stmts[0]).export_decl);
+    try std.testing.expect(inner == .var_decl);
+}
+
+test "export function declaration" {
+    var p = Parser.init(std.testing.allocator, "export function hello() {}");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .export_decl);
+    const inner = p.ast.getNode(p.ast.getNode(stmts[0]).export_decl);
+    try std.testing.expect(inner == .function_decl);
+}
+
+test "export named" {
+    var p = Parser.init(std.testing.allocator, "export { a, b as c };");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .export_named);
+    const decl = p.ast.getNode(stmts[0]).export_named;
+    try std.testing.expect(decl.source == null);
+    const specs = p.ast.getNodeList(decl.specifiers);
+    try std.testing.expectEqual(@as(usize, 2), specs.len);
+}
+
+test "export all re-export" {
+    var p = Parser.init(std.testing.allocator, "export * from \"utils\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .export_all);
+    const ea = p.ast.getNode(stmts[0]).export_all;
+    try std.testing.expectEqualStrings("utils", p.pool.get(ea.source).?);
+    try std.testing.expect(ea.alias == null);
+}
+
+test "export all with alias" {
+    var p = Parser.init(std.testing.allocator, "export * as helpers from \"utils\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    const ea = p.ast.getNode(stmts[0]).export_all;
+    try std.testing.expectEqualStrings("helpers", p.pool.get(ea.alias.?).?);
+}
+
+test "re-export named" {
+    var p = Parser.init(std.testing.allocator, "export { foo, bar as baz } from \"lib\";");
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    const decl = p.ast.getNode(stmts[0]).export_named;
+    try std.testing.expectEqualStrings("lib", p.pool.get(decl.source.?).?);
+    try std.testing.expectEqual(@as(usize, 2), p.ast.getNodeList(decl.specifiers).len);
+}
+
+test "mixed module statements" {
+    const source =
+        \\import { a } from "mod";
+        \\export const x = a;
+        \\export default x;
+    ;
+    var p = Parser.init(std.testing.allocator, source);
+    defer p.deinit();
+    const idx = try p.parse();
+    const stmts = p.ast.getNodeList(p.ast.getNode(idx).program);
+    try std.testing.expectEqual(@as(usize, 3), stmts.len);
+    try std.testing.expect(p.ast.getNode(stmts[0]) == .import_decl);
+    try std.testing.expect(p.ast.getNode(stmts[1]) == .export_decl);
+    try std.testing.expect(p.ast.getNode(stmts[2]) == .export_default);
+}

@@ -2505,3 +2505,122 @@ test "class instanceof-like check via prototype" {
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
 }
+
+// ---------------------------------------------------------------
+// ES Modules
+// ---------------------------------------------------------------
+
+test "export default expression" {
+    var compiler = Compiler.init(std.testing.allocator, "export default 42;");
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    _ = try vm_inst.execute();
+    const default_sid = try compiler.parser.pool.intern("default");
+    const exported = vm_inst.module_exports.get(default_sid);
+    try std.testing.expect(exported != null);
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), exported.?.asNumber(), 0.001);
+}
+
+test "export const declaration" {
+    var compiler = Compiler.init(std.testing.allocator,
+        \\export const x = 10;
+        \\export const y = 20;
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    _ = try vm_inst.execute();
+    const x_sid = try compiler.parser.pool.intern("x");
+    const y_sid = try compiler.parser.pool.intern("y");
+    const ex = vm_inst.module_exports.get(x_sid);
+    const ey = vm_inst.module_exports.get(y_sid);
+    try std.testing.expect(ex != null);
+    try std.testing.expect(ey != null);
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), ex.?.asNumber(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), ey.?.asNumber(), 0.001);
+}
+
+test "export function declaration" {
+    var compiler = Compiler.init(std.testing.allocator,
+        \\export function add(a, b) { return a + b; }
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    _ = try vm_inst.execute();
+    const add_sid = try compiler.parser.pool.intern("add");
+    const exported = vm_inst.module_exports.get(add_sid);
+    try std.testing.expect(exported != null);
+}
+
+test "export named from locals" {
+    var compiler = Compiler.init(std.testing.allocator,
+        \\var a = 100;
+        \\var b = 200;
+        \\export { a, b };
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    _ = try vm_inst.execute();
+    const a_sid = try compiler.parser.pool.intern("a");
+    const b_sid = try compiler.parser.pool.intern("b");
+    const ea = vm_inst.module_exports.get(a_sid);
+    const eb = vm_inst.module_exports.get(b_sid);
+    try std.testing.expect(ea != null);
+    try std.testing.expect(eb != null);
+    try std.testing.expectApproxEqAbs(@as(f64, 100.0), ea.?.asNumber(), 0.001);
+    try std.testing.expectApproxEqAbs(@as(f64, 200.0), eb.?.asNumber(), 0.001);
+}
+
+test "import side-effect only (no crash)" {
+    // Side-effect import with no module loader should not crash
+    var compiler = Compiler.init(std.testing.allocator,
+        \\import "./nonexistent.js";
+        \\var result = 1;
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    _ = try vm_inst.execute();
+    const r_sid = try compiler.parser.pool.intern("result");
+    const val = vm_inst.globals.get(r_sid) orelse JsValue.undefined_val;
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), val.asNumber(), 0.001);
+}
+
+test "import binding resolves from module_exports" {
+    // Pre-populate module_exports, then import should pick them up
+    var compiler = Compiler.init(std.testing.allocator,
+        \\import { foo } from "test-mod";
+        \\var result = foo;
+    );
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    // Pre-seed: simulate a loaded module that exports "foo" = 999
+    const foo_sid = try compiler.parser.pool.intern("foo");
+    try vm_inst.module_exports.put(std.testing.allocator, foo_sid, JsValue.initNumber(999));
+    _ = try vm_inst.execute();
+    const r_sid = try compiler.parser.pool.intern("result");
+    const val = vm_inst.globals.get(r_sid) orelse JsValue.undefined_val;
+    try std.testing.expectApproxEqAbs(@as(f64, 999.0), val.asNumber(), 0.001);
+}

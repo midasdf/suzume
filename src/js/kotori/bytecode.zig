@@ -94,6 +94,11 @@ pub const OpCode = enum(u8) {
     await_, // stack: [value] → [resolved_value] (suspends if pending)
     async_return, // stack: [value] → resolve async function's promise, return
 
+    // Modules
+    import_binding, // operand: u16 const index (module specifier), next u16 const index (binding name)
+    export_binding, // operand: u16 const index (exported name)
+    export_default, // stack: [value] → [] — register default export
+
     // Special
     typeof_,
     void_,
