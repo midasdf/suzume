@@ -543,7 +543,35 @@ fn signalJsEnabled(doc: *Document) void {
 // Kotori JS engine integration
 // ══════════════════════════════════════════════════════════════════════
 
-const KotoriRuntime = @import("kotori_runtime").KotoriRuntime;
+const kotori_rt_mod = @import("kotori_runtime");
+const KotoriRuntime = kotori_rt_mod.KotoriRuntime;
+const KotoriVM = kotori_rt_mod.VM;
+const HttpClient = @import("../net/http.zig").HttpClient;
+
+/// Bridge function: adapts HttpClient.request() to the kotori VM fetch callback signature.
+fn kotoriFetchBridge(ctx: *anyopaque, allocator: std.mem.Allocator, url: []const u8, method: []const u8, body: ?[]const u8) ?KotoriVM.HttpFetchResult {
+    const client: *HttpClient = @ptrCast(@alignCast(ctx));
+    // Need null-terminated URL for libcurl
+    const url_z = allocator.dupeZ(u8, url) catch return null;
+    defer allocator.free(url_z);
+    const method_z: ?[:0]const u8 = if (!std.mem.eql(u8, method, "GET"))
+        allocator.dupeZ(u8, method) catch null
+    else
+        null;
+    defer if (method_z) |m| allocator.free(m);
+
+    const response = client.request(allocator, url_z, .{
+        .method = method_z,
+        .body = body,
+        .timeout_secs = 15,
+    }) catch return null;
+
+    return .{
+        .status = response.status_code,
+        .body = response.body,
+        .content_type = response.content_type,
+    };
+}
 
 /// Initialize page JavaScript using the kotori engine (experimental).
 /// Simplified path: inline scripts only, no modules/defer/events/timers.
@@ -554,6 +582,11 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
         std.debug.print("[kotori] Failed to init kotori runtime\n", .{});
         return;
     };
+
+    // Wire up fetch() API if loader is available
+    if (loader) |l| {
+        krt.setHttpFetcher(@ptrCast(l.client), &kotoriFetchBridge);
+    }
 
     // Execute <script> tags (inline + external)
     const doc_node = doc.documentNode();

@@ -7,7 +7,7 @@ const std = @import("std");
 const kotori = @import("kotori");
 const kotori_dom = @import("kotori_dom");
 
-const VM = kotori.VM;
+pub const VM = kotori.VM;
 const JsValue = kotori.JsValue;
 const Compiler = kotori.Compiler;
 const Bytecode = kotori.Bytecode;
@@ -121,6 +121,16 @@ pub const KotoriRuntime = struct {
     /// Check if any timers are pending.
     pub fn hasPendingTimers(self: *KotoriRuntime) bool {
         return self.vm.hasPendingTimers() or self.vm.hasPendingMicrotasks();
+    }
+
+    /// Set the HTTP fetch callback for fetch() API support.
+    pub fn setHttpFetcher(
+        self: *KotoriRuntime,
+        ctx: *anyopaque,
+        fetch_fn: *const fn (ctx: *anyopaque, allocator: std.mem.Allocator, url: []const u8, method: []const u8, body: ?[]const u8) ?VM.HttpFetchResult,
+    ) void {
+        self.vm.http_fetch_ctx = ctx;
+        self.vm.http_fetch_fn = fetch_fn;
     }
 
     /// Check and clear DOM dirty flag.

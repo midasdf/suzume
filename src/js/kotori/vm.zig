@@ -52,6 +52,10 @@ pub const VM = struct {
     continuations: std.ArrayListUnmanaged(*Continuation) = .{},
     promise_proto: ?*JsObject = null,
 
+    // HTTP fetch callback (set by browser runtime)
+    http_fetch_ctx: ?*anyopaque = null,
+    http_fetch_fn: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, url: []const u8, method: []const u8, body: ?[]const u8) ?HttpFetchResult = null,
+
     // Exception handling
     try_stack: [32]TryContext = undefined,
     try_depth: u32 = 0,
@@ -79,6 +83,12 @@ pub const VM = struct {
             value: JsValue,
             is_reject: bool,
         },
+    };
+
+    pub const HttpFetchResult = struct {
+        status: u32,
+        body: []u8, // allocated with the provided allocator
+        content_type: []const u8,
     };
 
     pub const Continuation = struct {
@@ -1262,6 +1272,13 @@ pub const VM = struct {
             try self.registerNativeMethod(promise_ctor, "reject", &nativePromiseReject);
         }
 
+        // ── fetch ──
+        {
+            const fetch_obj = try self.createNativeFn(&nativeFetch);
+            const fetch_id = try self.pool.intern("fetch");
+            try self.globals.put(self.allocator, fetch_id, JsValue.initObject(fetch_obj));
+        }
+
         // ── Global constants ──
         const undef_id = try self.pool.intern("undefined");
         try self.globals.put(self.allocator, undef_id, JsValue.undefined_val);
@@ -2104,6 +2121,133 @@ pub const VM = struct {
             }
         }
         return null;
+    }
+
+    // ── fetch API ────────────────────────────────────────────────────
+
+    fn nativeFetch(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const fetch_fn = vm.http_fetch_fn orelse {
+            // No HTTP client — return rejected promise
+            const p = try vm.createPromiseObj();
+            const err_id = try vm.pool.intern("fetch not available");
+            try vm.rejectPromise(p, JsValue.initString(err_id));
+            return JsValue.initObject(p);
+        };
+        const fetch_ctx = vm.http_fetch_ctx orelse return JsValue.undefined_val;
+
+        // Get URL from first argument
+        if (args.len == 0) {
+            const p = try vm.createPromiseObj();
+            const err_id = try vm.pool.intern("fetch requires a URL");
+            try vm.rejectPromise(p, JsValue.initString(err_id));
+            return JsValue.initObject(p);
+        }
+
+        const url_str = if (args[0].isString())
+            vm.pool.get(args[0].asStringId()) orelse ""
+        else
+            "";
+
+        if (url_str.len == 0) {
+            const p = try vm.createPromiseObj();
+            const err_id = try vm.pool.intern("invalid URL");
+            try vm.rejectPromise(p, JsValue.initString(err_id));
+            return JsValue.initObject(p);
+        }
+
+        // Parse options (second argument)
+        var method: []const u8 = "GET";
+        var body: ?[]const u8 = null;
+        if (args.len > 1 and args[1].isObject()) {
+            const opts = args[1].asJsObject();
+            const method_id = vm.pool.intern("method") catch null;
+            if (method_id) |mid| {
+                if (opts.getProperty(mid)) |mv| {
+                    if (mv.isString()) {
+                        method = vm.pool.get(mv.asStringId()) orelse "GET";
+                    }
+                }
+            }
+            const body_id = vm.pool.intern("body") catch null;
+            if (body_id) |bid| {
+                if (opts.getProperty(bid)) |bv| {
+                    if (bv.isString()) {
+                        body = vm.pool.get(bv.asStringId());
+                    }
+                }
+            }
+        }
+
+        // Make the HTTP request (synchronous)
+        const result = fetch_fn(fetch_ctx, vm.allocator, url_str, method, body);
+        if (result == null) {
+            const p = try vm.createPromiseObj();
+            const err_id = try vm.pool.intern("network error");
+            try vm.rejectPromise(p, JsValue.initString(err_id));
+            return JsValue.initObject(p);
+        }
+
+        const resp = result.?;
+        defer vm.allocator.free(resp.body);
+        defer if (resp.content_type.len > 0) vm.allocator.free(resp.content_type);
+
+        // Create Response object
+        const response = try vm.createObj(.{});
+
+        // response.status
+        const status_id = try vm.pool.intern("status");
+        try response.setProperty(vm.allocator, status_id, JsValue.initNumber(@floatFromInt(resp.status)));
+
+        // response.ok
+        const ok_id = try vm.pool.intern("ok");
+        try response.setProperty(vm.allocator, ok_id, JsValue.initBool(resp.status >= 200 and resp.status < 300));
+
+        // response.url
+        const url_id = try vm.pool.intern("url");
+        const url_sid = try vm.pool.intern(url_str);
+        try response.setProperty(vm.allocator, url_id, JsValue.initString(url_sid));
+
+        // Store body as __body property (for text()/json())
+        const body_id_key = try vm.pool.intern("__body");
+        const body_sid = try vm.pool.intern(resp.body);
+        try response.setProperty(vm.allocator, body_id_key, JsValue.initString(body_sid));
+
+        // response.text() → Promise<string>
+        try vm.registerNativeMethod(response, "text", &nativeResponseText);
+
+        // response.json() → Promise<object>
+        try vm.registerNativeMethod(response, "json", &nativeResponseJson);
+
+        // Return resolved Promise with Response
+        const promise = try vm.createPromiseObj();
+        try vm.resolvePromise(promise, JsValue.initObject(response));
+        return JsValue.initObject(promise);
+    }
+
+    fn nativeResponseText(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        const body_key = try vm.pool.intern("__body");
+        const body_val = obj.getProperty(body_key) orelse JsValue.undefined_val;
+        // Return resolved Promise with body string
+        const promise = try vm.createPromiseObj();
+        try vm.resolvePromise(promise, body_val);
+        return JsValue.initObject(promise);
+    }
+
+    fn nativeResponseJson(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        const body_key = try vm.pool.intern("__body");
+        const body_val = obj.getProperty(body_key) orelse JsValue.undefined_val;
+        // Parse JSON using the existing JSON.parse builtin
+        const parsed = try nativeJsonParse(@ptrCast(vm), JsValue.undefined_val, &.{body_val});
+        const promise = try vm.createPromiseObj();
+        try vm.resolvePromise(promise, parsed);
+        return JsValue.initObject(promise);
     }
 
     // ── Object methods ─────────────────────────────────────────────

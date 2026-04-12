@@ -2133,6 +2133,22 @@ test "multiple awaits in sequence" {
     try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
 }
 
+test "fetch without http client rejects" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\fetch("http://example.com").catch(function(e) { result = 1; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "fetch with no args rejects" {
+    const result = try evalWithMicrotasks(
+        \\var result = 0;
+        \\fetch().catch(function(e) { result = 1; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
 test "async function with no return resolves undefined" {
     const result = try evalWithMicrotasks(
         \\var result = 99;
