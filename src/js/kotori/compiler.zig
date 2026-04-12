@@ -1007,11 +1007,27 @@ pub const Compiler = struct {
                         .string_literal => |id| id,
                         else => 0,
                     };
-                    try self.emitOp(.dup); // dup object ref
-                    try self.compileNode(prop.value);
                     const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_id)));
-                    try self.emitOpU16(.set_prop, ci);
-                    try self.emitOp(.pop); // discard set_prop result, keep object
+                    switch (prop.kind) {
+                        .init => {
+                            try self.emitOp(.dup);
+                            try self.compileNode(prop.value);
+                            try self.emitOpU16(.set_prop, ci);
+                            try self.emitOp(.pop);
+                        },
+                        .get => {
+                            try self.emitOp(.dup);
+                            try self.compileNode(prop.value);
+                            try self.emitOpU16(.define_getter, ci);
+                            try self.emitOp(.pop); // pop dup'd obj
+                        },
+                        .set => {
+                            try self.emitOp(.dup);
+                            try self.compileNode(prop.value);
+                            try self.emitOpU16(.define_setter, ci);
+                            try self.emitOp(.pop); // pop dup'd obj
+                        },
+                    }
                 },
                 else => {},
             }
@@ -1146,7 +1162,7 @@ pub const Compiler = struct {
                         continue;
                     }
 
-                    // Instance method: proto.methodName = function
+                    // Instance method/getter/setter: on proto
                     // Stack: [ctor, proto]
                     try self.emitOp(.dup); // [ctor, proto, proto]
                     const val = self.parser.ast.getNode(prop.value);
@@ -1156,8 +1172,21 @@ pub const Compiler = struct {
                     }
                     // [ctor, proto, proto, method_fn]
                     const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_id)));
-                    try self.emitOpU16(.set_prop, ci); // [ctor, proto, method_fn]
-                    try self.emitOp(.pop); // [ctor, proto]
+                    switch (prop.kind) {
+                        .init => {
+                            try self.emitOpU16(.set_prop, ci);
+                            try self.emitOp(.pop);
+                        },
+                        .get => {
+                            try self.emitOpU16(.define_getter, ci);
+                            try self.emitOp(.pop); // pop dup'd proto
+                        },
+                        .set => {
+                            try self.emitOpU16(.define_setter, ci);
+                            try self.emitOp(.pop); // pop dup'd proto
+                        },
+                    }
+                    // [ctor, proto]
                 },
                 else => {},
             }

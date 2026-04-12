@@ -29,6 +29,8 @@ pub const JsObject = struct {
     properties: std.AutoArrayHashMapUnmanaged(StringId, JsValue) = .{},
     prototype: ?*JsObject = null,
     data: ObjData = .none,
+    getters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
+    setters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
 
     pub const NativeFn = *const fn (ctx: *anyopaque, this: value_mod.JsValue, args: []const value_mod.JsValue) anyerror!value_mod.JsValue;
 
@@ -74,6 +76,8 @@ pub const JsObject = struct {
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
         self.properties.deinit(allocator);
+        if (self.getters) |*g| g.deinit(allocator);
+        if (self.setters) |*s| s.deinit(allocator);
         switch (self.data) {
             .function => |*f| f.deinit(allocator),
             .array => |*a| a.deinit(allocator),

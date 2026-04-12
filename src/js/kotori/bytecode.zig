@@ -101,6 +101,10 @@ pub const OpCode = enum(u8) {
     export_binding, // operand: u16 const index (exported name)
     export_default, // stack: [value] → [] — register default export
 
+    // Getters/Setters
+    define_getter, // operand: u16 (property name), stack: [obj, func] → [obj]
+    define_setter, // operand: u16 (property name), stack: [obj, func] → [obj]
+
     // Spread
     spread_into_array, // stack: [array, iterable] → [array]
     call_spread, // stack: [func, args_array] → [result]

@@ -568,6 +568,23 @@ pub const VM = struct {
                                 continue;
                             }
                         }
+                        // Check for getter (own or prototype)
+                        if (obj.getters) |getters| {
+                            if (getters.get(name_id)) |getter_fn| {
+                                const result = try self.callJsFunction(getter_fn, obj_val, &.{});
+                                self.push(result);
+                                continue;
+                            }
+                        }
+                        if (obj.prototype) |proto| {
+                            if (proto.getters) |getters| {
+                                if (getters.get(name_id)) |getter_fn| {
+                                    const result = try self.callJsFunction(getter_fn, obj_val, &.{});
+                                    self.push(result);
+                                    continue;
+                                }
+                            }
+                        }
                         // Array .length
                         if (obj.obj_type == .array) {
                             if (self.pool.get(name_id)) |name_str| {
@@ -616,6 +633,33 @@ pub const VM = struct {
                     }
                 },
 
+                .define_getter => {
+                    const ci = self.readU16(frame);
+                    const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
+                    const func = self.pop(); // getter function
+                    const obj_val = self.peek(); // object stays on stack
+                    if (obj_val.isObject()) {
+                        const obj = obj_val.asJsObject();
+                        if (obj.getters == null) {
+                            obj.getters = .{};
+                        }
+                        try obj.getters.?.put(self.allocator, name_id, func);
+                    }
+                },
+                .define_setter => {
+                    const ci = self.readU16(frame);
+                    const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
+                    const func = self.pop(); // setter function
+                    const obj_val = self.peek(); // object stays on stack
+                    if (obj_val.isObject()) {
+                        const obj = obj_val.asJsObject();
+                        if (obj.setters == null) {
+                            obj.setters = .{};
+                        }
+                        try obj.setters.?.put(self.allocator, name_id, func);
+                    }
+                },
+
                 .set_prop => {
                     const ci = self.readU16(frame);
                     const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
@@ -623,6 +667,23 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Check for setter (own or prototype)
+                        if (obj.setters) |setters_map| {
+                            if (setters_map.get(name_id)) |setter_fn| {
+                                _ = try self.callJsFunction(setter_fn, obj_val, &.{val});
+                                self.push(val);
+                                continue;
+                            }
+                        }
+                        if (obj.prototype) |proto| {
+                            if (proto.setters) |setters_map| {
+                                if (setters_map.get(name_id)) |setter_fn| {
+                                    _ = try self.callJsFunction(setter_fn, obj_val, &.{val});
+                                    self.push(val);
+                                    continue;
+                                }
+                            }
+                        }
                         // DOM node/style property interception
                         if ((obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_set_prop != null) {
                             if (self.dom_set_prop.?(self, obj, name_id, val)) {

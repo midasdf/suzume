@@ -144,6 +144,10 @@ pub const Parser = struct {
         return false;
     }
 
+    fn peek_next_type(self: *const Parser) TokenType {
+        return self.peek_token.type;
+    }
+
     fn check(self: *const Parser, tt: TokenType) bool {
         return self.current.type == tt;
     }
@@ -545,8 +549,41 @@ pub const Parser = struct {
     }
 
     fn parseProperty(self: *Parser) ParseError!NodeIndex {
+        // Check for getter/setter: get prop() { ... }, set prop(val) { ... }
+        if (self.current.type == .identifier) {
+            const text = self.tokenSlice(self.current);
+            if ((std.mem.eql(u8, text, "get") or std.mem.eql(u8, text, "set")) and
+                self.peek_next_type() != .colon and self.peek_next_type() != .lparen and self.peek_next_type() != .comma and self.peek_next_type() != .rbrace)
+            {
+                const is_getter = std.mem.eql(u8, text, "get");
+                self.advance(); // consume get/set
+                const prop_key = try self.parsePropertyKey();
+                try self.expect(.lparen);
+                var params = std.ArrayListUnmanaged(NodeIndex){};
+                defer params.deinit(self.allocator);
+                while (!self.check(.rparen) and !self.check(.eof)) {
+                    const param = try self.parseFunctionParam();
+                    params.append(self.allocator, param) catch return error.OutOfMemory;
+                    if (!self.match(.comma)) break;
+                }
+                try self.expect(.rparen);
+                const body = try self.parseBlock();
+                const params_list = self.ast.addNodeList(self.allocator, params.items) catch return error.OutOfMemory;
+                const func_node = try self.ast.addNode(self.allocator, .{ .function_expr = .{
+                    .params = params_list,
+                    .body = body,
+                    .is_expression = true,
+                } });
+                return self.ast.addNode(self.allocator, .{ .property = .{
+                    .key = prop_key,
+                    .value = func_node,
+                    .kind = if (is_getter) .get else .set,
+                    .method = true,
+                } }) catch return error.OutOfMemory;
+            }
+        }
+
         // Check for method shorthand: identifier() { ... }
-        // and getter/setter: get prop() { ... }, set prop(val) { ... }
         const key = try self.parsePropertyKey();
 
         // Method shorthand: key(...) { body }

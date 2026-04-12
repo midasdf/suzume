@@ -3149,3 +3149,47 @@ test "eval: spread mixed args" {
     const result = try evalExpr("function f(a,b,c,d) { return a+b+c+d; } f(0, ...[1,2], 3)");
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
+
+// ── Object getter/setter ────────────────────────────────────────
+
+test "eval: object getter" {
+    const result = try evalExpr("let o = { get x() { return 42; } }; o.x");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: object getter and setter" {
+    const result = try evalExpr(
+        \\let o = {
+        \\  _v: 0,
+        \\  set v(x) { this._v = x; },
+        \\  get v() { return this._v; }
+        \\};
+        \\o.v = 10;
+        \\o.v
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: class getter" {
+    const result = try evalExpr(
+        \\class C {
+        \\  get name() { return 42; }
+        \\}
+        \\new C().name
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: class getter and setter" {
+    const result = try evalExpr(
+        \\class C {
+        \\  constructor() { this._v = 0; }
+        \\  set val(v) { this._v = v * 2; }
+        \\  get val() { return this._v; }
+        \\}
+        \\let c = new C();
+        \\c.val = 5;
+        \\c.val
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
