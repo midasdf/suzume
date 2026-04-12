@@ -1163,48 +1163,99 @@ fn matchIsWhereInner(inner: []const u8, element: ElementAdapter) bool {
     return false;
 }
 
-/// Match :has() inner selector — check if element has matching descendants/siblings
+/// Match :has() inner selector — check if element has matching descendants/siblings.
+/// Supports combinator chains: :has(~ div .test), :has(+ div .test), :has(> .a .b)
 fn matchHasInner(inner: []const u8, element: ElementAdapter) bool {
     const trimmed = std.mem.trim(u8, inner, " \t");
     if (trimmed.len == 0) return false;
 
-    // Detect combinator prefix
+    // Split inner selector: combinator + first compound + optional rest
+    // e.g. "~ div .test" → combinator=~, first="div", rest=".test"
+    // e.g. "> .class:first-child" → combinator=>, first=".class:first-child", rest=""
+    // e.g. ".test" → combinator=descendant, first=".test", rest=""
+    var start: usize = 0;
+    var combinator: enum { descendant, child, next_sibling, subsequent_sibling } = .descendant;
+
     if (trimmed[0] == '>') {
-        // :has(> selector) — direct child
-        const sel = std.mem.trim(u8, trimmed[1..], " \t");
-        var child = element.firstChild();
-        while (child) |c| {
-            if (matchInnerSimple(sel, c)) return true;
-            child = c.nextElementSibling();
-        }
-        return false;
-    }
-    if (trimmed[0] == '+') {
-        // :has(+ selector) — next sibling
-        const sel = std.mem.trim(u8, trimmed[1..], " \t");
-        const next = element.nextElementSibling() orelse return false;
-        return matchInnerSimple(sel, next);
-    }
-    if (trimmed[0] == '~') {
-        // :has(~ selector) — subsequent siblings
-        const sel = std.mem.trim(u8, trimmed[1..], " \t");
-        var sib = element.nextElementSibling();
-        while (sib) |s| {
-            if (matchInnerSimple(sel, s)) return true;
-            sib = s.nextElementSibling();
-        }
-        return false;
+        combinator = .child;
+        start = 1;
+    } else if (trimmed[0] == '+') {
+        combinator = .next_sibling;
+        start = 1;
+    } else if (trimmed[0] == '~') {
+        combinator = .subsequent_sibling;
+        start = 1;
     }
 
-    // Default: descendant — check all descendants
-    return hasMatchingDescendant(trimmed, element, 0);
+    const after_comb = std.mem.trim(u8, trimmed[start..], " \t");
+    // Split at first whitespace to get compound selector and rest
+    const split = splitAtFirstSpace(after_comb);
+    const first = split.first;
+    const rest = split.rest;
+
+    switch (combinator) {
+        .child => {
+            var child = element.firstChild();
+            while (child) |c| {
+                if (matchInnerSimple(first, c)) {
+                    if (rest.len == 0) return true;
+                    if (hasMatchingDescendant(rest, c, 0)) return true;
+                }
+                child = c.nextElementSibling();
+            }
+            return false;
+        },
+        .next_sibling => {
+            const next = element.nextElementSibling() orelse return false;
+            if (!matchInnerSimple(first, next)) return false;
+            if (rest.len == 0) return true;
+            return hasMatchingDescendant(rest, next, 0);
+        },
+        .subsequent_sibling => {
+            var sib = element.nextElementSibling();
+            while (sib) |s| {
+                if (matchInnerSimple(first, s)) {
+                    if (rest.len == 0) return true;
+                    if (hasMatchingDescendant(rest, s, 0)) return true;
+                }
+                sib = s.nextElementSibling();
+            }
+            return false;
+        },
+        .descendant => {
+            return hasMatchingDescendant(after_comb, element, 0);
+        },
+    }
+}
+
+/// Split a selector string at the first whitespace (respecting brackets/parens).
+/// Returns the first compound selector and the rest.
+fn splitAtFirstSpace(sel: []const u8) struct { first: []const u8, rest: []const u8 } {
+    var paren_depth: u32 = 0;
+    var bracket_depth: u32 = 0;
+    for (sel, 0..) |ch, i| {
+        if (ch == '(') paren_depth += 1 else if (ch == ')' and paren_depth > 0) paren_depth -= 1 else if (ch == '[') bracket_depth += 1 else if (ch == ']' and bracket_depth > 0) bracket_depth -= 1 else if (ch == ' ' and paren_depth == 0 and bracket_depth == 0) {
+            return .{
+                .first = sel[0..i],
+                .rest = std.mem.trim(u8, sel[i + 1 ..], " \t"),
+            };
+        }
+    }
+    return .{ .first = sel, .rest = "" };
 }
 
 fn hasMatchingDescendant(sel: []const u8, element: ElementAdapter, depth: u32) bool {
     if (depth > 32) return false; // guard against deeply nested DOM
+    // Split multi-segment descendant selector: "div .test" → first="div", rest=".test"
+    const split = splitAtFirstSpace(sel);
     var child = element.firstChild();
     while (child) |c| {
-        if (matchInnerSimple(sel, c)) return true;
+        if (matchInnerSimple(split.first, c)) {
+            if (split.rest.len == 0) return true;
+            // Match rest as descendants of this matched element
+            if (hasMatchingDescendant(split.rest, c, depth + 1)) return true;
+        }
+        // Always recurse into children for descendant matching
         if (hasMatchingDescendant(sel, c, depth + 1)) return true;
         child = c.nextElementSibling();
     }
