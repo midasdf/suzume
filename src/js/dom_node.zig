@@ -2200,15 +2200,34 @@ pub fn nodeGetRootNode(
 
 pub fn nodeGetOwnerDocument(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    // Return the global document object
-    const global = qjs.JS_GetGlobalObject(c);
-    defer qjs.JS_FreeValue(c, global);
-    return qjs.JS_GetPropertyStr(c, global, "document");
+    // Determine which context to use based on the node's lexbor document owner.
+    // When iframes exist, the passed-in ctx can differ from the top frame's ctx,
+    // causing JS_GetGlobalObject to return a different wrapper (breaks === identity).
+    // Use the top frame's ctx if the node belongs to the main document.
+    var use_ctx = c;
+    if (api.g_top_frame.ctx) |main_ctx| {
+        if (api.getNode(c, this_val)) |node| {
+            // Walk to the root's document
+            var cur: *lxb.lxb_dom_node_t = node;
+            while (cur.parent) |p| cur = p;
+            // If the root is the main document, use main context for identity
+            if (api.g_top_frame.document) |main_doc| {
+                if (@intFromPtr(cur) == @intFromPtr(main_doc) or
+                    @intFromPtr(cur.owner_document) == @intFromPtr(main_doc))
+                {
+                    use_ctx = main_ctx;
+                }
+            }
+        }
+    }
+    const global = qjs.JS_GetGlobalObject(use_ctx);
+    defer qjs.JS_FreeValue(use_ctx, global);
+    return qjs.JS_GetPropertyStr(use_ctx, global, "document");
 }
 
 pub fn nodeGetIsConnected(
