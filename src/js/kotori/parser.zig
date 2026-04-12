@@ -1586,7 +1586,21 @@ pub const Parser = struct {
     }
 
     fn parseMember(self: *Parser, object: NodeIndex) ParseError!NodeIndex {
+        const is_optional = self.current.type == .optional_chain or self.current.type == .question_dot;
         self.advance(); // consume . or ?.
+
+        // ?.[ → optional computed member
+        if (is_optional and self.current.type == .lbracket) {
+            self.advance(); // consume [
+            const prop = try self.parsePrecedence(.assignment);
+            try self.expect(.rbracket);
+            return self.ast.addNode(self.allocator, .{ .computed_member = .{
+                .object = object,
+                .property = prop,
+                .optional = true,
+            } }) catch return error.OutOfMemory;
+        }
+
         if (self.current.type != .identifier and !isKeyword(self.current.type)) {
             return error.UnexpectedToken;
         }
@@ -1596,6 +1610,7 @@ pub const Parser = struct {
         return self.ast.addNode(self.allocator, .{ .member = .{
             .object = object,
             .property = sid,
+            .optional = is_optional,
         } }) catch return error.OutOfMemory;
     }
 

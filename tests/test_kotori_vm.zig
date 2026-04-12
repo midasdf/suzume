@@ -3083,3 +3083,40 @@ test "eval: chained null ?? undefined ?? 42" {
     const result = try evalExpr("null ?? undefined ?? 42");
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
+
+// ── Optional chaining (?.) ──────────────────────────────────────
+
+test "eval: null?.foo" {
+    const result = try evalExpr("null?.foo");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: undefined?.foo" {
+    const result = try evalExpr("undefined?.foo");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: obj?.a" {
+    const result = try evalExpr("let o = {a: 42}; o?.a");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: null?.foo?.bar" {
+    const result = try evalExpr("null?.foo?.bar");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: deep optional chain" {
+    const result = try evalExpr("let o = {a: {b: 99}}; o?.a?.b");
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: null?.[0]" {
+    const result = try evalExpr("null?.[0]");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: arr?.[1]" {
+    const result = try evalExpr("[10,20,30]?.[1]");
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
+}

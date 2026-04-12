@@ -443,8 +443,20 @@ pub const Compiler = struct {
             // ── Objects ──────────────────────────────────────────────
             .array_literal => |list| try self.compileArrayLiteral(list),
             .object_literal => |list| try self.compileObjectLiteral(list),
-            .member => |m| try self.compileMemberAccess(m.object, m.property),
-            .computed_member => |m| try self.compileComputedMember(m.object, m.property),
+            .member => |m| {
+                if (m.optional) {
+                    try self.compileOptionalMember(m.object, m.property);
+                } else {
+                    try self.compileMemberAccess(m.object, m.property);
+                }
+            },
+            .computed_member => |m| {
+                if (m.optional) {
+                    try self.compileOptionalComputedMember(m.object, m.property);
+                } else {
+                    try self.compileComputedMember(m.object, m.property);
+                }
+            },
 
             // ── Classes ──────────────────────────────────────────────
             .class_decl => |cls| try self.compileClassDecl(cls),
@@ -1155,6 +1167,32 @@ pub const Compiler = struct {
         try self.compileNode(object);
         try self.compileNode(property);
         try self.emitOp(.get_elem);
+    }
+
+    fn compileOptionalMember(self: *Compiler, object: NodeIndex, property: StringId) CompileError!void {
+        try self.compileNode(object); // [obj]
+        try self.emitOp(.dup); // [obj, obj]
+        const null_jump = try self.current.bc.emitJump(self.allocator, .jump_if_nullish); // pops → [obj]
+        const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(property)));
+        try self.emitOpU16(.get_prop, ci); // [result]
+        const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
+        self.current.bc.patchJump(null_jump); // [obj] (null/undefined)
+        try self.emitOp(.pop); // []
+        try self.emitConstant(JsValue.undefined_val); // [undefined]
+        self.current.bc.patchJump(end_jump);
+    }
+
+    fn compileOptionalComputedMember(self: *Compiler, object: NodeIndex, property: NodeIndex) CompileError!void {
+        try self.compileNode(object); // [obj]
+        try self.emitOp(.dup); // [obj, obj]
+        const null_jump = try self.current.bc.emitJump(self.allocator, .jump_if_nullish); // pops → [obj]
+        try self.compileNode(property); // [obj, key]
+        try self.emitOp(.get_elem); // [result]
+        const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
+        self.current.bc.patchJump(null_jump); // [obj]
+        try self.emitOp(.pop); // []
+        try self.emitConstant(JsValue.undefined_val); // [undefined]
+        self.current.bc.patchJump(end_jump);
     }
 
     // ── Loop helper ──────────────────────────────────────────────────
