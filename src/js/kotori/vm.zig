@@ -683,6 +683,37 @@ pub const VM = struct {
                     self.frame_count += 1;
                 },
 
+                // ── Iteration ────────────────────────────────────────
+                .get_length => {
+                    const obj_val = self.pop();
+                    if (obj_val.isObject()) {
+                        const obj = obj_val.asJsObject();
+                        if (obj.obj_type == .array) {
+                            self.push(JsValue.initNumber(@floatFromInt(obj.data.array.items.len)));
+                            continue;
+                        }
+                    }
+                    if (obj_val.isString()) {
+                        if (self.pool.get(obj_val.asStringId())) |s| {
+                            self.push(JsValue.initNumber(@floatFromInt(s.len)));
+                            continue;
+                        }
+                    }
+                    self.push(JsValue.initNumber(0));
+                },
+
+                .get_keys => {
+                    const obj_val = self.pop();
+                    const arr = try self.createArray();
+                    if (obj_val.isObject()) {
+                        const obj = obj_val.asJsObject();
+                        for (obj.properties.keys()) |key_id| {
+                            arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
+                        }
+                    }
+                    self.push(JsValue.initObject(arr));
+                },
+
                 // ── Exception handling ───────────────────────────────
                 .try_begin => {
                     const offset = self.readI16(frame);

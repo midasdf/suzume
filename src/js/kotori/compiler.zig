@@ -381,6 +381,9 @@ pub const Compiler = struct {
                 try self.endScope();
             },
 
+            .for_of_stmt => |s| try self.compileForOfIn(s.left, s.right, s.body, false),
+            .for_in_stmt => |s| try self.compileForOfIn(s.left, s.right, s.body, true),
+
             .block => |list| {
                 self.beginScope();
                 const items = self.parser.ast.getNodeList(list);
@@ -816,6 +819,122 @@ pub const Compiler = struct {
             if (!self.current.loop_stack[i].is_switch) return &self.current.loop_stack[i];
         }
         return null;
+    }
+
+    /// Compile for-of / for-in loops.
+    /// for (var x of iterable) { body }
+    /// for (var k in obj) { body }
+    ///
+    /// Strategy: convert to index-based loop over array.
+    /// for-of: iterate values of iterable (array directly)
+    /// for-in: iterate keys of object (get_keys → array, then iterate)
+    fn compileForOfIn(self: *Compiler, left: NodeIndex, right: NodeIndex, body: NodeIndex, is_for_in: bool) CompileError!void {
+        self.beginScope();
+
+        // Determine the loop variable name from the left side
+        const left_node = self.parser.ast.getNode(left);
+        var var_name: ?StringId = null;
+        switch (left_node) {
+            .var_decl => |decl| {
+                const declarators = self.parser.ast.getNodeList(decl.declarators);
+                if (declarators.len > 0) {
+                    const d = self.parser.ast.getNode(declarators[0]);
+                    switch (d) {
+                        .var_declarator => |vd| {
+                            const vn = self.parser.ast.getNode(vd.name);
+                            switch (vn) {
+                                .identifier => |id| var_name = id,
+                                else => {},
+                            }
+                        },
+                        else => {},
+                    }
+                }
+            },
+            .identifier => |name_id| var_name = name_id,
+            else => {},
+        }
+
+        if (var_name == null) {
+            try self.endScope();
+            return;
+        }
+
+        // Declare loop variable as local + push undefined placeholder
+        try self.emitConstant(JsValue.undefined_val);
+        _ = try self.addLocal(var_name.?);
+
+        // Compile the right-hand expression (iterable/object)
+        try self.compileNode(right);
+
+        if (is_for_in) {
+            try self.emitOp(.get_keys);
+        }
+        // Stack: [..., iterable_array]
+        // Store iterable in a hidden local
+        const iterable_name = self.parser.pool.intern("__iter") catch return error.OutOfMemory;
+        _ = try self.addLocal(iterable_name);
+
+        // get_length
+        try self.emitOp(.dup);
+        try self.emitOp(.get_length);
+        const len_name = self.parser.pool.intern("__len") catch return error.OutOfMemory;
+        _ = try self.addLocal(len_name);
+
+        // Push index = 0
+        try self.emitConstant(JsValue.initNumber(0));
+        const idx_name = self.parser.pool.intern("__idx") catch return error.OutOfMemory;
+        _ = try self.addLocal(idx_name);
+
+        // Loop start: check idx < len
+        const loop_start = self.current.bc.currentOffset();
+        try self.compileIdentifierLoad(idx_name);
+        try self.compileIdentifierLoad(len_name);
+        try self.emitOp(.lt);
+        const exit_jump = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+
+        self.pushLoopCtx(self.current.scope_depth, false);
+
+        // Load iterable[idx] → store to loop variable
+        try self.compileIdentifierLoad(iterable_name);
+        try self.compileIdentifierLoad(idx_name);
+        try self.emitOp(.get_elem);
+        try self.compileStoreVar(var_name.?);
+
+        // Compile body
+        try self.compileNode(body);
+
+        // Continue target: increment idx
+        const continue_target = self.current.bc.currentOffset();
+        self.patchContinueJumps(continue_target);
+
+        // idx = idx + 1
+        try self.compileIdentifierLoad(idx_name);
+        try self.emitConstant(JsValue.initNumber(1));
+        try self.emitOp(.add);
+        try self.compileStoreVar(idx_name);
+
+        // Jump back to loop start
+        try self.emitLoop(loop_start);
+
+        // Exit
+        self.current.bc.patchJump(exit_jump);
+        self.patchBreakJumps();
+        self.popLoopCtx();
+        try self.endScope();
+    }
+
+    fn compileStoreVar(self: *Compiler, name: StringId) CompileError!void {
+        if (self.resolveLocal(&self.current, name)) |slot| {
+            try self.current.bc.emitWithU16(self.allocator, .store_local, slot);
+            return;
+        }
+        if (try self.resolveUpvalue(&self.current, name)) |slot| {
+            try self.current.bc.emitWithU16(self.allocator, .store_upvalue, slot);
+            return;
+        }
+        const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name)));
+        try self.current.bc.emitWithU16(self.allocator, .store_global, ci);
     }
 
     fn compileBreak(self: *Compiler) CompileError!void {

@@ -1749,6 +1749,69 @@ test "eval: Set forEach" {
     try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
 }
 
+// ── for-of / for-in ─────────────────────────────────────────────
+
+test "eval: for-of array" {
+    const result = try evalExpr(
+        \\var sum = 0;
+        \\var arr = [10, 20, 30];
+        \\for (var x of arr) {
+        \\  sum = sum + x;
+        \\}
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-of with break" {
+    const result = try evalExpr(
+        \\var sum = 0;
+        \\for (var x of [1, 2, 3, 4, 5]) {
+        \\  if (x > 3) break;
+        \\  sum = sum + x;
+        \\}
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-in object keys" {
+    const result = try evalExpr(
+        \\var keys = "";
+        \\var obj = { a: 1, b: 2, c: 3 };
+        \\for (var k in obj) {
+        \\  keys = keys + k;
+        \\}
+        \\keys
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: for-in count" {
+    const result = try evalExpr(
+        \\var count = 0;
+        \\for (var k in { x: 1, y: 2, z: 3 }) {
+        \\  count = count + 1;
+        \\}
+        \\count
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-of nested" {
+    const result = try evalExpr(
+        \\var total = 0;
+        \\for (var x of [1, 2, 3]) {
+        \\  for (var y of [10, 20]) {
+        \\    total = total + x * y;
+        \\  }
+        \\}
+        \\total
+    );
+    // 1*10 + 1*20 + 2*10 + 2*20 + 3*10 + 3*20 = 10+20+20+40+30+60 = 180
+    try std.testing.expectApproxEqAbs(@as(f64, 180.0), result.asNumber(), 0.001);
+}
+
 test "eval: Set clear" {
     const result = try evalExpr(
         \\var s = new Set();
