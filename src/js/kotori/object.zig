@@ -24,6 +24,7 @@ pub const ObjType = enum(u8) {
     date,
     weak_map,
     weak_set,
+    generator,
 };
 
 pub const JsObject = struct {
@@ -77,6 +78,7 @@ pub const JsObject = struct {
         date_ms: i64,
         weak_map_data: std.AutoArrayHashMapUnmanaged(usize, JsValue),
         weak_set_data: std.AutoArrayHashMapUnmanaged(usize, void),
+        generator_data: GeneratorData,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -92,6 +94,10 @@ pub const JsObject = struct {
             .promise_data => |*p| p.handlers.deinit(allocator),
             .weak_map_data => |*wm| wm.deinit(allocator),
             .weak_set_data => |*ws| ws.deinit(allocator),
+            .generator_data => |*g| {
+                if (g.saved_stack.len > 0) allocator.free(g.saved_stack);
+                if (g.init_args.len > 0) allocator.free(g.init_args);
+            },
             .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms => {},
         }
     }
@@ -107,6 +113,22 @@ pub const JsObject = struct {
     }
 };
 
+pub const GeneratorState = enum(u8) {
+    suspended_start,
+    suspended_yield,
+    executing,
+    completed,
+};
+
+pub const GeneratorData = struct {
+    state: GeneratorState = .suspended_start,
+    func_obj: *JsObject, // the function object (for bytecode + upvalues)
+    saved_ip: u32 = 0,
+    saved_stack: []JsValue = &.{},
+    this_val: JsValue = JsValue.undefined_val,
+    init_args: []JsValue = &.{}, // arguments passed to generator function
+};
+
 pub const FunctionObj = struct {
     bytecode: Bytecode,
     param_count: u16 = 0,
@@ -116,6 +138,7 @@ pub const FunctionObj = struct {
     upvalue_defs: []UpvalueDef = &.{},
     owns_bytecode: bool = true,
     is_async: bool = false,
+    is_generator: bool = false,
 
     pub fn deinit(self: *FunctionObj, allocator: std.mem.Allocator) void {
         if (self.owns_bytecode) {

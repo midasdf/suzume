@@ -3260,6 +3260,87 @@ test "eval: WeakSet basic" {
     try std.testing.expect(result.asBool());
 }
 
+// ── Generators ──────────────────────────────────────────────────
+
+test "eval: generator single yield" {
+    const result = try evalExpr(
+        \\function* g() { yield 42; }
+        \\let it = g();
+        \\it.next().value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: generator with return" {
+    const result = try evalExpr(
+        \\function* f() { return 42; }
+        \\f().next().value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: generator done after exhausted" {
+    const result = try evalExpr(
+        \\function* g() { yield 1; }
+        \\let it = g();
+        \\let first = it.next();
+        \\let second = it.next();
+        \\second.done
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: generator two yields" {
+    const result = try evalExpr(
+        \\function* g() { yield 1; yield 2; }
+        \\let it = g();
+        \\let a = it.next().value;
+        \\let b = it.next().value;
+        \\a + b
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: generator next with sent value" {
+    const result = try evalExpr(
+        \\function* f() {
+        \\  let x = yield 1;
+        \\  yield x + 10;
+        \\}
+        \\let it = f();
+        \\it.next();
+        \\it.next(5).value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "eval: generator range" {
+    const result = try evalExpr(
+        \\function* range(n) {
+        \\  for (let i = 0; i < n; i++) yield i;
+        \\}
+        \\let sum = 0;
+        \\let it = range(5);
+        \\let r = it.next();
+        \\while (!r.done) { sum = sum + r.value; r = it.next(); }
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: generator three yields" {
+    const result = try evalExpr(
+        \\function* g() { yield 1; yield 2; yield 3; }
+        \\let it = g();
+        \\let a = it.next().value;
+        \\let b = it.next().value;
+        \\let c = it.next().value;
+        \\a + b + c
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
 test "eval: WeakSet delete" {
     const result = try evalExpr(
         \\let ws = new WeakSet();

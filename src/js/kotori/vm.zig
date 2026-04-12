@@ -60,6 +60,9 @@ pub const VM = struct {
     // Symbol support
     next_symbol_id: u32 = 4, // 0-3 reserved for well-known symbols
     symbol_descriptions: std.AutoArrayHashMapUnmanaged(u32, ?StringId) = .{},
+
+    // Generator support
+    active_generator: ?*object_mod.GeneratorData = null,
     date_proto: ?*JsObject = null,
 
     // Console state
@@ -481,6 +484,23 @@ pub const VM = struct {
                     }
 
                     const func = &obj.data.function;
+
+                    // Generator function: don't execute, create GeneratorObject
+                    if (func.is_generator) {
+                        const base = self.sp - arg_count;
+                        // Save args before popping
+                        var init_args: []JsValue = &.{};
+                        if (arg_count > 0) {
+                            init_args = try self.allocator.alloc(JsValue, arg_count);
+                            @memcpy(init_args, self.stack[base..self.sp]);
+                        }
+                        self.sp = base - 1; // pop args + func
+                        const gen_obj = try self.createGeneratorObject(obj);
+                        gen_obj.data.generator_data.init_args = init_args;
+                        self.push(JsValue.initObject(gen_obj));
+                        continue;
+                    }
+
                     const base = self.sp - arg_count;
 
                     // Pad missing args with undefined
@@ -1126,6 +1146,36 @@ pub const VM = struct {
                 },
 
                 // ── Async / Promise ──────────────────────────────────
+                .yield_value => {
+                    if (self.active_generator) |gen| {
+                        const yield_val = self.pop();
+                        // Save current execution state
+                        const f = &self.frames[self.frame_count - 1];
+                        const base = f.base_sp;
+                        const stack_len = self.sp - base;
+                        // Allocate and copy saved state
+                        if (gen.saved_stack.len > 0) {
+                            self.allocator.free(gen.saved_stack);
+                        }
+                        const saved = try self.allocator.alloc(JsValue, stack_len);
+                        @memcpy(saved, self.stack[base..self.sp]);
+                        gen.saved_ip = f.ip;
+                        gen.saved_stack = saved;
+                        gen.state = .suspended_yield;
+                        // Pop frame — this makes run() exit (frame_count drops to until_frame)
+                        self.frame_count -= 1;
+                        self.sp = base;
+                        // Pop the function slot that was pushed for the call
+                        if (self.sp > 0) self.sp -= 1;
+                        // Return {value, done: false}
+                        const result = try self.createIterResult(yield_val, false);
+                        return result;
+                    } else {
+                        // yield outside generator — just pass through
+                        // (value already on stack)
+                    }
+                },
+
                 .await_ => {
                     const val = self.pop();
                     // Non-promise or non-object: pass through synchronously
@@ -5632,6 +5682,160 @@ pub const VM = struct {
             try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
         }
         return JsValue.initObject(err_obj);
+    }
+
+    // ── Generator support ───────────────────────────────────────────
+
+    fn createGeneratorObject(self: *VM, func_obj: *JsObject) !*JsObject {
+        const gen_obj = try self.createObj(.{ .obj_type = .generator });
+        gen_obj.data = .{ .generator_data = .{
+            .state = .suspended_start,
+            .func_obj = func_obj,
+        } };
+        try self.registerNativeMethod(gen_obj, "next", &nativeGeneratorNext);
+        try self.registerNativeMethod(gen_obj, "return", &nativeGeneratorReturn);
+        return gen_obj;
+    }
+
+    fn createIterResult(self: *VM, value: JsValue, done: bool) !JsValue {
+        const obj = try self.createObj(.{});
+        const value_id = try self.pool.intern("value");
+        const done_id = try self.pool.intern("done");
+        try obj.setProperty(self.allocator, value_id, value);
+        try obj.setProperty(self.allocator, done_id, JsValue.initBool(done));
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeGeneratorNext(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .generator) return JsValue.undefined_val;
+        var gen = &obj.data.generator_data;
+
+        switch (gen.state) {
+            .completed => {
+                return try vm.createIterResult(JsValue.undefined_val, true);
+            },
+            .executing => {
+                return JsValue.undefined_val;
+            },
+            .suspended_start => {
+                gen.state = .executing;
+                return try vm.executeGenerator(gen, JsValue.undefined_val, false);
+            },
+            .suspended_yield => {
+                gen.state = .executing;
+                const sent_value = if (args.len > 0) args[0] else JsValue.undefined_val;
+                return try vm.executeGenerator(gen, sent_value, true);
+            },
+        }
+    }
+
+    fn nativeGeneratorReturn(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .generator) return JsValue.undefined_val;
+        var gen = &obj.data.generator_data;
+        gen.state = .completed;
+        const value = if (args.len > 0) args[0] else JsValue.undefined_val;
+        return try vm.createIterResult(value, true);
+    }
+
+    fn executeGenerator(self: *VM, gen: *object_mod.GeneratorData, sent_value: JsValue, is_resume: bool) !JsValue {
+        const func_obj = gen.func_obj;
+        const func = &func_obj.data.function;
+        const target_frame = self.frame_count;
+
+        if (is_resume) {
+            // Resuming from yield: restore saved stack
+            // Push function slot
+            self.push(JsValue.initObject(func_obj));
+            const frame_base = self.sp;
+            // Restore saved locals + temporaries
+            for (gen.saved_stack) |val| {
+                self.push(val);
+            }
+
+            const uv_array = self.getClosureUpvalues(func_obj);
+            self.frames[self.frame_count] = .{
+                .bc = &func.bytecode,
+                .ip = gen.saved_ip,
+                .base_sp = frame_base,
+                .upvalues = uv_array,
+                .this_val = gen.this_val,
+            };
+            self.frame_count += 1;
+
+            // Push sent_value as the result of the yield expression
+            self.push(sent_value);
+
+            // Set active generator so yield_value handler can save state
+            const prev_gen = self.active_generator;
+            self.active_generator = gen;
+            defer self.active_generator = prev_gen;
+
+            const result = self.run(target_frame) catch |err| {
+                gen.state = .completed;
+                return err;
+            };
+
+            // If run returned normally (return statement), generator is done
+            if (gen.state == .executing) {
+                gen.state = .completed;
+                return try self.createIterResult(result, true);
+            }
+            // If yield_value was hit, it already returned the result
+            return result;
+        } else {
+            // First call (suspended_start): start from beginning
+            self.push(JsValue.initObject(func_obj)); // function slot
+            const base = self.sp;
+
+            // Push saved initial args as params
+            for (gen.init_args) |arg| {
+                self.push(arg);
+            }
+            // Pad missing params
+            while (self.sp - base < func.param_count) {
+                self.push(JsValue.undefined_val);
+            }
+            // Reserve extra local slots beyond params
+            const extra_locals = if (func.local_count > func.param_count)
+                func.local_count - func.param_count
+            else
+                0;
+            var j: u16 = 0;
+            while (j < extra_locals) : (j += 1) {
+                self.push(JsValue.undefined_val);
+            }
+
+            const uv_array = self.getClosureUpvalues(func_obj);
+            self.frames[self.frame_count] = .{
+                .bc = &func.bytecode,
+                .ip = 0,
+                .base_sp = base,
+                .upvalues = uv_array,
+                .this_val = gen.this_val,
+            };
+            self.frame_count += 1;
+
+            const prev_gen = self.active_generator;
+            self.active_generator = gen;
+            defer self.active_generator = prev_gen;
+
+            const result = self.run(target_frame) catch |err| {
+                gen.state = .completed;
+                return err;
+            };
+
+            if (gen.state == .executing) {
+                gen.state = .completed;
+                return try self.createIterResult(result, true);
+            }
+            return result;
+        }
     }
 
     // ── WeakMap / WeakSet native functions ───────────────────────────

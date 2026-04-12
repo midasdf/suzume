@@ -468,6 +468,14 @@ pub const Compiler = struct {
                 try self.compileNode(operand);
                 try self.emitOp(.await_);
             },
+            .yield_expr => |y| {
+                if (y.argument != null_node) {
+                    try self.compileNode(y.argument);
+                } else {
+                    try self.emitConstant(JsValue.undefined_val);
+                }
+                try self.emitOp(.yield_value);
+            },
 
             // ── ES Modules ──────────────────────────────────────────
             .import_decl => |decl| try self.compileImportDecl(decl),
@@ -891,6 +899,7 @@ pub const Compiler = struct {
                 .upvalue_count = upvalue_count,
                 .upvalue_defs = uv_defs,
                 .is_async = func.is_async,
+                .is_generator = func.is_generator,
             } },
         };
 

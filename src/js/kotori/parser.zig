@@ -217,10 +217,21 @@ pub const Parser = struct {
                 return self.parseIdentifier();
             },
             .kw_await => {
-                // await expr → evaluate expr (async semantics not supported, just parse)
                 self.advance();
                 const operand = try self.parsePrecedence(.unary_);
                 return self.ast.addNode(self.allocator, .{ .await_expr = operand }) catch return error.OutOfMemory;
+            },
+            .kw_yield => {
+                self.advance();
+                // yield with no argument (next token is ; or } or , etc.)
+                var argument: NodeIndex = null_node;
+                if (!self.check(.semicolon) and !self.check(.rbrace) and !self.check(.rparen) and !self.check(.rbracket) and !self.check(.comma) and !self.check(.eof)) {
+                    argument = try self.parsePrecedence(.assignment);
+                }
+                return self.ast.addNode(self.allocator, .{ .yield_expr = .{
+                    .argument = argument,
+                    .delegate = false,
+                } }) catch return error.OutOfMemory;
             },
             .kw_this => return self.parseThis(),
             .lparen => return self.parseGrouped(),
@@ -1260,6 +1271,13 @@ pub const Parser = struct {
     fn parseFunctionDecl(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume 'function'
 
+        // Check for generator: function* name() { ... }
+        var is_generator = false;
+        if (self.current.type == .star) {
+            is_generator = true;
+            self.advance(); // consume *
+        }
+
         // Name (required for declarations)
         if (self.current.type != .identifier) return error.UnexpectedToken;
         const name_text = self.tokenSlice(self.current);
@@ -1288,6 +1306,7 @@ pub const Parser = struct {
             .params = params_list,
             .body = body,
             .is_async = is_async,
+            .is_generator = is_generator,
         } }) catch return error.OutOfMemory;
     }
 
