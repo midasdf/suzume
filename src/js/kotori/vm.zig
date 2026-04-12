@@ -39,6 +39,7 @@ pub const VM = struct {
     // Built-in prototypes
     array_proto: ?*JsObject = null,
     string_proto: ?*JsObject = null,
+    number_proto: ?*JsObject = null,
     element_proto: ?*JsObject = null,
     // DOM property interception (set by kotori_dom.zig)
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
@@ -564,6 +565,15 @@ pub const VM = struct {
                         // String prototype methods
                         if (self.string_proto) |sp| {
                             if (sp.getProperty(name_id)) |val| {
+                                self.push(val);
+                                continue;
+                            }
+                        }
+                        self.push(JsValue.undefined_val);
+                    } else if (obj_val.isNumber() or obj_val.isInt()) {
+                        // Number prototype methods
+                        if (self.number_proto) |num_p| {
+                            if (num_p.getProperty(name_id)) |val| {
                                 self.push(val);
                                 continue;
                             }
@@ -1283,6 +1293,35 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "lastIndexOf", &nativeStringLastIndexOf);
         try self.registerNativeMethod(sp, "concat", &nativeStringConcat);
         try self.registerNativeMethod(sp, "at", &nativeStringAt);
+
+        // ── Number.prototype ──
+        self.number_proto = try self.createObj(.{});
+        const np = self.number_proto.?;
+        try self.registerNativeMethod(np, "toFixed", &nativeNumberToFixed);
+        try self.registerNativeMethod(np, "toString", &nativeNumberToString);
+        try self.registerNativeMethod(np, "toPrecision", &nativeNumberToPrecision);
+        try self.registerNativeMethod(np, "toExponential", &nativeNumberToExponential);
+        try self.registerNativeMethod(np, "valueOf", &nativeNumberValueOf);
+
+        // ── Number constructor ──
+        {
+            const num_ctor = try self.createObj(.{});
+            try self.registerNativeMethod(num_ctor, "isNaN", &nativeNumberIsNaN);
+            try self.registerNativeMethod(num_ctor, "isFinite", &nativeNumberIsFinite);
+            try self.registerNativeMethod(num_ctor, "isInteger", &nativeNumberIsInteger);
+            try self.registerNativeMethod(num_ctor, "parseInt", &nativeParseInt);
+            try self.registerNativeMethod(num_ctor, "parseFloat", &nativeParseFloat);
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("MAX_SAFE_INTEGER"), JsValue.initNumber(9007199254740991.0));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("MIN_SAFE_INTEGER"), JsValue.initNumber(-9007199254740991.0));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("EPSILON"), JsValue.initNumber(2.220446049250313e-16));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("NaN"), JsValue.nan_val);
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("POSITIVE_INFINITY"), JsValue.initNumber(std.math.inf(f64)));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("NEGATIVE_INFINITY"), JsValue.initNumber(-std.math.inf(f64)));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("MAX_VALUE"), JsValue.initNumber(std.math.floatMax(f64)));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("MIN_VALUE"), JsValue.initNumber(std.math.floatMin(f64)));
+            try num_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(np));
+            try self.globals.put(self.allocator, try self.pool.intern("Number"), JsValue.initObject(num_ctor));
+        }
 
         // ── Object ──
         const obj_constructor = try self.createObj(.{});
@@ -3956,6 +3995,157 @@ pub const VM = struct {
         const n = val.toNumber();
         if (std.math.isNan(n) or n < 0) return 0;
         return @intFromFloat(@min(n, 4294967295.0));
+    }
+
+    // ── Number methods ────────────────────────────────────────────
+
+    fn nativeNumberToFixed(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const n = this.toNumber();
+        const digits: usize = if (args.len > 0) blk: {
+            const d = args[0].toNumber();
+            if (std.math.isNan(d) or d < 0) break :blk 0;
+            if (d > 100) break :blk 100;
+            break :blk @intFromFloat(d);
+        } else 0;
+        var buf: [320]u8 = undefined;
+        // Format: integer part, then '.', then decimal digits
+        // Use a simple approach: multiply, round, format
+        if (std.math.isNan(n)) return JsValue.initString(try vm.pool.intern("NaN"));
+        if (std.math.isInf(n)) return JsValue.initString(try vm.pool.intern(if (n > 0) "Infinity" else "-Infinity"));
+        const factor = std.math.pow(f64, 10.0, @floatFromInt(digits));
+        const rounded = @round(n * factor) / factor;
+        if (digits == 0) {
+            const i: i64 = @intFromFloat(rounded);
+            const s = std.fmt.bufPrint(&buf, "{d}", .{i}) catch return JsValue.undefined_val;
+            return JsValue.initString(try vm.pool.intern(s));
+        }
+        // Format with decimal point
+        const negative = rounded < 0;
+        const abs_val = @abs(rounded);
+        const int_part: u64 = @intFromFloat(abs_val);
+        const frac_val = abs_val - @as(f64, @floatFromInt(int_part));
+        const frac_scaled: u64 = @intFromFloat(@round(frac_val * factor));
+        var result_buf = std.ArrayListUnmanaged(u8){};
+        defer result_buf.deinit(vm.allocator);
+        if (negative) try result_buf.append(vm.allocator, '-');
+        const int_str = std.fmt.bufPrint(&buf, "{d}", .{int_part}) catch return JsValue.undefined_val;
+        try result_buf.appendSlice(vm.allocator, int_str);
+        try result_buf.append(vm.allocator, '.');
+        // Pad fractional part with leading zeros
+        const frac_str = std.fmt.bufPrint(&buf, "{d}", .{frac_scaled}) catch return JsValue.undefined_val;
+        var pad: usize = 0;
+        while (pad + frac_str.len < digits) : (pad += 1) {
+            try result_buf.append(vm.allocator, '0');
+        }
+        try result_buf.appendSlice(vm.allocator, frac_str);
+        return JsValue.initString(try vm.pool.intern(result_buf.items));
+    }
+
+    fn nativeNumberToString(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const n = this.toNumber();
+        if (std.math.isNan(n)) return JsValue.initString(try vm.pool.intern("NaN"));
+        if (std.math.isInf(n)) return JsValue.initString(try vm.pool.intern(if (n > 0) "Infinity" else "-Infinity"));
+        const radix: u8 = if (args.len > 0) blk: {
+            const r = args[0].toNumber();
+            if (std.math.isNan(r) or r < 2 or r > 36) break :blk 10;
+            break :blk @intFromFloat(r);
+        } else 10;
+        if (radix == 10) {
+            var buf: [64]u8 = undefined;
+            const s = formatValue(vm.pool, this, &buf);
+            return JsValue.initString(try vm.pool.intern(s));
+        }
+        // Integer radix conversion
+        const int_val: i64 = @intFromFloat(n);
+        var buf: [65]u8 = undefined;
+        var pos: usize = buf.len;
+        const negative = int_val < 0;
+        var val: u64 = if (negative) @intCast(-int_val) else @intCast(int_val);
+        const digits_chars = "0123456789abcdefghijklmnopqrstuvwxyz";
+        if (val == 0) {
+            pos -= 1;
+            buf[pos] = '0';
+        } else {
+            while (val > 0) {
+                pos -= 1;
+                buf[pos] = digits_chars[@intCast(val % radix)];
+                val /= radix;
+            }
+        }
+        if (negative) {
+            pos -= 1;
+            buf[pos] = '-';
+        }
+        return JsValue.initString(try vm.pool.intern(buf[pos..]));
+    }
+
+    fn nativeNumberToPrecision(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const n = this.toNumber();
+        if (std.math.isNan(n)) return JsValue.initString(try vm.pool.intern("NaN"));
+        if (std.math.isInf(n)) return JsValue.initString(try vm.pool.intern(if (n > 0) "Infinity" else "-Infinity"));
+        if (args.len == 0) {
+            var buf: [64]u8 = undefined;
+            const s = formatValue(vm.pool, this, &buf);
+            return JsValue.initString(try vm.pool.intern(s));
+        }
+        const prec: usize = blk: {
+            const p = args[0].toNumber();
+            if (std.math.isNan(p) or p < 1) break :blk 1;
+            if (p > 100) break :blk 100;
+            break :blk @intFromFloat(p);
+        };
+        // Simple implementation using exponential notation conversion
+        var buf: [320]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{e}", .{n}) catch return JsValue.undefined_val;
+        _ = prec;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeNumberToExponential(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const n = this.toNumber();
+        if (std.math.isNan(n)) return JsValue.initString(try vm.pool.intern("NaN"));
+        if (std.math.isInf(n)) return JsValue.initString(try vm.pool.intern(if (n > 0) "Infinity" else "-Infinity"));
+        _ = args;
+        var buf: [128]u8 = undefined;
+        const s = std.fmt.bufPrint(&buf, "{e}", .{n}) catch return JsValue.undefined_val;
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeNumberValueOf(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return JsValue.initNumber(this.toNumber());
+    }
+
+    fn nativeNumberIsNaN(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(false);
+        const v = args[0];
+        // Check for the JS NaN value (TAG_NAN) or a float NaN
+        if (v.bits == JsValue.nan_val.bits) return JsValue.initBool(true);
+        if (v.isNumber()) return JsValue.initBool(std.math.isNan(v.asNumber()));
+        return JsValue.initBool(false);
+    }
+
+    fn nativeNumberIsFinite(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(false);
+        const v = args[0];
+        if (v.isNumber()) return JsValue.initBool(std.math.isFinite(v.asNumber()));
+        if (v.isInt()) return JsValue.initBool(true);
+        return JsValue.initBool(false);
+    }
+
+    fn nativeNumberIsInteger(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(false);
+        const v = args[0];
+        if (v.isInt()) return JsValue.initBool(true);
+        if (v.isNumber()) {
+            const n = v.asNumber();
+            if (std.math.isNan(n) or std.math.isInf(n)) return JsValue.initBool(false);
+            return JsValue.initBool(@floor(n) == n);
+        }
+        return JsValue.initBool(false);
     }
 
     // ── Error methods ───────────────────────────────────────────────

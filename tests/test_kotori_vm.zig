@@ -2737,3 +2737,70 @@ test "Error toString empty message" {
     , "result");
     try std.testing.expect(result.isString());
 }
+
+// ---------------------------------------------------------------
+// Number.prototype + Number constructor
+// ---------------------------------------------------------------
+
+test "Number toFixed" {
+    const result = try evalWithMicrotasks(
+        \\var result = (3.14159).toFixed(2);
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Number toString radix 16" {
+    const result = try evalWithMicrotasks(
+        \\var result = (255).toString(16);
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+test "Number.isNaN true" {
+    const result = try evalExpr(
+        \\Number.isNaN(NaN);
+    );
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "Number.isNaN false for number" {
+    const result = try evalExpr(
+        \\Number.isNaN(42);
+    );
+    try std.testing.expect(result.asBool() == false);
+}
+
+test "Number.isFinite" {
+    const result = try evalExpr(
+        \\Number.isFinite(42);
+    );
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "Number.isInteger true" {
+    const result = try evalExpr(
+        \\Number.isInteger(42);
+    );
+    try std.testing.expect(result.asBool() == true);
+}
+
+test "Number.isInteger false for float" {
+    const result = try evalExpr(
+        \\Number.isInteger(42.5);
+    );
+    try std.testing.expect(result.asBool() == false);
+}
+
+test "Number.MAX_SAFE_INTEGER" {
+    const result = try evalExpr(
+        \\Number.MAX_SAFE_INTEGER;
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 9007199254740991.0), result.asNumber(), 1.0);
+}
+
+test "Number valueOf" {
+    const result = try evalExpr(
+        \\(42).valueOf();
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.toNumber(), 0.001);
+}
