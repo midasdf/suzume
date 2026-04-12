@@ -1122,6 +1122,23 @@ pub const VM = struct {
         try self.registerNativeMethod(ap, "forEach", &nativeArrayForEach);
         try self.registerNativeMethod(ap, "map", &nativeArrayMap);
         try self.registerNativeMethod(ap, "filter", &nativeArrayFilter);
+        try self.registerNativeMethod(ap, "reduce", &nativeArrayReduce);
+        try self.registerNativeMethod(ap, "reduceRight", &nativeArrayReduceRight);
+        try self.registerNativeMethod(ap, "find", &nativeArrayFind);
+        try self.registerNativeMethod(ap, "findIndex", &nativeArrayFindIndex);
+        try self.registerNativeMethod(ap, "some", &nativeArraySome);
+        try self.registerNativeMethod(ap, "every", &nativeArrayEvery);
+        try self.registerNativeMethod(ap, "sort", &nativeArraySort);
+        try self.registerNativeMethod(ap, "splice", &nativeArraySplice);
+        try self.registerNativeMethod(ap, "flat", &nativeArrayFlat);
+        try self.registerNativeMethod(ap, "flatMap", &nativeArrayFlatMap);
+        try self.registerNativeMethod(ap, "fill", &nativeArrayFill);
+        try self.registerNativeMethod(ap, "at", &nativeArrayAt);
+        try self.registerNativeMethod(ap, "unshift", &nativeArrayUnshift);
+        try self.registerNativeMethod(ap, "keys", &nativeArrayKeys);
+        try self.registerNativeMethod(ap, "values", &nativeArrayValues);
+        try self.registerNativeMethod(ap, "entries", &nativeArrayEntries);
+        try self.registerNativeMethod(ap, "toString", &nativeArrayToString);
 
         // ── String.prototype ──
         self.string_proto = try self.createObj(.{});
@@ -1697,6 +1714,325 @@ pub const VM = struct {
             }
         }
         return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayReduce(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        const items = obj.data.array.items;
+        var acc: JsValue = undefined;
+        var start: usize = 0;
+        if (args.len > 1) {
+            acc = args[1];
+        } else {
+            if (items.len == 0) return JsValue.undefined_val;
+            acc = items[0];
+            start = 1;
+        }
+        for (items[start..], start..) |item, i| {
+            const cb_args = [_]JsValue{ acc, item, JsValue.initNumber(@floatFromInt(i)), this };
+            acc = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+        }
+        return acc;
+    }
+
+    fn nativeArrayReduceRight(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        const items = obj.data.array.items;
+        if (items.len == 0 and args.len < 2) return JsValue.undefined_val;
+        var acc: JsValue = if (args.len > 1) args[1] else items[items.len - 1];
+        const end: usize = if (args.len > 1) items.len else items.len -| 1;
+        var i: usize = end;
+        while (i > 0) {
+            i -= 1;
+            const cb_args = [_]JsValue{ acc, items[i], JsValue.initNumber(@floatFromInt(i)), this };
+            acc = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+        }
+        return acc;
+    }
+
+    fn nativeArrayFind(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        for (obj.data.array.items, 0..) |item, i| {
+            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (result.isTruthy()) return item;
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn nativeArrayFindIndex(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initNumber(-1);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.initNumber(-1);
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        for (obj.data.array.items, 0..) |item, i| {
+            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+        }
+        return JsValue.initNumber(-1);
+    }
+
+    fn nativeArraySome(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.initBool(false);
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        for (obj.data.array.items, 0..) |item, i| {
+            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (result.isTruthy()) return JsValue.initBool(true);
+        }
+        return JsValue.initBool(false);
+    }
+
+    fn nativeArrayEvery(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(true);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.initBool(true);
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        for (obj.data.array.items, 0..) |item, i| {
+            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (!result.isTruthy()) return JsValue.initBool(false);
+        }
+        return JsValue.initBool(true);
+    }
+
+    fn nativeArraySort(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return this;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return this;
+        const items = obj.data.array.items;
+        if (items.len <= 1) return this;
+        const has_comparefn = args.len > 0 and args[0].isObject();
+        const vm = vmFromCtx(ctx);
+        // Simple insertion sort (stable, fine for typical array sizes)
+        var i: usize = 1;
+        while (i < items.len) : (i += 1) {
+            const key = items[i];
+            var j: usize = i;
+            while (j > 0) {
+                const cmp = if (has_comparefn) blk: {
+                    const cb_args = [_]JsValue{ items[j - 1], key };
+                    const r = try vm.callJsFunction(args[0], JsValue.undefined_val, &cb_args);
+                    break :blk r.toNumber();
+                } else blk: {
+                    // Default: lexicographic comparison
+                    var buf_a: [64]u8 = undefined;
+                    var buf_b: [64]u8 = undefined;
+                    const a_bytes = formatValue(vm.pool, items[j - 1], &buf_a);
+                    const b_bytes = formatValue(vm.pool, key, &buf_b);
+                    const order = std.mem.order(u8, a_bytes, b_bytes);
+                    break :blk switch (order) {
+                        .gt => @as(f64, 1),
+                        .lt => @as(f64, -1),
+                        .eq => @as(f64, 0),
+                    };
+                };
+                if (cmp <= 0) break;
+                items[j] = items[j - 1];
+                j -= 1;
+            }
+            items[j] = key;
+        }
+        return this;
+    }
+
+    fn nativeArraySplice(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const len: i64 = @intCast(obj.data.array.items.len);
+        var start: i64 = if (args.len > 0) clampToI64(args[0]) else 0;
+        if (start < 0) start = @max(start + len, 0);
+        start = @min(start, len);
+        const delete_count: usize = if (args.len > 1) @intCast(@min(@max(clampToI64(args[1]), 0), len - start)) else @intCast(len - start);
+        // Create return array with deleted elements
+        const deleted = try vm.allocator.create(JsObject);
+        deleted.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        try vm.objects.append(vm.allocator, deleted);
+        const s: usize = @intCast(start);
+        for (0..delete_count) |di| {
+            try deleted.data.array.append(vm.allocator, obj.data.array.items[s + di]);
+        }
+        // Remove deleted elements
+        for (0..delete_count) |_| {
+            _ = obj.data.array.orderedRemove(s);
+        }
+        // Insert new elements
+        if (args.len > 2) {
+            for (args[2..], 0..) |arg, ii| {
+                obj.data.array.insert(vm.allocator, s + ii, arg) catch break;
+            }
+        }
+        // Update length property
+        const len_id = vm.pool.intern("length") catch return JsValue.initObject(deleted);
+        obj.setProperty(vm.allocator, len_id, JsValue.initNumber(@floatFromInt(obj.data.array.items.len))) catch {};
+        return JsValue.initObject(deleted);
+    }
+
+    fn nativeArrayFlat(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const depth: u32 = if (args.len > 0) @intFromFloat(@max(0, @min(args[0].toNumber(), 100))) else 1;
+        const new_arr = try vm.allocator.create(JsObject);
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        try vm.objects.append(vm.allocator, new_arr);
+        try flattenArray(vm, obj, new_arr, depth);
+        return JsValue.initObject(new_arr);
+    }
+
+    fn flattenArray(vm: *VM, src: *JsObject, dst: *JsObject, depth: u32) !void {
+        for (src.data.array.items) |item| {
+            if (depth > 0 and item.isObject()) {
+                const inner = item.asJsObject();
+                if (inner.obj_type == .array) {
+                    try flattenArray(vm, inner, dst, depth - 1);
+                    continue;
+                }
+            }
+            try dst.data.array.append(vm.allocator, item);
+        }
+    }
+
+    fn nativeArrayFlatMap(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        const new_arr = try vm.allocator.create(JsObject);
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        try vm.objects.append(vm.allocator, new_arr);
+        for (obj.data.array.items, 0..) |item, i| {
+            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (result.isObject()) {
+                const r_obj = result.asJsObject();
+                if (r_obj.obj_type == .array) {
+                    for (r_obj.data.array.items) |sub| try new_arr.data.array.append(vm.allocator, sub);
+                    continue;
+                }
+            }
+            try new_arr.data.array.append(vm.allocator, result);
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayFill(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return this;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return this;
+        const val = args[0];
+        const len: i64 = @intCast(obj.data.array.items.len);
+        var start: i64 = if (args.len > 1) clampToI64(args[1]) else 0;
+        var end: i64 = if (args.len > 2) clampToI64(args[2]) else len;
+        if (start < 0) start = @max(start + len, 0);
+        if (end < 0) end = @max(end + len, 0);
+        start = @min(start, len);
+        end = @min(end, len);
+        const s: usize = @intCast(start);
+        const e: usize = @intCast(end);
+        for (obj.data.array.items[s..e]) |*slot| slot.* = val;
+        return this;
+    }
+
+    fn nativeArrayAt(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const len: i64 = @intCast(obj.data.array.items.len);
+        var idx: i64 = clampToI64(args[0]);
+        if (idx < 0) idx += len;
+        if (idx < 0 or idx >= len) return JsValue.undefined_val;
+        return obj.data.array.items[@intCast(idx)];
+    }
+
+    fn nativeArrayUnshift(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        // Insert args at the beginning in order
+        var insert_idx: usize = 0;
+        for (args) |arg| {
+            obj.data.array.insert(vm.allocator, insert_idx, arg) catch break;
+            insert_idx += 1;
+        }
+        const len_id = vm.pool.intern("length") catch return JsValue.initNumber(@floatFromInt(obj.data.array.items.len));
+        obj.setProperty(vm.allocator, len_id, JsValue.initNumber(@floatFromInt(obj.data.array.items.len))) catch {};
+        return JsValue.initNumber(@floatFromInt(obj.data.array.items.len));
+    }
+
+    fn nativeArrayKeys(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.allocator.create(JsObject);
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        try vm.objects.append(vm.allocator, new_arr);
+        for (0..obj.data.array.items.len) |i| {
+            try new_arr.data.array.append(vm.allocator, JsValue.initNumber(@floatFromInt(i)));
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayValues(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.allocator.create(JsObject);
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        try vm.objects.append(vm.allocator, new_arr);
+        for (obj.data.array.items) |item| {
+            try new_arr.data.array.append(vm.allocator, item);
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayEntries(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.allocator.create(JsObject);
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        try vm.objects.append(vm.allocator, new_arr);
+        for (obj.data.array.items, 0..) |item, i| {
+            const pair = try vm.allocator.create(JsObject);
+            pair.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+            try vm.objects.append(vm.allocator, pair);
+            try pair.data.array.append(vm.allocator, JsValue.initNumber(@floatFromInt(i)));
+            try pair.data.array.append(vm.allocator, item);
+            try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        // toString delegates to join with comma separator
+        return nativeArrayJoin(ctx, this, &.{});
     }
 
     // ── Timer methods ──────────────────────────────────────────────

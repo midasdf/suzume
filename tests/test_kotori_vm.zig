@@ -2159,3 +2159,349 @@ test "async function with no return resolves undefined" {
     , "result");
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }
+
+// ── Array.reduce ──
+
+test "array reduce sum" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3, 4].reduce(function(acc, x) { return acc + x; }, 0);
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "array reduce no initial value" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].reduce(function(acc, x) { return acc + x; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "array reduceRight" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3, 4].reduceRight(function(acc, x) { return acc + x; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+// ── Array.find / findIndex ──
+
+test "array find" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 5, 10, 15].find(function(x) { return x > 8; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "array find returns undefined when not found" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].find(function(x) { return x > 100; });
+    , "result");
+    try std.testing.expect(result.isUndefined());
+}
+
+test "array findIndex" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 5, 10, 15].findIndex(function(x) { return x > 8; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "array findIndex returns -1 when not found" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].findIndex(function(x) { return x > 100; });
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
+}
+
+// ── Array.some / every ──
+
+test "array some true" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].some(function(x) { return x > 2; }) ? 1 : 0;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "array some false" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].some(function(x) { return x > 10; }) ? 1 : 0;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "array every true" {
+    const result = try evalWithMicrotasks(
+        \\var result = [2, 4, 6].every(function(x) { return x % 2 === 0; }) ? 1 : 0;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "array every false" {
+    const result = try evalWithMicrotasks(
+        \\var result = [2, 3, 6].every(function(x) { return x % 2 === 0; }) ? 1 : 0;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+// ── Array.sort ──
+
+test "array sort default lexicographic" {
+    const result = try evalWithMicrotasks(
+        \\var a = [3, 1, 2];
+        \\a.sort();
+        \\var result = a[0] * 100 + a[1] * 10 + a[2];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 123.0), result.asNumber(), 0.001);
+}
+
+test "array sort with compareFn" {
+    const result = try evalWithMicrotasks(
+        \\var a = [3, 1, 2];
+        \\a.sort(function(x, y) { return x - y; });
+        \\var result = a[0] * 100 + a[1] * 10 + a[2];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 123.0), result.asNumber(), 0.001);
+}
+
+test "array sort descending" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, 3, 2];
+        \\a.sort(function(x, y) { return y - x; });
+        \\var result = a[0] * 100 + a[1] * 10 + a[2];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 321.0), result.asNumber(), 0.001);
+}
+
+// ── Array.splice ──
+
+test "array splice delete" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, 2, 3, 4, 5];
+        \\var removed = a.splice(1, 2);
+        \\var result = removed[0] * 10 + removed[1];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 23.0), result.asNumber(), 0.001);
+}
+
+test "array splice insert" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, 4, 5];
+        \\a.splice(1, 0, 2, 3);
+        \\var result = a.length * 1000 + a[1] * 100 + a[2] * 10 + a[3];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 5234.0), result.asNumber(), 0.001);
+}
+
+// ── Array.flat / flatMap ──
+
+test "array flat" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, [2, 3], [4, [5]]].flat().length;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "array flatMap" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].flatMap(function(x) { return [x, x * 2]; }).length;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+// ── Array.fill / at / unshift ──
+
+test "array fill" {
+    const result = try evalWithMicrotasks(
+        \\var a = [1, 2, 3, 4];
+        \\a.fill(0, 1, 3);
+        \\var result = a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1004.0), result.asNumber(), 0.001);
+}
+
+test "array at negative index" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].at(-1);
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "array unshift" {
+    const result = try evalWithMicrotasks(
+        \\var a = [3, 4];
+        \\var len = a.unshift(1, 2);
+        \\var result = len * 10000 + a[0] * 1000 + a[1] * 100 + a[2] * 10 + a[3];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 41234.0), result.asNumber(), 0.001);
+}
+
+// ── Array.keys / values / entries / toString ──
+
+test "array keys" {
+    const result = try evalWithMicrotasks(
+        \\var result = [10, 20, 30].keys().length;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "array entries" {
+    const result = try evalWithMicrotasks(
+        \\var e = [10, 20].entries();
+        \\var result = e[0][0] * 100 + e[0][1] * 10 + e[1][0];
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 101.0), result.asNumber(), 0.001);
+}
+
+test "array toString" {
+    const result = try evalWithMicrotasks(
+        \\var result = [1, 2, 3].toString();
+    , "result");
+    try std.testing.expect(result.isString());
+}
+
+// ── Destructuring ──
+
+test "array destructuring basic" {
+    const result = try evalWithMicrotasks(
+        \\var [a, b, c] = [10, 20, 30];
+        \\var result = a * 100 + b * 10 + c;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1230.0), result.asNumber(), 0.001);
+}
+
+test "array destructuring skip elements" {
+    const result = try evalWithMicrotasks(
+        \\var arr = [1, 2, 3, 4];
+        \\var [a, , , d] = arr;
+        \\var result = a * 10 + d;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 14.0), result.asNumber(), 0.001);
+}
+
+test "array destructuring with default" {
+    const result = try evalWithMicrotasks(
+        \\var [a, b = 99] = [42];
+        \\var result = a * 100 + b;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 4299.0), result.asNumber(), 0.001);
+}
+
+test "object destructuring basic" {
+    const result = try evalWithMicrotasks(
+        \\var obj = {x: 10, y: 20, z: 30};
+        \\var {x, y, z} = obj;
+        \\var result = x * 100 + y * 10 + z;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1230.0), result.asNumber(), 0.001);
+}
+
+test "object destructuring with rename" {
+    const result = try evalWithMicrotasks(
+        \\var obj = {name: 42, value: 7};
+        \\var {name: n, value: v} = obj;
+        \\var result = n * 10 + v;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 427.0), result.asNumber(), 0.001);
+}
+
+test "object destructuring with default" {
+    const result = try evalWithMicrotasks(
+        \\var {a, b = 50} = {a: 10};
+        \\var result = a * 100 + b;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1050.0), result.asNumber(), 0.001);
+}
+
+test "nested destructuring" {
+    const result = try evalWithMicrotasks(
+        \\var {a, b: {c, d}} = {a: 1, b: {c: 2, d: 3}};
+        \\var result = a * 100 + c * 10 + d;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 123.0), result.asNumber(), 0.001);
+}
+
+test "mixed array and object destructuring" {
+    const result = try evalWithMicrotasks(
+        \\var [{x}, [a, b]] = [{x: 5}, [6, 7]];
+        \\var result = x * 100 + a * 10 + b;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 567.0), result.asNumber(), 0.001);
+}
+
+// ── Class syntax ──
+
+test "class basic constructor and method" {
+    const result = try evalWithMicrotasks(
+        \\class Foo {
+        \\    constructor(x) { this.x = x; }
+        \\    getX() { return this.x; }
+        \\}
+        \\var f = new Foo(42);
+        \\var result = f.getX();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "class multiple methods" {
+    const result = try evalWithMicrotasks(
+        \\class Calc {
+        \\    constructor(v) { this.v = v; }
+        \\    add(n) { return this.v + n; }
+        \\    mul(n) { return this.v * n; }
+        \\}
+        \\var c = new Calc(10);
+        \\var result = c.add(5) * 100 + c.mul(3);
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1530.0), result.asNumber(), 0.001);
+}
+
+test "class static method" {
+    const result = try evalWithMicrotasks(
+        \\class Counter {
+        \\    constructor(n) { this.n = n; }
+        \\    static create(n) { return new Counter(n); }
+        \\}
+        \\var c = Counter.create(7);
+        \\var result = c.n;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "class inheritance" {
+    const result = try evalWithMicrotasks(
+        \\class Animal {
+        \\    constructor(name) { this.name = name; }
+        \\    speak() { return "..."; }
+        \\}
+        \\class Dog extends Animal {
+        \\    constructor(name) { this.name = name; }
+        \\    speak() { return "woof"; }
+        \\}
+        \\var d = new Dog("Rex");
+        \\var result = 0;
+        \\if (d.speak() === "woof") result = 1;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "class default constructor" {
+    const result = try evalWithMicrotasks(
+        \\class Empty {}
+        \\var e = new Empty();
+        \\e.x = 99;
+        \\var result = e.x;
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "class instanceof-like check via prototype" {
+    const result = try evalWithMicrotasks(
+        \\class Point {
+        \\    constructor(x, y) { this.x = x; this.y = y; }
+        \\    sum() { return this.x + this.y; }
+        \\}
+        \\var p = new Point(3, 4);
+        \\var result = p.sum();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
