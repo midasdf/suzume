@@ -1260,21 +1260,99 @@ pub const Parser = struct {
             super_class = try self.parseExpression();
         }
 
-        // Class body - for now just skip balanced braces
         try self.expect(.lbrace);
-        var depth: u32 = 1;
-        while (depth > 0 and !self.check(.eof)) {
-            if (self.check(.lbrace)) depth += 1;
-            if (self.check(.rbrace)) depth -= 1;
-            if (depth > 0) self.advance();
+
+        var methods = std.ArrayListUnmanaged(NodeIndex){};
+        defer methods.deinit(self.allocator);
+
+        while (!self.check(.rbrace) and !self.check(.eof)) {
+            // Skip semicolons in class body
+            if (self.match(.semicolon)) continue;
+
+            var is_static = false;
+            var kind: @FieldType(ast_mod.Property, "kind") = .init;
+
+            // Check for 'static' keyword
+            if (self.current.type == .kw_static) {
+                is_static = true;
+                self.advance();
+            }
+
+            // Check for get/set
+            if (self.current.type == .identifier) {
+                const text = self.tokenSlice(self.current);
+                if (std.mem.eql(u8, text, "get") and self.peek_token.type == .identifier) {
+                    kind = .get;
+                    self.advance();
+                } else if (std.mem.eql(u8, text, "set") and self.peek_token.type == .identifier) {
+                    kind = .set;
+                    self.advance();
+                }
+            }
+
+            // Check for async
+            var is_async = false;
+            if (self.current.type == .kw_async and self.peek_token.type == .identifier) {
+                is_async = true;
+                self.advance();
+            }
+
+            // Method name
+            const method_name_text = self.tokenSlice(self.current);
+            const method_name_id = self.pool.intern(method_name_text) catch return error.OutOfMemory;
+            const key_node = self.ast.addNode(self.allocator, .{ .identifier = method_name_id }) catch return error.OutOfMemory;
+            self.advance();
+
+            // Parse parameters
+            try self.expect(.lparen);
+            var params = std.ArrayListUnmanaged(NodeIndex){};
+            defer params.deinit(self.allocator);
+            while (!self.check(.rparen) and !self.check(.eof)) {
+                const param = try self.parseBindingTarget();
+                // Check for default value
+                if (self.check(.eq) or self.check(.assign)) {
+                    self.advance();
+                    const default_val = try self.parsePrecedence(.assignment);
+                    const ap = self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                        .left = param,
+                        .right = default_val,
+                    } }) catch return error.OutOfMemory;
+                    params.append(self.allocator, ap) catch return error.OutOfMemory;
+                } else {
+                    params.append(self.allocator, param) catch return error.OutOfMemory;
+                }
+                if (!self.match(.comma)) break;
+            }
+            try self.expect(.rparen);
+
+            // Parse method body
+            const body = try self.parseStatement(); // parseStatement handles { block }
+            const params_list = self.ast.addNodeList(self.allocator, params.items) catch return error.OutOfMemory;
+
+            const func_node = self.ast.addNode(self.allocator, .{ .function_decl = .{
+                .name = method_name_id,
+                .params = params_list,
+                .body = body,
+                .is_async = is_async,
+            } }) catch return error.OutOfMemory;
+
+            const prop_node = self.ast.addNode(self.allocator, .{ .property = .{
+                .key = key_node,
+                .value = func_node,
+                .kind = kind,
+                .method = true,
+                .is_static = is_static,
+            } }) catch return error.OutOfMemory;
+            methods.append(self.allocator, prop_node) catch return error.OutOfMemory;
         }
+
         try self.expect(.rbrace);
 
-        const empty_body = self.ast.addNodeList(self.allocator, &.{}) catch return error.OutOfMemory;
+        const body_list = self.ast.addNodeList(self.allocator, methods.items) catch return error.OutOfMemory;
         return self.ast.addNode(self.allocator, .{ .class_decl = .{
             .name = name,
             .super_class = super_class,
-            .body = empty_body,
+            .body = body_list,
         } }) catch return error.OutOfMemory;
     }
 

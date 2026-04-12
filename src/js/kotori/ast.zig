@@ -103,6 +103,7 @@ pub const Property = struct {
     computed: bool = false,
     shorthand: bool = false,
     method: bool = false,
+    is_static: bool = false,
 };
 
 pub const VarDecl = struct {
