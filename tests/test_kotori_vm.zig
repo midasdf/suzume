@@ -4724,3 +4724,118 @@ test "eval: String.localeCompare greater" {
     );
     try std.testing.expect(result.asBool());
 }
+
+// ── Pattern compatibility checks ────────────────────────────────
+
+test "eval: computed property in object literal" {
+    const result = try evalExpr(
+        \\var key = "foo"; var o = {[key]: 42}; o.foo
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: object spread" {
+    const result = try evalExpr(
+        \\var a = {x:1}; var b = {y:2, ...a}; b.x + b.y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: instanceof with inheritance" {
+    const result = try evalExpr(
+        \\class A {} class B extends A {}
+        \\var b = new B();
+        \\(b instanceof B) && (b instanceof A)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.isArray check" {
+    const result = try evalExpr(
+        \\Array.isArray([1,2]) && !Array.isArray({})
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Error constructor message" {
+    const result = try evalExpr(
+        \\var e = new TypeError("bad"); e.message === "bad"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: try-catch error handling" {
+    const result = try evalExpr(
+        \\var msg = "";
+        \\try { throw new Error("oops"); } catch(e) { msg = e.message; }
+        \\msg === "oops"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: for-of with array" {
+    const result = try evalExpr(
+        \\var sum = 0;
+        \\for (var x of [10, 20, 30]) { sum += x; }
+        \\sum
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: Map basic operations" {
+    const result = try evalExpr(
+        \\var m = new Map();
+        \\m.set("a", 1); m.set("b", 2);
+        \\m.get("a") + m.get("b") + m.size
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: Set basic operations" {
+    const result = try evalExpr(
+        \\var s = new Set([1, 2, 2, 3]);
+        \\s.size
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Promise.resolve then" {
+    const result = try evalWithMicrotasks(
+        \\var out = 0;
+        \\Promise.resolve(42).then(function(v) { out = v; });
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: async await basic" {
+    const result = try evalWithMicrotasks(
+        \\var out = 0;
+        \\async function f() { return 99; }
+        \\f().then(function(v) { out = v; });
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: destructuring assignment" {
+    const result = try evalExpr(
+        \\var [a, b, c] = [10, 20, 30];
+        \\a + b + c
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: object destructuring" {
+    const result = try evalExpr(
+        \\var {x, y} = {x: 5, y: 10};
+        \\x + y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "eval: template literal with expression" {
+    const result = try evalExpr(
+        \\var n = 42;
+        \\`value is ${n}`
+    );
+    try std.testing.expect(result.isString());
+}
