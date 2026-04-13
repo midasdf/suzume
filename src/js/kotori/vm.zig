@@ -43,6 +43,7 @@ pub const VM = struct {
     array_proto: ?*JsObject = null,
     string_proto: ?*JsObject = null,
     number_proto: ?*JsObject = null,
+    object_proto: ?*JsObject = null,
     element_proto: ?*JsObject = null,
     // DOM property interception (set by kotori_dom.zig)
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
@@ -643,6 +644,13 @@ pub const VM = struct {
                         }
                         if (obj.getProperty(name_id)) |val| {
                             self.push(val);
+                        } else if (self.object_proto) |obj_p| {
+                            // Object.prototype fallback
+                            if (obj_p.getProperty(name_id)) |val| {
+                                self.push(val);
+                            } else {
+                                self.push(JsValue.undefined_val);
+                            }
                         } else {
                             self.push(JsValue.undefined_val);
                         }
@@ -1637,6 +1645,8 @@ pub const VM = struct {
         try self.registerNativeMethod(ap, "reduceRight", &nativeArrayReduceRight);
         try self.registerNativeMethod(ap, "find", &nativeArrayFind);
         try self.registerNativeMethod(ap, "findIndex", &nativeArrayFindIndex);
+        try self.registerNativeMethod(ap, "findLast", &nativeArrayFindLast);
+        try self.registerNativeMethod(ap, "findLastIndex", &nativeArrayFindLastIndex);
         try self.registerNativeMethod(ap, "some", &nativeArraySome);
         try self.registerNativeMethod(ap, "every", &nativeArrayEvery);
         try self.registerNativeMethod(ap, "sort", &nativeArraySort);
@@ -1686,6 +1696,8 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "codePointAt", &nativeStringCodePointAt);
         try self.registerNativeMethod(sp, "substr", &nativeStringSubstr);
         try self.registerNativeMethod(sp, "toString", &nativeStringToString);
+        try self.registerNativeMethod(sp, "normalize", &nativeStringNormalize);
+        try self.registerNativeMethod(sp, "localeCompare", &nativeStringLocaleCompare);
         try self.registerNativeMethod(sp, "valueOf", &nativeStringToString);
 
         // ── String constructor ──
@@ -1725,6 +1737,15 @@ pub const VM = struct {
             try num_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(np));
             try self.globals.put(self.allocator, try self.pool.intern("Number"), JsValue.initObject(num_ctor));
         }
+
+        // ── Object.prototype ──
+        self.object_proto = try self.createObj(.{});
+        const op = self.object_proto.?;
+        try self.registerNativeMethod(op, "hasOwnProperty", &nativeObjHasOwnProperty);
+        try self.registerNativeMethod(op, "toString", &nativeObjToString);
+        try self.registerNativeMethod(op, "valueOf", &nativeObjValueOf);
+        try self.registerNativeMethod(op, "isPrototypeOf", &nativeReturnFalse);
+        try self.registerNativeMethod(op, "propertyIsEnumerable", &nativeReturnTrue);
 
         // ── Object ──
         const obj_constructor = try self.createObj(.{});
@@ -2013,6 +2034,12 @@ pub const VM = struct {
         // ── globalThis ──
         const global_this = try self.createObj(.{ .obj_type = .window_proxy });
         try self.globals.put(self.allocator, try self.pool.intern("globalThis"), JsValue.initObject(global_this));
+
+        // ── structuredClone ──
+        {
+            const sc_fn = try self.createNativeFn(&nativeStructuredClone);
+            try self.globals.put(self.allocator, try self.pool.intern("structuredClone"), JsValue.initObject(sc_fn));
+        }
 
         // ── Symbol ──
         {
@@ -2727,6 +2754,40 @@ pub const VM = struct {
         const callback = args[0];
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+        }
+        return JsValue.initNumber(-1);
+    }
+
+    fn nativeArrayFindLast(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        const items = obj.data.array.items;
+        var i: usize = items.len;
+        while (i > 0) {
+            i -= 1;
+            const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            if (result.isTruthy()) return items[i];
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn nativeArrayFindLastIndex(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initNumber(-1);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .array) return JsValue.initNumber(-1);
+        const vm = vmFromCtx(ctx);
+        const callback = args[0];
+        const items = obj.data.array.items;
+        var i: usize = items.len;
+        while (i > 0) {
+            i -= 1;
+            const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
             const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
             if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
         }
@@ -3679,6 +3740,108 @@ pub const VM = struct {
 
     fn nativeObjectPassthrough(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         return if (args.len > 0) args[0] else JsValue.undefined_val;
+    }
+
+    fn nativeObjHasOwnProperty(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
+        return JsValue.initBool(this.asJsObject().properties.get(args[0].asStringId()) != null);
+    }
+
+    fn nativeObjToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (this.isNull()) return JsValue.initString(try vm.pool.intern("[object Null]"));
+        if (this.isUndefined()) return JsValue.initString(try vm.pool.intern("[object Undefined]"));
+        if (!this.isObject()) return JsValue.initString(try vm.pool.intern("[object Object]"));
+        const obj = this.asJsObject();
+        const tag = switch (obj.obj_type) {
+            .array => "[object Array]",
+            .regexp => "[object RegExp]",
+            else => switch (obj.data) {
+                .function, .native_fn => "[object Function]",
+                .date_ms => "[object Date]",
+                .map_data => "[object Map]",
+                .set_data => "[object Set]",
+                else => "[object Object]",
+            },
+        };
+        return JsValue.initString(try vm.pool.intern(tag));
+    }
+
+    fn nativeObjValueOf(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return this;
+    }
+
+    fn nativeStructuredClone(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.undefined_val;
+        return try vmFromCtx(ctx).deepClone(args[0]);
+    }
+
+    fn deepClone(self: *VM, val: JsValue) anyerror!JsValue {
+        if (!val.isObject()) return val;
+        const src = val.asJsObject();
+        return switch (src.data) {
+            .array => |arr| {
+                const new_arr = try self.createArray();
+                for (arr.items) |item| {
+                    try new_arr.data.array.append(self.allocator, try self.deepClone(item));
+                }
+                // Copy named properties (e.g. .length is auto, but others might exist)
+                for (src.properties.keys(), src.properties.values()) |k, v| {
+                    try new_arr.setProperty(self.allocator, k, try self.deepClone(v));
+                }
+                return JsValue.initObject(new_arr);
+            },
+            .map_data => |entries| {
+                const new_map = try self.createObj(.{ .obj_type = .map });
+                new_map.data = .{ .map_data = .{} };
+                new_map.prototype = src.prototype;
+                for (entries.items) |entry| {
+                    try new_map.data.map_data.append(self.allocator, .{
+                        .key = try self.deepClone(entry.key),
+                        .val = try self.deepClone(entry.val),
+                    });
+                }
+                return JsValue.initObject(new_map);
+            },
+            .set_data => |items| {
+                const new_set = try self.createObj(.{ .obj_type = .set });
+                new_set.data = .{ .set_data = .{} };
+                new_set.prototype = src.prototype;
+                for (items.items) |item| {
+                    try new_set.data.set_data.append(self.allocator, try self.deepClone(item));
+                }
+                return JsValue.initObject(new_set);
+            },
+            .date_ms => |ms| {
+                const new_date = try self.createObj(.{});
+                new_date.data = .{ .date_ms = ms };
+                return JsValue.initObject(new_date);
+            },
+            else => {
+                const new_obj = try self.createObj(.{});
+                for (src.properties.keys(), src.properties.values()) |k, v| {
+                    try new_obj.setProperty(self.allocator, k, try self.deepClone(v));
+                }
+                return JsValue.initObject(new_obj);
+            },
+        };
+    }
+
+    fn nativeStringNormalize(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return this; // stub: return self (NFC normalization not implemented)
+    }
+
+    fn nativeStringLocaleCompare(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isString() or args.len == 0 or !args[0].isString()) return JsValue.initNumber(0);
+        const vm = vmFromCtx(ctx);
+        const a = vm.pool.get(this.asStringId()) orelse "";
+        const b = vm.pool.get(args[0].asStringId()) orelse "";
+        const cmp = std.mem.order(u8, a, b);
+        return JsValue.initNumber(switch (cmp) {
+            .lt => -1.0,
+            .gt => 1.0,
+            .eq => 0.0,
+        });
     }
 
     fn nativeObjectIs(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {

@@ -4593,3 +4593,134 @@ test "eval: matchAll with string pattern" {
     );
     try std.testing.expect(result.asBool());
 }
+
+// ── Phase J: Object.prototype ───────────────────────────────────
+
+test "eval: hasOwnProperty own prop" {
+    const result = try evalExpr(
+        \\var o = {x: 1, y: 2};
+        \\o.hasOwnProperty("x")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: hasOwnProperty missing prop" {
+    const result = try evalExpr(
+        \\var o = {x: 1};
+        \\o.hasOwnProperty("z")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: Object.prototype.toString on object" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\o.toString()
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: Object.prototype.toString on array" {
+    const result = try evalExpr(
+        \\var a = [1,2,3];
+        \\Object.prototype.toString.call(a)
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: Object.prototype.valueOf returns self" {
+    const result = try evalExpr(
+        \\var o = {x: 42};
+        \\o.valueOf().x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+// ── Phase J: Array.findLast / findLastIndex ──────────────────────
+
+test "eval: Array.findLast" {
+    const result = try evalExpr(
+        \\[1, 2, 3, 4, 5].findLast(function(x) { return x % 2 === 0; })
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.findLast not found" {
+    const result = try evalExpr(
+        \\[1, 3, 5].findLast(function(x) { return x > 10; }) === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.findLastIndex" {
+    const result = try evalExpr(
+        \\[1, 2, 3, 2, 1].findLastIndex(function(x) { return x === 2; })
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.findLastIndex not found" {
+    const result = try evalExpr(
+        \\[1, 2, 3].findLastIndex(function(x) { return x === 9; })
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
+}
+
+// ── Phase J: structuredClone ────────────────────────────────────
+
+test "eval: structuredClone object" {
+    const result = try evalExpr(
+        \\var orig = {a: 1, b: {c: 2}};
+        \\var copy = structuredClone(orig);
+        \\copy.b.c = 99;
+        \\orig.b.c
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: structuredClone array" {
+    const result = try evalExpr(
+        \\var orig = [1, [2, 3]];
+        \\var copy = structuredClone(orig);
+        \\copy[1].push(4);
+        \\orig[1].length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: structuredClone primitives" {
+    const result = try evalExpr(
+        \\structuredClone(42)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+// ── Phase J: String stubs ───────────────────────────────────────
+
+test "eval: String.normalize returns self" {
+    const result = try evalExpr(
+        \\"hello".normalize() === "hello"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: String.localeCompare equal" {
+    const result = try evalExpr(
+        \\"abc".localeCompare("abc")
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: String.localeCompare less" {
+    const result = try evalExpr(
+        \\"abc".localeCompare("xyz") < 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: String.localeCompare greater" {
+    const result = try evalExpr(
+        \\"xyz".localeCompare("abc") > 0
+    );
+    try std.testing.expect(result.asBool());
+}
