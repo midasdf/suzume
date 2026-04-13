@@ -60,6 +60,7 @@ pub const Node = union(enum) {
     yield_expr: struct { argument: NodeIndex, delegate: bool },
     await_expr: NodeIndex,
     function_expr: Function,
+    tagged_template: struct { tag: NodeIndex, quasi: NodeList, exprs: NodeList },
 
     // Statements
     block: NodeList,

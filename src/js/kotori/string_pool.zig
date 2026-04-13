@@ -1,6 +1,7 @@
 const std = @import("std");
 
 pub const StringId = u32;
+pub const EMPTY_STRING_ID: StringId = 0;
 
 pub const StringPool = struct {
     strings: std.StringArrayHashMapUnmanaged(StringId),
@@ -8,11 +9,13 @@ pub const StringPool = struct {
     next_id: StringId,
 
     pub fn init(allocator: std.mem.Allocator) StringPool {
-        return .{
+        var pool: StringPool = .{
             .strings = .{},
             .allocator = allocator,
             .next_id = 0,
         };
+        _ = pool.intern("") catch {};
+        return pool;
     }
 
     pub fn deinit(self: *StringPool) void {

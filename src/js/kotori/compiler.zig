@@ -239,6 +239,37 @@ pub const Compiler = struct {
                 }
             },
 
+            .tagged_template => |tt| {
+                // tag`str${expr}str` → tag(strings_array, expr1, expr2, ...)
+                // 1. Compile the tag function
+                try self.compileNode(tt.tag);
+
+                // 2. Create the strings array from quasi parts
+                const quasis = self.parser.ast.getNodeList(tt.quasi);
+                try self.emitOpU16(.new_array, @intCast(quasis.len));
+                for (quasis) |q| {
+                    try self.compileNode(q);
+                    try self.emitOp(.array_push);
+                }
+
+                // 3. Add .raw property (same as cooked for now)
+                try self.emitOp(.dup); // dup strings array for raw
+                try self.emitOp(.dup); // dup again — stack: [tag, arr, arr, arr]
+                const raw_id = try self.parser.pool.intern("raw");
+                const raw_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(raw_id)));
+                try self.emitOpU16(.set_prop, raw_ci);
+                try self.emitOp(.pop); // pop set_prop result, keep arr with .raw set
+
+                // 4. Compile each expression argument
+                const exprs = self.parser.ast.getNodeList(tt.exprs);
+                for (exprs) |e| {
+                    try self.compileNode(e);
+                }
+
+                // 5. Call: tag(strings, expr1, expr2, ...)
+                try self.emitOpU16(.call, @intCast(1 + exprs.len));
+            },
+
             .binary => |bin| {
                 // Short-circuit for logical_and / logical_or
                 if (bin.op == .logical_and) {
@@ -814,6 +845,10 @@ pub const Compiler = struct {
                         else => _ = try self.addLocal(0),
                     }
                 },
+                .array_pattern, .object_pattern, .array_literal, .object_literal => {
+                    // Destructuring param: placeholder local for the whole arg
+                    _ = try self.addLocal(0);
+                },
                 else => _ = try self.addLocal(0), // placeholder
             }
         }
@@ -839,6 +874,18 @@ pub const Compiler = struct {
                     // Full implementation collects remaining args (Task #2)
                     try self.emitOpU16(.new_array, 0);
                     try self.emitOpU16(.store_local, @intCast(i));
+                },
+                .array_pattern, .array_literal => |list| {
+                    // Destructuring array param: load arg, destructure into new locals
+                    try self.emitOpU16(.load_local, @intCast(i));
+                    try self.compileArrayDestructure(list);
+                    try self.emitOp(.pop);
+                },
+                .object_pattern, .object_literal => |list| {
+                    // Destructuring object param: load arg, destructure into new locals
+                    try self.emitOpU16(.load_local, @intCast(i));
+                    try self.compileObjectDestructure(list);
+                    try self.emitOp(.pop);
                 },
                 else => {},
             }
@@ -1013,8 +1060,16 @@ pub const Compiler = struct {
         const elems = self.parser.ast.getNodeList(list);
         try self.emitOpU16(.new_array, @intCast(elems.len));
         for (elems) |e_idx| {
-            try self.compileNode(e_idx);
-            try self.emitOp(.array_push);
+            switch (self.parser.ast.getNode(e_idx)) {
+                .spread => |inner| {
+                    try self.compileNode(inner);
+                    try self.emitOp(.spread_into_array);
+                },
+                else => {
+                    try self.compileNode(e_idx);
+                    try self.emitOp(.array_push);
+                },
+            }
         }
     }
 

@@ -855,36 +855,20 @@ pub const VM = struct {
                                     for (iter_obj.data.array.items) |item| {
                                         try arr.data.array.append(self.allocator, item);
                                     }
-                                } else if (iter_obj.obj_type == .generator) {
-                                    // Generator: collect all yielded values by calling .next() until done
-                                    const g_next_id = try self.pool.intern("next");
-                                    const g_done_id = try self.pool.intern("done");
-                                    const g_value_id = try self.pool.intern("value");
-                                    var g_iters: u32 = 0;
-                                    while (g_iters < 10000) : (g_iters += 1) {
-                                        const g_next_fn = iter_obj.getProperty(g_next_id) orelse break;
-                                        const g_result = try self.callJsFunction(g_next_fn, iterable, &.{});
-                                        if (!g_result.isObject()) break;
-                                        const g_result_obj = g_result.asJsObject();
-                                        const g_done = g_result_obj.getProperty(g_done_id) orelse JsValue.initBool(true);
-                                        if (g_done.isTruthy()) break;
-                                        const g_value = g_result_obj.getProperty(g_value_id) orelse JsValue.undefined_val;
-                                        try arr.data.array.append(self.allocator, g_value);
-                                    }
-                                } else if (iter_obj.obj_type == .iterator) {
-                                    // Iterator object: drain into array
-                                    try self.drainIteratorIntoArray(iterable, arr);
-                                } else if (self.findSymbolProp(iter_obj, SYMBOL_ITERATOR)) |iter_fn| {
-                                    // Custom iterable with Symbol.iterator
-                                    const iterator = try self.callJsFunction(iter_fn, iterable, &.{});
+                                } else if (try self.resolveIterator(iterable)) |iterator| {
+                                    // Generators, iterators, Symbol.iterator custom iterables
                                     try self.drainIteratorIntoArray(iterator, arr);
                                 }
                             } else if (iterable.isString()) {
-                                // Spread string into chars
+                                // Spread string into UTF-8 codepoints
                                 if (self.pool.get(iterable.asStringId())) |s| {
-                                    for (s) |c| {
-                                        const char_str = try self.pool.intern(&.{c});
+                                    var i: usize = 0;
+                                    while (i < s.len) {
+                                        const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
+                                        const end = @min(i + cp_len, s.len);
+                                        const char_str = try self.pool.intern(s[i..end]);
                                         try arr.data.array.append(self.allocator, JsValue.initString(char_str));
+                                        i = end;
                                     }
                                 }
                             }
@@ -5936,7 +5920,15 @@ pub const VM = struct {
         } };
         try self.registerNativeMethod(gen_obj, "next", &nativeGeneratorNext);
         try self.registerNativeMethod(gen_obj, "return", &nativeGeneratorReturn);
+        // ES6: generators are iterables — Symbol.iterator returns this
+        if (gen_obj.symbol_props == null) gen_obj.symbol_props = .{};
+        const iter_fn = try self.createNativeFn(&nativeReturnThis);
+        try gen_obj.symbol_props.?.put(self.allocator, SYMBOL_ITERATOR, JsValue.initObject(iter_fn));
         return gen_obj;
+    }
+
+    fn nativeReturnThis(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        return this;
     }
 
     fn createIterResult(self: *VM, value: JsValue, done: bool) !JsValue {
@@ -6043,6 +6035,8 @@ pub const VM = struct {
             // If run returned normally (return statement), generator is done
             if (gen.state == .executing) {
                 gen.state = .completed;
+                // return_/return_undefined leave return value on stack; pop it
+                if (self.sp > 0) self.sp -= 1;
                 return try self.createIterResult(result, true);
             }
             // If yield_value was hit, it already returned the result
@@ -6091,6 +6085,8 @@ pub const VM = struct {
 
             if (gen.state == .executing) {
                 gen.state = .completed;
+                // return_/return_undefined leave return value on stack; pop it
+                if (self.sp > 0) self.sp -= 1;
                 return try self.createIterResult(result, true);
             }
             return result;
