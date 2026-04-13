@@ -58,7 +58,7 @@ pub const VM = struct {
     error_proto: ?*JsObject = null,
 
     // Symbol support
-    next_symbol_id: u32 = 4, // 0-3 reserved for well-known symbols
+    next_symbol_id: u32 = 5, // 0-4 reserved for well-known symbols
     symbol_descriptions: std.AutoArrayHashMapUnmanaged(u32, ?StringId) = .{},
 
     // Generator support
@@ -135,6 +135,7 @@ pub const VM = struct {
     pub const SYMBOL_TO_PRIMITIVE: u32 = 1;
     pub const SYMBOL_HAS_INSTANCE: u32 = 2;
     pub const SYMBOL_TO_STRING_TAG: u32 = 3;
+    pub const SYMBOL_ASYNC_ITERATOR: u32 = 4;
 
     pub fn init(allocator: std.mem.Allocator, bc: *const Bytecode, pool: *StringPool) VM {
         var self = VM{ .allocator = allocator, .pool = pool };
@@ -1183,6 +1184,28 @@ pub const VM = struct {
                 },
 
                 // ── Async / Promise ──────────────────────────────────
+                .get_async_iterator => {
+                    const iterable = self.pop();
+                    // Check Symbol.asyncIterator first
+                    if (iterable.isObject()) {
+                        const obj = iterable.asJsObject();
+                        if (self.findSymbolProp(obj, SYMBOL_ASYNC_ITERATOR)) |iter_fn| {
+                            const result = try self.callJsFunction(iter_fn, iterable, &.{});
+                            self.push(result);
+                            continue;
+                        }
+                    }
+                    // Fallback to sync iterator
+                    if (try self.resolveIterator(iterable)) |iterator| {
+                        self.push(iterator);
+                    } else {
+                        const done_iter = try self.createObj(.{ .obj_type = .iterator });
+                        done_iter.data = .{ .iterator_data = .{ .source = JsValue.undefined_val } };
+                        try self.registerNativeMethod(done_iter, "next", &nativeArrayIteratorNext);
+                        self.push(JsValue.initObject(done_iter));
+                    }
+                },
+
                 .get_iterator => {
                     const iterable = self.pop();
                     if (try self.resolveIterator(iterable)) |iterator| {
@@ -1967,6 +1990,7 @@ pub const VM = struct {
             try symbol_fn.setProperty(self.allocator, try self.pool.intern("toPrimitive"), JsValue.initSymbol(SYMBOL_TO_PRIMITIVE));
             try symbol_fn.setProperty(self.allocator, try self.pool.intern("hasInstance"), JsValue.initSymbol(SYMBOL_HAS_INSTANCE));
             try symbol_fn.setProperty(self.allocator, try self.pool.intern("toStringTag"), JsValue.initSymbol(SYMBOL_TO_STRING_TAG));
+            try symbol_fn.setProperty(self.allocator, try self.pool.intern("asyncIterator"), JsValue.initSymbol(SYMBOL_ASYNC_ITERATOR));
         }
     }
 
@@ -5781,7 +5805,7 @@ pub const VM = struct {
     fn resolveIterator(self: *VM, iterable: JsValue) !?JsValue {
         if (iterable.isObject()) {
             const obj = iterable.asJsObject();
-            if (obj.obj_type == .generator) return iterable;
+            if (obj.obj_type == .generator or obj.obj_type == .async_generator) return iterable;
             if (self.findSymbolProp(obj, SYMBOL_ITERATOR)) |iter_fn| {
                 return try self.callJsFunction(iter_fn, iterable, &.{});
             }

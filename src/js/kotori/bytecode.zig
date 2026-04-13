@@ -103,6 +103,7 @@ pub const OpCode = enum(u8) {
 
     // Iterators
     get_iterator, // stack: [iterable] → [iterator]
+    get_async_iterator, // stack: [iterable] → [async_iterator]
 
     // Generators
     yield_value, // pop value, suspend generator, return {value, done:false}

@@ -394,8 +394,8 @@ pub const Compiler = struct {
                 try self.endScope();
             },
 
-            .for_of_stmt => |s| try self.compileForOfIn(s.left, s.right, s.body, false),
-            .for_in_stmt => |s| try self.compileForOfIn(s.left, s.right, s.body, true),
+            .for_of_stmt => |s| try self.compileForOfIn(s.left, s.right, s.body, false, s.is_await),
+            .for_in_stmt => |s| try self.compileForOfIn(s.left, s.right, s.body, true, false),
 
             .block => |list| {
                 self.beginScope();
@@ -1370,7 +1370,7 @@ pub const Compiler = struct {
     /// Strategy: convert to index-based loop over array.
     /// for-of: iterate values of iterable (array directly)
     /// for-in: iterate keys of object (get_keys → array, then iterate)
-    fn compileForOfIn(self: *Compiler, left: NodeIndex, right: NodeIndex, body: NodeIndex, is_for_in: bool) CompileError!void {
+    fn compileForOfIn(self: *Compiler, left: NodeIndex, right: NodeIndex, body: NodeIndex, is_for_in: bool, is_await: bool) CompileError!void {
         self.beginScope();
 
         // Determine the loop variable name from the left side
@@ -1411,7 +1411,11 @@ pub const Compiler = struct {
 
         if (!is_for_in) {
             // ── for-of: iterator protocol ──────────────────────────────
-            try self.emitOp(.get_iterator);
+            if (is_await) {
+                try self.emitOp(.get_async_iterator);
+            } else {
+                try self.emitOp(.get_iterator);
+            }
             const iter_name = self.parser.pool.intern("__iter") catch return error.OutOfMemory;
             _ = try self.addLocal(iter_name);
 
@@ -1426,6 +1430,10 @@ pub const Compiler = struct {
             try self.emitOpU16(.get_prop, next_ci);
             // call_method 0: consumes iter+next_fn, pushes result
             try self.emitOpU16(.call_method, 0);
+            // for-await-of: await the .next() result (Promise → {value, done})
+            if (is_await) {
+                try self.emitOp(.await_);
+            }
             // dup result, check .done
             try self.emitOp(.dup);
             const done_id = try self.parser.pool.intern("done");

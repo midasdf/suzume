@@ -70,7 +70,7 @@ pub const Node = union(enum) {
     do_while_stmt: struct { test_: NodeIndex, body: NodeIndex },
     for_stmt: struct { init_: NodeIndex, test_: NodeIndex, update: NodeIndex, body: NodeIndex },
     for_in_stmt: struct { left: NodeIndex, right: NodeIndex, body: NodeIndex },
-    for_of_stmt: struct { left: NodeIndex, right: NodeIndex, body: NodeIndex },
+    for_of_stmt: struct { left: NodeIndex, right: NodeIndex, body: NodeIndex, is_await: bool = false },
     switch_stmt: struct { discriminant: NodeIndex, cases: NodeList },
     switch_case: struct { test_: NodeIndex, body: NodeList },
     return_stmt: NodeIndex,

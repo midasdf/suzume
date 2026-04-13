@@ -1043,6 +1043,14 @@ pub const Parser = struct {
 
     fn parseForStatement(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume 'for'
+
+        // Check for "for await ("
+        var is_for_await = false;
+        if (self.current.type == .kw_await) {
+            is_for_await = true;
+            self.advance(); // consume 'await'
+        }
+
         try self.expect(.lparen);
 
         // Parse init
@@ -1058,7 +1066,7 @@ pub const Parser = struct {
                 return self.parseForIn(init_node);
             }
             if (self.match(.kw_of)) {
-                return self.parseForOf(init_node);
+                return if (is_for_await) self.parseForAwaitOf(init_node) else self.parseForOf(init_node);
             }
             try self.expect(.semicolon);
         } else {
@@ -1069,7 +1077,7 @@ pub const Parser = struct {
                 return self.parseForIn(init_node);
             }
             if (self.match(.kw_of)) {
-                return self.parseForOf(init_node);
+                return if (is_for_await) self.parseForAwaitOf(init_node) else self.parseForOf(init_node);
             }
             try self.expect(.semicolon);
         }
@@ -1143,6 +1151,14 @@ pub const Parser = struct {
     }
 
     fn parseForOf(self: *Parser, left: NodeIndex) ParseError!NodeIndex {
+        return self.parseForOfInner(left, false);
+    }
+
+    fn parseForAwaitOf(self: *Parser, left: NodeIndex) ParseError!NodeIndex {
+        return self.parseForOfInner(left, true);
+    }
+
+    fn parseForOfInner(self: *Parser, left: NodeIndex, is_await: bool) ParseError!NodeIndex {
         // 'of' already consumed (as identifier token since 'of' is not a keyword)
         const right = try self.parsePrecedence(.assignment);
         try self.expect(.rparen);
@@ -1151,6 +1167,7 @@ pub const Parser = struct {
             .left = left,
             .right = right,
             .body = body,
+            .is_await = is_await,
         } }) catch return error.OutOfMemory;
     }
 

@@ -3453,6 +3453,31 @@ test "eval: async generator done" {
     try std.testing.expect(result.asBool());
 }
 
+// ── for-await-of ────────────────────────────────────────────────
+
+test "eval: for-await-of with async generator" {
+    const result = try evalWithMicrotasks(
+        \\let sum = 0;
+        \\async function* ag() { yield 1; yield 2; yield 3; }
+        \\async function main() {
+        \\  for await (let x of ag()) { sum += x; }
+        \\}
+        \\main();
+    , "sum");
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-await-of with sync array" {
+    const result = try evalWithMicrotasks(
+        \\let sum = 0;
+        \\async function main() {
+        \\  for await (let x of [10, 20, 30]) { sum += x; }
+        \\}
+        \\main();
+    , "sum");
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
 test "eval: spread generator via for-of collect" {
     // Note: [...generator()] with direct spread has re-entrant VM issues.
     // Workaround: collect via for-of which uses the normal iteration path.
