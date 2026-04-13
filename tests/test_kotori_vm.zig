@@ -3709,6 +3709,22 @@ test "eval: spread iterator object" {
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
+test "eval: arrow destructuring default param" {
+    const result = try evalExpr(
+        \\let f = ({a} = {a: 55}) => a;
+        \\f()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 55.0), result.asNumber(), 0.001);
+}
+
+test "eval: arrow array default element" {
+    const result = try evalExpr(
+        \\let f = ([x = 7]) => x;
+        \\f([])
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
 test "eval: arrow nested destructuring param" {
     const result = try evalExpr(
         \\let f = ({a: {b}}) => b;
