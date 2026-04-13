@@ -1490,6 +1490,25 @@ pub const Parser = struct {
             const key_node = self.ast.addNode(self.allocator, .{ .identifier = method_name_id }) catch return error.OutOfMemory;
             self.advance();
 
+            // Class field (no parenthesis after name)
+            if (!self.check(.lparen)) {
+                var init_val: NodeIndex = null_node;
+                if (self.check(.eq) or self.check(.assign)) {
+                    self.advance();
+                    init_val = try self.parsePrecedence(.assignment);
+                }
+                _ = self.match(.semicolon);
+                const prop_node = self.ast.addNode(self.allocator, .{ .property = .{
+                    .key = key_node,
+                    .value = init_val,
+                    .kind = kind,
+                    .method = false,
+                    .is_static = is_static,
+                } }) catch return error.OutOfMemory;
+                methods.append(self.allocator, prop_node) catch return error.OutOfMemory;
+                continue;
+            }
+
             // Parse parameters
             try self.expect(.lparen);
             var params = std.ArrayListUnmanaged(NodeIndex){};

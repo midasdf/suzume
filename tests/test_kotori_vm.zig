@@ -4371,3 +4371,225 @@ test "eval: typeof symbol value" {
     );
     try std.testing.expect(result.asBool());
 }
+
+// ── Phase I: Class fields ───────────────────────────────────────
+
+test "eval: class instance field with initializer" {
+    const result = try evalExpr(
+        \\class A { x = 42; }
+        \\var a = new A();
+        \\a.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: class instance field without initializer" {
+    const result = try evalExpr(
+        \\class A { x; }
+        \\var a = new A();
+        \\a.x === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: class static field" {
+    const result = try evalExpr(
+        \\class A { static count = 10; }
+        \\A.count
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: class fields and methods together" {
+    const result = try evalExpr(
+        \\class Counter {
+        \\  count = 0;
+        \\  inc() { this.count++; return this.count; }
+        \\}
+        \\var c = new Counter();
+        \\c.inc(); c.inc(); c.inc()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: class multiple instance fields" {
+    const result = try evalExpr(
+        \\class Point {
+        \\  x = 1;
+        \\  y = 2;
+        \\}
+        \\var p = new Point();
+        \\p.x + p.y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: class static and instance fields" {
+    const result = try evalExpr(
+        \\class Dog {
+        \\  name = "Rex";
+        \\  static species = "canine";
+        \\}
+        \\var d = new Dog();
+        \\d.name + " " + Dog.species
+    );
+    const vm_result = result;
+    try std.testing.expect(vm_result.isString());
+}
+
+test "eval: class field with constructor" {
+    const result = try evalExpr(
+        \\class A {
+        \\  x = 10;
+        \\  constructor(y) { this.y = y; }
+        \\}
+        \\var a = new A(20);
+        \\a.x + a.y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: class field expression initializer" {
+    const result = try evalExpr(
+        \\class A {
+        \\  x = 2 + 3;
+        \\  y = [1, 2, 3];
+        \\}
+        \\var a = new A();
+        \\a.x + a.y.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: class static field without initializer" {
+    const result = try evalExpr(
+        \\class A { static x; }
+        \\A.x === undefined
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: instances have independent fields" {
+    const result = try evalExpr(
+        \\class Box { value = 0; }
+        \\var a = new Box(); var b = new Box();
+        \\a.value = 5;
+        \\b.value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+// ── Phase I: Object.is ──────────────────────────────────────────
+
+test "eval: Object.is same values" {
+    const result = try evalExpr(
+        \\Object.is(1, 1)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.is different values" {
+    const result = try evalExpr(
+        \\Object.is(1, 2)
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: Object.is strings" {
+    const result = try evalExpr(
+        \\Object.is("abc", "abc")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.is null" {
+    const result = try evalExpr(
+        \\Object.is(null, null)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.is undefined" {
+    const result = try evalExpr(
+        \\Object.is(undefined, undefined)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.is null vs undefined" {
+    const result = try evalExpr(
+        \\Object.is(null, undefined)
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+// ── Phase I: Object.hasOwn ──────────────────────────────────────
+
+test "eval: Object.hasOwn own property" {
+    const result = try evalExpr(
+        \\var o = {x: 1, y: 2};
+        \\Object.hasOwn(o, "x")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.hasOwn missing property" {
+    const result = try evalExpr(
+        \\var o = {x: 1};
+        \\Object.hasOwn(o, "z")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+// ── Phase I: Object.fromEntries ─────────────────────────────────
+
+test "eval: Object.fromEntries basic" {
+    const result = try evalExpr(
+        \\var o = Object.fromEntries([["a", 1], ["b", 2]]);
+        \\o.a + o.b
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.fromEntries roundtrip" {
+    const result = try evalExpr(
+        \\var orig = {x: 10, y: 20};
+        \\var copy = Object.fromEntries(Object.entries(orig));
+        \\copy.x + copy.y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+// ── Phase I: String.prototype.matchAll ──────────────────────────
+
+test "eval: matchAll basic iteration" {
+    const result = try evalExpr(
+        \\var s = "test1 test2 test3";
+        \\var it = s.matchAll(/test\d/g);
+        \\var a = it.next(); var b = it.next(); var c = it.next();
+        \\var d = it.next();
+        \\!a.done && !b.done && !c.done && d.done
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: matchAll match values" {
+    const result = try evalExpr(
+        \\var s = "foo1bar2";
+        \\var it = s.matchAll(/\d/g);
+        \\var first = it.next().value[0];
+        \\var second = it.next().value[0];
+        \\first + second
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: matchAll with string pattern" {
+    const result = try evalExpr(
+        \\var s = "abcabc";
+        \\var it = s.matchAll("bc");
+        \\var r = it.next();
+        \\!r.done
+    );
+    try std.testing.expect(result.asBool());
+}

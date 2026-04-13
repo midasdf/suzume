@@ -1672,6 +1672,7 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "endsWith", &nativeStringEndsWith);
         try self.registerNativeMethod(sp, "replace", &nativeStringReplace);
         try self.registerNativeMethod(sp, "match", &nativeStringMatch);
+        try self.registerNativeMethod(sp, "matchAll", &nativeStringMatchAll);
         try self.registerNativeMethod(sp, "search", &nativeStringSearch);
         try self.registerNativeMethod(sp, "repeat", &nativeStringRepeat);
         try self.registerNativeMethod(sp, "padStart", &nativeStringPadStart);
@@ -1744,6 +1745,9 @@ pub const VM = struct {
         try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeReturnFalse);
         try self.registerNativeMethod(obj_constructor, "isSealed", &nativeReturnFalse);
         try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeReturnTrue);
+        try self.registerNativeMethod(obj_constructor, "is", &nativeObjectIs);
+        try self.registerNativeMethod(obj_constructor, "hasOwn", &nativeObjectHasOwn);
+        try self.registerNativeMethod(obj_constructor, "fromEntries", &nativeObjectFromEntries);
         const obj_id = try self.pool.intern("Object");
         try self.globals.put(self.allocator, obj_id, JsValue.initObject(obj_constructor));
 
@@ -3677,6 +3681,50 @@ pub const VM = struct {
         return if (args.len > 0) args[0] else JsValue.undefined_val;
     }
 
+    fn nativeObjectIs(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const a = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const b = if (args.len > 1) args[1] else JsValue.undefined_val;
+        // SameValue: NaN===NaN (same bits in NaN-boxing), +0!==-0 (different bits)
+        return JsValue.initBool(a.bits == b.bits);
+    }
+
+    fn nativeObjectHasOwn(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2 or !args[0].isObject()) return JsValue.initBool(false);
+        const obj = args[0].asJsObject();
+        if (args[1].isString()) {
+            return JsValue.initBool(obj.properties.get(args[1].asStringId()) != null);
+        }
+        return JsValue.initBool(false);
+    }
+
+    fn nativeObjectFromEntries(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_obj = try vm.createObj(.{});
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_obj);
+        const arr_obj = args[0].asJsObject();
+        const entries = switch (arr_obj.data) {
+            .array => |a| a.items,
+            else => return JsValue.initObject(new_obj),
+        };
+        for (entries) |entry_val| {
+            if (!entry_val.isObject()) continue;
+            const entry = entry_val.asJsObject();
+            const pair = switch (entry.data) {
+                .array => |a| a.items,
+                else => continue,
+            };
+            if (pair.len < 2) continue;
+            const key_id = if (pair[0].isString())
+                pair[0].asStringId()
+            else blk: {
+                var buf: [64]u8 = undefined;
+                break :blk try vm.pool.intern(formatValue(vm.pool, pair[0], &buf));
+            };
+            try new_obj.setProperty(vm.allocator, key_id, pair[1]);
+        }
+        return JsValue.initObject(new_obj);
+    }
+
     fn nativeReturnFalse(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
         return JsValue.initBool(false);
     }
@@ -5143,6 +5191,70 @@ pub const VM = struct {
         const index_id = try vm.pool.intern("index");
         try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(result.start)));
         return JsValue.initObject(arr);
+    }
+
+    fn nativeStringMatchAll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isString()) return JsValue.undefined_val;
+        if (args.len == 0) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        var pattern_id: StringId = undefined;
+        var ignore_case = false;
+        if (args[0].isObject()) {
+            const obj = args[0].asJsObject();
+            if (obj.obj_type == .regexp) {
+                pattern_id = obj.data.regexp_data.source;
+                ignore_case = obj.data.regexp_data.ignore_case;
+            } else return JsValue.undefined_val;
+        } else if (args[0].isString()) {
+            pattern_id = args[0].asStringId();
+        } else return JsValue.undefined_val;
+
+        const iter = try vm.createObj(.{ .obj_type = .iterator });
+        iter.data = .{ .iterator_data = .{ .source = this } };
+        const pat_key = try vm.pool.intern("__pat");
+        try iter.setProperty(vm.allocator, pat_key, JsValue.initString(pattern_id));
+        const ic_key = try vm.pool.intern("__ic");
+        try iter.setProperty(vm.allocator, ic_key, JsValue.initBool(ignore_case));
+        try vm.registerNativeMethod(iter, "next", &nativeMatchAllNext);
+        return JsValue.initObject(iter);
+    }
+
+    fn nativeMatchAllNext(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return try vm.createIterResult(JsValue.undefined_val, true);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .iterator) return try vm.createIterResult(JsValue.undefined_val, true);
+        var data = &obj.data.iterator_data;
+        if (!data.source.isString()) return try vm.createIterResult(JsValue.undefined_val, true);
+        const s = vm.pool.get(data.source.asStringId()) orelse return try vm.createIterResult(JsValue.undefined_val, true);
+        if (data.index >= s.len) return try vm.createIterResult(JsValue.undefined_val, true);
+
+        const pat_key = try vm.pool.intern("__pat");
+        const pat_val = obj.properties.get(pat_key) orelse return try vm.createIterResult(JsValue.undefined_val, true);
+        const pattern = vm.pool.get(pat_val.asStringId()) orelse return try vm.createIterResult(JsValue.undefined_val, true);
+        const ic_key = try vm.pool.intern("__ic");
+        const ignore_case = if (obj.properties.get(ic_key)) |v| v.isTruthy() else false;
+
+        const sub = s[data.index..];
+        const result = regexSearch(pattern, sub, ignore_case) orelse return try vm.createIterResult(JsValue.undefined_val, true);
+
+        const arr = try vm.createArray();
+        const matched = sub[result.start..result.end];
+        try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(matched)));
+        for (result.captures) |cap| {
+            if (cap) |c| {
+                try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(sub[c.start..c.end])));
+            } else break;
+        }
+        const index_id = try vm.pool.intern("index");
+        try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(data.index + result.start)));
+        const input_id = try vm.pool.intern("input");
+        try arr.setProperty(vm.allocator, input_id, data.source);
+
+        data.index += @as(u32, @intCast(result.end));
+        if (result.end == result.start) data.index += 1;
+
+        return try vm.createIterResult(JsValue.initObject(arr), false);
     }
 
     fn nativeStringSearch(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {

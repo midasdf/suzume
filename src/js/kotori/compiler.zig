@@ -59,6 +59,11 @@ const LoopContext = struct {
     is_switch: bool = false,
 };
 
+const ClassField = struct {
+    name: StringId,
+    init: NodeIndex,
+};
+
 const FunctionScope = struct {
     locals: FixedArray(Local, 256) = .{},
     upvalues: FixedArray(UpvalueInfo, 256) = .{},
@@ -77,6 +82,8 @@ pub const Compiler = struct {
     current: FunctionScope,
     /// Compiled FunctionObj constants (heap-allocated, owned by caller via Bytecode constants)
     functions: std.ArrayListUnmanaged(*object_mod.JsObject) = .{},
+    /// Instance field initializers for current class constructor
+    pending_class_fields: ?[]const ClassField = null,
 
     pub fn init(allocator: std.mem.Allocator, source: []const u8) Compiler {
         return .{
@@ -986,6 +993,22 @@ pub const Compiler = struct {
             }
         }
 
+        // Emit instance field initializers (class constructor)
+        if (self.pending_class_fields) |fields| {
+            for (fields) |field| {
+                try self.emitOp(.load_this);
+                if (field.init != null_node) {
+                    try self.compileNode(field.init);
+                } else {
+                    try self.emitConstant(JsValue.undefined_val);
+                }
+                const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(field.name)));
+                try self.emitOpU16(.set_prop, ci);
+                try self.emitOp(.pop);
+            }
+            self.pending_class_fields = null;
+        }
+
         // Compile body
         const body = self.parser.ast.getNode(func.body);
         switch (body) {
@@ -1212,28 +1235,45 @@ pub const Compiler = struct {
     fn compileClassDecl(self: *Compiler, cls: ast_mod.Class) CompileError!void {
         const methods = self.parser.ast.getNodeList(cls.body);
 
-        // Find constructor method
+        // Collect fields and find constructor
         var constructor_func: ?ast_mod.Function = null;
+        var inst_fields: [64]ClassField = undefined;
+        var inst_field_n: usize = 0;
+        var static_fields: [64]ClassField = undefined;
+        var static_field_n: usize = 0;
+
         for (methods) |m_idx| {
             const m = self.parser.ast.getNode(m_idx);
             switch (m) {
                 .property => |prop| {
+                    const key = self.parser.ast.getNode(prop.key);
+                    const key_id: StringId = switch (key) {
+                        .identifier => |id| id,
+                        else => continue,
+                    };
+                    if (!prop.method) {
+                        const f = ClassField{ .name = key_id, .init = prop.value };
+                        if (prop.is_static) {
+                            if (static_field_n < static_fields.len) {
+                                static_fields[static_field_n] = f;
+                                static_field_n += 1;
+                            }
+                        } else {
+                            if (inst_field_n < inst_fields.len) {
+                                inst_fields[inst_field_n] = f;
+                                inst_field_n += 1;
+                            }
+                        }
+                        continue;
+                    }
                     if (!prop.is_static) {
-                        const key = self.parser.ast.getNode(prop.key);
-                        switch (key) {
-                            .identifier => |id| {
-                                const name = self.parser.pool.get(id) orelse "";
-                                if (std.mem.eql(u8, name, "constructor")) {
-                                    const val = self.parser.ast.getNode(prop.value);
-                                    switch (val) {
-                                        .function_decl => |f| {
-                                            constructor_func = f;
-                                        },
-                                        else => {},
-                                    }
-                                }
-                            },
-                            else => {},
+                        const name = self.parser.pool.get(key_id) orelse "";
+                        if (std.mem.eql(u8, name, "constructor")) {
+                            const val = self.parser.ast.getNode(prop.value);
+                            switch (val) {
+                                .function_decl => |f| constructor_func = f,
+                                else => {},
+                            }
                         }
                     }
                 },
@@ -1241,15 +1281,15 @@ pub const Compiler = struct {
             }
         }
 
-        // 1. Compile constructor function (or default empty constructor)
+        // 1. Compile constructor (with instance field initializers injected)
+        if (inst_field_n > 0) {
+            self.pending_class_fields = inst_fields[0..inst_field_n];
+        }
         if (constructor_func) |func| {
-            // Use the constructor body but with the class name
             var ctor = func;
             ctor.name = cls.name;
             try self.compileFunctionBody(ctor);
         } else {
-            // Default constructor: function ClassName() {}
-            // If extends, default should call super(...args), but we'll keep it simple
             const empty_body = self.parser.ast.addNodeList(self.allocator, &.{}) catch return error.OutOfMemory;
             const empty_block = self.parser.ast.addNode(self.allocator, .{ .block = empty_body }) catch return error.OutOfMemory;
             const empty_params = self.parser.ast.addNodeList(self.allocator, &.{}) catch return error.OutOfMemory;
@@ -1293,7 +1333,7 @@ pub const Compiler = struct {
             const m = self.parser.ast.getNode(m_idx);
             switch (m) {
                 .property => |prop| {
-                    if (!prop.is_static) {
+                    if (prop.method and !prop.is_static) {
                         const key = self.parser.ast.getNode(prop.key);
                         switch (key) {
                             .identifier => |id| {
@@ -1329,6 +1369,7 @@ pub const Compiler = struct {
 
                     const kname = self.parser.pool.get(key_id) orelse "";
                     if (std.mem.eql(u8, kname, "constructor")) continue;
+                    if (!prop.method) continue;
 
                     if (prop.is_static) {
                         // Static method: set on constructor directly
@@ -1377,7 +1418,7 @@ pub const Compiler = struct {
             const m = self.parser.ast.getNode(m_idx);
             switch (m) {
                 .property => |prop| {
-                    if (!prop.is_static) continue;
+                    if (!prop.is_static or !prop.method) continue;
                     const key = self.parser.ast.getNode(prop.key);
                     const key_id: StringId = switch (key) {
                         .identifier => |id| id,
@@ -1400,7 +1441,20 @@ pub const Compiler = struct {
             }
         }
 
-        // 6. Store constructor as class name (stack: [ctor])
+        // 6. Static field initializers: set on constructor
+        for (static_fields[0..static_field_n]) |field| {
+            try self.emitOp(.dup); // [ctor, ctor]
+            if (field.init != null_node) {
+                try self.compileNode(field.init);
+            } else {
+                try self.emitConstant(JsValue.undefined_val);
+            }
+            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(field.name)));
+            try self.emitOpU16(.set_prop, ci);
+            try self.emitOp(.pop); // [ctor]
+        }
+
+        // 7. Store constructor as class name (stack: [ctor])
         if (cls.name) |name_id| {
             try self.storeBinding(name_id);
         }
