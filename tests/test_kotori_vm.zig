@@ -4894,6 +4894,60 @@ test "eval: Uint8Array byte overflow wraps" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }
 
+// ── Function.prototype.call/apply/bind ───────────────────────────
+
+test "eval: Function.call" {
+    const result = try evalExpr(
+        \\function greet(x) { return this.name + " " + x; }
+        \\var obj = {name: "Alice"};
+        \\greet.call(obj, "hi")
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: Function.apply" {
+    const result = try evalExpr(
+        \\function sum(a, b) { return a + b; }
+        \\sum.apply(null, [10, 20])
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: Function.bind basic" {
+    const result = try evalExpr(
+        \\function add(a, b) { return a + b; }
+        \\var add5 = add.bind(null, 5);
+        \\add5(10)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "eval: Function.bind with this" {
+    const result = try evalExpr(
+        \\var obj = {x: 100};
+        \\function getX() { return this.x; }
+        \\var bound = getX.bind(obj);
+        \\bound()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 100.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.prototype.toString.call for type check" {
+    const result = try evalExpr(
+        \\Object.prototype.toString.call([1,2,3])
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: Function.call with native method" {
+    const result = try evalExpr(
+        \\var a = [1, 2, 3];
+        \\Array.prototype.push.call(a, 4);
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
 test "eval: Uint8Array slice" {
     const result = try evalExpr(
         \\var a = new Uint8Array([1,2,3,4,5]);

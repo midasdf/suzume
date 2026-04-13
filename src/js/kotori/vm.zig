@@ -45,6 +45,7 @@ pub const VM = struct {
     number_proto: ?*JsObject = null,
     object_proto: ?*JsObject = null,
     typed_array_proto: ?*JsObject = null,
+    function_proto: ?*JsObject = null,
     element_proto: ?*JsObject = null,
     // DOM property interception (set by kotori_dom.zig)
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
@@ -661,6 +662,18 @@ pub const VM = struct {
                         }
                         if (obj.getProperty(name_id)) |val| {
                             self.push(val);
+                        } else if ((obj.obj_type == .function or obj.obj_type == .native_function) and self.function_proto != null) {
+                            if (self.function_proto.?.getProperty(name_id)) |val| {
+                                self.push(val);
+                            } else if (self.object_proto) |obj_p| {
+                                if (obj_p.getProperty(name_id)) |val2| {
+                                    self.push(val2);
+                                } else {
+                                    self.push(JsValue.undefined_val);
+                                }
+                            } else {
+                                self.push(JsValue.undefined_val);
+                            }
                         } else if (self.object_proto) |obj_p| {
                             // Object.prototype fallback
                             if (obj_p.getProperty(name_id)) |val| {
@@ -1778,6 +1791,14 @@ pub const VM = struct {
             try num_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(np));
             try self.globals.put(self.allocator, try self.pool.intern("Number"), JsValue.initObject(num_ctor));
         }
+
+        // ── Function.prototype ──
+        self.function_proto = try self.createObj(.{});
+        const fp = self.function_proto.?;
+        try self.registerNativeMethod(fp, "call", &nativeFunctionCall);
+        try self.registerNativeMethod(fp, "apply", &nativeFunctionApply);
+        try self.registerNativeMethod(fp, "bind", &nativeFunctionBind);
+        try self.registerNativeMethod(fp, "toString", &nativeFunctionToString);
 
         // ── Object.prototype ──
         self.object_proto = try self.createObj(.{});
@@ -3904,6 +3925,78 @@ pub const VM = struct {
             .gt => 1.0,
             .eq => 0.0,
         });
+    }
+
+    // ── Function.prototype ─────────────────────────────────────────
+
+    fn nativeFunctionCall(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const this_arg = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const call_args = if (args.len > 1) args[1..] else &[_]JsValue{};
+        return try vm.callJsFunction(this, this_arg, call_args);
+    }
+
+    fn nativeFunctionApply(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const this_arg = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (args.len > 1 and args[1].isObject()) {
+            const arr_obj = args[1].asJsObject();
+            if (arr_obj.obj_type == .array) {
+                return try vm.callJsFunction(this, this_arg, arr_obj.data.array.items);
+            }
+        }
+        return try vm.callJsFunction(this, this_arg, &[_]JsValue{});
+    }
+
+    fn nativeFunctionBind(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const wrapper = try vm.createNativeFn(&nativeBoundCall);
+        const fn_id = try vm.pool.intern("__fn");
+        try wrapper.setProperty(vm.allocator, fn_id, this);
+        const this_id = try vm.pool.intern("__this");
+        try wrapper.setProperty(vm.allocator, this_id, if (args.len > 0) args[0] else JsValue.undefined_val);
+        if (args.len > 1) {
+            const bound_args = try vm.createArray();
+            for (args[1..]) |arg| {
+                try bound_args.data.array.append(vm.allocator, arg);
+            }
+            const args_id = try vm.pool.intern("__args");
+            try wrapper.setProperty(vm.allocator, args_id, JsValue.initObject(bound_args));
+        }
+        return JsValue.initObject(wrapper);
+    }
+
+    fn nativeBoundCall(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        // Find bound wrapper on stack (pushed by callJsFunction before native call)
+        const wrapper = vm.stack[vm.sp - 1].asJsObject();
+        const fn_id = try vm.pool.intern("__fn");
+        const orig_fn = wrapper.properties.get(fn_id) orelse return JsValue.undefined_val;
+        const this_id = try vm.pool.intern("__this");
+        const bound_this = wrapper.properties.get(this_id) orelse JsValue.undefined_val;
+        const args_id = try vm.pool.intern("__args");
+
+        // Merge bound args + call args
+        if (wrapper.properties.get(args_id)) |ba_val| {
+            if (ba_val.isObject()) {
+                const ba = ba_val.asJsObject();
+                if (ba.obj_type == .array) {
+                    const bound = ba.data.array.items;
+                    const total = bound.len + args.len;
+                    const merged = try vm.allocator.alloc(JsValue, total);
+                    defer vm.allocator.free(merged);
+                    @memcpy(merged[0..bound.len], bound);
+                    @memcpy(merged[bound.len..], args);
+                    return try vm.callJsFunction(orig_fn, bound_this, merged);
+                }
+            }
+        }
+        return try vm.callJsFunction(orig_fn, bound_this, args);
+    }
+
+    fn nativeFunctionToString(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        return JsValue.initString(try vm.pool.intern("function() { [native code] }"));
     }
 
     // ── ArrayBuffer / Uint8Array ────────────────────────────────────
