@@ -14,7 +14,9 @@ pub const StringPool = struct {
             .allocator = allocator,
             .next_id = 0,
         };
-        _ = pool.intern("") catch {};
+        // EMPTY_STRING_ID invariant: "" must be StringId 0
+        const id = pool.intern("") catch unreachable;
+        std.debug.assert(id == EMPTY_STRING_ID);
         return pool;
     }
 

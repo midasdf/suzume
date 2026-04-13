@@ -398,10 +398,10 @@ pub const Parser = struct {
     }
 
     fn parseTaggedTemplate(self: *Parser, tag: NodeIndex) ParseError!NodeIndex {
-        var quasis: [64]NodeIndex = undefined;
-        var exprs: [64]NodeIndex = undefined;
-        var quasi_count: usize = 0;
-        var expr_count: usize = 0;
+        var quasis = std.ArrayListUnmanaged(NodeIndex){};
+        var exprs = std.ArrayListUnmanaged(NodeIndex){};
+        defer quasis.deinit(self.allocator);
+        defer exprs.deinit(self.allocator);
 
         if (self.current.type == .template) {
             // No-substitution tagged template: tag`text`
@@ -410,38 +410,34 @@ pub const Parser = struct {
             const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
             const sid = self.pool.intern(content) catch return error.OutOfMemory;
             const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
-            quasis[0] = str_node;
-            quasi_count = 1;
+            quasis.append(self.allocator, str_node) catch return error.OutOfMemory;
         } else {
             // template_head: `text${
             const text = self.tokenSlice(self.current);
             const content = if (text.len >= 3) text[1 .. text.len - 2] else "";
             const sid = self.pool.intern(content) catch return error.OutOfMemory;
-            quasis[quasi_count] = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
-            quasi_count += 1;
+            const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+            quasis.append(self.allocator, str_node) catch return error.OutOfMemory;
             self.advance(); // consume template_head
 
             while (true) {
                 // Parse interpolated expression
                 const expr = try self.parsePrecedence(.assignment);
-                if (expr_count < exprs.len) {
-                    exprs[expr_count] = expr;
-                    expr_count += 1;
-                }
+                exprs.append(self.allocator, expr) catch return error.OutOfMemory;
 
                 if (self.current.type == .template_middle) {
                     const mid_text = self.tokenSlice(self.current);
                     const mid_content = if (mid_text.len >= 3) mid_text[1 .. mid_text.len - 2] else "";
                     const mid_sid = self.pool.intern(mid_content) catch return error.OutOfMemory;
-                    quasis[quasi_count] = self.ast.addNode(self.allocator, .{ .string_literal = mid_sid }) catch return error.OutOfMemory;
-                    quasi_count += 1;
+                    const mid_node = self.ast.addNode(self.allocator, .{ .string_literal = mid_sid }) catch return error.OutOfMemory;
+                    quasis.append(self.allocator, mid_node) catch return error.OutOfMemory;
                     self.advance();
                 } else if (self.current.type == .template_tail) {
                     const tail_text = self.tokenSlice(self.current);
                     const tail_content = if (tail_text.len >= 2) tail_text[1 .. tail_text.len - 1] else "";
                     const tail_sid = self.pool.intern(tail_content) catch return error.OutOfMemory;
-                    quasis[quasi_count] = self.ast.addNode(self.allocator, .{ .string_literal = tail_sid }) catch return error.OutOfMemory;
-                    quasi_count += 1;
+                    const tail_node = self.ast.addNode(self.allocator, .{ .string_literal = tail_sid }) catch return error.OutOfMemory;
+                    quasis.append(self.allocator, tail_node) catch return error.OutOfMemory;
                     self.advance();
                     break;
                 } else {
@@ -450,8 +446,8 @@ pub const Parser = struct {
             }
         }
 
-        const quasi_list = self.ast.addNodeList(self.allocator, quasis[0..quasi_count]) catch return error.OutOfMemory;
-        const exprs_list = self.ast.addNodeList(self.allocator, exprs[0..expr_count]) catch return error.OutOfMemory;
+        const quasi_list = self.ast.addNodeList(self.allocator, quasis.items) catch return error.OutOfMemory;
+        const exprs_list = self.ast.addNodeList(self.allocator, exprs.items) catch return error.OutOfMemory;
         return self.ast.addNode(self.allocator, .{ .tagged_template = .{
             .tag = tag,
             .quasi = quasi_list,
@@ -817,9 +813,31 @@ pub const Parser = struct {
             return self.ast.addNode(self.allocator, .{ .rest_element = operand }) catch return error.OutOfMemory;
         }
 
-        // Destructuring patterns: {a, b} or [x, y]
-        if (self.check(.lbrace)) return self.parseObjectPattern();
-        if (self.check(.lbracket)) return self.parseArrayPattern();
+        // Destructuring patterns: {a, b} or [x, y], optionally with default: {a, b} = {}
+        if (self.check(.lbrace)) {
+            const pattern = try self.parseObjectPattern();
+            if (self.check(.eq) or self.check(.assign)) {
+                self.advance();
+                const default_val = try self.parsePrecedence(.assignment);
+                return self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                    .left = pattern,
+                    .right = default_val,
+                } }) catch return error.OutOfMemory;
+            }
+            return pattern;
+        }
+        if (self.check(.lbracket)) {
+            const pattern = try self.parseArrayPattern();
+            if (self.check(.eq) or self.check(.assign)) {
+                self.advance();
+                const default_val = try self.parsePrecedence(.assignment);
+                return self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                    .left = pattern,
+                    .right = default_val,
+                } }) catch return error.OutOfMemory;
+            }
+            return pattern;
+        }
 
         // Regular parameter
         const ident = try self.parseIdentifier();

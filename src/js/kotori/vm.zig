@@ -855,6 +855,8 @@ pub const VM = struct {
                                     for (iter_obj.data.array.items) |item| {
                                         try arr.data.array.append(self.allocator, item);
                                     }
+                                } else if (iter_obj.obj_type == .async_generator) {
+                                    // async generators cannot be spread synchronously — skip
                                 } else if (try self.resolveIterator(iterable)) |iterator| {
                                     // Generators, iterators, Symbol.iterator custom iterables
                                     try self.drainIteratorIntoArray(iterator, arr);

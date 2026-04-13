@@ -241,8 +241,30 @@ pub const Compiler = struct {
 
             .tagged_template => |tt| {
                 // tag`str${expr}str` → tag(strings_array, expr1, expr2, ...)
-                // 1. Compile the tag function
-                try self.compileNode(tt.tag);
+                // Check if tag is a member expression for proper this binding
+                const tag_node = self.parser.ast.getNode(tt.tag);
+                const is_method = tag_node == .member or tag_node == .computed_member;
+
+                // 1. Compile the tag function (with this for member calls)
+                if (is_method) {
+                    switch (tag_node) {
+                        .member => |m| {
+                            try self.compileNode(m.object); // push this
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(m.property)));
+                            try self.emitOpU16(.get_prop, ci); // stack: [this, func]
+                        },
+                        .computed_member => |m| {
+                            try self.compileNode(m.object); // push this
+                            try self.emitOp(.dup);
+                            try self.compileNode(m.property);
+                            try self.emitOp(.get_elem); // stack: [this, func]
+                        },
+                        else => unreachable,
+                    }
+                } else {
+                    try self.compileNode(tt.tag);
+                }
 
                 // 2. Create the strings array from quasi parts
                 const quasis = self.parser.ast.getNodeList(tt.quasi);
@@ -252,13 +274,17 @@ pub const Compiler = struct {
                     try self.emitOp(.array_push);
                 }
 
-                // 3. Add .raw property (same as cooked for now)
-                try self.emitOp(.dup); // dup strings array for raw
-                try self.emitOp(.dup); // dup again — stack: [tag, arr, arr, arr]
+                // 3. Add .raw property (separate array with same contents)
+                try self.emitOp(.dup); // dup strings array
+                try self.emitOpU16(.new_array, @intCast(quasis.len));
+                for (quasis) |q| {
+                    try self.compileNode(q);
+                    try self.emitOp(.array_push);
+                }
                 const raw_id = try self.parser.pool.intern("raw");
                 const raw_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(raw_id)));
                 try self.emitOpU16(.set_prop, raw_ci);
-                try self.emitOp(.pop); // pop set_prop result, keep arr with .raw set
+                try self.emitOp(.pop); // pop set_prop result
 
                 // 4. Compile each expression argument
                 const exprs = self.parser.ast.getNodeList(tt.exprs);
@@ -266,8 +292,12 @@ pub const Compiler = struct {
                     try self.compileNode(e);
                 }
 
-                // 5. Call: tag(strings, expr1, expr2, ...)
-                try self.emitOpU16(.call, @intCast(1 + exprs.len));
+                // 5. Call with proper this binding
+                if (is_method) {
+                    try self.emitOpU16(.call_method, @intCast(1 + exprs.len));
+                } else {
+                    try self.emitOpU16(.call, @intCast(1 + exprs.len));
+                }
             },
 
             .binary => |bin| {
@@ -868,6 +898,21 @@ pub const Compiler = struct {
                     try self.compileNode(ap.right);
                     try self.emitOpU16(.store_local, @intCast(i));
                     self.current.bc.patchJump(jump_over);
+                    // If left side is a destructuring pattern, destructure after default check
+                    const left = self.parser.ast.getNode(ap.left);
+                    switch (left) {
+                        .array_pattern, .array_literal => |list| {
+                            try self.emitOpU16(.load_local, @intCast(i));
+                            try self.compileArrayDestructure(list);
+                            try self.emitOp(.pop);
+                        },
+                        .object_pattern, .object_literal => |list| {
+                            try self.emitOpU16(.load_local, @intCast(i));
+                            try self.compileObjectDestructure(list);
+                            try self.emitOp(.pop);
+                        },
+                        else => {},
+                    }
                 },
                 .rest_element => {
                     // Rest params: for now, initialize as empty array

@@ -3513,10 +3513,12 @@ test "eval: array iterator done" {
 // ── Phase F: Empty string falsiness ─────────────────────────────
 
 test "eval: empty string is falsy" {
+    // Must produce "no", not "yes" — verifies "" is falsy
     const result = try evalExpr(
-        \\"" ? "yes" : "no"
+        \\let r = "" ? "yes" : "no";
+        \\r === "no" ? 1 : 0
     );
-    try std.testing.expect(result.isString());
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
 }
 
 test "eval: non-empty string is truthy" {
@@ -3570,6 +3572,18 @@ test "eval: spread ASCII string" {
         \\a.length
     );
     try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread multibyte string" {
+    // "あいう" = 3 codepoints (each 3 bytes), should spread to 3 elements not 9
+    const result = try evalExpr("let a = [...\"\xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\"];\na.length");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-of multibyte string char count" {
+    // "あいう" = 3 codepoints, for-of should iterate 3 times not 9
+    const result = try evalExpr("let count = 0;\nfor (let c of \"\xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\") count++;\ncount");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
 }
 
 test "eval: for-of string char count" {
@@ -3634,11 +3648,13 @@ test "eval: multiple destructuring params" {
 // ── Phase F: Tagged template literals ────────────────────────────
 
 test "eval: tagged template basic" {
+    // Verify exact interpolation result: "x1y2z"
     const result = try evalExpr(
         \\function tag(strings, a, b) { return strings[0] + a + strings[1] + b + strings[2]; }
-        \\tag`x${1}y${2}z`
+        \\let r = tag`x${1}y${2}z`;
+        \\r === "x1y2z" ? 1 : 0
     );
-    try std.testing.expect(result.isString());
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
 }
 
 test "eval: tagged template strings length" {
@@ -3650,11 +3666,13 @@ test "eval: tagged template strings length" {
 }
 
 test "eval: tagged template no expressions" {
+    // Verify exact string content: "hello"
     const result = try evalExpr(
         \\function tag(strings) { return strings[0]; }
-        \\tag`hello`
+        \\let r = tag`hello`;
+        \\r === "hello" ? 1 : 0
     );
-    try std.testing.expect(result.isString());
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
 }
 
 test "eval: tagged template raw property" {
@@ -3663,6 +3681,22 @@ test "eval: tagged template raw property" {
         \\tag`hello`
     );
     try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: tagged template member this binding" {
+    const result = try evalExpr(
+        \\let obj = { val: 42, tag(strings) { return this.val; } };
+        \\obj.tag`hello`
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: destructuring param with whole-param default" {
+    const result = try evalExpr(
+        \\function f({a} = {a: 99}) { return a; }
+        \\f()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
 }
 
 test "eval: if empty string takes else" {
