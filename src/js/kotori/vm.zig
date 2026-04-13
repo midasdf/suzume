@@ -2515,11 +2515,46 @@ pub const VM = struct {
 
     fn nativeStringReplace(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
-        if (args.len < 2 or !args[0].isString() or !args[1].isString()) return this;
+        if (args.len < 2) return this;
         const vm = vmFromCtx(ctx);
+        const replacement = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse "" else "";
+        // RegExp argument
+        if (args[0].isObject()) {
+            const obj = args[0].asJsObject();
+            if (obj.obj_type == .regexp) {
+                const re = obj.data.regexp_data;
+                const pattern = vm.pool.get(re.source) orelse return this;
+                var buf = std.ArrayListUnmanaged(u8){};
+                defer buf.deinit(vm.allocator);
+                if (re.global) {
+                    // Replace all matches
+                    var search_from: usize = 0;
+                    var iterations: usize = 0;
+                    while (search_from <= s.len and iterations < 10000) : (iterations += 1) {
+                        const sub = s[search_from..];
+                        const result = regexSearch(pattern, sub, re.ignore_case) orelse break;
+                        try buf.appendSlice(vm.allocator, sub[0..result.start]);
+                        try buf.appendSlice(vm.allocator, replacement);
+                        search_from += result.end;
+                        if (result.end == result.start) {
+                            if (search_from < s.len) try buf.append(vm.allocator, s[search_from]);
+                            search_from += 1;
+                        }
+                    }
+                    try buf.appendSlice(vm.allocator, s[search_from..]);
+                } else {
+                    // Replace first match only
+                    const result = regexSearch(pattern, s, re.ignore_case) orelse return this;
+                    try buf.appendSlice(vm.allocator, s[0..result.start]);
+                    try buf.appendSlice(vm.allocator, replacement);
+                    try buf.appendSlice(vm.allocator, s[result.end..]);
+                }
+                return JsValue.initString(try vm.pool.intern(buf.items));
+            }
+        }
+        // String argument — replace first occurrence
+        if (!args[0].isString()) return this;
         const needle = vm.pool.get(args[0].asStringId()) orelse return this;
-        const replacement = vm.pool.get(args[1].asStringId()) orelse return this;
-        // Replace first occurrence only (like JS String.replace with string arg)
         if (std.mem.indexOf(u8, s, needle)) |pos| {
             var buf = std.ArrayListUnmanaged(u8){};
             defer buf.deinit(vm.allocator);
@@ -3793,7 +3828,7 @@ pub const VM = struct {
         const re = obj.data.regexp_data;
         const pattern = vm.pool.get(re.source) orelse return JsValue.initBool(false);
         const str = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
-        return JsValue.initBool(simpleMatch(pattern, str, re.ignore_case) != null);
+        return JsValue.initBool(regexSearch(pattern, str, re.ignore_case) != null);
     }
 
     fn nativeRegExpExec(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -3804,131 +3839,405 @@ pub const VM = struct {
         const re = obj.data.regexp_data;
         const pattern = vm.pool.get(re.source) orelse return JsValue.null_val;
         const str = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
-        const match_result = simpleMatch(pattern, str, re.ignore_case) orelse return JsValue.null_val;
-        // Return [matched_string] with index property
+        const result = regexSearch(pattern, str, re.ignore_case) orelse return JsValue.null_val;
+        // Return [full_match, group1, group2, ...] with index property
         const arr = try vm.createArray();
-        const matched = str[match_result.start..match_result.end];
-        const match_sid = try vm.pool.intern(matched);
-        try arr.data.array.append(vm.allocator, JsValue.initString(match_sid));
+        const matched = str[result.start..result.end];
+        try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(matched)));
+        // Add capturing groups
+        for (result.captures) |cap| {
+            if (cap) |c| {
+                try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(str[c.start..c.end])));
+            } else break;
+        }
         const index_id = try vm.pool.intern("index");
-        try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(match_result.start)));
+        try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(result.start)));
+        const input_id = try vm.pool.intern("input");
+        try arr.setProperty(vm.allocator, input_id, args[0]);
         return JsValue.initObject(arr);
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // RegExp engine — supports: |, (), (?:), ., ^, $, \d, \w, \s,
+    // \b, \B, *, +, ?, {n}, {n,}, {n,m}, *?, +?, ??, [...], [^...]
+    // ═══════════════════════════════════════════════════════════════
+
     const MatchResult = struct { start: usize, end: usize };
 
-    /// Simple pattern matcher supporting: literal chars, ., ^, $, \d, \w, \s, *, +, ?
-    /// Not a full regex engine but covers common JS patterns.
-    fn simpleMatch(pattern: []const u8, str: []const u8, ignore_case: bool) ?MatchResult {
-        // Try matching at each position
-        var anchored_start = false;
+    const RegexResult = struct {
+        start: usize,
+        end: usize,
+        captures: [16]?MatchResult = [_]?MatchResult{null} ** 16,
+    };
+
+    /// Entry point: search for pattern in str. Returns match + captures.
+    fn regexSearch(pattern: []const u8, str: []const u8, ignore_case: bool) ?RegexResult {
         var pat = pattern;
+        var anchored_start = false;
+        var anchored_end = false;
         if (pat.len > 0 and pat[0] == '^') {
             anchored_start = true;
             pat = pat[1..];
         }
-        var anchored_end = false;
         if (pat.len > 0 and pat[pat.len - 1] == '$' and (pat.len < 2 or pat[pat.len - 2] != '\\')) {
             anchored_end = true;
             pat = pat[0 .. pat.len - 1];
         }
-
+        var caps: [16]?MatchResult = [_]?MatchResult{null} ** 16;
         if (anchored_start) {
-            if (matchAt(pat, str, 0, ignore_case)) |end| {
+            var gc: u8 = 0;
+            if (regexExpr(pat, str, 0, ignore_case, &caps, &gc)) |end| {
                 if (anchored_end and end != str.len) return null;
-                return .{ .start = 0, .end = end };
+                return .{ .start = 0, .end = end, .captures = caps };
             }
             return null;
         }
-
         var pos: usize = 0;
         while (pos <= str.len) : (pos += 1) {
-            if (matchAt(pat, str, pos, ignore_case)) |end| {
+            caps = [_]?MatchResult{null} ** 16;
+            var gc: u8 = 0;
+            if (regexExpr(pat, str, pos, ignore_case, &caps, &gc)) |end| {
                 if (anchored_end and end != str.len) continue;
-                return .{ .start = pos, .end = end };
+                return .{ .start = pos, .end = end, .captures = caps };
             }
         }
         return null;
     }
 
-    /// Try to match pattern starting at str[pos]. Returns end position if match.
-    fn matchAt(pat: []const u8, str: []const u8, start: usize, ignore_case: bool) ?usize {
-        var pi: usize = 0;
-        var si: usize = start;
+    /// Backward compat wrapper
+    fn simpleMatch(pattern: []const u8, str: []const u8, ignore_case: bool) ?MatchResult {
+        const r = regexSearch(pattern, str, ignore_case) orelse return null;
+        return .{ .start = r.start, .end = r.end };
+    }
 
+    /// Match expression: handles alternation (|) by splitting at top-level pipe
+    fn regexExpr(pat: []const u8, str: []const u8, si: usize, ic: bool, caps: *[16]?MatchResult, gc: *u8) ?usize {
+        if (findTopPipe(pat)) |pipe| {
+            const left = pat[0..pipe];
+            const right = pat[pipe + 1 ..];
+            // Save state, try left
+            const saved_caps = caps.*;
+            const saved_gc = gc.*;
+            if (regexSeq(left, str, si, ic, caps, gc)) |end| return end;
+            // Restore, try right (recursive for a|b|c)
+            caps.* = saved_caps;
+            gc.* = saved_gc;
+            return regexExpr(right, str, si, ic, caps, gc);
+        }
+        return regexSeq(pat, str, si, ic, caps, gc);
+    }
+
+    /// Match a sequence of atoms+quantifiers
+    fn regexSeq(pat: []const u8, str: []const u8, start: usize, ic: bool, caps: *[16]?MatchResult, gc: *u8) ?usize {
+        return regexSeqAt(pat, 0, str, start, ic, caps, gc);
+    }
+
+    fn regexSeqAt(pat: []const u8, pi_start: usize, str: []const u8, si: usize, ic: bool, caps: *[16]?MatchResult, gc: *u8) ?usize {
+        var pi = pi_start;
+        const pos = si;
         while (pi < pat.len) {
-            // Check for quantifier after current atom
-            const atom_len = atomLength(pat, pi);
-            const after_atom = pi + atom_len;
-            if (after_atom < pat.len and (pat[after_atom] == '*' or pat[after_atom] == '+' or pat[after_atom] == '?')) {
-                const quant = pat[after_atom];
-                const min: usize = if (quant == '+') 1 else 0;
-                const max: usize = if (quant == '?') 1 else str.len - si + 1;
-                // Greedy: try max matches first, then fewer
-                var count: usize = 0;
-                while (count < max and si + count <= str.len) {
-                    if (!matchAtom(pat, pi, str, si + count, ignore_case)) break;
-                    count += 1;
+            // ── Parse one atom ──
+            if (pat[pi] == '\\' and pi + 1 < pat.len and (pat[pi + 1] == 'b' or pat[pi + 1] == 'B')) {
+                // Word boundary — zero-width assertion
+                const at_boundary = isWordBoundary(str, pos);
+                const want = pat[pi + 1] == 'b';
+                if (at_boundary != want) return null;
+                pi += 2;
+                continue;
+            }
+            const atom_start = pi;
+            var atom_end: usize = 0;
+            var is_group = false;
+            var group_id: ?u8 = null;
+            var group_inner_start: usize = 0;
+            var group_inner_end: usize = 0;
+
+            if (pat[pi] == '(') {
+                is_group = true;
+                const close = findCloseParen(pat, pi);
+                if (pi + 2 < pat.len and pat[pi + 1] == '?' and pat[pi + 2] == ':') {
+                    group_inner_start = pi + 3;
+                } else {
+                    group_id = gc.*;
+                    if (gc.* < 16) gc.* += 1;
+                    group_inner_start = pi + 1;
                 }
-                // Try from count down to min
-                while (count >= min) {
-                    if (matchAt(pat[after_atom + 1 ..], str, si + count, ignore_case)) |end| return end;
-                    if (count == 0) break;
-                    count -= 1;
+                group_inner_end = close;
+                atom_end = close + 1;
+                _ = atom_start;
+            } else {
+                atom_end = pi + regexAtomLen(pat, pi);
+            }
+
+            // ── Parse quantifier ──
+            var min_rep: usize = 1;
+            var max_rep: usize = 1;
+            var quant_end = atom_end;
+            if (atom_end < pat.len) {
+                switch (pat[atom_end]) {
+                    '*' => {
+                        min_rep = 0;
+                        max_rep = 100000;
+                        quant_end = atom_end + 1;
+                    },
+                    '+' => {
+                        min_rep = 1;
+                        max_rep = 100000;
+                        quant_end = atom_end + 1;
+                    },
+                    '?' => {
+                        min_rep = 0;
+                        max_rep = 1;
+                        quant_end = atom_end + 1;
+                    },
+                    '{' => {
+                        if (parseBraceQuant(pat, atom_end)) |bq| {
+                            min_rep = bq.min;
+                            max_rep = bq.max;
+                            quant_end = bq.end;
+                        }
+                    },
+                    else => {},
+                }
+            }
+            // Lazy modifier
+            var lazy = false;
+            if (quant_end < pat.len and pat[quant_end] == '?') {
+                lazy = true;
+                quant_end += 1;
+            }
+
+            // ── Match atom × quantifier with backtracking ──
+            if (is_group) {
+                const inner = pat[group_inner_start..group_inner_end];
+                if (lazy) {
+                    // Lazy: try fewer first
+                    var count: usize = 0;
+                    var positions: [1024]usize = undefined;
+                    positions[0] = pos;
+                    // Collect all possible repeat positions
+                    while (count < max_rep and count < 1023) {
+                        var sub_gc = gc.*;
+                        if (regexExpr(inner, str, positions[count], ic, caps, &sub_gc)) |end| {
+                            count += 1;
+                            positions[count] = end;
+                            gc.* = sub_gc;
+                        } else break;
+                    }
+                    // Try from min to count
+                    var try_n = min_rep;
+                    while (try_n <= count) : (try_n += 1) {
+                        if (group_id) |gid| if (gid < 16) {
+                            if (try_n > 0) caps[gid] = .{ .start = positions[try_n - 1], .end = positions[try_n] }
+                            else caps[gid] = null;
+                        };
+                        if (regexSeqAt(pat, quant_end, str, positions[try_n], ic, caps, gc)) |end| return end;
+                    }
+                } else {
+                    // Greedy: collect all matches, try from max down
+                    var count: usize = 0;
+                    var positions: [1024]usize = undefined;
+                    positions[0] = pos;
+                    while (count < max_rep and count < 1023) {
+                        var sub_gc = gc.*;
+                        if (regexExpr(inner, str, positions[count], ic, caps, &sub_gc)) |end| {
+                            count += 1;
+                            positions[count] = end;
+                            gc.* = sub_gc;
+                        } else break;
+                    }
+                    // Try from count down to min
+                    if (count < min_rep) return null;
+                    var try_n = count;
+                    while (try_n >= min_rep) {
+                        if (group_id) |gid| if (gid < 16) {
+                            if (try_n > 0) caps[gid] = .{ .start = positions[try_n - 1], .end = positions[try_n] }
+                            else caps[gid] = null;
+                        };
+                        if (regexSeqAt(pat, quant_end, str, positions[try_n], ic, caps, gc)) |end| return end;
+                        if (try_n == min_rep) break;
+                        try_n -= 1;
+                    }
+                }
+                return null;
+            } else {
+                // Simple atom (single char consumer)
+                const atom_pat = pat[pi..atom_end];
+                if (lazy) {
+                    // Lazy: try fewer first
+                    var count: usize = 0;
+                    // Count max possible matches
+                    var max_count: usize = 0;
+                    while (max_count < max_rep) {
+                        if (!regexCharMatch(atom_pat, str, pos + max_count, ic)) break;
+                        max_count += 1;
+                    }
+                    count = min_rep;
+                    while (count <= max_count) : (count += 1) {
+                        if (regexSeqAt(pat, quant_end, str, pos + count, ic, caps, gc)) |end| return end;
+                    }
+                } else {
+                    // Greedy: match max, backtrack to min
+                    var count: usize = 0;
+                    while (count < max_rep) {
+                        if (!regexCharMatch(atom_pat, str, pos + count, ic)) break;
+                        count += 1;
+                    }
+                    if (count < min_rep) return null;
+                    while (count >= min_rep) {
+                        if (regexSeqAt(pat, quant_end, str, pos + count, ic, caps, gc)) |end| return end;
+                        if (count == min_rep) break;
+                        count -= 1;
+                    }
                 }
                 return null;
             }
-
-            // No quantifier — must match exactly once
-            if (!matchAtom(pat, pi, str, si, ignore_case)) return null;
-            si += 1;
-            pi += atom_len;
         }
-        return si;
+        return pos; // Consumed entire pattern successfully
     }
 
-    fn atomLength(pat: []const u8, pi: usize) usize {
-        if (pi < pat.len and pat[pi] == '\\' and pi + 1 < pat.len) return 2;
-        if (pi < pat.len and pat[pi] == '[') {
-            // Character class — find closing ]
+    /// Match a single char-consuming atom at position si
+    fn regexCharMatch(atom: []const u8, str: []const u8, si: usize, ic: bool) bool {
+        if (si >= str.len) return false;
+        const ch = str[si];
+        if (atom.len == 0) return false;
+        if (atom[0] == '.') return ch != '\n';
+        if (atom[0] == '\\' and atom.len >= 2) {
+            return switch (atom[1]) {
+                'd' => ch >= '0' and ch <= '9',
+                'D' => !(ch >= '0' and ch <= '9'),
+                'w' => isWordChar(ch),
+                'W' => !isWordChar(ch),
+                's' => isSpaceChar(ch),
+                'S' => !isSpaceChar(ch),
+                'n' => ch == '\n',
+                't' => ch == '\t',
+                'r' => ch == '\r',
+                '0' => ch == 0,
+                else => ch == atom[1],
+            };
+        }
+        if (atom[0] == '[') return matchCharClass(atom, 0, ch, ic);
+        if (ic) {
+            return toLowerAscii(ch) == toLowerAscii(atom[0]);
+        }
+        return ch == atom[0];
+    }
+
+    fn isWordChar(c: u8) bool {
+        return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
+    }
+
+    fn isSpaceChar(c: u8) bool {
+        return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C or c == 0x0B;
+    }
+
+    fn toLowerAscii(c: u8) u8 {
+        return if (c >= 'A' and c <= 'Z') c + 32 else c;
+    }
+
+    fn isWordBoundary(str: []const u8, pos: usize) bool {
+        const left = if (pos > 0) isWordChar(str[pos - 1]) else false;
+        const right = if (pos < str.len) isWordChar(str[pos]) else false;
+        return left != right;
+    }
+
+    /// Length of one atom in pattern (for simple atoms, not groups)
+    fn regexAtomLen(pat: []const u8, pi: usize) usize {
+        if (pi >= pat.len) return 0;
+        if (pat[pi] == '\\' and pi + 1 < pat.len) return 2;
+        if (pat[pi] == '[') {
             var j = pi + 1;
-            if (j < pat.len and pat[j] == ']') j += 1; // ] at start is literal
-            while (j < pat.len and pat[j] != ']') j += 1;
-            if (j < pat.len) return j - pi + 1;
+            if (j < pat.len and pat[j] == '^') j += 1;
+            if (j < pat.len and pat[j] == ']') j += 1;
+            while (j < pat.len and pat[j] != ']') {
+                if (pat[j] == '\\' and j + 1 < pat.len) { j += 2; } else { j += 1; }
+            }
+            return if (j < pat.len) j - pi + 1 else pat.len - pi;
         }
         return 1;
     }
 
-    fn matchAtom(pat: []const u8, pi: usize, str: []const u8, si: usize, ignore_case: bool) bool {
-        if (si >= str.len) return false;
-        const ch = str[si];
-        if (pat[pi] == '.') return ch != '\n';
-        if (pat[pi] == '\\' and pi + 1 < pat.len) {
-            return switch (pat[pi + 1]) {
-                'd' => ch >= '0' and ch <= '9',
-                'D' => !(ch >= '0' and ch <= '9'),
-                'w' => (ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_',
-                'W' => !((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or (ch >= '0' and ch <= '9') or ch == '_'),
-                's' => ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r',
-                'S' => !(ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r'),
-                'n' => ch == '\n',
-                't' => ch == '\t',
-                'r' => ch == '\r',
-                else => ch == pat[pi + 1],
-            };
+    /// Find matching ')' for '(' at pat[start], respecting nesting and char classes
+    fn findCloseParen(pat: []const u8, start: usize) usize {
+        var depth: usize = 0;
+        var i = start;
+        while (i < pat.len) {
+            if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; continue; }
+            if (pat[i] == '[') {
+                i += 1;
+                if (i < pat.len and pat[i] == ']') i += 1;
+                while (i < pat.len and pat[i] != ']') {
+                    if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; } else { i += 1; }
+                }
+                if (i < pat.len) i += 1;
+                continue;
+            }
+            if (pat[i] == '(') depth += 1;
+            if (pat[i] == ')') {
+                depth -= 1;
+                if (depth == 0) return i;
+            }
+            i += 1;
         }
-        if (pat[pi] == '[') {
-            return matchCharClass(pat, pi, ch);
-        }
-        if (ignore_case) {
-            const a = if (ch >= 'A' and ch <= 'Z') ch + 32 else ch;
-            const b = if (pat[pi] >= 'A' and pat[pi] <= 'Z') pat[pi] + 32 else pat[pi];
-            return a == b;
-        }
-        return ch == pat[pi];
+        return pat.len; // unmatched
     }
 
-    fn matchCharClass(pat: []const u8, pi: usize, ch: u8) bool {
+    /// Find first top-level '|' (not inside groups or char classes)
+    fn findTopPipe(pat: []const u8) ?usize {
+        var depth: usize = 0;
+        var i: usize = 0;
+        while (i < pat.len) {
+            if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; continue; }
+            if (pat[i] == '[') {
+                i += 1;
+                if (i < pat.len and pat[i] == ']') i += 1;
+                while (i < pat.len and pat[i] != ']') {
+                    if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; } else { i += 1; }
+                }
+                if (i < pat.len) i += 1;
+                continue;
+            }
+            if (pat[i] == '(') depth += 1;
+            if (pat[i] == ')') { if (depth > 0) depth -= 1; }
+            if (pat[i] == '|' and depth == 0) return i;
+            i += 1;
+        }
+        return null;
+    }
+
+    const BraceQuant = struct { min: usize, max: usize, end: usize };
+
+    /// Parse {n}, {n,}, {n,m}
+    fn parseBraceQuant(pat: []const u8, start: usize) ?BraceQuant {
+        if (start >= pat.len or pat[start] != '{') return null;
+        var i = start + 1;
+        // Parse min
+        var min_val: usize = 0;
+        var has_min = false;
+        while (i < pat.len and pat[i] >= '0' and pat[i] <= '9') {
+            min_val = min_val * 10 + (pat[i] - '0');
+            has_min = true;
+            i += 1;
+        }
+        if (!has_min) return null;
+        if (i >= pat.len) return null;
+        if (pat[i] == '}') return .{ .min = min_val, .max = min_val, .end = i + 1 };
+        if (pat[i] != ',') return null;
+        i += 1;
+        if (i >= pat.len) return null;
+        if (pat[i] == '}') return .{ .min = min_val, .max = 100000, .end = i + 1 };
+        // Parse max
+        var max_val: usize = 0;
+        while (i < pat.len and pat[i] >= '0' and pat[i] <= '9') {
+            max_val = max_val * 10 + (pat[i] - '0');
+            i += 1;
+        }
+        if (i >= pat.len or pat[i] != '}') return null;
+        return .{ .min = min_val, .max = max_val, .end = i + 1 };
+    }
+
+    fn matchCharClass(pat: []const u8, pi: usize, ch: u8, ic: bool) bool {
         var j = pi + 1;
         var negate = false;
         if (j < pat.len and pat[j] == '^') {
@@ -3937,12 +4246,36 @@ pub const VM = struct {
         }
         var matched = false;
         while (j < pat.len and pat[j] != ']') {
-            if (j + 2 < pat.len and pat[j + 1] == '-' and pat[j + 2] != ']') {
+            if (pat[j] == '\\' and j + 1 < pat.len) {
+                // Escaped char class inside [...]
+                const ok = switch (pat[j + 1]) {
+                    'd' => ch >= '0' and ch <= '9',
+                    'D' => !(ch >= '0' and ch <= '9'),
+                    'w' => isWordChar(ch),
+                    'W' => !isWordChar(ch),
+                    's' => isSpaceChar(ch),
+                    'S' => !isSpaceChar(ch),
+                    'n' => ch == '\n',
+                    't' => ch == '\t',
+                    'r' => ch == '\r',
+                    else => ch == pat[j + 1],
+                };
+                if (ok) matched = true;
+                j += 2;
+            } else if (j + 2 < pat.len and pat[j + 1] == '-' and pat[j + 2] != ']') {
                 // Range
-                if (ch >= pat[j] and ch <= pat[j + 2]) matched = true;
+                if (ic) {
+                    if (toLowerAscii(ch) >= toLowerAscii(pat[j]) and toLowerAscii(ch) <= toLowerAscii(pat[j + 2])) matched = true;
+                } else {
+                    if (ch >= pat[j] and ch <= pat[j + 2]) matched = true;
+                }
                 j += 3;
             } else {
-                if (ch == pat[j]) matched = true;
+                if (ic) {
+                    if (toLowerAscii(ch) == toLowerAscii(pat[j])) matched = true;
+                } else {
+                    if (ch == pat[j]) matched = true;
+                }
                 j += 1;
             }
         }
@@ -4765,25 +5098,48 @@ pub const VM = struct {
         const s = getStr(ctx, this) orelse return JsValue.null_val;
         if (args.len == 0) return JsValue.null_val;
         const vm = vmFromCtx(ctx);
-        // Accept RegExp object or string pattern
         var pattern: []const u8 = undefined;
         var ignore_case = false;
+        var global = false;
         if (args[0].isObject()) {
             const obj = args[0].asJsObject();
             if (obj.obj_type == .regexp) {
                 const re = obj.data.regexp_data;
                 pattern = vm.pool.get(re.source) orelse return JsValue.null_val;
                 ignore_case = re.ignore_case;
+                global = re.global;
             } else return JsValue.null_val;
         } else if (args[0].isString()) {
             pattern = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
         } else return JsValue.null_val;
 
-        const result = simpleMatch(pattern, s, ignore_case) orelse return JsValue.null_val;
+        if (global) {
+            // Global match: return array of all matches
+            const arr = try vm.createArray();
+            var search_from: usize = 0;
+            var iterations: usize = 0;
+            while (search_from <= s.len and iterations < 10000) : (iterations += 1) {
+                const sub = s[search_from..];
+                const result = regexSearch(pattern, sub, ignore_case) orelse break;
+                const matched = sub[result.start..result.end];
+                try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(matched)));
+                search_from += result.end;
+                if (result.end == result.start) search_from += 1; // prevent infinite loop on zero-width match
+            }
+            if (arr.data.array.items.len == 0) return JsValue.null_val;
+            return JsValue.initObject(arr);
+        }
+
+        // Non-global: return first match with captures + index
+        const result = regexSearch(pattern, s, ignore_case) orelse return JsValue.null_val;
         const arr = try vm.createArray();
         const matched = s[result.start..result.end];
-        const match_sid = try vm.pool.intern(matched);
-        try arr.data.array.append(vm.allocator, JsValue.initString(match_sid));
+        try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(matched)));
+        for (result.captures) |cap| {
+            if (cap) |c| {
+                try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s[c.start..c.end])));
+            } else break;
+        }
         const index_id = try vm.pool.intern("index");
         try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(result.start)));
         return JsValue.initObject(arr);
@@ -4806,7 +5162,7 @@ pub const VM = struct {
             pattern = vm.pool.get(args[0].asStringId()) orelse return JsValue.initNumber(-1);
         } else return JsValue.initNumber(-1);
 
-        const result = simpleMatch(pattern, s, ignore_case) orelse return JsValue.initNumber(-1);
+        const result = regexSearch(pattern, s, ignore_case) orelse return JsValue.initNumber(-1);
         return JsValue.initNumber(@floatFromInt(result.start));
     }
 

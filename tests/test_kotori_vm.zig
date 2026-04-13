@@ -1933,6 +1933,187 @@ test "eval: regex char class" {
     try std.testing.expect(result.asBool());
 }
 
+// ── Phase H: Enhanced RegExp ─────────────────────────────────────
+
+test "eval: regex alternation basic" {
+    const result = try evalExpr(
+        \\var re = /cat|dog/;
+        \\re.test("I have a dog")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex alternation first" {
+    const result = try evalExpr(
+        \\var re = /cat|dog/;
+        \\re.test("my cat")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex alternation no match" {
+    const result = try evalExpr(
+        \\var re = /cat|dog/;
+        \\re.test("a bird")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: regex alternation three" {
+    const result = try evalExpr(
+        \\/red|green|blue/.test("color: blue")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex group capture exec" {
+    const result = try evalExpr(
+        \\var m = /(\d+)-(\d+)/.exec("date 2024-01");
+        \\m[1]
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: regex group capture value" {
+    const result = try evalExpr(
+        \\var m = /(\d+)-(\d+)/.exec("date 2024-01");
+        \\m[1] === "2024"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex group capture second" {
+    const result = try evalExpr(
+        \\var m = /(\d+)-(\d+)/.exec("date 2024-01");
+        \\m[2] === "01"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex group full match" {
+    const result = try evalExpr(
+        \\var m = /(\d+)-(\d+)/.exec("date 2024-01");
+        \\m[0] === "2024-01"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex non-capturing group" {
+    const result = try evalExpr(
+        \\/(?:ab)+/.test("ababab")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex brace quantifier exact" {
+    const result = try evalExpr(
+        \\/\d{3}/.test("abc123def")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex brace quantifier no match" {
+    const result = try evalExpr(
+        \\/\d{4}/.test("abc12def")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: regex brace range" {
+    const result = try evalExpr(
+        \\/\d{2,4}/.test("a12b")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex brace min only" {
+    const result = try evalExpr(
+        \\/a{2,}/.test("aaa")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex word boundary" {
+    const result = try evalExpr(
+        \\/\bworld\b/.test("hello world today")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex word boundary no match" {
+    const result = try evalExpr(
+        \\/\bworld\b/.test("helloworld")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: regex group in alternation" {
+    const result = try evalExpr(
+        \\var m = /(cat|dog) food/.exec("buy dog food");
+        \\m[1] === "dog"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: match global returns all" {
+    const result = try evalExpr(
+        \\var m = "aaa bbb ccc".match(/\w+/g);
+        \\m.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: match global values" {
+    const result = try evalExpr(
+        \\var m = "cat and dog".match(/\w+/g);
+        \\m[0] === "cat" && m[2] === "dog"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: match with captures" {
+    const result = try evalExpr(
+        \\var m = "2024-01-15".match(/(\d{4})-(\d{2})-(\d{2})/);
+        \\m[1] === "2024" && m[2] === "01" && m[3] === "15"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: replace with regex" {
+    const result = try evalExpr(
+        \\"hello world".replace(/world/, "zig") === "hello zig"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: replace with regex global" {
+    const result = try evalExpr(
+        \\"aaa bbb aaa".replace(/aaa/g, "xxx") === "xxx bbb xxx"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: replace regex pattern" {
+    const result = try evalExpr(
+        \\"abc123def456".replace(/\d+/g, "N") === "abcNdefN"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex escaped dot" {
+    const result = try evalExpr(
+        \\/\d+\.\d+/.test("3.14")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: regex escaped dot no match" {
+    const result = try evalExpr(
+        \\/\d+\.\d+/.test("314")
+    );
+    try std.testing.expect(!result.asBool());
+}
+
 // ── setTimeout / setInterval / clearTimeout ─────────────────────
 
 test "eval: setTimeout returns timer id" {
