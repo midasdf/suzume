@@ -5792,6 +5792,7 @@ pub const VM = struct {
         if (iterable.isObject()) {
             const obj = iterable.asJsObject();
             if (obj.obj_type == .generator or obj.obj_type == .async_generator) return iterable;
+            if (obj.obj_type == .iterator) return iterable;
             if (self.findSymbolProp(obj, SYMBOL_ITERATOR)) |iter_fn| {
                 return try self.callJsFunction(iter_fn, iterable, &.{});
             }

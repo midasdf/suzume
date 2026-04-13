@@ -655,7 +655,7 @@ pub const Compiler = struct {
                         else => {},
                     }
                 },
-                .array_pattern => |nested| {
+                .array_pattern, .array_literal => |nested| {
                     // Nested: const [[a, b]] = expr
                     try self.emitOp(.dup);
                     try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
@@ -663,7 +663,7 @@ pub const Compiler = struct {
                     try self.compileArrayDestructure(nested);
                     try self.emitOp(.pop);
                 },
-                .object_pattern => |nested| {
+                .object_pattern, .object_literal => |nested| {
                     // Nested: const [{x}] = expr
                     try self.emitOp(.dup);
                     try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
@@ -705,7 +705,7 @@ pub const Compiler = struct {
                             try self.emitOpU16(.get_prop, ci);
                             try self.compileDefaultValue(ap.left, ap.right);
                         },
-                        .array_pattern => |nested| {
+                        .array_pattern, .array_literal => |nested| {
                             // {key: [a, b]}
                             try self.emitOp(.dup);
                             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
@@ -713,7 +713,7 @@ pub const Compiler = struct {
                             try self.compileArrayDestructure(nested);
                             try self.emitOp(.pop);
                         },
-                        .object_pattern => |nested| {
+                        .object_pattern, .object_literal => |nested| {
                             // {key: {a, b}}
                             try self.emitOp(.dup);
                             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));

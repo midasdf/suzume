@@ -3699,6 +3699,24 @@ test "eval: destructuring param with whole-param default" {
     try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
 }
 
+test "eval: spread iterator object" {
+    const result = try evalExpr(
+        \\let a = [1, 2, 3];
+        \\let it = a[Symbol.iterator]();
+        \\let b = [...it];
+        \\b[0] + b[1] + b[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: arrow nested destructuring param" {
+    const result = try evalExpr(
+        \\let f = ({a: {b}}) => b;
+        \\f({a: {b: 77}})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 77.0), result.asNumber(), 0.001);
+}
+
 test "eval: if empty string takes else" {
     const result = try evalExpr(
         \\let r = 0;
