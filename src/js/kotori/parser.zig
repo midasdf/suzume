@@ -181,6 +181,14 @@ pub const Parser = struct {
 
         // 2. Loop infix
         while (true) {
+            // Tagged template: expr`...` — treat backtick as infix at call precedence
+            if ((self.current.type == .template or self.current.type == .template_head) and
+                @intFromEnum(min_prec) <= @intFromEnum(Precedence.call_))
+            {
+                lhs = try self.parseTaggedTemplate(lhs);
+                continue;
+            }
+
             // In for-statement init, 'in' is not a binary operator
             if (self.no_in and self.current.type == .kw_in) break;
             const infix_prec = infixPrecedence(self.current.type);
@@ -389,6 +397,64 @@ pub const Parser = struct {
         return self.ast.addNode(self.allocator, .{ .template_literal = list }) catch return error.OutOfMemory;
     }
 
+    fn parseTaggedTemplate(self: *Parser, tag: NodeIndex) ParseError!NodeIndex {
+        var quasis = std.ArrayListUnmanaged(NodeIndex){};
+        var exprs = std.ArrayListUnmanaged(NodeIndex){};
+        defer quasis.deinit(self.allocator);
+        defer exprs.deinit(self.allocator);
+
+        if (self.current.type == .template) {
+            // No-substitution tagged template: tag`text`
+            const text = self.tokenSlice(self.current);
+            self.advance();
+            const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
+            const sid = self.pool.intern(content) catch return error.OutOfMemory;
+            const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+            quasis.append(self.allocator, str_node) catch return error.OutOfMemory;
+        } else {
+            // template_head: `text${
+            const text = self.tokenSlice(self.current);
+            const content = if (text.len >= 3) text[1 .. text.len - 2] else "";
+            const sid = self.pool.intern(content) catch return error.OutOfMemory;
+            const str_node = self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+            quasis.append(self.allocator, str_node) catch return error.OutOfMemory;
+            self.advance(); // consume template_head
+
+            while (true) {
+                // Parse interpolated expression
+                const expr = try self.parsePrecedence(.assignment);
+                exprs.append(self.allocator, expr) catch return error.OutOfMemory;
+
+                if (self.current.type == .template_middle) {
+                    const mid_text = self.tokenSlice(self.current);
+                    const mid_content = if (mid_text.len >= 3) mid_text[1 .. mid_text.len - 2] else "";
+                    const mid_sid = self.pool.intern(mid_content) catch return error.OutOfMemory;
+                    const mid_node = self.ast.addNode(self.allocator, .{ .string_literal = mid_sid }) catch return error.OutOfMemory;
+                    quasis.append(self.allocator, mid_node) catch return error.OutOfMemory;
+                    self.advance();
+                } else if (self.current.type == .template_tail) {
+                    const tail_text = self.tokenSlice(self.current);
+                    const tail_content = if (tail_text.len >= 2) tail_text[1 .. tail_text.len - 1] else "";
+                    const tail_sid = self.pool.intern(tail_content) catch return error.OutOfMemory;
+                    const tail_node = self.ast.addNode(self.allocator, .{ .string_literal = tail_sid }) catch return error.OutOfMemory;
+                    quasis.append(self.allocator, tail_node) catch return error.OutOfMemory;
+                    self.advance();
+                    break;
+                } else {
+                    break;
+                }
+            }
+        }
+
+        const quasi_list = self.ast.addNodeList(self.allocator, quasis.items) catch return error.OutOfMemory;
+        const exprs_list = self.ast.addNodeList(self.allocator, exprs.items) catch return error.OutOfMemory;
+        return self.ast.addNode(self.allocator, .{ .tagged_template = .{
+            .tag = tag,
+            .quasi = quasi_list,
+            .exprs = exprs_list,
+        } }) catch return error.OutOfMemory;
+    }
+
     fn parseRegex(self: *Parser) ParseError!NodeIndex {
         // self.current is the '/' token. Re-read source from that position as regex.
         const source = self.lexer.source;
@@ -539,8 +605,15 @@ pub const Parser = struct {
         defer items.deinit(self.allocator);
 
         while (!self.check(.rbracket) and !self.check(.eof)) {
-            const elem = try self.parsePrecedence(.assignment);
-            items.append(self.allocator, elem) catch return error.OutOfMemory;
+            if (self.check(.ellipsis)) {
+                self.advance(); // consume ...
+                const operand = try self.parsePrecedence(.assignment);
+                const spread_node = self.ast.addNode(self.allocator, .{ .spread = operand }) catch return error.OutOfMemory;
+                items.append(self.allocator, spread_node) catch return error.OutOfMemory;
+            } else {
+                const elem = try self.parsePrecedence(.assignment);
+                items.append(self.allocator, elem) catch return error.OutOfMemory;
+            }
             if (!self.match(.comma)) break;
         }
         try self.expect(.rbracket);
@@ -731,13 +804,39 @@ pub const Parser = struct {
         } }) catch return error.OutOfMemory;
     }
 
-    /// Parse a single function parameter: identifier, identifier = default, or ...identifier
+    /// Parse a single function parameter: identifier, {pattern}, [pattern], identifier = default, or ...identifier
     fn parseFunctionParam(self: *Parser) ParseError!NodeIndex {
         // Rest parameter: ...identifier
         if (self.check(.ellipsis)) {
             self.advance(); // consume ...
-            const operand = try self.parseIdentifier();
+            const operand = try self.parseBindingTarget();
             return self.ast.addNode(self.allocator, .{ .rest_element = operand }) catch return error.OutOfMemory;
+        }
+
+        // Destructuring patterns: {a, b} or [x, y], optionally with default: {a, b} = {}
+        if (self.check(.lbrace)) {
+            const pattern = try self.parseObjectPattern();
+            if (self.check(.eq) or self.check(.assign)) {
+                self.advance();
+                const default_val = try self.parsePrecedence(.assignment);
+                return self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                    .left = pattern,
+                    .right = default_val,
+                } }) catch return error.OutOfMemory;
+            }
+            return pattern;
+        }
+        if (self.check(.lbracket)) {
+            const pattern = try self.parseArrayPattern();
+            if (self.check(.eq) or self.check(.assign)) {
+                self.advance();
+                const default_val = try self.parsePrecedence(.assignment);
+                return self.ast.addNode(self.allocator, .{ .assign_pattern = .{
+                    .left = pattern,
+                    .right = default_val,
+                } }) catch return error.OutOfMemory;
+            }
+            return pattern;
         }
 
         // Regular parameter

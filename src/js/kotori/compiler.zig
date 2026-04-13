@@ -239,6 +239,67 @@ pub const Compiler = struct {
                 }
             },
 
+            .tagged_template => |tt| {
+                // tag`str${expr}str` → tag(strings_array, expr1, expr2, ...)
+                // Check if tag is a member expression for proper this binding
+                const tag_node = self.parser.ast.getNode(tt.tag);
+                const is_method = tag_node == .member or tag_node == .computed_member;
+
+                // 1. Compile the tag function (with this for member calls)
+                if (is_method) {
+                    switch (tag_node) {
+                        .member => |m| {
+                            try self.compileNode(m.object); // push this
+                            try self.emitOp(.dup);
+                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(m.property)));
+                            try self.emitOpU16(.get_prop, ci); // stack: [this, func]
+                        },
+                        .computed_member => |m| {
+                            try self.compileNode(m.object); // push this
+                            try self.emitOp(.dup);
+                            try self.compileNode(m.property);
+                            try self.emitOp(.get_elem); // stack: [this, func]
+                        },
+                        else => unreachable,
+                    }
+                } else {
+                    try self.compileNode(tt.tag);
+                }
+
+                // 2. Create the strings array from quasi parts
+                const quasis = self.parser.ast.getNodeList(tt.quasi);
+                try self.emitOpU16(.new_array, @intCast(quasis.len));
+                for (quasis) |q| {
+                    try self.compileNode(q);
+                    try self.emitOp(.array_push);
+                }
+
+                // 3. Add .raw property (separate array with same contents)
+                try self.emitOp(.dup); // dup strings array
+                try self.emitOpU16(.new_array, @intCast(quasis.len));
+                for (quasis) |q| {
+                    try self.compileNode(q);
+                    try self.emitOp(.array_push);
+                }
+                const raw_id = try self.parser.pool.intern("raw");
+                const raw_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(raw_id)));
+                try self.emitOpU16(.set_prop, raw_ci);
+                try self.emitOp(.pop); // pop set_prop result
+
+                // 4. Compile each expression argument
+                const exprs = self.parser.ast.getNodeList(tt.exprs);
+                for (exprs) |e| {
+                    try self.compileNode(e);
+                }
+
+                // 5. Call with proper this binding
+                if (is_method) {
+                    try self.emitOpU16(.call_method, @intCast(1 + exprs.len));
+                } else {
+                    try self.emitOpU16(.call, @intCast(1 + exprs.len));
+                }
+            },
+
             .binary => |bin| {
                 // Short-circuit for logical_and / logical_or
                 if (bin.op == .logical_and) {
@@ -577,24 +638,29 @@ pub const Compiler = struct {
                     const rest_node = self.parser.ast.getNode(rest_target);
                     switch (rest_node) {
                         .identifier => |name_id| {
-                            // dup source, call slice(i)
-                            try self.emitOp(.dup);
-                            // We need to get .slice method and call it
-                            // Simpler approach: push index, emit a special sequence
-                            // For now, generate: source.slice(i)
-                            const slice_id = try self.parser.pool.intern("slice");
-                            const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(slice_id)));
-                            try self.emitOp(.dup); // dup for method call (this)
-                            try self.emitOpU16(.get_prop, ci); // get .slice
-                            try self.emitOp(.swap); // [slice, source] for call
-                            try self.emitConstant(JsValue.initNumber(@floatFromInt(i))); // arg: start index
-                            try self.emitOpU16(.call, 1);
-                            try self.storeBinding(name_id);
+                            try self.emitRestSlice(name_id, i);
                         },
                         else => {},
                     }
                 },
-                .array_pattern => |nested| {
+                .spread => |inner| {
+                    // Arrow param path: ...rest parsed as .spread instead of .rest_element
+                    const spread_node = self.parser.ast.getNode(inner);
+                    switch (spread_node) {
+                        .identifier => |name_id| {
+                            try self.emitRestSlice(name_id, i);
+                        },
+                        else => {},
+                    }
+                },
+                .assignment => |asgn| {
+                    // Arrow param path: [x = default] parsed as .assignment instead of .assign_pattern
+                    try self.emitOp(.dup);
+                    try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
+                    try self.emitOp(.get_elem);
+                    try self.compileDefaultValue(asgn.lhs, asgn.rhs);
+                },
+                .array_pattern, .array_literal => |nested| {
                     // Nested: const [[a, b]] = expr
                     try self.emitOp(.dup);
                     try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
@@ -602,7 +668,7 @@ pub const Compiler = struct {
                     try self.compileArrayDestructure(nested);
                     try self.emitOp(.pop);
                 },
-                .object_pattern => |nested| {
+                .object_pattern, .object_literal => |nested| {
                     // Nested: const [{x}] = expr
                     try self.emitOp(.dup);
                     try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
@@ -644,7 +710,7 @@ pub const Compiler = struct {
                             try self.emitOpU16(.get_prop, ci);
                             try self.compileDefaultValue(ap.left, ap.right);
                         },
-                        .array_pattern => |nested| {
+                        .array_pattern, .array_literal => |nested| {
                             // {key: [a, b]}
                             try self.emitOp(.dup);
                             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
@@ -652,7 +718,7 @@ pub const Compiler = struct {
                             try self.compileArrayDestructure(nested);
                             try self.emitOp(.pop);
                         },
-                        .object_pattern => |nested| {
+                        .object_pattern, .object_literal => |nested| {
                             // {key: {a, b}}
                             try self.emitOp(.dup);
                             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
@@ -677,6 +743,18 @@ pub const Compiler = struct {
                 else => {},
             }
         }
+    }
+
+    fn emitRestSlice(self: *Compiler, name_id: StringId, start_index: usize) CompileError!void {
+        try self.emitOp(.dup);
+        const slice_id = try self.parser.pool.intern("slice");
+        const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(slice_id)));
+        try self.emitOp(.dup);
+        try self.emitOpU16(.get_prop, ci);
+        try self.emitOp(.swap);
+        try self.emitConstant(JsValue.initNumber(@floatFromInt(start_index)));
+        try self.emitOpU16(.call, 1);
+        try self.storeBinding(name_id);
     }
 
     fn compileDefaultValue(self: *Compiler, target_node: NodeIndex, default_node: NodeIndex) CompileError!void {
@@ -814,6 +892,18 @@ pub const Compiler = struct {
                         else => _ = try self.addLocal(0),
                     }
                 },
+                .array_pattern, .object_pattern, .array_literal, .object_literal => {
+                    // Destructuring param: placeholder local for the whole arg
+                    _ = try self.addLocal(0);
+                },
+                .assignment => |asgn| {
+                    // Arrow param path: ({a} = {}) parsed as .assignment
+                    const left = self.parser.ast.getNode(asgn.lhs);
+                    switch (left) {
+                        .identifier => |id| _ = try self.addLocal(id),
+                        else => _ = try self.addLocal(0),
+                    }
+                },
                 else => _ = try self.addLocal(0), // placeholder
             }
         }
@@ -833,12 +923,64 @@ pub const Compiler = struct {
                     try self.compileNode(ap.right);
                     try self.emitOpU16(.store_local, @intCast(i));
                     self.current.bc.patchJump(jump_over);
+                    // If left side is a destructuring pattern, destructure after default check
+                    const left = self.parser.ast.getNode(ap.left);
+                    switch (left) {
+                        .array_pattern, .array_literal => |list| {
+                            try self.emitOpU16(.load_local, @intCast(i));
+                            try self.compileArrayDestructure(list);
+                            try self.emitOp(.pop);
+                        },
+                        .object_pattern, .object_literal => |list| {
+                            try self.emitOpU16(.load_local, @intCast(i));
+                            try self.compileObjectDestructure(list);
+                            try self.emitOp(.pop);
+                        },
+                        else => {},
+                    }
                 },
                 .rest_element => {
                     // Rest params: for now, initialize as empty array
                     // Full implementation collects remaining args (Task #2)
                     try self.emitOpU16(.new_array, 0);
                     try self.emitOpU16(.store_local, @intCast(i));
+                },
+                .array_pattern, .array_literal => |list| {
+                    // Destructuring array param: load arg, destructure into new locals
+                    try self.emitOpU16(.load_local, @intCast(i));
+                    try self.compileArrayDestructure(list);
+                    try self.emitOp(.pop);
+                },
+                .object_pattern, .object_literal => |list| {
+                    // Destructuring object param: load arg, destructure into new locals
+                    try self.emitOpU16(.load_local, @intCast(i));
+                    try self.compileObjectDestructure(list);
+                    try self.emitOp(.pop);
+                },
+                .assignment => |asgn| {
+                    // Arrow param path: ({a} = {}) parsed as .assignment
+                    try self.emitOpU16(.load_local, @intCast(i));
+                    try self.emitConstant(JsValue.undefined_val);
+                    try self.emitOp(.strict_ne);
+                    const jump_over = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+                    try self.compileNode(asgn.rhs);
+                    try self.emitOpU16(.store_local, @intCast(i));
+                    self.current.bc.patchJump(jump_over);
+                    // Destructure if lhs is a pattern
+                    const left = self.parser.ast.getNode(asgn.lhs);
+                    switch (left) {
+                        .array_pattern, .array_literal => |list| {
+                            try self.emitOpU16(.load_local, @intCast(i));
+                            try self.compileArrayDestructure(list);
+                            try self.emitOp(.pop);
+                        },
+                        .object_pattern, .object_literal => |list| {
+                            try self.emitOpU16(.load_local, @intCast(i));
+                            try self.compileObjectDestructure(list);
+                            try self.emitOp(.pop);
+                        },
+                        else => {},
+                    }
                 },
                 else => {},
             }
@@ -1013,8 +1155,16 @@ pub const Compiler = struct {
         const elems = self.parser.ast.getNodeList(list);
         try self.emitOpU16(.new_array, @intCast(elems.len));
         for (elems) |e_idx| {
-            try self.compileNode(e_idx);
-            try self.emitOp(.array_push);
+            switch (self.parser.ast.getNode(e_idx)) {
+                .spread => |inner| {
+                    try self.compileNode(inner);
+                    try self.emitOp(.spread_into_array);
+                },
+                else => {
+                    try self.compileNode(e_idx);
+                    try self.emitOp(.array_push);
+                },
+            }
         }
     }
 

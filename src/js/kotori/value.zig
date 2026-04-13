@@ -154,7 +154,8 @@ pub const JsValue = packed struct {
             const n = self.asNumber();
             return n != 0.0 and !std.math.isNan(n);
         }
-        // Objects, strings, symbols are truthy (empty string falsiness needs pool access — TODO)
+        if (self.isString()) return self.asStringId() != @import("string_pool.zig").EMPTY_STRING_ID;
+        // Objects and symbols are always truthy
         return true;
     }
 

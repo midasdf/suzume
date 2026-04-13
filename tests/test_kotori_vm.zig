@@ -3509,3 +3509,235 @@ test "eval: array iterator done" {
     );
     try std.testing.expect(result.asBool());
 }
+
+// ── Phase F: Empty string falsiness ─────────────────────────────
+
+test "eval: empty string is falsy" {
+    // Must produce "no", not "yes" — verifies "" is falsy
+    const result = try evalExpr(
+        \\let r = "" ? "yes" : "no";
+        \\r === "no" ? 1 : 0
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: non-empty string is truthy" {
+    const result = try evalExpr(
+        \\"hello" ? 1 : 0
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: not empty string is true" {
+    const result = try evalExpr(
+        \\!""
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// ── Phase F: Array literal spread + generator spread ────────────
+
+test "eval: spread array in array literal" {
+    const result = try evalExpr(
+        \\let a = [1, 2, 3];
+        \\let b = [...a];
+        \\b[0] + b[1] + b[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread generator into array" {
+    const result = try evalExpr(
+        \\function* g() { yield 1; yield 2; yield 3; }
+        \\let a = [...g()];
+        \\a[0] + a[1] + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread generator with strings" {
+    const result = try evalExpr(
+        \\function* g() { yield "a"; yield "b"; }
+        \\let a = [...g()];
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+// ── Phase F: UTF-8 string iteration ─────────────────────────────
+
+test "eval: spread ASCII string" {
+    const result = try evalExpr(
+        \\let a = [..."hello"];
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread multibyte string" {
+    // "あいう" = 3 codepoints (each 3 bytes), should spread to 3 elements not 9
+    const result = try evalExpr("let a = [...\"\xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\"];\na.length");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-of multibyte string char count" {
+    // "あいう" = 3 codepoints, for-of should iterate 3 times not 9
+    const result = try evalExpr("let count = 0;\nfor (let c of \"\xe3\x81\x82\xe3\x81\x84\xe3\x81\x86\") count++;\ncount");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-of string char count" {
+    const result = try evalExpr(
+        \\let count = 0;
+        \\for (let c of "hi") count++;
+        \\count
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+// ── Phase F: Destructuring parameters ───────────────────────────
+
+test "eval: object destructuring param" {
+    const result = try evalExpr(
+        \\function f({a, b}) { return a + b; }
+        \\f({a: 1, b: 2})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: array destructuring param" {
+    const result = try evalExpr(
+        \\function f([x, y]) { return x * y; }
+        \\f([3, 4])
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
+}
+
+test "eval: destructuring param with default" {
+    const result = try evalExpr(
+        \\function f({a = 10}) { return a; }
+        \\f({})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: nested destructuring param" {
+    const result = try evalExpr(
+        \\function f({a: {b}}) { return b; }
+        \\f({a: {b: 42}})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: arrow destructuring param" {
+    const result = try evalExpr(
+        \\let f = ({x}) => x + 1;
+        \\f({x: 9})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: multiple destructuring params" {
+    const result = try evalExpr(
+        \\function f({a}, [b]) { return a + b; }
+        \\f({a: 10}, [20])
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+// ── Phase F: Tagged template literals ────────────────────────────
+
+test "eval: tagged template basic" {
+    // Verify exact interpolation result: "x1y2z"
+    const result = try evalExpr(
+        \\function tag(strings, a, b) { return strings[0] + a + strings[1] + b + strings[2]; }
+        \\let r = tag`x${1}y${2}z`;
+        \\r === "x1y2z" ? 1 : 0
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: tagged template strings length" {
+    const result = try evalExpr(
+        \\function tag(strings) { return strings.length; }
+        \\tag`a${0}b${0}c`
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: tagged template no expressions" {
+    // Verify exact string content: "hello"
+    const result = try evalExpr(
+        \\function tag(strings) { return strings[0]; }
+        \\let r = tag`hello`;
+        \\r === "hello" ? 1 : 0
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: tagged template raw property" {
+    const result = try evalExpr(
+        \\function tag(strings) { return strings.raw.length; }
+        \\tag`hello`
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: tagged template member this binding" {
+    const result = try evalExpr(
+        \\let obj = { val: 42, tag(strings) { return this.val; } };
+        \\obj.tag`hello`
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: destructuring param with whole-param default" {
+    const result = try evalExpr(
+        \\function f({a} = {a: 99}) { return a; }
+        \\f()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: spread iterator object" {
+    const result = try evalExpr(
+        \\let a = [1, 2, 3];
+        \\let it = a[Symbol.iterator]();
+        \\let b = [...it];
+        \\b[0] + b[1] + b[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: arrow destructuring default param" {
+    const result = try evalExpr(
+        \\let f = ({a} = {a: 55}) => a;
+        \\f()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 55.0), result.asNumber(), 0.001);
+}
+
+test "eval: arrow array default element" {
+    const result = try evalExpr(
+        \\let f = ([x = 7]) => x;
+        \\f([])
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: arrow nested destructuring param" {
+    const result = try evalExpr(
+        \\let f = ({a: {b}}) => b;
+        \\f({a: {b: 77}})
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 77.0), result.asNumber(), 0.001);
+}
+
+test "eval: if empty string takes else" {
+    const result = try evalExpr(
+        \\let r = 0;
+        \\if ("") { r = 1; } else { r = 2; }
+        \\r
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
