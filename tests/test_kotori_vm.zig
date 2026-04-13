@@ -5003,6 +5003,73 @@ test "eval: generator function" {
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
+// ── Phase N: atob/btoa, Boolean, Array immutable, WeakRef, perf ─
+
+test "eval: btoa encode" {
+    const result = try evalExpr(
+        \\btoa("Hello") === "SGVsbG8="
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: atob decode" {
+    const result = try evalExpr(
+        \\atob("SGVsbG8=") === "Hello"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: btoa/atob roundtrip" {
+    const result = try evalExpr(
+        \\atob(btoa("test123")) === "test123"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Boolean constructor" {
+    const result = try evalExpr(
+        \\Boolean(1) === true && Boolean(0) === false && Boolean("") === false && Boolean("x") === true
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.toSorted" {
+    const result = try evalExpr(
+        \\var a = [3,1,2]; var b = a.toSorted(); a[0] * 10 + b[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 31.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.toReversed" {
+    const result = try evalExpr(
+        \\var a = [1,2,3]; var b = a.toReversed(); a[0] * 10 + b[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 13.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.toSpliced" {
+    const result = try evalExpr(
+        \\var a = [1,2,3,4]; var b = a.toSpliced(1, 2, 8, 9); b.length * 10 + b[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 48.0), result.asNumber(), 0.001);
+}
+
+test "eval: WeakRef deref" {
+    const result = try evalExpr(
+        \\var target = {x: 42};
+        \\var wr = new WeakRef(target);
+        \\wr.deref().x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: performance.now" {
+    const result = try evalExpr(
+        \\performance.now() > 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
 // ── Private class fields ────────────────────────────────────────
 
 test "eval: private field basic" {

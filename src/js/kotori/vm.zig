@@ -1714,6 +1714,9 @@ pub const VM = struct {
         try self.registerNativeMethod(ap, "values", &nativeArrayValues);
         try self.registerNativeMethod(ap, "entries", &nativeArrayEntries);
         try self.registerNativeMethod(ap, "toString", &nativeArrayToString);
+        try self.registerNativeMethod(ap, "toSorted", &nativeArrayToSorted);
+        try self.registerNativeMethod(ap, "toReversed", &nativeArrayToReversed);
+        try self.registerNativeMethod(ap, "toSpliced", &nativeArrayToSpliced);
         // Register Symbol.iterator on array prototype
         if (ap.symbol_props == null) ap.symbol_props = .{};
         const arr_iter_fn = try self.createNativeFn(&nativeArraySymbolIterator);
@@ -2122,6 +2125,33 @@ pub const VM = struct {
         {
             const sc_fn = try self.createNativeFn(&nativeStructuredClone);
             try self.globals.put(self.allocator, try self.pool.intern("structuredClone"), JsValue.initObject(sc_fn));
+        }
+
+        // ── atob / btoa ──
+        {
+            const atob_fn = try self.createNativeFn(&nativeAtob);
+            try self.globals.put(self.allocator, try self.pool.intern("atob"), JsValue.initObject(atob_fn));
+            const btoa_fn = try self.createNativeFn(&nativeBtoa);
+            try self.globals.put(self.allocator, try self.pool.intern("btoa"), JsValue.initObject(btoa_fn));
+        }
+
+        // ── Boolean constructor ──
+        {
+            const bool_ctor = try self.createNativeFn(&nativeBooleanConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("Boolean"), JsValue.initObject(bool_ctor));
+        }
+
+        // ── WeakRef ──
+        {
+            const wr_ctor = try self.createNativeFn(&nativeWeakRefConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("WeakRef"), JsValue.initObject(wr_ctor));
+        }
+
+        // ── performance ──
+        {
+            const perf = try self.createObj(.{});
+            try self.registerNativeMethod(perf, "now", &nativePerformanceNow);
+            try self.globals.put(self.allocator, try self.pool.intern("performance"), JsValue.initObject(perf));
         }
 
         // ── Symbol ──
@@ -3997,6 +4027,150 @@ pub const VM = struct {
     fn nativeFunctionToString(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         return JsValue.initString(try vm.pool.intern("function() { [native code] }"));
+    }
+
+    // ── atob / btoa ────────────────────────────────────────────────
+
+    const b64_table = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    fn nativeBtoa(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const input = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+        const out_len = ((input.len + 2) / 3) * 4;
+        const buf = try vm.allocator.alloc(u8, out_len);
+        defer vm.allocator.free(buf);
+        var oi: usize = 0;
+        var i: usize = 0;
+        while (i < input.len) {
+            const a: u32 = input[i];
+            const b: u32 = if (i + 1 < input.len) input[i + 1] else 0;
+            const c: u32 = if (i + 2 < input.len) input[i + 2] else 0;
+            const triple = (a << 16) | (b << 8) | c;
+            buf[oi] = b64_table[(triple >> 18) & 0x3F];
+            buf[oi + 1] = b64_table[(triple >> 12) & 0x3F];
+            buf[oi + 2] = if (i + 1 < input.len) b64_table[(triple >> 6) & 0x3F] else '=';
+            buf[oi + 3] = if (i + 2 < input.len) b64_table[triple & 0x3F] else '=';
+            oi += 4;
+            i += 3;
+        }
+        return JsValue.initString(try vm.pool.intern(buf[0..oi]));
+    }
+
+    fn b64Decode(c: u8) u8 {
+        if (c >= 'A' and c <= 'Z') return c - 'A';
+        if (c >= 'a' and c <= 'z') return c - 'a' + 26;
+        if (c >= '0' and c <= '9') return c - '0' + 52;
+        if (c == '+') return 62;
+        if (c == '/') return 63;
+        return 0;
+    }
+
+    fn nativeAtob(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const input = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+        const out_len = (input.len / 4) * 3;
+        const buf = try vm.allocator.alloc(u8, out_len);
+        defer vm.allocator.free(buf);
+        var oi: usize = 0;
+        var i: usize = 0;
+        while (i + 3 < input.len) {
+            const a: u32 = b64Decode(input[i]);
+            const b: u32 = b64Decode(input[i + 1]);
+            const c: u32 = b64Decode(input[i + 2]);
+            const d: u32 = b64Decode(input[i + 3]);
+            const triple = (a << 18) | (b << 12) | (c << 6) | d;
+            if (oi < buf.len) { buf[oi] = @intCast((triple >> 16) & 0xFF); oi += 1; }
+            if (input[i + 2] != '=' and oi < buf.len) { buf[oi] = @intCast((triple >> 8) & 0xFF); oi += 1; }
+            if (input[i + 3] != '=' and oi < buf.len) { buf[oi] = @intCast(triple & 0xFF); oi += 1; }
+            i += 4;
+        }
+        return JsValue.initString(try vm.pool.intern(buf[0..oi]));
+    }
+
+    // ── Boolean constructor ─────────────────────────────────────────
+
+    fn nativeBooleanConstructor(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initBool(false);
+        return JsValue.initBool(args[0].isTruthy());
+    }
+
+    // ── WeakRef ─────────────────────────────────────────────────────
+
+    fn nativeWeakRefConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = try vm.createObj(.{});
+        const target_id = try vm.pool.intern("__target");
+        try obj.setProperty(vm.allocator, target_id, args[0]);
+        try vm.registerNativeMethod(obj, "deref", &nativeWeakRefDeref);
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeWeakRefDeref(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        const target_id = try vm.pool.intern("__target");
+        return obj.properties.get(target_id) orelse JsValue.undefined_val;
+    }
+
+    // ── performance ─────────────────────────────────────────────────
+
+    fn nativePerformanceNow(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+        const ts = std.time.milliTimestamp();
+        return JsValue.initNumber(@floatFromInt(ts));
+    }
+
+    // ── Array immutable methods (ES2023) ────────────────────────────
+
+    fn nativeArrayToSorted(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const src = this.asJsObject();
+        if (src.obj_type != .array) return JsValue.undefined_val;
+        // Copy array
+        const new_arr = try vm.createArray();
+        try new_arr.data.array.appendSlice(vm.allocator, src.data.array.items);
+        // Sort the copy
+        const sort_val = JsValue.initObject(new_arr);
+        return try nativeArraySort(ctx, sort_val, args);
+    }
+
+    fn nativeArrayToReversed(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const src = this.asJsObject();
+        if (src.obj_type != .array) return JsValue.undefined_val;
+        const new_arr = try vm.createArray();
+        const items = src.data.array.items;
+        var i: usize = items.len;
+        while (i > 0) {
+            i -= 1;
+            try new_arr.data.array.append(vm.allocator, items[i]);
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayToSpliced(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const src = this.asJsObject();
+        if (src.obj_type != .array) return JsValue.undefined_val;
+        const items = src.data.array.items;
+        const start: usize = if (args.len > 0) @min(clampToUsize(args[0]), items.len) else 0;
+        const del_count: usize = if (args.len > 1) @min(clampToUsize(args[1]), items.len - start) else items.len - start;
+        const new_arr = try vm.createArray();
+        // Copy before splice point
+        try new_arr.data.array.appendSlice(vm.allocator, items[0..start]);
+        // Insert new elements
+        if (args.len > 2) {
+            try new_arr.data.array.appendSlice(vm.allocator, args[2..]);
+        }
+        // Copy after splice point
+        try new_arr.data.array.appendSlice(vm.allocator, items[start + del_count ..]);
+        return JsValue.initObject(new_arr);
     }
 
     // ── ArrayBuffer / Uint8Array ────────────────────────────────────
