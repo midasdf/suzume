@@ -481,6 +481,27 @@ pub const Lexer = struct {
             // identifiers / keywords
             'a'...'z', 'A'...'Z', '_', '$' => return self.readIdentifier(),
 
+            // private identifier: #name
+            '#' => {
+                if (self.pos + 1 < self.source.len) {
+                    const nc = self.source[self.pos + 1];
+                    if ((nc >= 'a' and nc <= 'z') or (nc >= 'A' and nc <= 'Z') or nc == '_') {
+                        self.pos += 1; // skip #
+                        while (self.pos < self.source.len) {
+                            const ch = self.source[self.pos];
+                            if ((ch >= 'a' and ch <= 'z') or (ch >= 'A' and ch <= 'Z') or
+                                (ch >= '0' and ch <= '9') or ch == '_' or ch == '$')
+                            {
+                                self.pos += 1;
+                            } else break;
+                        }
+                        return self.makeToken(.identifier, start);
+                    }
+                }
+                _ = self.advance();
+                return .{ .type = .eof, .start = start, .len = 1, .line = self.line };
+            },
+
             // unknown — return eof to avoid infinite loop
             else => {
                 _ = self.advance();

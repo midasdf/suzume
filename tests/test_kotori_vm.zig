@@ -5003,6 +5003,64 @@ test "eval: generator function" {
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
+// ── Private class fields ────────────────────────────────────────
+
+test "eval: private field basic" {
+    const result = try evalExpr(
+        \\class Counter {
+        \\  #count = 0;
+        \\  inc() { this.#count++; }
+        \\  get() { return this.#count; }
+        \\}
+        \\var c = new Counter();
+        \\c.inc(); c.inc(); c.inc();
+        \\c.get()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: private field inaccessible from outside" {
+    const result = try evalExpr(
+        \\class A { #x = 42; getX() { return this.#x; } }
+        \\var a = new A();
+        \\a.getX()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: private field with constructor" {
+    const result = try evalExpr(
+        \\class Point {
+        \\  #x; #y;
+        \\  constructor(x, y) { this.#x = x; this.#y = y; }
+        \\  sum() { return this.#x + this.#y; }
+        \\}
+        \\new Point(10, 20).sum()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: static private field" {
+    const result = try evalExpr(
+        \\class Config {
+        \\  static #instance = null;
+        \\  static create() { Config.#instance = {v:99}; return Config.#instance; }
+        \\}
+        \\Config.create().v
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: private field encapsulation per instance" {
+    const result = try evalExpr(
+        \\class Box { #v = 0; set(x) { this.#v = x; } get() { return this.#v; } }
+        \\var a = new Box(); var b = new Box();
+        \\a.set(100);
+        \\b.get()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
 test "eval: Date.now" {
     const result = try evalExpr(
         \\Date.now() > 0
