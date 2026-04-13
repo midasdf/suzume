@@ -3406,6 +3406,53 @@ test "eval: yield* generator delegation" {
     try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
 }
 
+// ── Async Generators ────────────────────────────────────────────
+
+test "eval: async generator basic" {
+    const result = try evalWithMicrotasks(
+        \\let result = 0;
+        \\async function* ag() { yield 1; yield 2; }
+        \\async function main() {
+        \\  let it = ag();
+        \\  let r = await it.next();
+        \\  result = r.value;
+        \\}
+        \\main();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: async generator multiple yields" {
+    const result = try evalWithMicrotasks(
+        \\let result = 0;
+        \\async function* ag() { yield 10; yield 20; }
+        \\async function main() {
+        \\  let it = ag();
+        \\  let r1 = await it.next();
+        \\  let r2 = await it.next();
+        \\  result = r1.value + r2.value;
+        \\}
+        \\main();
+    , "result");
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: async generator done" {
+    const result = try evalWithMicrotasks(
+        \\let result = false;
+        \\async function* ag() { yield 1; }
+        \\async function main() {
+        \\  let it = ag();
+        \\  await it.next();
+        \\  let r = await it.next();
+        \\  result = r.done;
+        \\}
+        \\main();
+    , "result");
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
 test "eval: spread generator via for-of collect" {
     // Note: [...generator()] with direct spread has re-entrant VM issues.
     // Workaround: collect via for-of which uses the normal iteration path.

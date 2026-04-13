@@ -485,6 +485,21 @@ pub const VM = struct {
 
                     const func = &obj.data.function;
 
+                    // Async generator function: create AsyncGeneratorObject
+                    if (func.is_generator and func.is_async) {
+                        const base = self.sp - arg_count;
+                        var ag_init_args: []JsValue = &.{};
+                        if (arg_count > 0) {
+                            ag_init_args = try self.allocator.alloc(JsValue, arg_count);
+                            @memcpy(ag_init_args, self.stack[base..self.sp]);
+                        }
+                        self.sp = base - 1;
+                        const ag_obj = try self.createAsyncGeneratorObject(obj);
+                        ag_obj.data.generator_data.init_args = ag_init_args;
+                        self.push(JsValue.initObject(ag_obj));
+                        continue;
+                    }
+
                     // Generator function: don't execute, create GeneratorObject
                     if (func.is_generator) {
                         const base = self.sp - arg_count;
@@ -6056,6 +6071,66 @@ pub const VM = struct {
             }
             return result;
         }
+    }
+
+    // ── Async Generator support ──────────────────────────────────────
+
+    fn createAsyncGeneratorObject(self: *VM, func_obj: *JsObject) !*JsObject {
+        const gen_obj = try self.createObj(.{ .obj_type = .async_generator });
+        gen_obj.data = .{ .generator_data = .{
+            .state = .suspended_start,
+            .func_obj = func_obj,
+        } };
+        try self.registerNativeMethod(gen_obj, "next", &nativeAsyncGeneratorNext);
+        try self.registerNativeMethod(gen_obj, "return", &nativeAsyncGeneratorReturn);
+        return gen_obj;
+    }
+
+    fn nativeAsyncGeneratorNext(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .async_generator) return JsValue.undefined_val;
+        var gen = &obj.data.generator_data;
+
+        const result = switch (gen.state) {
+            .completed => try vm.createIterResult(JsValue.undefined_val, true),
+            .executing, .await_pending => return JsValue.undefined_val,
+            .suspended_start => blk: {
+                gen.state = .executing;
+                break :blk try vm.executeGenerator(gen, JsValue.undefined_val, false);
+            },
+            .suspended_yield => blk: {
+                gen.state = .executing;
+                const sent = if (args.len > 0) args[0] else JsValue.undefined_val;
+                break :blk try vm.executeGenerator(gen, sent, true);
+            },
+        };
+
+        // Wrap in resolved Promise
+        return try vm.createResolvedPromise(result);
+    }
+
+    fn nativeAsyncGeneratorReturn(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .async_generator) return JsValue.undefined_val;
+        var gen = &obj.data.generator_data;
+        gen.state = .completed;
+        const value = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const result = try vm.createIterResult(value, true);
+        return try vm.createResolvedPromise(result);
+    }
+
+    fn createResolvedPromise(self: *VM, value: JsValue) !JsValue {
+        const promise = try self.createObj(.{ .obj_type = .promise });
+        promise.data = .{ .promise_data = .{
+            .state = .fulfilled,
+            .result = value,
+        } };
+        if (self.promise_proto) |pp| promise.prototype = pp;
+        return JsValue.initObject(promise);
     }
 
     // ── WeakMap / WeakSet native functions ───────────────────────────
