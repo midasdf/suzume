@@ -27,6 +27,8 @@ pub const ObjType = enum(u8) {
     generator,
     iterator,
     async_generator,
+    typed_array,
+    array_buffer,
 };
 
 pub const JsObject = struct {
@@ -82,6 +84,7 @@ pub const JsObject = struct {
         weak_set_data: std.AutoArrayHashMapUnmanaged(usize, void),
         generator_data: GeneratorData,
         iterator_data: IteratorData,
+        bytes_data: []u8,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -101,6 +104,7 @@ pub const JsObject = struct {
                 if (g.saved_stack.len > 0) allocator.free(g.saved_stack);
                 if (g.init_args.len > 0) allocator.free(g.init_args);
             },
+            .bytes_data => |b| if (b.len > 0) allocator.free(b),
             .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data => {},
         }
     }

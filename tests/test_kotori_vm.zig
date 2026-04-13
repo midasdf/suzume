@@ -4839,3 +4839,66 @@ test "eval: template literal with expression" {
     );
     try std.testing.expect(result.isString());
 }
+
+// ── Uint8Array / ArrayBuffer ────────────────────────────────────
+
+test "eval: Uint8Array from length" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(4);
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array index read/write" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(3);
+        \\a[0] = 10; a[1] = 20; a[2] = 30;
+        \\a[0] + a[1] + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 60.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array from array" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array([65, 66, 67]);
+        \\a[0] + a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 68.0), result.asNumber(), 0.001);
+}
+
+test "eval: ArrayBuffer constructor" {
+    const result = try evalExpr(
+        \\var b = new ArrayBuffer(8);
+        \\b.byteLength
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array from ArrayBuffer" {
+    const result = try evalExpr(
+        \\var b = new ArrayBuffer(4);
+        \\var v = new Uint8Array(b);
+        \\v[0] = 42;
+        \\v[0] + v.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 46.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array byte overflow wraps" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(1);
+        \\a[0] = 256;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array slice" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array([1,2,3,4,5]);
+        \\var b = a.slice(1, 3);
+        \\b[0] + b[1] + b.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}

@@ -44,6 +44,7 @@ pub const VM = struct {
     string_proto: ?*JsObject = null,
     number_proto: ?*JsObject = null,
     object_proto: ?*JsObject = null,
+    typed_array_proto: ?*JsObject = null,
     element_proto: ?*JsObject = null,
     // DOM property interception (set by kotori_dom.zig)
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
@@ -642,6 +643,22 @@ pub const VM = struct {
                                 }
                             }
                         }
+                        if (obj.obj_type == .typed_array or obj.obj_type == .array_buffer) {
+                            if (self.pool.get(name_id)) |name_str| {
+                                if (std.mem.eql(u8, name_str, "length") or std.mem.eql(u8, name_str, "byteLength")) {
+                                    const len = switch (obj.data) {
+                                        .bytes_data => |b| b.len,
+                                        else => 0,
+                                    };
+                                    self.push(JsValue.initNumber(@floatFromInt(len)));
+                                    continue;
+                                }
+                                if (std.mem.eql(u8, name_str, "buffer")) {
+                                    self.push(obj_val); // self-reference for simplicity
+                                    continue;
+                                }
+                            }
+                        }
                         if (obj.getProperty(name_id)) |val| {
                             self.push(val);
                         } else if (self.object_proto) |obj_p| {
@@ -783,6 +800,23 @@ pub const VM = struct {
                                 }
                             }
                         }
+                        if (obj.obj_type == .typed_array) {
+                            if (self.toArrayIndex(key)) |i| {
+                                const bytes = obj.data.bytes_data;
+                                if (i < bytes.len) {
+                                    self.push(JsValue.initNumber(@floatFromInt(bytes[i])));
+                                    continue;
+                                }
+                            }
+                            // .length for typed arrays
+                            if (key.isString()) {
+                                const name = self.pool.get(key.asStringId()) orelse "";
+                                if (std.mem.eql(u8, name, "length") or std.mem.eql(u8, name, "byteLength")) {
+                                    self.push(JsValue.initNumber(@floatFromInt(obj.data.bytes_data.len)));
+                                    continue;
+                                }
+                            }
+                        }
                         // Fall back to property access for string keys
                         if (key.isString()) {
                             if (obj.getProperty(key.asStringId())) |val| {
@@ -817,6 +851,13 @@ pub const VM = struct {
                                     try obj.data.array.append(self.allocator, JsValue.undefined_val);
                                 }
                                 obj.data.array.items[i] = val;
+                            }
+                        } else if (obj.obj_type == .typed_array) {
+                            if (self.toArrayIndex(key)) |i| {
+                                const bytes = obj.data.bytes_data;
+                                if (i < bytes.len) {
+                                    bytes[i] = @intFromFloat(@mod(@trunc(val.toNumber()), 256.0));
+                                }
                             }
                         } else if (key.isString()) {
                             try obj.setProperty(self.allocator, key.asStringId(), val);
@@ -2029,6 +2070,27 @@ pub const VM = struct {
             try self.globals.put(self.allocator, try self.pool.intern("WeakMap"), JsValue.initObject(wm_ctor));
             const ws_ctor = try self.createNativeFn(&nativeWeakSetConstructor);
             try self.globals.put(self.allocator, try self.pool.intern("WeakSet"), JsValue.initObject(ws_ctor));
+        }
+
+        // ── ArrayBuffer / Uint8Array ──
+        {
+            const ab_ctor = try self.createNativeFn(&nativeArrayBufferConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("ArrayBuffer"), JsValue.initObject(ab_ctor));
+
+            const u8_proto = try self.createObj(.{});
+            try self.registerNativeMethod(u8_proto, "slice", &nativeUint8ArraySlice);
+            try self.registerNativeMethod(u8_proto, "set", &nativeUint8ArraySet);
+            try self.registerNativeMethod(u8_proto, "subarray", &nativeUint8ArraySlice); // alias
+            const u8_ctor = try self.createNativeFn(&nativeUint8ArrayConstructor);
+            try u8_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(u8_proto));
+            self.typed_array_proto = u8_proto;
+            try self.globals.put(self.allocator, try self.pool.intern("Uint8Array"), JsValue.initObject(u8_ctor));
+            try self.globals.put(self.allocator, try self.pool.intern("Int8Array"), JsValue.initObject(u8_ctor));
+            try self.globals.put(self.allocator, try self.pool.intern("Uint16Array"), JsValue.initObject(u8_ctor));
+            try self.globals.put(self.allocator, try self.pool.intern("Int16Array"), JsValue.initObject(u8_ctor));
+            try self.globals.put(self.allocator, try self.pool.intern("Uint32Array"), JsValue.initObject(u8_ctor));
+            try self.globals.put(self.allocator, try self.pool.intern("Float32Array"), JsValue.initObject(u8_ctor));
+            try self.globals.put(self.allocator, try self.pool.intern("Float64Array"), JsValue.initObject(u8_ctor));
         }
 
         // ── globalThis ──
@@ -3842,6 +3904,116 @@ pub const VM = struct {
             .gt => 1.0,
             .eq => 0.0,
         });
+    }
+
+    // ── ArrayBuffer / Uint8Array ────────────────────────────────────
+
+    fn nativeArrayBufferConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const len: usize = if (args.len > 0) clampToUsize(args[0]) else 0;
+        const buf = try vm.allocator.alloc(u8, len);
+        @memset(buf, 0);
+        const obj = try vm.createObj(.{ .obj_type = .array_buffer });
+        obj.data = .{ .bytes_data = buf };
+        const bl_id = try vm.pool.intern("byteLength");
+        try obj.setProperty(vm.allocator, bl_id, JsValue.initNumber(@floatFromInt(len)));
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeUint8ArrayConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) {
+            const obj = try vm.createObj(.{ .obj_type = .typed_array });
+            obj.data = .{ .bytes_data = &.{} };
+            if (vm.typed_array_proto) |tap| obj.prototype = tap;
+            return JsValue.initObject(obj);
+        }
+        const arg = args[0];
+        if (arg.isObject()) {
+            const src = arg.asJsObject();
+            if (src.obj_type == .array_buffer) {
+                // Uint8Array(arrayBuffer) — share buffer
+                const obj = try vm.createObj(.{ .obj_type = .typed_array });
+                obj.data = .{ .bytes_data = src.data.bytes_data };
+                if (vm.typed_array_proto) |tap| obj.prototype = tap;
+                return JsValue.initObject(obj);
+            }
+            if (src.obj_type == .typed_array) {
+                // Uint8Array(otherTypedArray) — copy
+                const src_bytes = src.data.bytes_data;
+                const buf = try vm.allocator.alloc(u8, src_bytes.len);
+                @memcpy(buf, src_bytes);
+                const obj = try vm.createObj(.{ .obj_type = .typed_array });
+                obj.data = .{ .bytes_data = buf };
+                if (vm.typed_array_proto) |tap| obj.prototype = tap;
+                return JsValue.initObject(obj);
+            }
+            if (src.obj_type == .array) {
+                // Uint8Array(array) — convert
+                const items = src.data.array.items;
+                const buf = try vm.allocator.alloc(u8, items.len);
+                for (items, 0..) |v, i| {
+                    const n = v.toNumber();
+                    buf[i] = @intFromFloat(@mod(@trunc(n), 256.0));
+                }
+                const obj = try vm.createObj(.{ .obj_type = .typed_array });
+                obj.data = .{ .bytes_data = buf };
+                if (vm.typed_array_proto) |tap| obj.prototype = tap;
+                return JsValue.initObject(obj);
+            }
+        }
+        // Uint8Array(length)
+        const len: usize = clampToUsize(arg);
+        const buf = try vm.allocator.alloc(u8, len);
+        @memset(buf, 0);
+        const obj = try vm.createObj(.{ .obj_type = .typed_array });
+        obj.data = .{ .bytes_data = buf };
+        if (vm.typed_array_proto) |tap| obj.prototype = tap;
+        return JsValue.initObject(obj);
+    }
+
+    fn nativeUint8ArraySlice(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (obj.obj_type != .typed_array) return JsValue.undefined_val;
+        const bytes = obj.data.bytes_data;
+        const start: usize = if (args.len > 0) clampToUsize(args[0]) else 0;
+        const end: usize = if (args.len > 1) clampToUsize(args[1]) else bytes.len;
+        const s = @min(start, bytes.len);
+        const e = @min(end, bytes.len);
+        if (s >= e) {
+            const new_obj = try vm.createObj(.{ .obj_type = .typed_array });
+            new_obj.data = .{ .bytes_data = &.{} };
+            if (vm.typed_array_proto) |tap| new_obj.prototype = tap;
+            return JsValue.initObject(new_obj);
+        }
+        const buf = try vm.allocator.alloc(u8, e - s);
+        @memcpy(buf, bytes[s..e]);
+        const new_obj = try vm.createObj(.{ .obj_type = .typed_array });
+        new_obj.data = .{ .bytes_data = buf };
+        if (vm.typed_array_proto) |tap| new_obj.prototype = tap;
+        return JsValue.initObject(new_obj);
+    }
+
+    fn nativeUint8ArraySet(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0 or !args[0].isObject()) return JsValue.undefined_val;
+        const obj = this.asJsObject();
+        if (obj.obj_type != .typed_array) return JsValue.undefined_val;
+        const src = args[0].asJsObject();
+        const offset: usize = if (args.len > 1) clampToUsize(args[1]) else 0;
+        const dst = obj.data.bytes_data;
+        if (src.obj_type == .typed_array) {
+            const src_bytes = src.data.bytes_data;
+            const count = @min(src_bytes.len, dst.len -| offset);
+            @memcpy(dst[offset..][0..count], src_bytes[0..count]);
+        } else if (src.obj_type == .array) {
+            for (src.data.array.items, 0..) |v, i| {
+                if (offset + i >= dst.len) break;
+                dst[offset + i] = @intFromFloat(@mod(@trunc(v.toNumber()), 256.0));
+            }
+        }
+        return JsValue.undefined_val;
     }
 
     fn nativeObjectIs(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
