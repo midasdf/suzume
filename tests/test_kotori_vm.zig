@@ -3741,3 +3741,452 @@ test "eval: if empty string takes else" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Phase G: Real-World Compatibility Tests
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Math trig functions ─────────────────────────────────────────
+
+test "eval: Math.sin" {
+    const result = try evalExpr("Math.sin(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.sin PI/2" {
+    const result = try evalExpr("Math.sin(Math.PI / 2)");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.cos" {
+    const result = try evalExpr("Math.cos(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.cos PI" {
+    const result = try evalExpr("Math.cos(Math.PI)");
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.tan" {
+    const result = try evalExpr("Math.tan(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.asin" {
+    const result = try evalExpr("Math.asin(1)");
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.pi / 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.acos" {
+    const result = try evalExpr("Math.acos(1)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.atan" {
+    const result = try evalExpr("Math.atan(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.atan2" {
+    const result = try evalExpr("Math.atan2(1, 1)");
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.pi / 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.exp" {
+    const result = try evalExpr("Math.exp(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.exp(1)" {
+    const result = try evalExpr("Math.exp(1)");
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.e), result.asNumber(), 0.001);
+}
+
+test "eval: Math.log2" {
+    const result = try evalExpr("Math.log2(8)");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.cbrt" {
+    const result = try evalExpr("Math.cbrt(27)");
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.hypot" {
+    const result = try evalExpr("Math.hypot(3, 4)");
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.clz32" {
+    const result = try evalExpr("Math.clz32(1)");
+    try std.testing.expectApproxEqAbs(@as(f64, 31.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.clz32 zero" {
+    const result = try evalExpr("Math.clz32(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 32.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.sinh" {
+    const result = try evalExpr("Math.sinh(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.cosh" {
+    const result = try evalExpr("Math.cosh(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.tanh" {
+    const result = try evalExpr("Math.tanh(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.fround" {
+    const result = try evalExpr("Math.fround(5.5)");
+    try std.testing.expectApproxEqAbs(@as(f64, 5.5), result.asNumber(), 0.001);
+}
+
+test "eval: Math.log1p" {
+    const result = try evalExpr("Math.log1p(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.expm1" {
+    const result = try evalExpr("Math.expm1(0)");
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Math.LN2" {
+    const result = try evalExpr("Math.LN2");
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.ln2), result.asNumber(), 0.001);
+}
+
+test "eval: Math.LOG2E" {
+    const result = try evalExpr("Math.LOG2E");
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.log2e), result.asNumber(), 0.001);
+}
+
+test "eval: Math.SQRT2" {
+    const result = try evalExpr("Math.SQRT2");
+    try std.testing.expectApproxEqAbs(@as(f64, std.math.sqrt2), result.asNumber(), 0.001);
+}
+
+// ── URL encoding/decoding ──────────────────────────────────────
+
+test "eval: encodeURIComponent basic" {
+    const result = try evalExpr(
+        \\encodeURIComponent("hello world")
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: encodeURIComponent special chars" {
+    const result = try evalExpr(
+        \\encodeURIComponent("a=1&b=2")
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: decodeURIComponent roundtrip" {
+    const result = try evalExpr(
+        \\decodeURIComponent(encodeURIComponent("hello world"))
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: encodeURI preserves reserved" {
+    const result = try evalExpr(
+        \\encodeURI("https://example.com/path?q=hello world")
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: decodeURI roundtrip" {
+    const result = try evalExpr(
+        \\decodeURI(encodeURI("test value"))
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: encodeURIComponent decode roundtrip equality" {
+    const result = try evalExpr(
+        \\decodeURIComponent(encodeURIComponent("café")) === "café"
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── String.fromCharCode / fromCodePoint / codePointAt / substr ──
+
+test "eval: String.fromCharCode" {
+    const result = try evalExpr(
+        \\String.fromCharCode(72, 105)
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: String.fromCodePoint" {
+    const result = try evalExpr(
+        \\String.fromCodePoint(65)
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: String.fromCharCode A" {
+    const result = try evalExpr(
+        \\String.fromCharCode(65) === "A"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: String.fromCodePoint A" {
+    const result = try evalExpr(
+        \\String.fromCodePoint(65) === "A"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: codePointAt" {
+    const result = try evalExpr(
+        \\"A".codePointAt(0)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 65.0), result.asNumber(), 0.001);
+}
+
+test "eval: codePointAt index 1" {
+    const result = try evalExpr(
+        \\"AB".codePointAt(1)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 66.0), result.asNumber(), 0.001);
+}
+
+test "eval: codePointAt out of range" {
+    const result = try evalExpr(
+        \\"A".codePointAt(5)
+    );
+    try std.testing.expect(result.isUndefined());
+}
+
+test "eval: substr basic" {
+    const result = try evalExpr(
+        \\"hello world".substr(6) === "world"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: substr with length" {
+    const result = try evalExpr(
+        \\"hello world".substr(0, 5) === "hello"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: substr negative start" {
+    const result = try evalExpr(
+        \\"hello".substr(-3) === "llo"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// ── Array.from / Array.of ───────────────────────────────────────
+
+test "eval: Array.of" {
+    const result = try evalExpr(
+        \\let a = Array.of(1, 2, 3);
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.of values" {
+    const result = try evalExpr(
+        \\let a = Array.of(10, 20, 30);
+        \\a[1]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from string" {
+    const result = try evalExpr(
+        \\let a = Array.from("abc");
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from string values" {
+    const result = try evalExpr(
+        \\let a = Array.from("abc");
+        \\a[0] === "a" && a[1] === "b" && a[2] === "c"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.from array" {
+    const result = try evalExpr(
+        \\let a = Array.from([1, 2, 3]);
+        \\a[0] + a[1] + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: Array.from with mapFn" {
+    const result = try evalExpr(
+        \\let a = Array.from([1, 2, 3], x => x * 2);
+        \\a[0] + a[1] + a[2]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
+}
+
+// ── Abstract equality (==) ──────────────────────────────────────
+
+test "eval: null == undefined" {
+    const result = try evalExpr("null == undefined");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: undefined == null" {
+    const result = try evalExpr("undefined == null");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: null == null" {
+    const result = try evalExpr("null == null");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: null != 0" {
+    const result = try evalExpr("null == 0");
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: null != false" {
+    const result = try evalExpr("null == false");
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: string == number coercion" {
+    const result = try evalExpr(
+        \\"42" == 42
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: number == string coercion" {
+    const result = try evalExpr(
+        \\42 == "42"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: bool == number coercion" {
+    const result = try evalExpr(
+        \\true == 1
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: false == 0" {
+    const result = try evalExpr(
+        \\false == 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: empty string == 0" {
+    const result = try evalExpr(
+        \\"" == 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: string != different number" {
+    const result = try evalExpr(
+        \\"5" == 3
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: 1 == true" {
+    const result = try evalExpr("1 == true");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: 0 == false" {
+    const result = try evalExpr("0 == false");
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: != with coercion" {
+    const result = try evalExpr(
+        \\"42" != 42
+    );
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: !== without coercion" {
+    const result = try evalExpr(
+        \\"42" !== 42
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// ── typeof ──────────────────────────────────────────────────────
+
+test "eval: typeof number strict check" {
+    const result = try evalExpr(
+        \\typeof 42 === "number"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof string strict check" {
+    const result = try evalExpr(
+        \\typeof "hello" === "string"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof boolean strict check" {
+    const result = try evalExpr(
+        \\typeof true === "boolean"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof undefined strict check" {
+    const result = try evalExpr(
+        \\typeof undefined === "undefined"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof null returns object" {
+    const result = try evalExpr(
+        \\typeof null === "object"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof function decl" {
+    const result = try evalExpr(
+        \\typeof function(){} === "function"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof object literal" {
+    const result = try evalExpr(
+        \\typeof {} === "object"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: typeof symbol value" {
+    const result = try evalExpr(
+        \\typeof Symbol("x") === "symbol"
+    );
+    try std.testing.expect(result.asBool());
+}

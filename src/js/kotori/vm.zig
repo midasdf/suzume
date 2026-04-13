@@ -241,8 +241,8 @@ pub const VM = struct {
                 .neg => self.push(JsValue.jsNeg(self.pop())),
 
                 // ── Comparison ───────────────────────────────────────
-                .eq => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsEq(a, b)); },
-                .ne => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsNe(a, b)); },
+                .eq => { const b = self.pop(); const a = self.pop(); self.push(self.abstractEq(a, b)); },
+                .ne => { const b = self.pop(); const a = self.pop(); self.push(JsValue.initBool(!self.abstractEq(a, b).asBool())); },
                 .strict_eq => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsStrictEq(a, b)); },
                 .strict_ne => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsStrictNe(a, b)); },
                 .lt => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsLt(a, b)); },
@@ -1682,6 +1682,19 @@ pub const VM = struct {
         try self.registerNativeMethod(sp, "lastIndexOf", &nativeStringLastIndexOf);
         try self.registerNativeMethod(sp, "concat", &nativeStringConcat);
         try self.registerNativeMethod(sp, "at", &nativeStringAt);
+        try self.registerNativeMethod(sp, "codePointAt", &nativeStringCodePointAt);
+        try self.registerNativeMethod(sp, "substr", &nativeStringSubstr);
+        try self.registerNativeMethod(sp, "toString", &nativeStringToString);
+        try self.registerNativeMethod(sp, "valueOf", &nativeStringToString);
+
+        // ── String constructor ──
+        {
+            const str_ctor = try self.createObj(.{});
+            try self.registerNativeMethod(str_ctor, "fromCharCode", &nativeStringFromCharCode);
+            try self.registerNativeMethod(str_ctor, "fromCodePoint", &nativeStringFromCodePoint);
+            try str_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(sp));
+            try self.globals.put(self.allocator, try self.pool.intern("String"), JsValue.initObject(str_ctor));
+        }
 
         // ── Number.prototype ──
         self.number_proto = try self.createObj(.{});
@@ -1738,6 +1751,7 @@ pub const VM = struct {
         const arr_constructor = try self.createObj(.{});
         try self.registerNativeMethod(arr_constructor, "isArray", &nativeArrayIsArray);
         try self.registerNativeMethod(arr_constructor, "from", &nativeArrayFrom);
+        try self.registerNativeMethod(arr_constructor, "of", &nativeArrayOf);
         // Array.prototype accessible from constructor
         const proto_id = try self.pool.intern("prototype");
         try arr_constructor.setProperty(self.allocator, proto_id, JsValue.initObject(ap));
@@ -1776,7 +1790,31 @@ pub const VM = struct {
         try self.registerNativeMethod(math_obj, "log10", &nativeMathLog10);
         try self.registerNativeMethod(math_obj, "trunc", &nativeMathTrunc);
         try self.registerNativeMethod(math_obj, "sign", &nativeMathSign);
+        try self.registerNativeMethod(math_obj, "sin", &nativeMathSin);
+        try self.registerNativeMethod(math_obj, "cos", &nativeMathCos);
+        try self.registerNativeMethod(math_obj, "tan", &nativeMathTan);
+        try self.registerNativeMethod(math_obj, "asin", &nativeMathAsin);
+        try self.registerNativeMethod(math_obj, "acos", &nativeMathAcos);
+        try self.registerNativeMethod(math_obj, "atan", &nativeMathAtan);
+        try self.registerNativeMethod(math_obj, "atan2", &nativeMathAtan2);
+        try self.registerNativeMethod(math_obj, "exp", &nativeMathExp);
+        try self.registerNativeMethod(math_obj, "log2", &nativeMathLog2);
+        try self.registerNativeMethod(math_obj, "cbrt", &nativeMathCbrt);
+        try self.registerNativeMethod(math_obj, "hypot", &nativeMathHypot);
+        try self.registerNativeMethod(math_obj, "clz32", &nativeMathClz32);
+        try self.registerNativeMethod(math_obj, "sinh", &nativeMathSinh);
+        try self.registerNativeMethod(math_obj, "cosh", &nativeMathCosh);
+        try self.registerNativeMethod(math_obj, "tanh", &nativeMathTanh);
+        try self.registerNativeMethod(math_obj, "fround", &nativeMathFround);
+        try self.registerNativeMethod(math_obj, "log1p", &nativeMathLog1p);
+        try self.registerNativeMethod(math_obj, "expm1", &nativeMathExpm1);
         // Math constants
+        try math_obj.setProperty(self.allocator, try self.pool.intern("LN2"), JsValue.initNumber(std.math.ln2));
+        try math_obj.setProperty(self.allocator, try self.pool.intern("LN10"), JsValue.initNumber(std.math.ln10));
+        try math_obj.setProperty(self.allocator, try self.pool.intern("LOG2E"), JsValue.initNumber(std.math.log2e));
+        try math_obj.setProperty(self.allocator, try self.pool.intern("LOG10E"), JsValue.initNumber(std.math.log10e));
+        try math_obj.setProperty(self.allocator, try self.pool.intern("SQRT2"), JsValue.initNumber(std.math.sqrt2));
+        try math_obj.setProperty(self.allocator, try self.pool.intern("SQRT1_2"), JsValue.initNumber(1.0 / std.math.sqrt2));
         const pi_id = try self.pool.intern("PI");
         try math_obj.setProperty(self.allocator, pi_id, JsValue.initNumber(std.math.pi));
         const e_id = try self.pool.intern("E");
@@ -1802,6 +1840,16 @@ pub const VM = struct {
         const is_finite_obj = try self.createNativeFn(&nativeIsFinite);
         const is_finite_id = try self.pool.intern("isFinite");
         try self.globals.put(self.allocator, is_finite_id, JsValue.initObject(is_finite_obj));
+
+        // ── URI encoding/decoding ──
+        const encode_uri_obj = try self.createNativeFn(&nativeEncodeURI);
+        try self.globals.put(self.allocator, try self.pool.intern("encodeURI"), JsValue.initObject(encode_uri_obj));
+        const decode_uri_obj = try self.createNativeFn(&nativeDecodeURI);
+        try self.globals.put(self.allocator, try self.pool.intern("decodeURI"), JsValue.initObject(decode_uri_obj));
+        const encode_uric_obj = try self.createNativeFn(&nativeEncodeURIComponent);
+        try self.globals.put(self.allocator, try self.pool.intern("encodeURIComponent"), JsValue.initObject(encode_uric_obj));
+        const decode_uric_obj = try self.createNativeFn(&nativeDecodeURIComponent);
+        try self.globals.put(self.allocator, try self.pool.intern("decodeURIComponent"), JsValue.initObject(decode_uric_obj));
 
         // ── setTimeout / setInterval / clearTimeout / clearInterval ──
         const set_timeout_obj = try self.createNativeFn(&nativeSetTimeout);
@@ -3615,13 +3663,84 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0) return JsValue.initObject(new_arr);
         const src = args[0];
-        if (src.isObject()) {
-            const obj = src.asJsObject();
-            if (obj.obj_type == .array) {
-                for (obj.data.array.items) |item| {
-                    try new_arr.data.array.append(vm.allocator, item);
+        const map_fn = if (args.len > 1 and args[1].isObject()) args[1] else JsValue.undefined_val;
+        // String → array of characters
+        if (src.isString()) {
+            const s = vm.pool.get(src.asStringId()) orelse "";
+            var i: usize = 0;
+            var idx: usize = 0;
+            while (i < s.len) {
+                const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
+                const end = @min(i + cp_len, s.len);
+                var value = JsValue.initString(try vm.pool.intern(s[i..end]));
+                if (!map_fn.isUndefined()) {
+                    value = try vm.callJsFunction(map_fn, JsValue.undefined_val, &.{ value, JsValue.initNumber(@floatFromInt(idx)) });
+                }
+                try new_arr.data.array.append(vm.allocator, value);
+                i = end;
+                idx += 1;
+            }
+            return JsValue.initObject(new_arr);
+        }
+        if (!src.isObject()) return JsValue.initObject(new_arr);
+        const obj = src.asJsObject();
+        // Array source: direct copy
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, idx| {
+                var value = item;
+                if (!map_fn.isUndefined()) {
+                    value = try vm.callJsFunction(map_fn, JsValue.undefined_val, &.{ value, JsValue.initNumber(@floatFromInt(idx)) });
+                }
+                try new_arr.data.array.append(vm.allocator, value);
+            }
+            return JsValue.initObject(new_arr);
+        }
+        // Iterable: resolve iterator, call .next() until done
+        if (try vm.resolveIterator(src)) |iter_val| {
+            if (iter_val.isObject()) {
+                const next_id = try vm.pool.intern("next");
+                const done_sid = try vm.pool.intern("done");
+                const value_sid = try vm.pool.intern("value");
+                var idx: usize = 0;
+                while (idx < 10000) { // safety limit
+                    const next_fn = iter_val.asJsObject().getProperty(next_id) orelse break;
+                    const result = try vm.callJsFunction(next_fn, iter_val, &.{});
+                    if (!result.isObject()) break;
+                    const done_val = result.asJsObject().getProperty(done_sid) orelse JsValue.initBool(false);
+                    if (done_val.isBool() and done_val.asBool()) break;
+                    var value = result.asJsObject().getProperty(value_sid) orelse JsValue.undefined_val;
+                    if (!map_fn.isUndefined()) {
+                        value = try vm.callJsFunction(map_fn, JsValue.undefined_val, &.{ value, JsValue.initNumber(@floatFromInt(idx)) });
+                    }
+                    try new_arr.data.array.append(vm.allocator, value);
+                    idx += 1;
                 }
             }
+        } else {
+            // Array-like: has .length
+            const length_id = try vm.pool.intern("length");
+            if (obj.getProperty(length_id)) |len_val| {
+                const len: usize = @intCast(@max(@as(i64, 0), clampToI64(len_val)));
+                for (0..len) |idx| {
+                    var buf: [20]u8 = undefined;
+                    const key = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch break;
+                    const key_id = try vm.pool.intern(key);
+                    var value = obj.getProperty(key_id) orelse JsValue.undefined_val;
+                    if (!map_fn.isUndefined()) {
+                        value = try vm.callJsFunction(map_fn, JsValue.undefined_val, &.{ value, JsValue.initNumber(@floatFromInt(idx)) });
+                    }
+                    try new_arr.data.array.append(vm.allocator, value);
+                }
+            }
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    fn nativeArrayOf(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        for (args) |a| {
+            try new_arr.data.array.append(vm.allocator, a);
         }
         return JsValue.initObject(new_arr);
     }
@@ -4376,6 +4495,204 @@ pub const VM = struct {
         return JsValue.initNumber(0);
     }
 
+    fn nativeMathSin(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@sin(args[0].toNumber()));
+    }
+
+    fn nativeMathCos(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@cos(args[0].toNumber()));
+    }
+
+    fn nativeMathTan(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@tan(args[0].toNumber()));
+    }
+
+    fn nativeMathAsin(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.asin(args[0].toNumber()));
+    }
+
+    fn nativeMathAcos(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.acos(args[0].toNumber()));
+    }
+
+    fn nativeMathAtan(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.atan(args[0].toNumber()));
+    }
+
+    fn nativeMathAtan2(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len < 2) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.atan2(args[0].toNumber(), args[1].toNumber()));
+    }
+
+    fn nativeMathExp(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(@exp(args[0].toNumber()));
+    }
+
+    fn nativeMathLog2(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.log2(args[0].toNumber()));
+    }
+
+    fn nativeMathCbrt(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.cbrt(args[0].toNumber()));
+    }
+
+    fn nativeMathHypot(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initNumber(0);
+        if (args.len == 1) return JsValue.initNumber(@abs(args[0].toNumber()));
+        var sum: f64 = 0;
+        for (args) |a| {
+            const n = a.toNumber();
+            sum += n * n;
+        }
+        return JsValue.initNumber(@sqrt(sum));
+    }
+
+    fn nativeMathClz32(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initNumber(32);
+        const n = args[0].toNumber();
+        const i: u32 = @bitCast(@as(i32, @intFromFloat(n)));
+        if (i == 0) return JsValue.initNumber(32);
+        return JsValue.initNumber(@as(f64, @floatFromInt(@clz(i))));
+    }
+
+    fn nativeMathSinh(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const x = args[0].toNumber();
+        return JsValue.initNumber((@exp(x) - @exp(-x)) / 2.0);
+    }
+
+    fn nativeMathCosh(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const x = args[0].toNumber();
+        return JsValue.initNumber((@exp(x) + @exp(-x)) / 2.0);
+    }
+
+    fn nativeMathTanh(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const x = args[0].toNumber();
+        const ex = @exp(x);
+        const emx = @exp(-x);
+        return JsValue.initNumber((ex - emx) / (ex + emx));
+    }
+
+    fn nativeMathFround(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        const f: f32 = @floatCast(args[0].toNumber());
+        return JsValue.initNumber(@as(f64, @floatCast(f)));
+    }
+
+    fn nativeMathLog1p(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.log1p(args[0].toNumber()));
+    }
+
+    fn nativeMathExpm1(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.nan_val;
+        return JsValue.initNumber(std.math.expm1(args[0].toNumber()));
+    }
+
+    // ── URI encoding/decoding ────────────────────────────────────
+
+    // Characters unreserved in RFC 3986
+    fn isUnreserved(c: u8) bool {
+        return (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z') or
+            (c >= '0' and c <= '9') or c == '-' or c == '_' or c == '.' or c == '~';
+    }
+
+    // Additional characters preserved by encodeURI (but not encodeURIComponent)
+    fn isUriReserved(c: u8) bool {
+        return switch (c) {
+            ';', '/', '?', ':', '@', '&', '=', '+', '$', ',', '#', '!', '\'', '(', ')', '*' => true,
+            else => false,
+        };
+    }
+
+    fn percentEncode(allocator: std.mem.Allocator, input: []const u8, preserve_reserved: bool) ![]u8 {
+        const hex = "0123456789ABCDEF";
+        var buf = std.ArrayListUnmanaged(u8){};
+        for (input) |c| {
+            if (isUnreserved(c) or (preserve_reserved and isUriReserved(c))) {
+                try buf.append(allocator, c);
+            } else {
+                try buf.append(allocator, '%');
+                try buf.append(allocator, hex[c >> 4]);
+                try buf.append(allocator, hex[c & 0x0f]);
+            }
+        }
+        return buf.toOwnedSlice(allocator);
+    }
+
+    fn hexVal(c: u8) ?u8 {
+        if (c >= '0' and c <= '9') return c - '0';
+        if (c >= 'A' and c <= 'F') return c - 'A' + 10;
+        if (c >= 'a' and c <= 'f') return c - 'a' + 10;
+        return null;
+    }
+
+    fn percentDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+        var buf = std.ArrayListUnmanaged(u8){};
+        var i: usize = 0;
+        while (i < input.len) {
+            if (input[i] == '%' and i + 2 < input.len) {
+                if (hexVal(input[i + 1])) |hi| {
+                    if (hexVal(input[i + 2])) |lo| {
+                        try buf.append(allocator, (hi << 4) | lo);
+                        i += 3;
+                        continue;
+                    }
+                }
+            }
+            try buf.append(allocator, input[i]);
+            i += 1;
+        }
+        return buf.toOwnedSlice(allocator);
+    }
+
+    fn nativeEncodeURIComponent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initString(try vmFromCtx(ctx).pool.intern("undefined"));
+        const vm = vmFromCtx(ctx);
+        const s = vm.pool.get(args[0].asStringId()) orelse return JsValue.initString(try vm.pool.intern("undefined"));
+        const encoded = try percentEncode(vm.allocator, s, false);
+        defer vm.allocator.free(encoded);
+        return JsValue.initString(try vm.pool.intern(encoded));
+    }
+
+    fn nativeDecodeURIComponent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initString(try vmFromCtx(ctx).pool.intern("undefined"));
+        const vm = vmFromCtx(ctx);
+        const s = vm.pool.get(args[0].asStringId()) orelse return JsValue.initString(try vm.pool.intern("undefined"));
+        const decoded = try percentDecode(vm.allocator, s);
+        defer vm.allocator.free(decoded);
+        return JsValue.initString(try vm.pool.intern(decoded));
+    }
+
+    fn nativeEncodeURI(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initString(try vmFromCtx(ctx).pool.intern("undefined"));
+        const vm = vmFromCtx(ctx);
+        const s = vm.pool.get(args[0].asStringId()) orelse return JsValue.initString(try vm.pool.intern("undefined"));
+        const encoded = try percentEncode(vm.allocator, s, true);
+        defer vm.allocator.free(encoded);
+        return JsValue.initString(try vm.pool.intern(encoded));
+    }
+
+    fn nativeDecodeURI(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initString(try vmFromCtx(ctx).pool.intern("undefined"));
+        const vm = vmFromCtx(ctx);
+        const s = vm.pool.get(args[0].asStringId()) orelse return JsValue.initString(try vm.pool.intern("undefined"));
+        const decoded = try percentDecode(vm.allocator, s);
+        defer vm.allocator.free(decoded);
+        return JsValue.initString(try vm.pool.intern(decoded));
+    }
+
     // ── Global functions ───────────────────────────────────────────
 
     fn nativeParseInt(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -4629,6 +4946,112 @@ pub const VM = struct {
         if (idx < 0 or idx >= len) return JsValue.undefined_val;
         const uidx: usize = @intCast(idx);
         return JsValue.initString(try vm.pool.intern(s[uidx .. uidx + 1]));
+    }
+
+    fn nativeStringCodePointAt(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.undefined_val;
+        if (args.len == 0 or s.len == 0) return JsValue.undefined_val;
+        const pos: usize = @intCast(@max(@as(i64, 0), clampToI64(args[0])));
+        // Walk UTF-8 codepoints to find the one at JS index `pos`
+        var cp_index: usize = 0;
+        var i: usize = 0;
+        while (i < s.len) {
+            const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
+            if (cp_index == pos) {
+                const cp = std.unicode.utf8Decode(s[i..@min(i + cp_len, s.len)]) catch return JsValue.undefined_val;
+                return JsValue.initNumber(@floatFromInt(cp));
+            }
+            i += cp_len;
+            cp_index += 1;
+        }
+        return JsValue.undefined_val;
+    }
+
+    fn nativeStringSubstr(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        const s = getStr(ctx, this) orelse return JsValue.initString(try vmFromCtx(ctx).pool.intern(""));
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.initString(try vm.pool.intern(s));
+        const len: i64 = @intCast(s.len);
+        var start = clampToI64(args[0]);
+        if (start < 0) start = @max(len + start, 0);
+        if (start >= len) return JsValue.initString(try vm.pool.intern(""));
+        const count: i64 = if (args.len > 1 and !args[1].isUndefined()) clampToI64(args[1]) else len - start;
+        if (count <= 0) return JsValue.initString(try vm.pool.intern(""));
+        const ustart: usize = @intCast(start);
+        const end: usize = @intCast(@min(start + count, len));
+        return JsValue.initString(try vm.pool.intern(s[ustart..end]));
+    }
+
+    fn nativeStringToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        if (this.isString()) return this;
+        // For boxed string objects or other values, format to string
+        const vm = vmFromCtx(ctx);
+        var buf: [64]u8 = undefined;
+        const s = formatValue(vm.pool, this, &buf);
+        return JsValue.initString(try vm.pool.intern(s));
+    }
+
+    fn nativeStringFromCharCode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        var buf = std.ArrayListUnmanaged(u8){};
+        for (args) |a| {
+            const code: u21 = @intCast(@as(u32, @bitCast(@as(i32, @intFromFloat(a.toNumber())))) & 0xFFFF);
+            var tmp: [4]u8 = undefined;
+            const n = std.unicode.utf8Encode(code, &tmp) catch continue;
+            buf.appendSlice(vm.allocator, tmp[0..n]) catch continue;
+        }
+        defer buf.deinit(vm.allocator);
+        return JsValue.initString(try vm.pool.intern(if (buf.items.len > 0) buf.items else ""));
+    }
+
+    fn nativeStringFromCodePoint(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        var buf = std.ArrayListUnmanaged(u8){};
+        for (args) |a| {
+            const n = a.toNumber();
+            if (std.math.isNan(n) or n < 0 or n > 0x10FFFF or n != @trunc(n))
+                return JsValue.undefined_val; // RangeError in spec, undefined for simplicity
+            const code: u21 = @intCast(@as(u32, @intFromFloat(n)));
+            var tmp: [4]u8 = undefined;
+            const len = std.unicode.utf8Encode(code, &tmp) catch continue;
+            buf.appendSlice(vm.allocator, tmp[0..len]) catch continue;
+        }
+        defer buf.deinit(vm.allocator);
+        return JsValue.initString(try vm.pool.intern(if (buf.items.len > 0) buf.items else ""));
+    }
+
+    // ── Abstract equality (==) with string→number via StringPool ──
+
+    fn abstractEq(self: *VM, a: JsValue, b: JsValue) JsValue {
+        // Same bits
+        if (a.bits == b.bits) return JsValue.initBool(true);
+        // Both numbers (including int)
+        if ((a.isNumber() or a.isInt()) and (b.isNumber() or b.isInt()))
+            return JsValue.initBool(a.toNumber() == b.toNumber());
+        // Both strings
+        if (a.isString() and b.isString()) return JsValue.initBool(a.asStringId() == b.asStringId());
+        // null == undefined
+        if ((a.isNull() or a.isUndefined()) and (b.isNull() or b.isUndefined()))
+            return JsValue.initBool(true);
+        // bool → ToNumber then compare
+        if (a.isBool()) return self.abstractEq(JsValue.initNumber(if (a.asBool()) 1.0 else 0.0), b);
+        if (b.isBool()) return self.abstractEq(a, JsValue.initNumber(if (b.asBool()) 1.0 else 0.0));
+        // string == number → parse string to number
+        if (a.isString() and (b.isNumber() or b.isInt())) {
+            const s = std.mem.trim(u8, self.pool.get(a.asStringId()) orelse "", " \t\n\r");
+            if (s.len == 0) return JsValue.initBool(b.toNumber() == 0.0);
+            const n = std.fmt.parseFloat(f64, s) catch return JsValue.initBool(false);
+            return JsValue.initBool(n == b.toNumber());
+        }
+        if ((a.isNumber() or a.isInt()) and b.isString()) {
+            const s = std.mem.trim(u8, self.pool.get(b.asStringId()) orelse "", " \t\n\r");
+            if (s.len == 0) return JsValue.initBool(a.toNumber() == 0.0);
+            const n = std.fmt.parseFloat(f64, s) catch return JsValue.initBool(false);
+            return JsValue.initBool(a.toNumber() == n);
+        }
+        // object == same pointer
+        if (a.isObject() and b.isObject()) return JsValue.initBool(a.bits == b.bits);
+        return JsValue.initBool(false);
     }
 
     // ── Helper: create array ───────────────────────────────────────

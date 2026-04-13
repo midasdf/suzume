@@ -222,8 +222,30 @@ pub const JsValue = packed struct {
     }
 
     pub fn jsEq(a: JsValue, b: JsValue) JsValue {
-        // Abstract equality: for now same as strict for primitive types
-        return jsStrictEq(a, b);
+        // Abstract equality (==) with type coercion per ES spec
+        // Same bits → equal
+        if (a.bits == b.bits) return initBool(true);
+        // Same type comparisons
+        if (a.isNumber() and b.isNumber()) return initBool(a.asNumber() == b.asNumber());
+        if (a.isInt() and b.isInt()) return initBool(a.asInt() == b.asInt());
+        if (a.isString() and b.isString()) return initBool(a.asStringId() == b.asStringId());
+        // null == undefined (and vice versa)
+        if ((a.isNull() or a.isUndefined()) and (b.isNull() or b.isUndefined())) return initBool(true);
+        // number/int == number/int (mixed)
+        if ((a.isNumber() or a.isInt()) and (b.isNumber() or b.isInt())) return initBool(a.toNumber() == b.toNumber());
+        // boolean == anything → ToNumber(bool) == other
+        if (a.isBool()) return jsEq(initNumber(if (a.asBool()) 1.0 else 0.0), b);
+        if (b.isBool()) return jsEq(a, initNumber(if (b.asBool()) 1.0 else 0.0));
+        // string == number/int → ToNumber(string) == number
+        if (a.isString() and (b.isNumber() or b.isInt())) {
+            return initBool(a.toNumber() == b.toNumber());
+        }
+        if ((a.isNumber() or a.isInt()) and b.isString()) {
+            return initBool(a.toNumber() == b.toNumber());
+        }
+        // object == same object pointer
+        if (a.isObject() and b.isObject()) return initBool(a.bits == b.bits);
+        return initBool(false);
     }
 
     pub fn jsNe(a: JsValue, b: JsValue) JsValue {
