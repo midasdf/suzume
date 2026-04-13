@@ -4894,6 +4894,169 @@ test "eval: Uint8Array byte overflow wraps" {
     try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
 }
 
+// ── Gap analysis probes ─────────────────────────────────────────
+
+test "eval: getter/setter in object literal" {
+    const result = try evalExpr(
+        \\var obj = { _x: 0, get x() { return this._x; }, set x(v) { this._x = v; } };
+        \\obj.x = 42;
+        \\obj.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: logical nullish assignment" {
+    const result = try evalExpr(
+        \\var a = null; a ??= 5; a
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: logical or assignment" {
+    const result = try evalExpr(
+        \\var b = 0; b ||= 10; b
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: logical and assignment" {
+    const result = try evalExpr(
+        \\var c = 1; c &&= 20; c
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
+}
+
+test "eval: for-in loop" {
+    const result = try evalExpr(
+        \\var obj = {a:1, b:2, c:3}; var keys = [];
+        \\for (var k in obj) { keys.push(k); }
+        \\keys.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: delete operator" {
+    const result = try evalExpr(
+        \\var o = {x:1, y:2}; delete o.x; Object.keys(o).length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: in operator" {
+    const result = try evalExpr(
+        \\var o = {x:1}; ("x" in o) && !("y" in o)
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Number as function" {
+    const result = try evalExpr(
+        \\Number("42") + Number(true) + Number(null)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 43.0), result.asNumber(), 0.001);
+}
+
+test "eval: String as function" {
+    const result = try evalExpr(
+        \\String(42) === "42"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Array.from string" {
+    const result = try evalExpr(
+        \\Array.from("abc").length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "eval: rest parameters" {
+    const result = try evalExpr(
+        \\function sum(...args) { return args.reduce(function(a,b){return a+b}, 0); }
+        \\sum(1,2,3,4)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: default parameters" {
+    const result = try evalExpr(
+        \\function f(x, y = 10) { return x + y; }
+        \\f(5)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
+
+test "eval: Symbol.iterator protocol" {
+    const result = try evalExpr(
+        \\var arr = [10, 20, 30];
+        \\var iter = arr[Symbol.iterator]();
+        \\iter.next().value + iter.next().value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 30.0), result.asNumber(), 0.001);
+}
+
+test "eval: generator function" {
+    const result = try evalExpr(
+        \\function* gen() { yield 1; yield 2; yield 3; }
+        \\var g = gen(); g.next().value + g.next().value + g.next().value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 6.0), result.asNumber(), 0.001);
+}
+
+test "eval: Date.now" {
+    const result = try evalExpr(
+        \\Date.now() > 0
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: JSON.stringify object" {
+    const result = try evalExpr(
+        \\JSON.stringify({a:1, b:"two"})
+    );
+    try std.testing.expect(result.isString());
+}
+
+test "eval: JSON.parse roundtrip" {
+    const result = try evalExpr(
+        \\var s = JSON.stringify({x:42}); var o = JSON.parse(s); o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: RegExp test method" {
+    const result = try evalExpr(
+        \\/^hello/.test("hello world")
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: chained array methods" {
+    const result = try evalExpr(
+        \\[1,2,3,4,5].filter(function(x){return x>2}).map(function(x){return x*10}).reduce(function(a,b){return a+b}, 0)
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 120.0), result.asNumber(), 0.001);
+}
+
+test "eval: nested destructuring" {
+    const result = try evalExpr(
+        \\var {a: {b}} = {a: {b: 99}}; b
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: class with getter/setter" {
+    const result = try evalExpr(
+        \\class C {
+        \\  constructor() { this._v = 0; }
+        \\  get val() { return this._v; }
+        \\  set val(x) { this._v = x * 2; }
+        \\}
+        \\var c = new C(); c.val = 5; c.val
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
 // ── Function.prototype.call/apply/bind ───────────────────────────
 
 test "eval: Function.call" {
