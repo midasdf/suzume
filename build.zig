@@ -519,6 +519,20 @@ pub fn build(b: *std.Build) void {
     test_url_parser_step.dependOn(&run_url_parser_tests.step);
     test_step.dependOn(&run_url_parser_tests.step);
 
+    // ── Shadow DOM Phase 1 unit tests ───────────────────────────
+    const shadow_dom_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_shadow_dom.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    shadow_dom_mod.addIncludePath(lexbor_dep.path("lib"));
+    shadow_dom_mod.link_libc = true;
+    const shadow_dom_tests = b.addTest(.{ .root_module = shadow_dom_mod });
+    const run_shadow_dom_tests = b.addRunArtifact(shadow_dom_tests);
+    const test_shadow_dom_step = b.step("test-shadow-dom", "Run Shadow DOM Phase 1 tests");
+    test_shadow_dom_step.dependOn(&run_shadow_dom_tests.step);
+    test_step.dependOn(&run_shadow_dom_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
