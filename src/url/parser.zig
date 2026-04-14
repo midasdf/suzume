@@ -202,6 +202,8 @@ pub fn parse(allocator: Allocator, raw_input: []const u8, base: ?*const Url) !?U
     defer buf.deinit(allocator);
 
     while (true) {
+        // Skip ASCII tab (0x09), newline (0x0A), carriage return (0x0D) per WHATWG spec
+        while (ptr < input.len and (input[ptr] == 0x09 or input[ptr] == 0x0A or input[ptr] == 0x0D)) : (ptr += 1) {}
         const c: ?u8 = if (ptr < input.len) input[ptr] else null;
 
         switch (state) {
