@@ -585,6 +585,19 @@ pub fn build(b: *std.Build) void {
     });
     test_variables_mod.addImport("css", css_mod);
 
+    const style_decl_src_mod = b.createModule(.{
+        .root_source_file = b.path("src/css/cssom/style_decl.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const test_style_decl_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_style_decl.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_style_decl_mod.addImport("style_decl", style_decl_src_mod);
+
     // Root test module that pulls in all CSS test modules
     const css_all_test_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_css_all.zig"),
@@ -598,6 +611,7 @@ pub fn build(b: *std.Build) void {
     css_all_test_mod.addImport("test_selectors", test_selectors_mod);
     css_all_test_mod.addImport("test_media", test_media_mod);
     css_all_test_mod.addImport("test_variables", test_variables_mod);
+    css_all_test_mod.addImport("test_style_decl", test_style_decl_mod);
 
     const css_tests = b.addTest(.{
         .root_module = css_all_test_mod,

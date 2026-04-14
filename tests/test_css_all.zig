@@ -8,4 +8,5 @@ comptime {
     _ = @import("test_selectors");
     _ = @import("test_media");
     _ = @import("test_variables");
+    _ = @import("test_style_decl");
 }

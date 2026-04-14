@@ -162,6 +162,7 @@ const computed_mod = @import("../css/computed.zig");
 const ComputedStyle = computed_mod.ComputedStyle;
 const css_ast = @import("../css/ast.zig");
 const css_properties = @import("../css/properties.zig");
+const style_decl_mod = @import("../css/cssom/style_decl.zig");
 pub var g_root_box: ?*const Box = null;
 
 /// Set the root box pointer (called from main after layout).
@@ -180,6 +181,33 @@ pub fn flushStylesIfDirty() void {
         dom_dirty = false;
         if (restyle_fn) |f| f();
     }
+}
+
+// ── StyleDeclList side-map ────────────────────────────────────────────
+// Keyed by lxb_dom_element_t pointer (as usize). One StyleDeclList per
+// element that has had inline style set via the CSSOM API.
+var g_style_decl_map: style_decl_mod.DeclMap = undefined;
+var g_style_decl_map_inited: bool = false;
+
+fn styleDeclMap() *style_decl_mod.DeclMap {
+    if (!g_style_decl_map_inited) {
+        g_style_decl_map = style_decl_mod.DeclMap.init(std.heap.c_allocator);
+        g_style_decl_map_inited = true;
+    }
+    return &g_style_decl_map;
+}
+
+/// Get or create a StyleDeclList for an element. Returns null on OOM.
+fn getDeclList(elem: *lxb.lxb_dom_element_t) ?*style_decl_mod.StyleDeclList {
+    const key = @intFromPtr(elem);
+    return style_decl_mod.getOrCreate(styleDeclMap(), std.heap.c_allocator, key) catch null;
+}
+
+/// Serialize a StyleDeclList back to the lxb "style" attribute.
+fn syncDeclListToAttr(elem: *lxb.lxb_dom_element_t, list: *style_decl_mod.StyleDeclList) void {
+    var buf: [8192]u8 = undefined;
+    const serialized = list.serialize(&buf);
+    _ = lxb_dom_element_set_attribute(elem, "style", 5, serialized.ptr, serialized.len);
 }
 
 /// Global styles pointer — set from main after cascade, used for getComputedStyle.
@@ -1037,9 +1065,16 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
     _ = qjs.JS_SetPropertyStr(ctx, obj, "__element", qjs.JS_DupValue(ctx, element_val));
 
     // Native methods
-    _ = qjs.JS_SetPropertyStr(ctx, obj, "setProperty", qjs.JS_NewCFunction(ctx, &styleSetProperty, "setProperty", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "setProperty", qjs.JS_NewCFunction(ctx, &styleSetProperty, "setProperty", 3));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "getPropertyValue", qjs.JS_NewCFunction(ctx, &styleGetPropertyValue, "getPropertyValue", 1));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "removeProperty", qjs.JS_NewCFunction(ctx, &styleRemoveProperty, "removeProperty", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "getPropertyPriority", qjs.JS_NewCFunction(ctx, &styleGetPropertyPriority, "getPropertyPriority", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "item", qjs.JS_NewCFunction(ctx, &styleItem, "item", 1));
+
+    // length getter (read-only)
+    const lengthAtom = qjs.JS_NewAtom(ctx, "length");
+    _ = qjs.JS_DefinePropertyGetSet(ctx, obj, lengthAtom, qjs.JS_NewCFunction(ctx, &styleLength, "get length", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+    qjs.JS_FreeAtom(ctx, lengthAtom);
 
     // cssText getter/setter
     const cssTextAtom = qjs.JS_NewAtom(ctx, "cssText");
@@ -1570,6 +1605,16 @@ fn styleSetProperty(
     const val_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val_s.ptr);
 
+    // Parse optional priority argument (arg[2]): "important" → important=true
+    var is_important = false;
+    if (argc >= 3) {
+        const prio_s = jsStringToSlice(c, args[2]);
+        if (prio_s) |ps| {
+            defer qjs.JS_FreeCString(c, ps.ptr);
+            is_important = dom_style.eqlIgnoreCase(ps.ptr[0..ps.len], "important");
+        }
+    }
+
     const prop = prop_s.ptr[0..prop_s.len];
     const val = val_s.ptr[0..val_s.len];
 
@@ -1760,6 +1805,17 @@ fn styleSetProperty(
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
         setDomDirtyIfConnected(elem);
     }
+
+    // Keep the structured decl list in sync for getPropertyPriority / length / item.
+    // Use effective_val so the stored value matches what goes into the attribute.
+    if (getDeclList(elem)) |list| {
+        if (effective_val.len == 0) {
+            _ = list.remove(prop);
+        } else {
+            list.upsert(std.heap.c_allocator, prop, effective_val, is_important) catch {};
+        }
+    }
+
     return quickjs.JS_UNDEFINED();
 }
 
@@ -1968,8 +2024,86 @@ fn styleRemoveProperty(
         setDomDirty();
     }
 
+    // Remove from structured decl list (preserves other entries' important flags).
+    if (getDeclList(elem)) |list| {
+        _ = list.remove(prop);
+    }
+
     if (old_val) |ov| {
         return qjs.JS_NewStringLen(c, ov.ptr, ov.len);
+    }
+    return qjs.JS_NewStringLen(c, "", 0);
+}
+
+fn styleGetPropertyPriority(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return qjs.JS_NewStringLen(c, "", 0);
+    const args = argv orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    const prop_s = jsStringToSlice(c, args[0]) orelse return qjs.JS_NewStringLen(c, "", 0);
+    defer qjs.JS_FreeCString(c, prop_s.ptr);
+    const prop = prop_s.ptr[0..prop_s.len];
+
+    if (getDeclList(elem)) |list| {
+        if (list.indexOf(prop)) |idx| {
+            if (list.entries.items[idx].important) {
+                return qjs.JS_NewStringLen(c, "important", 9);
+            }
+        }
+    }
+    return qjs.JS_NewStringLen(c, "", 0);
+}
+
+fn styleLength(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewInt32(c, 0);
+
+    if (getDeclList(elem)) |list| {
+        return qjs.JS_NewInt32(c, @intCast(list.entries.items.len));
+    }
+    return qjs.JS_NewInt32(c, 0);
+}
+
+fn styleItem(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return qjs.JS_NewStringLen(c, "", 0);
+    const args = argv orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
+    defer qjs.JS_FreeValue(c, elem_val);
+    const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    var idx_i32: i32 = 0;
+    _ = qjs.JS_ToInt32(c, &idx_i32, args[0]);
+    if (idx_i32 < 0) return qjs.JS_NewStringLen(c, "", 0);
+    const idx: usize = @intCast(idx_i32);
+
+    if (getDeclList(elem)) |list| {
+        if (idx < list.entries.items.len) {
+            const name = list.entries.items[idx].name;
+            return qjs.JS_NewStringLen(c, name.ptr, name.len);
+        }
     }
     return qjs.JS_NewStringLen(c, "", 0);
 }
@@ -3775,7 +3909,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const reflected_js =
             \\(function(){
             \\  var EP=Element.prototype;
-            \\  ['src','href','action','type','alt','title','rel','target','placeholder','method','enctype','lang','for'].forEach(function(a){
+            \\  ['src','href','action','type','alt','title','rel','placeholder','method','enctype','lang','for'].forEach(function(a){
             \\    if(!(a in EP)){Object.defineProperty(EP,a,{get:function(){return this.getAttribute(a)||'';},set:function(v){this.setAttribute(a,v);},configurable:true});}
             \\  });
             \\  ['disabled','checked','selected','autofocus'].forEach(function(a){
