@@ -5445,9 +5445,13 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  CSSStyleRule.__proto__=CSSGroupingRule;
             \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{get:function(){return this._sel;},set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=_canonSel(c);}catch(e){}},enumerable:true,configurable:true});
             \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){
+            \\    if(this.cssRules.length===0){return this._sel+' { '+(this._decls||'')+' }';}
             \\    var t=this._sel+' {\n';
             \\    if(this._decls)t+='  '+this._decls+'\n';
-            \\    for(var i=0;i<this.cssRules.length;i++)t+='  '+this.cssRules[i].cssText+'\n';
+            \\    for(var i=0;i<this.cssRules.length;i++){
+            \\      var ct=this.cssRules[i].cssText;
+            \\      t+='  '+ct+'\n';
+            \\    }
             \\    return t+'}';
             \\  },enumerable:true,configurable:true});
             \\
