@@ -291,7 +291,7 @@ const url_search_params_js =
     \\  get size() { return this._e.length; },
     \\  toString: function() { return this._e.map(function(p) { return encodeURIComponent(p[0]).replace(/%20/g,'+') + '=' + encodeURIComponent(p[1]).replace(/%20/g,'+'); }).join('&'); },
     \\  forEach: function(cb, thisArg) { for (var i = 0; i < this._e.length; i++) cb.call(thisArg, this._e[i][1], this._e[i][0], this); },
-    \\  entries: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: [e[i][0], e[i][1]], done: false } : { value: undefined, done: true }; }, i: 0 }; },
+    \\  entries: function() { var i = 0, e = this._e; return { next: function() { if (i < e.length) { var v = [e[i][0], e[i][1]]; i++; return { value: v, done: false }; } return { value: undefined, done: true }; } }; },
     \\  keys: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: e[i++][0], done: false } : { value: undefined, done: true }; } }; },
     \\  values: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: e[i++][1], done: false } : { value: undefined, done: true }; } }; }
     \\};
