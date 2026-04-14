@@ -784,60 +784,152 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
         }
     }
 
-    // Layout each child with full container width
+    // Phase 1: Layout each child to get intrinsic heights
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
         block.layoutBlock(child, container_width, box.content.y, fonts);
     }
 
-    // Calculate total main (vertical) size
-    var total_main: f32 = 0;
-    for (children) |child| {
-        if (child.style.position == .absolute or child.style.position == .fixed) continue;
-        total_main += child.content.height + child.padding.top + child.padding.bottom +
-            child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-    }
     const gap_total = if (col_flex_count > 1) gap * @as(f32, @floatFromInt(col_flex_count - 1)) else 0;
-    total_main += gap_total;
 
-    // Explicit height for justify-content distribution
+    // Explicit container height (needed for flex-grow distribution)
     const explicit_h: ?f32 = switch (style.height) {
         .px => |h| h,
         .percent => |pct| if (box.content.height > 0) box.content.height else pct * dom_api.g_viewport_height / 100.0,
         .auto, .none, .min_content, .max_content, .fit_content => null,
     };
-    const container_main = explicit_h orelse total_main;
+
+    // Phase 2: Calculate total base main size and flex totals
+    var total_base_size: f32 = 0;
+    var total_grow: f32 = 0;
+    var total_shrink: f32 = 0;
+
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        // flex-basis on column = height hint
+        const basis: ?f32 = switch (child.style.flex_basis) {
+            .px => |b| b,
+            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
+            else => null,
+        };
+        const explicit_child_h: ?f32 = switch (child.style.height) {
+            .px => |h| h,
+            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
+            else => null,
+        };
+        const child_outer = child.margin.top + child.margin.bottom +
+            child.padding.top + child.padding.bottom +
+            child.border.top + child.border.bottom;
+        const child_main = basis orelse (explicit_child_h orelse child.content.height);
+        total_base_size += child_main + child_outer;
+        total_grow += child.style.flex_grow;
+        total_shrink += child.style.flex_shrink;
+    }
+
+    total_base_size += gap_total;
+
+    // Determine container main size
+    const container_main = explicit_h orelse total_base_size;
+    const available = container_main - gap_total;
+    const free_space = available - (total_base_size - gap_total);
+
+    // Phase 3: Compute final heights with flex-grow/shrink distribution
+    var final_heights_buf: [256]f32 = undefined;
+    var final_heights_len: usize = 0;
+    const has_flex = (free_space > 0 and total_grow > 0) or (free_space < 0 and total_shrink > 0);
+
+    for (children) |child| {
+        if (child.style.position == .absolute or child.style.position == .fixed) continue;
+        if (final_heights_len >= 256) break;
+
+        const basis: ?f32 = switch (child.style.flex_basis) {
+            .px => |b| b,
+            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
+            else => null,
+        };
+        const explicit_child_h: ?f32 = switch (child.style.height) {
+            .px => |h| h,
+            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
+            else => null,
+        };
+        var child_main = basis orelse (explicit_child_h orelse child.content.height);
+
+        if (free_space > 0 and total_grow > 0) {
+            child_main += free_space * child.style.flex_grow / total_grow;
+        } else if (free_space < 0 and total_shrink > 0) {
+            child_main += free_space * child.style.flex_shrink / total_shrink;
+        }
+
+        // Apply min-height constraint
+        const min_h: f32 = switch (child.style.min_height) {
+            .px => |mh| mh,
+            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else 0,
+            else => 0,
+        };
+        if (child_main < min_h) child_main = min_h;
+        if (child_main < 0) child_main = 0;
+
+        final_heights_buf[final_heights_len] = child_main;
+        final_heights_len += 1;
+    }
+
+    // Phase 3.5: Re-layout children with adjusted heights if flex changed them
+    if (has_flex) {
+        var flex_idx: usize = 0;
+        for (children) |child| {
+            if (child.style.position == .absolute or child.style.position == .fixed) continue;
+            if (flex_idx < final_heights_len) {
+                child.content.height = final_heights_buf[flex_idx];
+            }
+            flex_idx += 1;
+        }
+    }
+
+    // Phase 4: Calculate total used main for justify-content
+    var total_used: f32 = 0;
+    {
+        var flex_idx: usize = 0;
+        for (children) |child| {
+            if (child.style.position == .absolute or child.style.position == .fixed) continue;
+            if (flex_idx < final_heights_len) {
+                total_used += final_heights_buf[flex_idx] + child.padding.top + child.padding.bottom +
+                    child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+            }
+            flex_idx += 1;
+        }
+    }
+    total_used += gap_total;
 
     // Position children
     var cursor_y: f32 = 0;
 
     // Justify content offsets
-    const free_space = container_main - total_main;
+    const justify_space = container_main - total_used;
     var per_gap = gap;
 
     switch (style.justify_content) {
         .flex_start => {},
         .flex_end => {
-            cursor_y = free_space;
+            cursor_y = justify_space;
         },
         .center => {
-            cursor_y = free_space / 2;
+            cursor_y = justify_space / 2;
         },
         .space_between => {
             if (col_flex_count > 1) {
-                per_gap = gap + free_space / @as(f32, @floatFromInt(col_flex_count - 1));
+                per_gap = gap + justify_space / @as(f32, @floatFromInt(col_flex_count - 1));
             }
         },
         .space_around => {
             if (col_flex_count > 0) {
-                const space = free_space / @as(f32, @floatFromInt(col_flex_count));
+                const space = justify_space / @as(f32, @floatFromInt(col_flex_count));
                 cursor_y = space / 2;
                 per_gap = gap + space;
             }
         },
         .space_evenly => {
             if (col_flex_count > 0) {
-                const space = free_space / @as(f32, @floatFromInt(col_flex_count + 1));
+                const space = justify_space / @as(f32, @floatFromInt(col_flex_count + 1));
                 cursor_y = space;
                 per_gap = gap + space;
             }

@@ -1083,8 +1083,11 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
             } else path_len;
 
             // Find first element with activation behavior in path (target → root)
+            // Per DOM spec: element.click() skips disabled elements, but
+            // dispatchEvent(new MouseEvent("click")) still activates them.
+            const is_internal_click = existing_event == null;
             for (path[0..search_len]) |node| {
-                if (isCheckboxOrRadio(ctx, node) and !isDisabledFormElement(ctx, node)) {
+                if (isCheckboxOrRadio(ctx, node) and (!is_internal_click or !isDisabledFormElement(ctx, node))) {
                     activation_target = node;
                     // Legacy pre-activation: save state and set new state
                     const at_js = dom_api.wrapNodePublic(ctx, node);
@@ -1108,6 +1111,10 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                         _ = qjs.JS_SetPropertyStr(ctx, at_js, "checked", quickjs.JS_NewBool(new_checked));
                         has_pre_activation = true;
                     }
+                    break;
+                } else if (isSubmitButton(ctx, node) and !isDisabledFormElement(ctx, node)) {
+                    // Submit button activation: will submit parent form in post-activation
+                    activation_target = node;
                     break;
                 }
             }
@@ -1267,6 +1274,40 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
                 }
             }
         }
+    } else if (activation_target != null and ev_result) {
+        // Non-checkbox/radio activation: submit button → form submit
+        if (activation_target) |at| {
+            if (isSubmitButton(ctx, at) and !isDisabledFormElement(ctx, at)) {
+                if (findParentForm(at)) |form_node| {
+                    // Only submit if form is connected (in a document)
+                    const form_js = dom_api.wrapNodePublic(ctx, form_node);
+                    defer qjs.JS_FreeValue(ctx, form_js);
+                    const conn = qjs.JS_GetPropertyStr(ctx, form_js, "isConnected");
+                    const form_connected = qjs.JS_ToBool(ctx, conn) > 0;
+                    qjs.JS_FreeValue(ctx, conn);
+                    if (form_connected) {
+                        // Dispatch 'submit' event on the form (cancelable)
+                        const submit_ev_code =
+                            \\(function(form, submitter){
+                            \\  var ev;
+                            \\  try { ev = new SubmitEvent('submit', {bubbles:true, cancelable:true, submitter:submitter}); }
+                            \\  catch(e) { ev = new Event('submit', {bubbles:true, cancelable:true}); ev.submitter = submitter; }
+                            \\  return form.dispatchEvent(ev);
+                            \\})
+                        ;
+                        const fn_val = qjs.JS_Eval(ctx, submit_ev_code, submit_ev_code.len, "<submit>", qjs.JS_EVAL_TYPE_GLOBAL);
+                        if (fn_val.tag != qjs.JS_TAG_EXCEPTION) {
+                            const at_js3 = dom_api.wrapNodePublic(ctx, at);
+                            var args = [_]qjs.JSValue{ form_js, at_js3 };
+                            const result = qjs.JS_Call(ctx, fn_val, quickjs.JS_UNDEFINED(), 2, &args);
+                            qjs.JS_FreeValue(ctx, result);
+                            qjs.JS_FreeValue(ctx, at_js3);
+                        }
+                        qjs.JS_FreeValue(ctx, fn_val);
+                    }
+                }
+            }
+        }
     }
 
     return ev_result;
@@ -1321,6 +1362,53 @@ fn isCheckboxOrRadio(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) bool {
     defer qjs.JS_FreeCString(ctx, ts.ptr);
     const t = ts.ptr[0..ts.len];
     return std.ascii.eqlIgnoreCase(t, "checkbox") or std.ascii.eqlIgnoreCase(t, "radio");
+}
+
+/// Check if a DOM node is a submit button (<button type="submit"> or <input type="submit">).
+fn isSubmitButton(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) bool {
+    if (node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    var name_len: usize = 0;
+    const name_ptr = dom_api.lxb_dom_element_local_name(@ptrCast(node), &name_len);
+    if (name_ptr == null) return false;
+    const name = name_ptr.?[0..name_len];
+    if (std.mem.eql(u8, name, "button")) {
+        // <button> defaults to type="submit" if no type specified
+        const js = dom_api.wrapNodePublic(ctx, node);
+        defer qjs.JS_FreeValue(ctx, js);
+        const type_val = qjs.JS_GetPropertyStr(ctx, js, "type");
+        defer qjs.JS_FreeValue(ctx, type_val);
+        const ts = dom_api.jsStringToSlice(ctx, type_val) orelse return true; // default is submit
+        defer qjs.JS_FreeCString(ctx, ts.ptr);
+        const t = ts.ptr[0..ts.len];
+        return std.ascii.eqlIgnoreCase(t, "submit");
+    }
+    if (std.mem.eql(u8, name, "input")) {
+        const js = dom_api.wrapNodePublic(ctx, node);
+        defer qjs.JS_FreeValue(ctx, js);
+        const type_val = qjs.JS_GetPropertyStr(ctx, js, "type");
+        defer qjs.JS_FreeValue(ctx, type_val);
+        const ts = dom_api.jsStringToSlice(ctx, type_val) orelse return false;
+        defer qjs.JS_FreeCString(ctx, ts.ptr);
+        const t = ts.ptr[0..ts.len];
+        return std.ascii.eqlIgnoreCase(t, "submit");
+    }
+    return false;
+}
+
+/// Find the closest <form> ancestor of a node.
+fn findParentForm(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    var current: ?*lxb.lxb_dom_node_t = node.parent;
+    while (current) |cur| {
+        if (cur.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            var flen: usize = 0;
+            const fptr = dom_api.lxb_dom_element_local_name(@ptrCast(cur), &flen);
+            if (fptr != null and flen == 4 and std.mem.eql(u8, fptr.?[0..4], "form")) {
+                return cur;
+            }
+        }
+        current = cur.parent;
+    }
+    return null;
 }
 
 /// Check if a DOM node is a disabled form element (has disabled=true).
