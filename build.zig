@@ -485,6 +485,19 @@ pub fn build(b: *std.Build) void {
     test_url_idna_step.dependOn(&run_url_idna_tests.step);
     test_step.dependOn(&run_url_idna_tests.step);
 
+    const url_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/host.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_host_mod.addImport("idna", url_idna_mod);
+    url_host_mod.addImport("percent_encode", url_pe_mod);
+    const url_host_tests = b.addTest(.{ .root_module = url_host_mod });
+    const run_url_host_tests = b.addRunArtifact(url_host_tests);
+    const test_url_host_step = b.step("test-url-host", "Run URL host parsing tests");
+    test_url_host_step.dependOn(&run_url_host_tests.step);
+    test_step.dependOn(&run_url_host_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
