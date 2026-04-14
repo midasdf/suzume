@@ -392,10 +392,21 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
     } else if (std.mem.eql(u8, prop, "background-color")) {
         return argbToCssColor(c, style.background_color, &buf);
     } else if (std.mem.eql(u8, prop, "outline-color")) {
-        // Default outline-color is currentcolor → resolve to computed color
+        // CSS UI 4 §4.1.3: initial is currentcolor.
+        // Per CSS Color 3 §4.4 browsers resolve currentcolor to the element's
+        // computed `color` at computed-value time (matches Chrome/Firefox).
         return argbToCssColor(c, style.color, &buf);
     } else if (std.mem.eql(u8, prop, "caret-color")) {
-        // Default caret-color is auto → resolved as currentcolor
+        // CSS UI 4 §5.2: initial is auto, resolved as currentcolor.
+        return argbToCssColor(c, style.color, &buf);
+    } else if (std.mem.eql(u8, prop, "text-decoration-color")) {
+        // CSS Text Decoration 3 §3.2: initial is currentcolor.
+        return argbToCssColor(c, style.color, &buf);
+    } else if (std.mem.eql(u8, prop, "text-emphasis-color")) {
+        // CSS Text Decoration 3 §6.2: initial is currentcolor.
+        return argbToCssColor(c, style.color, &buf);
+    } else if (std.mem.eql(u8, prop, "column-rule-color")) {
+        // CSS Multicol 1 §4.2: initial is currentcolor.
         return argbToCssColor(c, style.color, &buf);
     } else if (std.mem.eql(u8, prop, "box-shadow")) {
         // Default box-shadow is none
@@ -2274,11 +2285,14 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "hyphens")) return qjs.JS_NewStringLen(c, "manual", 6);
     if (eqlIgnoreCase(prop, "text-decoration-line")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "text-decoration-style")) return qjs.JS_NewStringLen(c, "solid", 5);
-    if (eqlIgnoreCase(prop, "text-decoration-color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    // text-decoration-color fallback: the main computed-style path resolves
+    // currentcolor to the element's color. This branch is only hit when no
+    // element style is available (e.g. cascade initial query).
+    if (eqlIgnoreCase(prop, "text-decoration-color")) return qjs.JS_NewStringLen(c, "currentcolor", 12);
     if (eqlIgnoreCase(prop, "text-underline-position")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "text-underline-offset")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "text-emphasis-style")) return qjs.JS_NewStringLen(c, "none", 4);
-    if (eqlIgnoreCase(prop, "text-emphasis-color")) return qjs.JS_NewStringLen(c, "rgb(0, 0, 0)", 12);
+    if (eqlIgnoreCase(prop, "text-emphasis-color")) return qjs.JS_NewStringLen(c, "currentcolor", 12);
     if (eqlIgnoreCase(prop, "text-shadow")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "white-space")) return qjs.JS_NewStringLen(c, "normal", 6);
     if (eqlIgnoreCase(prop, "white-space-collapse")) return qjs.JS_NewStringLen(c, "collapse", 8);
