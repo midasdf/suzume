@@ -1709,6 +1709,7 @@ fn styleSetProperty(
                 _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
                 setDomDirtyIfConnected(elem);
             }
+            if (getDeclList(elem)) |list| list.removeShorthand(prop);
             return quickjs.JS_UNDEFINED();
         }
         var expanded_vals: [4][]const u8 = undefined;
@@ -1732,6 +1733,10 @@ fn styleSetProperty(
         if (expandBoxShorthandInStyle(current_style, prop, longhands, expanded_vals, &buf)) |new_style| {
             _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
             setDomDirtyIfConnected(elem);
+        }
+        // Sync decl list: upsert all four longhands tagged with this shorthand.
+        if (getDeclList(elem)) |list| {
+            list.upsertShorthand(std.heap.c_allocator, prop, &longhands, &expanded_vals, is_important) catch {};
         }
         return quickjs.JS_UNDEFINED();
     }
@@ -1784,6 +1789,12 @@ fn styleSetProperty(
         }
         _ = lxb_dom_element_set_attribute(elem, "style", 5, style_result.ptr, style_result.len);
         setDomDirtyIfConnected(elem);
+        // Sync decl list for flex longhands.
+        if (getDeclList(elem)) |list| {
+            const flex_names = [_][]const u8{ "flex-grow", "flex-shrink", "flex-basis" };
+            const flex_vals  = [_][]const u8{ grow_v, shrink_v, basis_v };
+            list.upsertShorthand(std.heap.c_allocator, "flex", &flex_names, &flex_vals, is_important) catch {};
+        }
         return quickjs.JS_UNDEFINED();
     }
 
@@ -1815,6 +1826,12 @@ fn styleSetProperty(
         }
         _ = lxb_dom_element_set_attribute(elem, "style", 5, style_result.ptr, style_result.len);
         setDomDirtyIfConnected(elem);
+        // Sync decl list for flex-flow longhands.
+        if (getDeclList(elem)) |list| {
+            const ff_names = [_][]const u8{ "flex-direction", "flex-wrap" };
+            const ff_vals  = [_][]const u8{ dir_v, wrap_v };
+            list.upsertShorthand(std.heap.c_allocator, "flex-flow", &ff_names, &ff_vals, is_important) catch {};
+        }
         return quickjs.JS_UNDEFINED();
     }
 
@@ -1860,6 +1877,15 @@ fn styleGetPropertyValue(
 
     const style = style_ptr.?[0..style_len];
     const prop = prop_s.ptr[0..prop_s.len];
+
+    // Phase 3: if the decl list has longhands tagged for this shorthand, use
+    // canonical serialization from the structured list (respects important flags).
+    if (getDeclList(elem)) |list| {
+        var sh_buf: [256]u8 = undefined;
+        if (list.getPropertyValueShorthand(prop, &sh_buf)) |canonical| {
+            return qjs.JS_NewStringLen(c, canonical.ptr, canonical.len);
+        }
+    }
 
     // Reconstruct flex shorthand from longhands
     if (dom_style.eqlIgnoreCase(prop, "flex")) {
@@ -2072,10 +2098,16 @@ fn styleGetPropertyPriority(
     const prop = prop_s.ptr[0..prop_s.len];
 
     if (getDeclList(elem)) |list| {
+        // Try direct longhand lookup first.
         if (list.indexOf(prop)) |idx| {
             if (list.entries.items[idx].important) {
                 return qjs.JS_NewStringLen(c, "important", 9);
             }
+            return qjs.JS_NewStringLen(c, "", 0);
+        }
+        // Fall back to shorthand: "important" iff all component longhands are important.
+        if (list.getPropertyPriorityShorthand(prop)) |prio| {
+            return qjs.JS_NewStringLen(c, prio.ptr, prio.len);
         }
     }
     return qjs.JS_NewStringLen(c, "", 0);

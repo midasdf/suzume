@@ -1,10 +1,18 @@
-//! style_decl.zig — Phase 1 CSSStyleDeclaration backing store
+//! style_decl.zig — Phase 1–3 CSSStyleDeclaration backing store
 //!
 //! Provides StyleDecl + StyleDeclList: an ordered list of { name, value, important }
 //! entries per element. Mutations sync back to the lxb "style" attribute so the
 //! existing cascade path continues to work without modification.
+//!
+//! Phase 3 additions:
+//!   - StyleDecl.shorthand_for: tag longhands expanded from a shorthand
+//!   - upsertShorthand: expands a shorthand, inserts longhands tagged with shorthand_for
+//!   - removeShorthand: removes all longhands for a given shorthand
+//!   - getPropertyValueShorthand: canonical shorthand serialization from component longhands
+//!   - getPropertyPriorityShorthand: "important" iff all component longhands are important
 
 const std = @import("std");
+const shorthand_serialize = @import("shorthand_serialize.zig");
 
 // ── Types ─────────────────────────────────────────────────────────────
 
@@ -14,6 +22,9 @@ pub const StyleDecl = struct {
     /// CSSOM-serialized value — no "!important" suffix. Owned by the list's arena.
     value: []const u8,
     important: bool,
+    /// When this longhand was expanded from a shorthand (e.g., "margin"), this is
+    /// a literal string identifying that shorthand. Not arena-owned; no need to free.
+    shorthand_for: ?[]const u8 = null,
 };
 
 pub const StyleDeclList = struct {
@@ -82,17 +93,113 @@ pub const StyleDeclList = struct {
         return null;
     }
 
+    // ── Phase 3: shorthand expansion ─────────────────────────────────
+
+    /// Expand a shorthand property into its component longhands and upsert each.
+    /// `longhand_names` is a slice of kebab-case longhand names (e.g. &.{"margin-top", ...}).
+    /// `longhand_values` is a parallel slice of values (already resolved by the caller).
+    /// `important` applies to all longhands. `shorthand_name` is stored as `shorthand_for`.
+    /// The caller is responsible for passing the correct parallel arrays.
+    pub fn upsertShorthand(
+        self: *StyleDeclList,
+        allocator: std.mem.Allocator,
+        shorthand_name: []const u8,
+        longhand_names: []const []const u8,
+        longhand_values: []const []const u8,
+        important: bool,
+    ) !void {
+        std.debug.assert(longhand_names.len == longhand_values.len);
+        // First remove any existing longhands tagged for this shorthand, plus the
+        // shorthand entry itself if it was stored directly (should not happen normally).
+        self.removeShorthand(shorthand_name);
+        // Insert each longhand with the shorthand tag.
+        const arena = self.arena.allocator();
+        const owned_sh = try arena.dupe(u8, shorthand_name);
+        for (longhand_names, longhand_values) |lh_name, lh_val| {
+            // Also remove any pre-existing plain longhand with this name.
+            if (self.indexOf(lh_name)) |idx| {
+                _ = self.entries.orderedRemove(idx);
+            }
+            const owned_name = try arena.dupe(u8, lh_name);
+            const owned_val = try arena.dupe(u8, lh_val);
+            try self.entries.append(allocator, .{
+                .name = owned_name,
+                .value = owned_val,
+                .important = important,
+                .shorthand_for = owned_sh,
+            });
+        }
+        self.dirty_css_text = true;
+    }
+
+    /// Remove all entries whose `shorthand_for` equals `shorthand_name` (case-insensitive),
+    /// plus any direct entry with that name.
+    pub fn removeShorthand(self: *StyleDeclList, shorthand_name: []const u8) void {
+        var i: usize = 0;
+        var removed = false;
+        while (i < self.entries.items.len) {
+            const e = self.entries.items[i];
+            const is_lh = if (e.shorthand_for) |sf| std.ascii.eqlIgnoreCase(sf, shorthand_name) else false;
+            const is_direct = std.ascii.eqlIgnoreCase(e.name, shorthand_name);
+            if (is_lh or is_direct) {
+                _ = self.entries.orderedRemove(i);
+                removed = true;
+                // do NOT increment i — next item shifted into position i
+            } else {
+                i += 1;
+            }
+        }
+        if (removed) self.dirty_css_text = true;
+    }
+
+    /// Return the canonical serialization of a shorthand from its component longhands.
+    /// Returns null if the shorthand is not supported or any component is missing.
+    pub fn getPropertyValueShorthand(
+        self: *const StyleDeclList,
+        shorthand_name: []const u8,
+        buf: []u8,
+    ) ?[]const u8 {
+        const Impl = struct {
+            fn get(ptr: *const anyopaque, name: []const u8) ?[]const u8 {
+                const list: *const StyleDeclList = @ptrCast(@alignCast(ptr));
+                for (list.entries.items) |e| {
+                    if (std.ascii.eqlIgnoreCase(e.name, name)) return e.value;
+                }
+                return null;
+            }
+        };
+        const ctx = shorthand_serialize.LookupCtx{ .ptr = @ptrCast(self), .get = Impl.get };
+        return shorthand_serialize.serializeShorthand(shorthand_name, ctx, buf);
+    }
+
+    /// Return "important" if ALL component longhands for the given shorthand are important,
+    /// "" if any is non-important, and null if none found.
+    pub fn getPropertyPriorityShorthand(
+        self: *const StyleDeclList,
+        shorthand_name: []const u8,
+    ) ?[]const u8 {
+        var found_any = false;
+        for (self.entries.items) |e| {
+            const is_lh = if (e.shorthand_for) |sf| std.ascii.eqlIgnoreCase(sf, shorthand_name) else false;
+            if (!is_lh) continue;
+            found_any = true;
+            if (!e.important) return "";
+        }
+        if (!found_any) return null;
+        return "important";
+    }
+
     /// Serialize entries to "name: value[ !important];" format suitable for the
     /// style attribute. Caller owns the returned ArrayList and must call deinit().
     pub fn serialize(self: *const StyleDeclList, allocator: std.mem.Allocator) !std.ArrayList(u8) {
-        var out = std.ArrayList(u8).init(allocator);
-        errdefer out.deinit();
+        var out: std.ArrayList(u8) = .empty;
+        errdefer out.deinit(allocator);
         for (self.entries.items) |e| {
-            try out.appendSlice(e.name);
-            try out.appendSlice(": ");
-            try out.appendSlice(e.value);
-            if (e.important) try out.appendSlice(" !important");
-            try out.appendSlice("; ");
+            try out.appendSlice(allocator, e.name);
+            try out.appendSlice(allocator, ": ");
+            try out.appendSlice(allocator, e.value);
+            if (e.important) try out.appendSlice(allocator, " !important");
+            try out.appendSlice(allocator, "; ");
         }
         // Trim trailing space
         if (out.items.len > 0 and out.items[out.items.len - 1] == ' ') {
@@ -118,14 +225,15 @@ pub const StyleDeclList = struct {
             return self.cached_css_text orelse "";
         }
         // Serialize into a temporary ArrayList then dupe into the arena.
-        var tmp = std.ArrayList(u8).init(self.arena.allocator());
-        defer tmp.deinit();
+        const arena_alloc = self.arena.allocator();
+        var tmp: std.ArrayList(u8) = .empty;
+        defer tmp.deinit(arena_alloc);
         for (self.entries.items) |e| {
-            try tmp.appendSlice(e.name);
-            try tmp.appendSlice(": ");
-            try tmp.appendSlice(e.value);
-            if (e.important) try tmp.appendSlice(" !important");
-            try tmp.appendSlice("; ");
+            try tmp.appendSlice(arena_alloc, e.name);
+            try tmp.appendSlice(arena_alloc, ": ");
+            try tmp.appendSlice(arena_alloc, e.value);
+            if (e.important) try tmp.appendSlice(arena_alloc, " !important");
+            try tmp.appendSlice(arena_alloc, "; ");
         }
         if (tmp.items.len > 0 and tmp.items[tmp.items.len - 1] == ' ') {
             tmp.items.len -= 1;
@@ -333,7 +441,7 @@ test "StyleDeclList upsert and serialize" {
     try list.upsert(alloc, "margin-top", "1px", false);
 
     var out = try list.serialize(alloc);
-    defer out.deinit();
+    defer out.deinit(alloc);
     try std.testing.expectEqualStrings("color: red; margin-top: 1px;", out.items);
 }
 
@@ -346,7 +454,7 @@ test "StyleDeclList important serialization" {
     try list.upsert(alloc, "margin-top", "1px", false);
 
     var out = try list.serialize(alloc);
-    defer out.deinit();
+    defer out.deinit(alloc);
     try std.testing.expectEqualStrings("color: red !important; margin-top: 1px;", out.items);
 }
 
@@ -422,7 +530,7 @@ test "StyleDeclList serialize large inline style — no truncation" {
     }
 
     var out = try list.serialize(alloc);
-    defer out.deinit();
+    defer out.deinit(alloc);
 
     // All 200 entries must be present — check count via semicolons
     var count: usize = 0;
@@ -575,7 +683,7 @@ test "cascade important ordering — inline important wins over non-important" {
 
     // The serialized attribute contains "!important" so the cascade parser sets the bit.
     var out = try list.serialize(alloc);
-    defer out.deinit();
+    defer out.deinit(alloc);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "!important") != null);
     try std.testing.expectEqualStrings("color: blue !important;", out.items);
 }
@@ -592,10 +700,191 @@ test "cascade important ordering — multiple props, important flags preserved i
     try list.upsert(alloc, "display", "flex", true);     // important
 
     var out = try list.serialize(alloc);
-    defer out.deinit();
+    defer out.deinit(alloc);
 
     // color and display must carry !important; margin-top must not.
     try std.testing.expect(std.mem.indexOf(u8, out.items, "color: red !important") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "margin-top: 4px;") != null);
     try std.testing.expect(std.mem.indexOf(u8, out.items, "display: flex !important") != null);
+}
+
+// ── Phase 3 tests ─────────────────────────────────────────────────────
+
+test "upsertShorthand margin 4-value expands to 4 longhands" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "1px", "2px", "1px", "2px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, false);
+
+    try std.testing.expectEqual(@as(usize, 4), list.entries.items.len);
+    try std.testing.expectEqualStrings("margin-top",    list.entries.items[0].name);
+    try std.testing.expectEqualStrings("1px",           list.entries.items[0].value);
+    try std.testing.expectEqualStrings("margin-right",  list.entries.items[1].name);
+    try std.testing.expectEqualStrings("2px",           list.entries.items[1].value);
+    try std.testing.expectEqualStrings("margin-bottom", list.entries.items[2].name);
+    try std.testing.expectEqualStrings("margin-left",   list.entries.items[3].name);
+    // all tagged as shorthand_for = "margin"
+    for (list.entries.items) |e| {
+        try std.testing.expectEqualStrings("margin", e.shorthand_for.?);
+    }
+}
+
+test "upsertShorthand length reflects expanded longhands" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "5px", "5px", "5px", "5px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, false);
+
+    try std.testing.expectEqual(@as(usize, 4), list.entries.items.len);
+}
+
+test "upsertShorthand important propagates to all longhands" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "1px", "1px", "1px", "1px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, true);
+
+    for (list.entries.items) |e| {
+        try std.testing.expect(e.important);
+    }
+    // getPropertyPriorityShorthand returns "important"
+    const prio = list.getPropertyPriorityShorthand("margin");
+    try std.testing.expectEqualStrings("important", prio.?);
+}
+
+test "getPropertyPriorityShorthand — mixed important returns empty" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Insert two longhands with different important flags via upsert (direct)
+    try list.upsert(alloc, "margin-top",    "1px", true);
+    try list.upsert(alloc, "margin-right",  "2px", false);
+    try list.upsert(alloc, "margin-bottom", "1px", true);
+    try list.upsert(alloc, "margin-left",   "2px", false);
+    // Tag them as shorthand_for manually is not needed — getPropertyPriorityShorthand
+    // checks shorthand_for; so use upsertShorthand with mixed flags via two calls.
+    // Instead test via upsertShorthand replacing one entry:
+    const names2 = [_][]const u8{ "padding-top", "padding-right", "padding-bottom", "padding-left" };
+    const vals2  = [_][]const u8{ "3px", "3px", "3px", "3px" };
+    try list.upsertShorthand(alloc, "padding", &names2, &vals2, false);
+
+    // padding all non-important → ""
+    const prio_pad = list.getPropertyPriorityShorthand("padding");
+    try std.testing.expectEqualStrings("", prio_pad.?);
+}
+
+test "getPropertyValueShorthand margin — canonical 1-value" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "4px", "4px", "4px", "4px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, false);
+
+    var buf: [64]u8 = undefined;
+    const result = list.getPropertyValueShorthand("margin", &buf);
+    try std.testing.expectEqualStrings("4px", result.?);
+}
+
+test "getPropertyValueShorthand margin — canonical 2-value" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "1px", "2px", "1px", "2px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, false);
+
+    var buf: [64]u8 = undefined;
+    const result = list.getPropertyValueShorthand("margin", &buf);
+    try std.testing.expectEqualStrings("1px 2px", result.?);
+}
+
+test "getPropertyValueShorthand margin — canonical 4-value" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "1px", "2px", "3px", "4px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, false);
+
+    var buf: [64]u8 = undefined;
+    const result = list.getPropertyValueShorthand("margin", &buf);
+    try std.testing.expectEqualStrings("1px 2px 3px 4px", result.?);
+}
+
+test "getPropertyValueShorthand — missing longhand returns null" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Only 2 of 4 longhands present
+    try list.upsert(alloc, "margin-top",   "1px", false);
+    try list.upsert(alloc, "margin-right", "2px", false);
+
+    var buf: [64]u8 = undefined;
+    const result = list.getPropertyValueShorthand("margin", &buf);
+    try std.testing.expect(result == null);
+}
+
+test "removeShorthand removes all tagged longhands" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals  = [_][]const u8{ "1px", "2px", "1px", "2px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals, false);
+    try list.upsert(alloc, "color", "red", false);
+
+    list.removeShorthand("margin");
+
+    // Only color remains
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expectEqualStrings("color", list.entries.items[0].name);
+}
+
+test "upsertShorthand flex expands to 3 longhands" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "flex-grow", "flex-shrink", "flex-basis" };
+    const vals  = [_][]const u8{ "1", "1", "auto" };
+    try list.upsertShorthand(alloc, "flex", &names, &vals, false);
+
+    try std.testing.expectEqual(@as(usize, 3), list.entries.items.len);
+
+    var buf: [64]u8 = undefined;
+    const result = list.getPropertyValueShorthand("flex", &buf);
+    try std.testing.expectEqualStrings("auto", result.?);
+}
+
+test "upsertShorthand replaces prior shorthand expansion" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "margin-top", "margin-right", "margin-bottom", "margin-left" };
+    const vals1 = [_][]const u8{ "1px", "1px", "1px", "1px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals1, false);
+
+    const vals2 = [_][]const u8{ "8px", "8px", "8px", "8px" };
+    try list.upsertShorthand(alloc, "margin", &names, &vals2, false);
+
+    // Still 4 longhands, not 8
+    try std.testing.expectEqual(@as(usize, 4), list.entries.items.len);
+    try std.testing.expectEqualStrings("8px", list.entries.items[0].value);
 }
