@@ -490,3 +490,109 @@ test "isConnected-in-shadow: element inside shadow tree of connected host is con
     const val = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("connected", val);
 }
+
+// ── Shadow DOM Phase 2: event retargeting + composedPath ──────────────
+
+test "retargeted-target: listener on host sees event.target = host (not inner)" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\host.setAttribute("id", "host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\inner.setAttribute("id", "inner");
+        \\sr.appendChild(inner);
+        \\var seenId = "";
+        \\host.addEventListener("ping", function(e) { seenId = e.target.id; });
+        \\inner.dispatchEvent({ type: "ping", composed: true });
+        \\seenId;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("host", val);
+}
+
+test "composedPath-composed-true: includes both shadow and light nodes" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\host.setAttribute("id", "host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\inner.setAttribute("id", "inner");
+        \\sr.appendChild(inner);
+        \\var lenSeen = 0;
+        \\var hasHost = 0;
+        \\var hasInner = 0;
+        \\host.addEventListener("ping", function(e) {
+        \\  var p = e.composedPath();
+        \\  lenSeen = p.length;
+        \\  for (var i = 0; i < p.length; i++) {
+        \\    if (p[i].id === "host") hasHost = 1;
+        \\    if (p[i].id === "inner") hasInner = 1;
+        \\  }
+        \\});
+        \\inner.dispatchEvent({ type: "ping", composed: true });
+        \\"" + hasHost + hasInner;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("11", val);
+}
+
+test "composedPath-composed-false: listener outside shadow never fires" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\host.setAttribute("id", "host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\inner.setAttribute("id", "inner");
+        \\sr.appendChild(inner);
+        \\var hostFired = 0;
+        \\host.addEventListener("ping", function(e) { hostFired = 1; });
+        \\inner.dispatchEvent({ type: "ping" });
+        \\hostFired ? "fired" : "notfired";
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("notfired", val);
+}
+
+test "closed-tree-filtering: listener inside closed shadow sees inner; host listener sees retargeted only" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\host.setAttribute("id", "host");
+        \\var sr = host.attachShadow({ mode: "closed" });
+        \\var inner = document.createElement("span");
+        \\inner.setAttribute("id", "inner");
+        \\sr.appendChild(inner);
+        \\var hostSeesInner = 0;
+        \\var innerSeesInner = 0;
+        \\host.addEventListener("ping", function(e) {
+        \\  var p = e.composedPath();
+        \\  for (var i = 0; i < p.length; i++)
+        \\    if (p[i].id === "inner") hostSeesInner = 1;
+        \\});
+        \\inner.addEventListener("ping", function(e) {
+        \\  var p = e.composedPath();
+        \\  for (var i = 0; i < p.length; i++)
+        \\    if (p[i].id === "inner") innerSeesInner = 1;
+        \\});
+        \\inner.dispatchEvent({ type: "ping", composed: true });
+        \\"" + hostSeesInner + innerSeesInner;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    // host should NOT see the closed-tree inner node, but inner's own listener should.
+    try std.testing.expectEqualStrings("01", val);
+}

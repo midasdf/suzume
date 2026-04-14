@@ -129,6 +129,48 @@ const sr = struct {
         const root = shadowInclusiveRoot(node, true);
         return root.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
     }
+
+    // ── Phase 2: retargeting + composed path helpers ────────────────
+    pub fn shadowRootForFragment(node: *lxb.lxb_dom_node_t) ?*ShadowRoot {
+        const sid = nodeScope(node);
+        if (sid == 0) return null;
+        const r = shadowRootById(sid) orelse return null;
+        if (r.fragment != node) return null;
+        return r;
+    }
+
+    pub fn composedParent(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+        if (shadowRootForFragment(node)) |root| return @ptrCast(root.host);
+        const p: ?*lxb.lxb_dom_node_t = @ptrCast(node.parent);
+        return p;
+    }
+
+    pub fn treeRoot(node: *lxb.lxb_dom_node_t) *lxb.lxb_dom_node_t {
+        var cur: *lxb.lxb_dom_node_t = node;
+        while (cur.parent) |p| cur = @ptrCast(p);
+        return cur;
+    }
+
+    pub fn isShadowIncludingInclusiveAncestor(ancestor: *lxb.lxb_dom_node_t, descendant: *lxb.lxb_dom_node_t) bool {
+        var cur: ?*lxb.lxb_dom_node_t = descendant;
+        while (cur) |c| {
+            if (c == ancestor) return true;
+            cur = composedParent(c);
+        }
+        return false;
+    }
+
+    pub fn retarget(a_in: *lxb.lxb_dom_node_t, b_in: ?*lxb.lxb_dom_node_t) *lxb.lxb_dom_node_t {
+        var a: *lxb.lxb_dom_node_t = a_in;
+        while (true) {
+            const a_root = treeRoot(a);
+            const root = shadowRootForFragment(a_root) orelse return a;
+            if (b_in) |b| {
+                if (isShadowIncludingInclusiveAncestor(a_root, b)) return a;
+            }
+            a = @ptrCast(root.host);
+        }
+    }
 };
 
 // ── Lexbor extern functions ─────────────────────────────────────────
@@ -229,6 +271,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     try vm.registerNativeMethod(ep, "getRootNode", &nativeGetRootNode);
+    try vm.registerNativeMethod(ep, "dispatchEvent", &nativeDispatchEvent);
 
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
@@ -653,6 +696,171 @@ fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const shadow = sr.create(doc, elem, mode) orelse return JsValue.undefined_val;
 
     return wrapShadowRoot(vm, shadow) orelse JsValue.undefined_val;
+}
+
+// ── Phase 2: dispatchEvent with retargeting + composedPath filtering ──
+//
+// Builds a composed path by walking `composedParent` from target up through
+// shadow hosts. For non-composed events, stops at the target's shadow-root
+// fragment (does not cross into the host's tree).
+//
+// For each listener invocation at node N, sets:
+//   event.target = retarget(original_target, N)
+//   event.currentTarget = wrap(N)
+//   event.composedPath() returns the path filtered to nodes visible from N's
+//   tree root (closed-tree filtering).
+fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const target = getThisNode(this) orelse return JsValue.initBool(false);
+    if (args.len == 0) return JsValue.initBool(false);
+
+    // Parse event: accept either a string type or an object with { type, composed, bubbles }
+    var type_str: []const u8 = "event";
+    var event_composed: bool = false;
+    var event_obj_in: ?*JsObject = null;
+    if (args[0].isString()) {
+        type_str = vm.pool.get(args[0].asStringId()) orelse "event";
+    } else if (args[0].isObject()) {
+        event_obj_in = args[0].asJsObject();
+        const t_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
+        if (event_obj_in.?.getProperty(t_sid)) |tv| {
+            if (tv.isString()) type_str = vm.pool.get(tv.asStringId()) orelse "event";
+        }
+        const comp_sid = vm.pool.intern("composed") catch return JsValue.initBool(false);
+        if (event_obj_in.?.getProperty(comp_sid)) |cv| {
+            event_composed = cv.isTruthy();
+        }
+    }
+
+    // Build composed path: path[0] = target, walking up via composedParent.
+    var path_buf: [64]*lxb.lxb_dom_node_t = undefined;
+    var path_len: usize = 0;
+    var cur: ?*lxb.lxb_dom_node_t = target;
+    const target_scope = sr.nodeScope(target);
+    while (cur) |n| {
+        if (path_len >= path_buf.len) break;
+        path_buf[path_len] = n;
+        path_len += 1;
+        // If non-composed and n is the shadow-root fragment of the target's own
+        // scope, stop here (don't cross into host).
+        if (!event_composed) {
+            if (sr.shadowRootForFragment(n)) |_| {
+                if (sr.nodeScope(n) == target_scope and target_scope != 0) break;
+            }
+        }
+        cur = sr.composedParent(n);
+    }
+
+    // Get-or-create event object passed to listeners.
+    const ev_obj: *JsObject = blk: {
+        if (event_obj_in) |e| break :blk e;
+        break :blk vm.createObj(.{}) catch return JsValue.initBool(false);
+    };
+    const type_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, type_sid, JsValue.initString(vm.pool.intern(type_str) catch return JsValue.initBool(false))) catch {};
+    const composed_sid = vm.pool.intern("composed") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, composed_sid, JsValue.initBool(event_composed)) catch {};
+
+    // Install composedPath() method returning the filtered path relative to currentTarget.
+    // We do this by storing the raw path on the event object and a native getter
+    // "composedPath" that reads currentTarget at call time.
+    const cp_fn = try vm.createObj(.{ .obj_type = .native_function });
+    cp_fn.data = .{ .native_fn = &nativeEventComposedPath };
+    const cp_sid = vm.pool.intern("composedPath") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, cp_sid, JsValue.initObject(cp_fn)) catch {};
+
+    // Stash raw path as a JS array on the event as __rawPath (wrappers)
+    // and __rawPathIds as matching numeric pointers.
+    const raw_arr = try vm.createObj(.{ .obj_type = .array });
+    const raw_ids = try vm.createObj(.{ .obj_type = .array });
+    var pi: usize = 0;
+    while (pi < path_len) : (pi += 1) {
+        const w = wrapNode(vm, path_buf[pi]) orelse continue;
+        try raw_arr.data.array.append(vm.allocator, w);
+        try raw_ids.data.array.append(vm.allocator, JsValue.initNumber(@floatFromInt(@intFromPtr(path_buf[pi]))));
+    }
+    const rp_sid = vm.pool.intern("__rawPath") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, rp_sid, JsValue.initObject(raw_arr)) catch {};
+    const rpi_sid = vm.pool.intern("__rawPathIds") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, rpi_sid, JsValue.initObject(raw_ids)) catch {};
+
+    // Dispatch: simple bubble-phase walk from target up the path. For each
+    // node N, call all listeners whose node_ptr == N and event_type == type.
+    // Retarget event.target = retarget(original_target, N).
+    const target_sid = vm.pool.intern("target") catch return JsValue.initBool(false);
+    const ct_sid = vm.pool.intern("currentTarget") catch return JsValue.initBool(false);
+    var i: usize = 0;
+    while (i < path_len) : (i += 1) {
+        const node = path_buf[i];
+        const retargeted = sr.retarget(target, node);
+        ev_obj.setProperty(vm.allocator, target_sid, wrapNode(vm, retargeted) orelse JsValue.null_val) catch {};
+        ev_obj.setProperty(vm.allocator, ct_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
+        // Find matching listeners
+        for (g_listeners.items) |entry| {
+            if (@intFromPtr(entry.node_ptr) != @intFromPtr(node)) continue;
+            if (!std.mem.eql(u8, entry.event_type, type_str)) continue;
+            _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
+        }
+    }
+
+    return JsValue.initBool(true);
+}
+
+/// Event.composedPath() — reads currentTarget from `this`, then filters the
+/// stashed raw path to exclude nodes hidden by closed shadow trees from
+/// currentTarget's root.
+fn nativeEventComposedPath(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.null_val;
+    const ev_obj = this.asJsObject();
+    const rp_sid = vm.pool.intern("__rawPath") catch return JsValue.null_val;
+    const rpi_sid = vm.pool.intern("__rawPathIds") catch return JsValue.null_val;
+    const raw = ev_obj.getProperty(rp_sid) orelse return JsValue.null_val;
+    const raw_ids = ev_obj.getProperty(rpi_sid) orelse return JsValue.null_val;
+    if (!raw.isObject() or !raw_ids.isObject()) return JsValue.null_val;
+    const raw_arr = raw.asJsObject();
+    const raw_id_arr = raw_ids.asJsObject();
+
+    // Find current target node ptr.
+    const ct_sid = vm.pool.intern("currentTarget") catch return JsValue.null_val;
+    const ct_val = ev_obj.getProperty(ct_sid) orelse return JsValue.null_val;
+    const ct_node = getThisNode(ct_val) orelse return JsValue.null_val;
+    const ct_root = sr.treeRoot(ct_node);
+
+    const out = try vm.createObj(.{ .obj_type = .array });
+    var i: usize = 0;
+    while (i < raw_id_arr.data.array.items.len) : (i += 1) {
+        const id_val = raw_id_arr.data.array.items[i];
+        const ptr_num: usize = @intFromFloat(id_val.asNumber());
+        const item_ptr: *lxb.lxb_dom_node_t = @ptrFromInt(ptr_num);
+        if (nodeVisibleFromRoot(item_ptr, ct_root)) {
+            try out.data.array.append(vm.allocator, raw_arr.data.array.items[i]);
+        }
+    }
+    return JsValue.initObject(out);
+}
+
+/// Closed-tree filter: is `item` visible to a listener whose tree root is `ct_root`?
+fn nodeVisibleFromRoot(item: *lxb.lxb_dom_node_t, ct_root: *lxb.lxb_dom_node_t) bool {
+    const item_root = sr.treeRoot(item);
+    if (item_root == ct_root) return true;
+    // If the listener is inside the item's subtree (item_root is ancestor of ct_root), visible.
+    if (sr.isShadowIncludingInclusiveAncestor(item_root, ct_root)) return true;
+    // Otherwise: item is in some tree whose ancestor chain of shadow roots
+    // must all be non-closed (or we must be inside one of the closed ones).
+    var cur: *lxb.lxb_dom_node_t = item_root;
+    while (true) {
+        if (sr.shadowRootForFragment(cur)) |root| {
+            if (root.mode == .closed) {
+                if (!sr.isShadowIncludingInclusiveAncestor(cur, ct_root)) return false;
+            }
+            cur = @ptrCast(root.host);
+            cur = sr.treeRoot(cur);
+            if (cur == ct_root) return true;
+            continue;
+        }
+        return true;
+    }
 }
 
 fn nativeGetRootNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {

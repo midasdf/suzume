@@ -3044,7 +3044,7 @@ pub const VM = struct {
 
     // ── JS callback invocation ──────────────────────────────────────
 
-    fn callJsFunction(self: *VM, func_val: JsValue, this_val: JsValue, args: []const JsValue) !JsValue {
+    pub fn callJsFunction(self: *VM, func_val: JsValue, this_val: JsValue, args: []const JsValue) !JsValue {
         if (!func_val.isObject()) return JsValue.undefined_val;
         const obj = func_val.asJsObject();
 
