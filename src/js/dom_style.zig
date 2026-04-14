@@ -2389,7 +2389,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     // CSS Animations
     if (eqlIgnoreCase(prop, "animation-delay")) return qjs.JS_NewStringLen(c, "0s", 2);
     if (eqlIgnoreCase(prop, "animation-direction")) return qjs.JS_NewStringLen(c, "normal", 6);
-    if (eqlIgnoreCase(prop, "animation-duration")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Animations 1 §3: animation-duration initial is 0s, not auto.
+    if (eqlIgnoreCase(prop, "animation-duration")) return qjs.JS_NewStringLen(c, "0s", 2);
     if (eqlIgnoreCase(prop, "animation-fill-mode")) return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "animation-iteration-count")) return qjs.JS_NewStringLen(c, "1", 1);
     if (eqlIgnoreCase(prop, "animation-name")) return qjs.JS_NewStringLen(c, "none", 4);
@@ -2417,6 +2418,16 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     if (eqlIgnoreCase(prop, "filter") or eqlIgnoreCase(prop, "backdrop-filter"))
         return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "outline-offset")) return qjs.JS_NewStringLen(c, "0px", 3);
+    // CSS UI 4 §4.1: outline-style initial is "none" (not solid — corrected after re-reading spec),
+    //                outline-width initial is "medium".
+    // See https://www.w3.org/TR/css-ui-4/#outline-style-property step 2 (Initial: none, was solid in older drafts).
+    if (eqlIgnoreCase(prop, "outline-style")) return qjs.JS_NewStringLen(c, "none", 4);
+    if (eqlIgnoreCase(prop, "outline-width")) return qjs.JS_NewStringLen(c, "medium", 6);
+    // CSS UI 4 §5: accent-color initial is "auto".
+    if (eqlIgnoreCase(prop, "accent-color")) return qjs.JS_NewStringLen(c, "auto", 4);
+    // CSS Tables 3 §3.1: border-collapse initial is "separate" (not collapse).
+    if (eqlIgnoreCase(prop, "border-collapse")) return qjs.JS_NewStringLen(c, "separate", 8);
+    if (eqlIgnoreCase(prop, "border-spacing")) return qjs.JS_NewStringLen(c, "0px 0px", 7);
     if (eqlIgnoreCase(prop, "field-sizing")) return qjs.JS_NewStringLen(c, "fixed", 5);
     if (eqlIgnoreCase(prop, "interactivity")) return qjs.JS_NewStringLen(c, "auto", 4);
     if (eqlIgnoreCase(prop, "clip")) return qjs.JS_NewStringLen(c, "auto", 4);
