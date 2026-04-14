@@ -3944,8 +3944,23 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
 
     // DocumentFragment constructor — reuse existing one (with prototype already set up above)
 
+    // ShadowRoot constructor + prototype (Phase 1 — see src/js/shadow_root.zig).
+    // ShadowRoot extends DocumentFragment (spec) but for Phase 1 we inherit from
+    // Element.prototype so existing Element/Node methods (querySelector, appendChild,
+    // innerHTML, etc.) are available on the JS wrapper via the prototype chain.
     const shadow_root_ctor = qjs.JS_NewCFunction2(ctx, &dom_doc.jsNoOpConstructor, "ShadowRoot", 0, qjs.JS_CFUNC_constructor, 0);
     _ = qjs.JS_SetPropertyStr(ctx, global, "ShadowRoot", shadow_root_ctor);
+    {
+        const sr_proto = qjs.JS_NewObject(ctx);
+        // Chain: ShadowRoot.prototype → Element.prototype (via element_class_id default proto)
+        const element_proto = qjs.JS_GetClassProto(ctx, element_class_id);
+        defer qjs.JS_FreeValue(ctx, element_proto);
+        if (!quickjs.JS_IsUndefined(element_proto) and !quickjs.JS_IsNull(element_proto)) {
+            _ = qjs.JS_SetPrototype(ctx, sr_proto, element_proto);
+        }
+        _ = qjs.JS_SetPropertyStr(ctx, sr_proto, "constructor", qjs.JS_DupValue(ctx, shadow_root_ctor));
+        _ = qjs.JS_SetPropertyStr(ctx, shadow_root_ctor, "prototype", sr_proto);
+    }
 
     // window.top / window.parent / window.self / window.frames
     _ = qjs.JS_SetPropertyStr(ctx, global, "top", qjs.JS_DupValue(ctx, global));

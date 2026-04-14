@@ -1493,31 +1493,145 @@ pub fn elementGetClassList(
     return cl;
 }
 
-// ── element.attachShadow() stub ─────────────────────────────────────
+// ── element.attachShadow() — Shadow DOM v1 Phase 1 ──────────────────
+//
+// Spec: https://dom.spec.whatwg.org/#dom-element-attachshadow
+// Implementation: see src/js/shadow_root.zig for the tree-scope model.
+
+const shadow_root = @import("shadow_root.zig");
 
 pub fn elementAttachShadow(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    // Create a pseudo-shadow root object that delegates to the element
-    const shadow = qjs.JS_NewObject(c);
-    // Copy key methods from the element so querySelector etc. work on shadowRoot
-    const qs = qjs.JS_GetPropertyStr(c, this_val, "querySelector");
-    _ = qjs.JS_SetPropertyStr(c, shadow, "querySelector", qs);
-    const qsa = qjs.JS_GetPropertyStr(c, this_val, "querySelectorAll");
-    _ = qjs.JS_SetPropertyStr(c, shadow, "querySelectorAll", qsa);
-    const ac = qjs.JS_GetPropertyStr(c, this_val, "appendChild");
-    _ = qjs.JS_SetPropertyStr(c, shadow, "appendChild", ac);
-    const ih_get = qjs.JS_GetPropertyStr(c, this_val, "innerHTML");
-    _ = qjs.JS_SetPropertyStr(c, shadow, "innerHTML", ih_get);
-    _ = qjs.JS_SetPropertyStr(c, shadow, "host", qjs.JS_DupValue(c, this_val));
-    _ = qjs.JS_SetPropertyStr(c, shadow, "mode", qjs.JS_NewString(c, "open"));
-    // Store on element as .shadowRoot
-    _ = qjs.JS_SetPropertyStr(c, this_val, "shadowRoot", qjs.JS_DupValue(c, shadow));
-    return shadow;
+    const elem = getElement(c, this_val) orelse
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'attachShadow' on 'Element': receiver is not an Element.");
+
+    // ── Parse init dict ─────────────────────────────────────────────
+    var mode: shadow_root.Mode = .open;
+    var delegates_focus: bool = false;
+    var slot_assignment: shadow_root.SlotAssignment = .named;
+    var has_mode: bool = false;
+
+    if (argc >= 1) {
+        const args = argv orelse return quickjs.JS_UNDEFINED();
+        const init = args[0];
+        if (!quickjs.JS_IsUndefined(init) and !quickjs.JS_IsNull(init)) {
+            // mode (required per spec for attachShadow)
+            const mode_val = qjs.JS_GetPropertyStr(c, init, "mode");
+            defer qjs.JS_FreeValue(c, mode_val);
+            if (!quickjs.JS_IsUndefined(mode_val)) {
+                if (jsStringToSlice(c, mode_val)) |s| {
+                    defer qjs.JS_FreeCString(c, s.ptr);
+                    const ms = s.ptr[0..s.len];
+                    if (std.mem.eql(u8, ms, "open")) {
+                        mode = .open;
+                        has_mode = true;
+                    } else if (std.mem.eql(u8, ms, "closed")) {
+                        mode = .closed;
+                        has_mode = true;
+                    } else {
+                        return qjs.JS_ThrowTypeError(c, "Failed to execute 'attachShadow' on 'Element': mode must be 'open' or 'closed'.");
+                    }
+                }
+            }
+            const df_val = qjs.JS_GetPropertyStr(c, init, "delegatesFocus");
+            defer qjs.JS_FreeValue(c, df_val);
+            if (!quickjs.JS_IsUndefined(df_val)) {
+                delegates_focus = qjs.JS_ToBool(c, df_val) != 0;
+            }
+            const sa_val = qjs.JS_GetPropertyStr(c, init, "slotAssignment");
+            defer qjs.JS_FreeValue(c, sa_val);
+            if (!quickjs.JS_IsUndefined(sa_val) and !quickjs.JS_IsNull(sa_val)) {
+                if (jsStringToSlice(c, sa_val)) |s| {
+                    defer qjs.JS_FreeCString(c, s.ptr);
+                    const sas = s.ptr[0..s.len];
+                    if (std.mem.eql(u8, sas, "named")) {
+                        slot_assignment = .named;
+                    } else if (std.mem.eql(u8, sas, "manual")) {
+                        slot_assignment = .manual;
+                    } else {
+                        return qjs.JS_ThrowTypeError(c, "Failed to execute 'attachShadow' on 'Element': slotAssignment must be 'named' or 'manual'.");
+                    }
+                }
+            }
+        }
+    }
+    if (!has_mode) {
+        return qjs.JS_ThrowTypeError(c, "Failed to execute 'attachShadow' on 'Element': options.mode is required.");
+    }
+
+    // ── Host allowlist (Spec §4.8) ─────────────────────────────────
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null or name_len == 0) {
+        return api.throwDOMException(c, "NotSupportedError", "Element cannot host a shadow root.");
+    }
+    const local_name = name_ptr.?[0..name_len];
+    if (!shadow_root.isAllowedShadowHost(local_name)) {
+        return api.throwDOMException(c, "NotSupportedError", "This element cannot host a shadow root.");
+    }
+
+    // ── Second-call guard ──────────────────────────────────────────
+    if (shadow_root.shadowRootForHost(elem) != null) {
+        return api.throwDOMException(c, "NotSupportedError", "Shadow root already attached.");
+    }
+
+    // ── Create backing fragment + ShadowRoot struct ────────────────
+    const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
+    const sr = shadow_root.create(doc, elem, mode, delegates_focus, slot_assignment) orelse
+        return api.throwDOMException(c, "InvalidStateError", "Failed to create shadow root.");
+
+    // ── Build JS wrapper backed by the fragment node ────────────────
+    // Using element_class_id lets existing Node/Element methods (appendChild,
+    // querySelector, innerHTML, etc.) work against the fragment via getNode.
+    const wrapper = qjs.JS_NewObjectClass(c, @intCast(api.element_class_id));
+    if (quickjs.JS_IsException(wrapper)) return wrapper;
+    _ = qjs.JS_SetOpaque(wrapper, @ptrCast(sr.fragment));
+
+    // Prototype chain: ShadowRoot.prototype (if registered) → Element.prototype
+    {
+        const global = qjs.JS_GetGlobalObject(c);
+        defer qjs.JS_FreeValue(c, global);
+        const ctor = qjs.JS_GetPropertyStr(c, global, "ShadowRoot");
+        defer qjs.JS_FreeValue(c, ctor);
+        if (!quickjs.JS_IsUndefined(ctor)) {
+            const proto = qjs.JS_GetPropertyStr(c, ctor, "prototype");
+            defer qjs.JS_FreeValue(c, proto);
+            if (!quickjs.JS_IsUndefined(proto) and !quickjs.JS_IsNull(proto)) {
+                _ = qjs.JS_SetPrototype(c, wrapper, proto);
+            }
+        }
+    }
+
+    // Fixed per-instance attrs.
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "host", qjs.JS_DupValue(c, this_val));
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "mode", qjs.JS_NewString(c, switch (mode) {
+        .open => "open",
+        .closed => "closed",
+    }));
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "delegatesFocus", quickjs.JS_NewBool(delegates_focus));
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "slotAssignment", qjs.JS_NewString(c, switch (slot_assignment) {
+        .named => "named",
+        .manual => "manual",
+    }));
+    // nodeType 11 (DocumentFragment) — matches the underlying fragment.
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "nodeType", qjs.JS_NewInt32(c, 11));
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "nodeName", qjs.JS_NewString(c, "#document-fragment"));
+    // Marker so getRootNode / isConnected fast-paths can detect shadow root.
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "__isShadowRoot", quickjs.JS_NewBool(true));
+    _ = qjs.JS_SetPropertyStr(c, wrapper, "__shadowId", qjs.JS_NewInt32(c, @intCast(sr.id)));
+
+    // Expose on host only for open mode (closed is hidden from JS).
+    if (mode == .open) {
+        _ = qjs.JS_SetPropertyStr(c, this_val, "shadowRoot", qjs.JS_DupValue(c, wrapper));
+    } else {
+        _ = qjs.JS_SetPropertyStr(c, this_val, "shadowRoot", quickjs.JS_NULL());
+    }
+    return wrapper;
 }
 
 // ── element.insertAdjacentElement() ─────────────────────────────────
