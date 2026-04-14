@@ -270,27 +270,28 @@ const url_search_params_js =
     \\"use strict";
     \\function URLSearchParams(init) {
     \\  this._e = [];
+    \\  if (init === undefined || init === null) return;
     \\  if (typeof init === 'string') {
     \\    var s = init.charAt(0) === '?' ? init.substring(1) : init;
     \\    if (s) { var pairs = s.split('&'); for (var i = 0; i < pairs.length; i++) { var eq = pairs[i].indexOf('='); var n, v; if (eq >= 0) { n = pairs[i].substring(0, eq); v = pairs[i].substring(eq + 1); } else { n = pairs[i]; v = ''; } this._e.push([decodeURIComponent(n.replace(/\+/g, ' ')), decodeURIComponent(v.replace(/\+/g, ' '))]); } }
-    \\  } else if (Array.isArray(init)) {
-    \\    for (var i = 0; i < init.length; i++) this._e.push([String(init[i][0]), String(init[i][1])]);
-    \\  } else if (init && typeof init === 'object') {
-    \\    var keys = Object.keys(init); for (var i = 0; i < keys.length; i++) this._e.push([keys[i], String(init[keys[i]])]);
+    \\  } else if (typeof Symbol !== 'undefined' && Symbol.iterator && init[Symbol.iterator]) {
+    \\    var it = init[Symbol.iterator](), r; while (!(r = it.next()).done) { var p = r.value; this._e.push([String(p[0]), String(p[1])]); }
+    \\  } else if (typeof init === 'object') {
+    \\    var keys = Object.keys(init); for (var i = 0; i < keys.length; i++) this._e.push([String(keys[i]), String(init[keys[i]])]);
     \\  }
     \\}
     \\URLSearchParams.prototype = {
     \\  append: function(n, v) { this._e.push([String(n), String(v)]); },
-    \\  delete: function(n, v) { var e = this._e; for (var i = e.length - 1; i >= 0; i--) { if (e[i][0] === n && (v === undefined || e[i][1] === v)) e.splice(i, 1); } },
-    \\  get: function(n) { for (var i = 0; i < this._e.length; i++) if (this._e[i][0] === n) return this._e[i][1]; return null; },
-    \\  getAll: function(n) { var r = []; for (var i = 0; i < this._e.length; i++) if (this._e[i][0] === n) r.push(this._e[i][1]); return r; },
-    \\  has: function(n, v) { for (var i = 0; i < this._e.length; i++) if (this._e[i][0] === n && (v === undefined || this._e[i][1] === v)) return true; return false; },
-    \\  set: function(n, v) { var found = false, e = this._e; for (var i = e.length - 1; i >= 0; i--) { if (e[i][0] === n) { if (!found) { e[i][1] = String(v); found = true; } else { e.splice(i, 1); } } } if (!found) e.push([String(n), String(v)]); },
+    \\  delete: function(n, v) { this._e = this._e.filter(function(p) { return !(p[0] === String(n) && (arguments.length < 2 || p[1] === String(v))); }); },
+    \\  get: function(n) { n = String(n); for (var i = 0; i < this._e.length; i++) if (this._e[i][0] === n) return this._e[i][1]; return null; },
+    \\  getAll: function(n) { n = String(n); var r = []; for (var i = 0; i < this._e.length; i++) if (this._e[i][0] === n) r.push(this._e[i][1]); return r; },
+    \\  has: function(n, v) { n = String(n); for (var i = 0; i < this._e.length; i++) if (this._e[i][0] === n && (arguments.length < 2 || this._e[i][1] === String(v))) return true; return false; },
+    \\  set: function(n, v) { n = String(n); v = String(v); var found = false, e = this._e; for (var i = 0; i < e.length; i++) { if (e[i][0] === n) { if (!found) { e[i][1] = v; found = true; } else { e.splice(i, 1); i--; } } } if (!found) e.push([n, v]); },
     \\  sort: function() { this._e.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }); },
     \\  get size() { return this._e.length; },
     \\  toString: function() { return this._e.map(function(p) { return encodeURIComponent(p[0]).replace(/%20/g,'+') + '=' + encodeURIComponent(p[1]).replace(/%20/g,'+'); }).join('&'); },
     \\  forEach: function(cb, thisArg) { for (var i = 0; i < this._e.length; i++) cb.call(thisArg, this._e[i][1], this._e[i][0], this); },
-    \\  entries: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: e[i++], done: false } : { value: undefined, done: true }; } }; },
+    \\  entries: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: [e[i][0], e[i][1]], done: false } : { value: undefined, done: true }; }, i: 0 }; },
     \\  keys: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: e[i++][0], done: false } : { value: undefined, done: true }; } }; },
     \\  values: function() { var i = 0, e = this._e; return { next: function() { return i < e.length ? { value: e[i++][1], done: false } : { value: undefined, done: true }; } }; }
     \\};
