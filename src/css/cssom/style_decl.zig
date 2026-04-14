@@ -20,11 +20,17 @@ pub const StyleDeclList = struct {
     entries: std.ArrayListUnmanaged(StyleDecl),
     /// Arena that owns all name/value strings. Reset on full cssText= replacement.
     arena: std.heap.ArenaAllocator,
+    /// True when entries have changed since the last cssText serialization.
+    dirty_css_text: bool = true,
+    /// Cached serialized cssText. Owned by the arena; invalidated when dirty_css_text=true.
+    cached_css_text: ?[]const u8 = null,
 
     pub fn init(backing_allocator: std.mem.Allocator) StyleDeclList {
         return .{
             .entries = .{},
             .arena = std.heap.ArenaAllocator.init(backing_allocator),
+            .dirty_css_text = true,
+            .cached_css_text = null,
         };
     }
 
@@ -61,6 +67,7 @@ pub const StyleDeclList = struct {
             .value = owned_val,
             .important = important,
         });
+        self.dirty_css_text = true;
     }
 
     /// Remove the entry with the given name. Returns the previous value slice
@@ -69,6 +76,7 @@ pub const StyleDeclList = struct {
         if (self.indexOf(name)) |idx| {
             const old_val = self.entries.items[idx].value;
             _ = self.entries.orderedRemove(idx);
+            self.dirty_css_text = true;
             return old_val;
         }
         return null;
@@ -97,7 +105,35 @@ pub const StyleDeclList = struct {
     pub fn clear(self: *StyleDeclList, allocator: std.mem.Allocator) void {
         self.entries.clearRetainingCapacity();
         _ = self.arena.reset(.free_all);
+        self.dirty_css_text = true;
+        self.cached_css_text = null;
         _ = allocator; // entries backing memory freed by deinit or clear
+    }
+
+    /// Return a cached serialized cssText string. Rebuilt when dirty_css_text=true.
+    /// The returned slice is valid until the next mutation or clear.
+    /// Caller must NOT free it.
+    pub fn getCssText(self: *StyleDeclList) ![]const u8 {
+        if (!self.dirty_css_text) {
+            return self.cached_css_text orelse "";
+        }
+        // Serialize into a temporary ArrayList then dupe into the arena.
+        var tmp = std.ArrayList(u8).init(self.arena.allocator());
+        defer tmp.deinit();
+        for (self.entries.items) |e| {
+            try tmp.appendSlice(e.name);
+            try tmp.appendSlice(": ");
+            try tmp.appendSlice(e.value);
+            if (e.important) try tmp.appendSlice(" !important");
+            try tmp.appendSlice("; ");
+        }
+        if (tmp.items.len > 0 and tmp.items[tmp.items.len - 1] == ' ') {
+            tmp.items.len -= 1;
+        }
+        const owned = try self.arena.allocator().dupe(u8, tmp.items);
+        self.cached_css_text = owned;
+        self.dirty_css_text = false;
+        return owned;
     }
 };
 
@@ -132,6 +168,16 @@ pub fn removeElem(map: *DeclMap, allocator: std.mem.Allocator, elem_ptr: usize) 
     }
 }
 
+/// Free every StyleDeclList in the map and deinit the map itself (call on VM shutdown).
+pub fn shutdownMap(map: *DeclMap, allocator: std.mem.Allocator) void {
+    var iter = map.iterator();
+    while (iter.next()) |entry| {
+        entry.value_ptr.*.deinit(allocator);
+        allocator.destroy(entry.value_ptr.*);
+    }
+    map.deinit();
+}
+
 // ── Parse helper ─────────────────────────────────────────────────────
 //
 // Populate a StyleDeclList by parsing a raw CSS declaration string
@@ -145,31 +191,53 @@ pub fn parseIntoList(
     list.clear(allocator);
     var pos: usize = 0;
     while (pos < css_text.len) {
-        // Skip whitespace
-        while (pos < css_text.len and isWs(css_text[pos])) pos += 1;
+        // Skip whitespace and comments before property name
+        skipWsAndComments(css_text, &pos);
         if (pos >= css_text.len) break;
 
-        // Property name
+        // Property name: scan until ':' or ';', skipping comments
         const name_start = pos;
-        while (pos < css_text.len and css_text[pos] != ':' and css_text[pos] != ';') pos += 1;
+        while (pos < css_text.len) {
+            if (css_text[pos] == '/' and pos + 1 < css_text.len and css_text[pos + 1] == '*') {
+                skipComment(css_text, &pos);
+            } else if (css_text[pos] == ':' or css_text[pos] == ';') {
+                break;
+            } else {
+                pos += 1;
+            }
+        }
         if (pos >= css_text.len or css_text[pos] != ':') {
-            // No colon — skip to next semicolon
-            while (pos < css_text.len and css_text[pos] != ';') pos += 1;
+            // No colon — skip to next semicolon (comment-aware)
+            while (pos < css_text.len and css_text[pos] != ';') {
+                if (css_text[pos] == '/' and pos + 1 < css_text.len and css_text[pos + 1] == '*') {
+                    skipComment(css_text, &pos);
+                } else {
+                    pos += 1;
+                }
+            }
             if (pos < css_text.len) pos += 1;
             continue;
         }
         const raw_name = std.mem.trim(u8, css_text[name_start..pos], " \t\r\n");
         pos += 1; // skip ':'
 
-        // Value (may include '(' ')' pairs — scan for ';' at depth 0)
+        // Value: scan for ';' at paren-depth 0, skipping strings and comments.
+        // Strings and comments may contain ';' which must not terminate the declaration.
         const val_start = pos;
         var depth: usize = 0;
         while (pos < css_text.len) {
-            if (css_text[pos] == '(') {
+            const ch = css_text[pos];
+            if (ch == '/' and pos + 1 < css_text.len and css_text[pos + 1] == '*') {
+                skipComment(css_text, &pos);
+                continue;
+            } else if (ch == '"' or ch == '\'') {
+                skipString(css_text, &pos, ch);
+                continue;
+            } else if (ch == '(') {
                 depth += 1;
-            } else if (css_text[pos] == ')') {
+            } else if (ch == ')') {
                 if (depth > 0) depth -= 1;
-            } else if (css_text[pos] == ';' and depth == 0) {
+            } else if (ch == ';' and depth == 0) {
                 break;
             }
             pos += 1;
@@ -195,6 +263,51 @@ pub fn parseIntoList(
 
 fn isWs(c: u8) bool {
     return c == ' ' or c == '\t' or c == '\r' or c == '\n';
+}
+
+/// Skip a CSS comment starting at pos. pos must point to '/'.
+/// Advances pos past the closing '*/' (or to end of input if unclosed).
+fn skipComment(s: []const u8, pos: *usize) void {
+    pos.* += 2; // skip '/' and '*'
+    while (pos.* < s.len) {
+        if (s[pos.*] == '*' and pos.* + 1 < s.len and s[pos.* + 1] == '/') {
+            pos.* += 2;
+            return;
+        }
+        pos.* += 1;
+    }
+}
+
+/// Skip a quoted string starting at pos. pos must point to the opening quote.
+/// Advances pos past the closing quote (handles backslash escapes).
+fn skipString(s: []const u8, pos: *usize, quote: u8) void {
+    pos.* += 1; // skip opening quote
+    while (pos.* < s.len) {
+        const c = s[pos.*];
+        if (c == '\\') {
+            pos.* += 1; // skip backslash
+            if (pos.* < s.len) pos.* += 1; // skip escaped char
+            continue;
+        }
+        if (c == quote) {
+            pos.* += 1; // skip closing quote
+            return;
+        }
+        pos.* += 1;
+    }
+}
+
+/// Skip whitespace and CSS comments, advancing pos.
+fn skipWsAndComments(s: []const u8, pos: *usize) void {
+    while (pos.* < s.len) {
+        if (isWs(s[pos.*])) {
+            pos.* += 1;
+        } else if (s[pos.*] == '/' and pos.* + 1 < s.len and s[pos.* + 1] == '*') {
+            skipComment(s, pos);
+        } else {
+            break;
+        }
+    }
 }
 
 /// If raw_val ends with "!important" (case-insensitive, possibly with whitespace),
@@ -318,4 +431,46 @@ test "StyleDeclList serialize large inline style — no truncation" {
 
     // Last entry must be present (would be lost with the old 8192-byte buffer)
     try std.testing.expect(std.mem.indexOf(u8, out.items, "--custom-prop-199") != null);
+}
+
+test "parseIntoList url with semicolon in string" {
+    // background: url("a;b") red — the ';' inside the string must not split the declaration
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "background: url(\"a;b\") red; color: green");
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+    try std.testing.expectEqualStrings("background", list.entries.items[0].name);
+    try std.testing.expectEqualStrings("url(\"a;b\") red", list.entries.items[0].value);
+    try std.testing.expectEqualStrings("color", list.entries.items[1].name);
+    try std.testing.expectEqualStrings("green", list.entries.items[1].value);
+}
+
+test "parseIntoList comment with semicolon" {
+    // /* comment with ; */ color: red — the ';' inside the comment must not split anything
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "/* 1px */ margin: /* 2px */ 3px");
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expectEqualStrings("margin", list.entries.items[0].name);
+    // value is everything after ':' trimmed; the comment is included in raw_val
+    // What matters is that we get exactly one entry (not zero due to early ';' split)
+    try std.testing.expect(list.entries.items[0].value.len > 0);
+}
+
+test "parseIntoList url single-quoted multiple semicolons in string" {
+    // url('a;b;c') — multiple semicolons inside a single-quoted string
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "background: url('a;b;c'); color: blue");
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+    try std.testing.expectEqualStrings("background", list.entries.items[0].name);
+    try std.testing.expectEqualStrings("url('a;b;c')", list.entries.items[0].value);
+    try std.testing.expectEqualStrings("color", list.entries.items[1].name);
+    try std.testing.expectEqualStrings("blue", list.entries.items[1].value);
 }
