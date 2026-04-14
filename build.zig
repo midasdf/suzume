@@ -471,6 +471,20 @@ pub fn build(b: *std.Build) void {
     test_url_nfc_step.dependOn(&run_url_nfc_tests.step);
     test_step.dependOn(&run_url_nfc_tests.step);
 
+    const url_idna_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/idna.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_idna_mod.addImport("tables", url_tables_mod);
+    url_idna_mod.addImport("nfc", url_nfc_mod);
+    url_idna_mod.addImport("punycode", url_pc_mod);
+    const url_idna_tests = b.addTest(.{ .root_module = url_idna_mod });
+    const run_url_idna_tests = b.addRunArtifact(url_idna_tests);
+    const test_url_idna_step = b.step("test-url-idna", "Run URL IDNA tests");
+    test_url_idna_step.dependOn(&run_url_idna_tests.step);
+    test_step.dependOn(&run_url_idna_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
