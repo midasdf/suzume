@@ -1308,6 +1308,16 @@ fn inheritProperty(style: *ComputedStyle, parent: *const ComputedStyle, prop: Pr
         .border_right_color => style.border_right_color = parent.border_right_color,
         .border_bottom_color => style.border_bottom_color = parent.border_bottom_color,
         .border_left_color => style.border_left_color = parent.border_left_color,
+        .order => style.order = parent.order,
+        .flex_direction => style.flex_direction = parent.flex_direction,
+        .flex_wrap => style.flex_wrap = parent.flex_wrap,
+        .flex_grow => style.flex_grow = parent.flex_grow,
+        .flex_shrink => style.flex_shrink = parent.flex_shrink,
+        .flex_basis => style.flex_basis = parent.flex_basis,
+        .justify_content => style.justify_content = parent.justify_content,
+        .align_items => style.align_items = parent.align_items,
+        .align_self => style.align_self = parent.align_self,
+        .align_content => style.align_content = parent.align_content,
         else => {},
     }
 }
@@ -1777,16 +1787,20 @@ fn applyDeclaration(
         },
         .flex_grow => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| {
-                style.flex_grow = @max(v, 0);
+                if (v >= 0) style.flex_grow = v; // CSS: negative values invalid, ignore
             } else |_| {
-                if (parseCalcSimple(trimmed, fs, vw, vh, 0)) |v| style.flex_grow = @max(v, 0);
+                if (parseCalcSimple(trimmed, fs, vw, vh, 0)) |v| {
+                    style.flex_grow = @max(v, 0); // calc(): clamp per CSS Values 4
+                }
             }
         },
         .flex_shrink => {
             if (std.fmt.parseFloat(f32, trimmed)) |v| {
-                style.flex_shrink = @max(v, 0);
+                if (v >= 0) style.flex_shrink = v; // CSS: negative values invalid, ignore
             } else |_| {
-                if (parseCalcSimple(trimmed, fs, vw, vh, 0)) |v| style.flex_shrink = @max(v, 0);
+                if (parseCalcSimple(trimmed, fs, vw, vh, 0)) |v| {
+                    style.flex_shrink = @max(v, 0); // calc(): clamp per CSS Values 4
+                }
             }
         },
         .order => {
