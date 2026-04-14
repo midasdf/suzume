@@ -3,6 +3,7 @@ const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const dom_api = @import("dom_api.zig");
+const shadow_root_mod = @import("shadow_root.zig");
 
 const Allocator = std.mem.Allocator;
 const allocator = std.heap.c_allocator;
@@ -516,9 +517,13 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
 }
 
 /// Update target/currentTarget/eventPhase on an existing JS event object during dispatch.
+/// Applies Shadow DOM retargeting (DOM §4.4): if the original target is inside
+/// a shadow tree, event.target is set to retarget(target, currentTarget) so
+/// listeners outside the tree see the host (not the internal node).
 fn updateEventObjectForDispatch(ctx: *qjs.JSContext, event: qjs.JSValue, target: ?*lxb.lxb_dom_node_t, current_target: ?*lxb.lxb_dom_node_t, phase: i32) void {
     if (target) |t| {
-        _ = qjs.JS_SetPropertyStr(ctx, event, "target", dom_api.wrapNodePublic(ctx, t));
+        const retargeted = shadow_root_mod.retarget(t, current_target);
+        _ = qjs.JS_SetPropertyStr(ctx, event, "target", dom_api.wrapNodePublic(ctx, retargeted));
     } else {
         _ = qjs.JS_SetPropertyStr(ctx, event, "target", quickjs.JS_NULL());
     }
@@ -528,6 +533,89 @@ fn updateEventObjectForDispatch(ctx: *qjs.JSContext, event: qjs.JSValue, target:
         _ = qjs.JS_SetPropertyStr(ctx, event, "currentTarget", quickjs.JS_NULL());
     }
     _ = qjs.JS_SetPropertyStr(ctx, event, "eventPhase", qjs.JS_NewInt32(ctx, phase));
+
+    // Shadow DOM: refresh composedPath _path with closed-tree filtering
+    // relative to currentTarget's root. Only does work if a shadow tree is
+    // on the current path.
+    if (current_target) |ct| {
+        refreshComposedPathForCurrentTarget(ctx, event, ct);
+    }
+}
+
+/// Rebuild the `_path` property on the event to reflect what is visible from
+/// a listener at `current_target`. Closed-mode shadow roots' internals are
+/// hidden from listeners outside that closed tree.
+fn refreshComposedPathForCurrentTarget(
+    ctx: *qjs.JSContext,
+    event: qjs.JSValue,
+    current_target: *lxb.lxb_dom_node_t,
+) void {
+    const full = qjs.JS_GetPropertyStr(ctx, event, "_full_path");
+    defer qjs.JS_FreeValue(ctx, full);
+    if (!qjs.JS_IsArray(full)) return;
+    const ptrs = qjs.JS_GetPropertyStr(ctx, event, "_full_ptrs");
+    defer qjs.JS_FreeValue(ctx, ptrs);
+
+    const len_val = qjs.JS_GetPropertyStr(ctx, full, "length");
+    defer qjs.JS_FreeValue(ctx, len_val);
+    var len_i: i32 = 0;
+    _ = qjs.JS_ToInt32(ctx, &len_i, len_val);
+    if (len_i <= 0) return;
+
+    const out = qjs.JS_NewArray(ctx);
+    var out_i: u32 = 0;
+    var i: u32 = 0;
+    const ct_root = shadow_root_mod.treeRoot(current_target);
+    while (i < @as(u32, @intCast(len_i))) : (i += 1) {
+        const item = qjs.JS_GetPropertyUint32(ctx, full, i);
+        const ptr_val = qjs.JS_GetPropertyUint32(ctx, ptrs, i);
+        var ptr_num: i64 = 0;
+        _ = qjs.JS_ToInt64(ctx, &ptr_num, ptr_val);
+        qjs.JS_FreeValue(ctx, ptr_val);
+        const item_ptr: ?*lxb.lxb_dom_node_t = if (ptr_num == 0) null else @ptrFromInt(@as(usize, @intCast(ptr_num)));
+        const visible = visibleFromCurrentTarget(item_ptr, ct_root);
+        if (visible) {
+            _ = qjs.JS_SetPropertyUint32(ctx, out, out_i, item);
+            out_i += 1;
+        } else {
+            qjs.JS_FreeValue(ctx, item);
+        }
+    }
+    _ = qjs.JS_SetPropertyStr(ctx, event, "_path", out);
+}
+
+/// Visibility rule for closed-tree filtering: an item is visible to a
+/// listener at `ct_root` if the item's tree root is a shadow-including
+/// inclusive ancestor of `ct_root`, OR the item's tree root is inside
+/// an open shadow tree. Closed shadow trees hide their internals from
+/// nodes outside that tree.
+fn visibleFromCurrentTarget(item_opt: ?*lxb.lxb_dom_node_t, ct_root: *lxb.lxb_dom_node_t) bool {
+    const item = item_opt orelse return true;
+    const item_root = shadow_root_mod.treeRoot(item);
+    if (item_root == ct_root) return true;
+    // If the listener is inside `item`'s tree (item_root is an ancestor of ct_root), visible.
+    if (shadow_root_mod.isShadowIncludingInclusiveAncestor(item_root, ct_root)) return true;
+    // If the item is inside the listener's tree or a descendant tree, visibility
+    // depends on whether every shadow tree between the item's root and ct_root
+    // is open. For Phase 2 simplification, walk from item_root upward via host
+    // chain — if any closed shadow root is encountered before reaching ct_root,
+    // hide the item.
+    var cur: *lxb.lxb_dom_node_t = item_root;
+    while (true) {
+        if (shadow_root_mod.shadowRootForFragment(cur)) |sr| {
+            if (sr.mode == .closed) {
+                // Listener must be inside this closed tree to see `item`.
+                if (!shadow_root_mod.isShadowIncludingInclusiveAncestor(cur, ct_root)) {
+                    return false;
+                }
+            }
+            cur = @ptrCast(sr.host);
+            cur = shadow_root_mod.treeRoot(cur);
+            if (cur == ct_root) return true;
+            continue;
+        }
+        return true;
+    }
 }
 
 /// Ensure a JS event object has preventDefault/stopPropagation/stopImmediatePropagation methods
@@ -954,16 +1042,44 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
     const saved_flags = current_event_flags;
     current_event_flags = .{};
 
-    // Build path: path[0] = target, path[path_len-1] = root (document node)
+    // Build composed path: path[0] = target, walking up through shadow hosts
+    // (via shadow_root.composedParent) so listeners on ancestor hosts can see
+    // events originating inside their shadow trees.
+    //
+    // Truncation for non-composed events: if the event is NOT composed, we
+    // stop the path at the boundary of the target's shadow root (i.e., we
+    // keep the shadow-root fragment itself but do NOT cross into its host).
     var path: [64]*lxb.lxb_dom_node_t = undefined;
     var path_len: usize = 0;
     var current: ?*lxb.lxb_dom_node_t = target;
+    const event_is_composed = blk: {
+        if (existing_event) |ev| {
+            const cv = qjs.JS_GetPropertyStr(ctx, ev, "composed");
+            defer qjs.JS_FreeValue(ctx, cv);
+            if (qjs.JS_ToBool(ctx, cv) > 0) break :blk true;
+            if (!quickjs.JS_IsUndefined(cv)) break :blk false;
+        }
+        break :blk isComposedEvent(event_type);
+    };
+    const target_scope = shadow_root_mod.nodeScope(target);
     while (current) |node| {
         if (path_len < path.len) {
             path[path_len] = node;
             path_len += 1;
         }
-        current = node.parent;
+        // For non-composed events, when we are about to step from a shadow
+        // fragment to its host, stop.
+        if (!event_is_composed) {
+            if (shadow_root_mod.shadowRootForFragment(node)) |sr| {
+                // Only stop when this shadow boundary would take us out of
+                // the target's own shadow scope.
+                _ = sr;
+                if (shadow_root_mod.nodeScope(node) == target_scope or target_scope == 0) {
+                    break;
+                }
+            }
+        }
+        current = shadow_root_mod.composedParent(node);
     }
 
     // Use existing event or create a new one
@@ -993,19 +1109,30 @@ fn dispatchEventWithObj(ctx: *qjs.JSContext, target: *lxb.lxb_dom_node_t, event_
         if (owns_event) qjs.JS_FreeValue(ctx, event_obj);
     }
 
-    // DOM spec: set composedPath (_path) on event object
+    // DOM spec: set composedPath (_path) on event object.
+    // Also stash a "_full_path" (with pointers in "_full_ptrs") so
+    // per-listener-step closed-tree filtering can refer back to it.
     {
         const path_arr = qjs.JS_NewArray(ctx);
+        const full_arr = qjs.JS_NewArray(ctx);
+        const ptrs_arr = qjs.JS_NewArray(ctx);
         for (0..path_len) |pi| {
-            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(pi), dom_api.wrapNodePublic(ctx, path[pi]));
+            const wrapped = dom_api.wrapNodePublic(ctx, path[pi]);
+            _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(pi), qjs.JS_DupValue(ctx, wrapped));
+            _ = qjs.JS_SetPropertyUint32(ctx, full_arr, @intCast(pi), wrapped);
+            _ = qjs.JS_SetPropertyUint32(ctx, ptrs_arr, @intCast(pi), qjs.JS_NewInt64(ctx, @intCast(@intFromPtr(path[pi]))));
         }
         // Add window as the last element in the path (for connected nodes)
         if (path_len > 0 and path[path_len - 1].type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
             const global = qjs.JS_GetGlobalObject(ctx);
             _ = qjs.JS_SetPropertyUint32(ctx, path_arr, @intCast(path_len), qjs.JS_DupValue(ctx, global));
+            _ = qjs.JS_SetPropertyUint32(ctx, full_arr, @intCast(path_len), qjs.JS_DupValue(ctx, global));
+            _ = qjs.JS_SetPropertyUint32(ctx, ptrs_arr, @intCast(path_len), qjs.JS_NewInt64(ctx, 0));
             qjs.JS_FreeValue(ctx, global);
         }
         _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_path", path_arr);
+        _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_full_path", full_arr);
+        _ = qjs.JS_SetPropertyStr(ctx, event_obj, "_full_ptrs", ptrs_arr);
     }
 
     // DOM spec: set dispatch flag — initEvent must short-circuit while dispatching

@@ -181,8 +181,10 @@ pub fn create(
 pub fn shadowInclusiveRoot(node: *lxb.lxb_dom_node_t, composed: bool) *lxb.lxb_dom_node_t {
     var current: *lxb.lxb_dom_node_t = node;
     while (true) {
-        // Walk normal parent chain.
-        while (current.parent) |p| : (current = p) {}
+        // Walk normal parent chain until we hit the root of a tree.
+        while (current.parent) |p| {
+            current = p;
+        }
         // current has no parent. Check if it is a shadow fragment.
         const sid = nodeScope(current);
         if (sid == 0) return current; // document or detached root
@@ -190,6 +192,79 @@ pub fn shadowInclusiveRoot(node: *lxb.lxb_dom_node_t, composed: bool) *lxb.lxb_d
         if (!composed) return current; // stop at shadow root
         // Jump to host and continue.
         current = @ptrCast(sr.host);
+    }
+}
+
+/// Is `node` the fragment-root of a ShadowRoot?
+pub fn isShadowRootNode(node: *lxb.lxb_dom_node_t) bool {
+    const sid = nodeScope(node);
+    if (sid == 0) return false;
+    const sr = shadowRootById(sid) orelse return false;
+    return sr.fragment == node;
+}
+
+/// Return the shadow root whose fragment == `node`, or null.
+pub fn shadowRootForFragment(node: *lxb.lxb_dom_node_t) ?*ShadowRoot {
+    const sid = nodeScope(node);
+    if (sid == 0) return null;
+    const sr = shadowRootById(sid) orelse return null;
+    if (sr.fragment != node) return null;
+    return sr;
+}
+
+/// Spec "parent" used for composed path: if `node` is a shadow-root fragment,
+/// return host; else return `node.parent`.
+pub fn composedParent(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    if (shadowRootForFragment(node)) |sr| {
+        return @ptrCast(sr.host);
+    }
+    return node.parent;
+}
+
+/// Walk up the composed parent chain from `node` to find the tree root
+/// (i.e., the first ancestor whose `composedParent` is null).
+/// Unlike shadowInclusiveRoot, this stops at the first tree root we reach
+/// via normal parents AND always climbs through shadow hosts.
+pub fn treeRoot(node: *lxb.lxb_dom_node_t) *lxb.lxb_dom_node_t {
+    var current: *lxb.lxb_dom_node_t = node;
+    while (current.parent) |p| {
+        current = p;
+    }
+    return current;
+}
+
+/// Is `ancestor` a shadow-including inclusive ancestor of `descendant`?
+/// Spec: either `ancestor` IS `descendant`, or `ancestor` is an inclusive
+/// ancestor in the same tree OR through shadow host boundaries.
+pub fn isShadowIncludingInclusiveAncestor(
+    ancestor: *lxb.lxb_dom_node_t,
+    descendant: *lxb.lxb_dom_node_t,
+) bool {
+    var current: ?*lxb.lxb_dom_node_t = descendant;
+    while (current) |c| {
+        if (c == ancestor) return true;
+        current = composedParent(c);
+    }
+    return false;
+}
+
+/// Retargeting algorithm (DOM §4.4):
+///   while true:
+///     if A is not a node OR A's root is not a shadow root: return A
+///     if B is a node and A's root is a shadow-including inclusive ancestor of B: return A
+///     A = A's root's host
+pub fn retarget(
+    a_in: *lxb.lxb_dom_node_t,
+    b_in: ?*lxb.lxb_dom_node_t,
+) *lxb.lxb_dom_node_t {
+    var a: *lxb.lxb_dom_node_t = a_in;
+    while (true) {
+        const a_root = treeRoot(a);
+        const sr = shadowRootForFragment(a_root) orelse return a;
+        if (b_in) |b| {
+            if (isShadowIncludingInclusiveAncestor(a_root, b)) return a;
+        }
+        a = @ptrCast(sr.host);
     }
 }
 
