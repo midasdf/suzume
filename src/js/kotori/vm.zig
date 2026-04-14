@@ -2674,6 +2674,15 @@ pub const VM = struct {
         return val;
     }
 
+    /// ES2023 §7.2.11 SameValueZero: same as strict equality but NaN equals NaN.
+    fn sameValueZero(a: JsValue, b: JsValue) bool {
+        if (JsValue.jsStrictEq(a, b).asBool()) return true;
+        // NaN === NaN is false under strict equality; SameValueZero makes it true.
+        if (a.isNumber() and b.isNumber() and
+            std.math.isNan(a.toNumber()) and std.math.isNan(b.toNumber())) return true;
+        return false;
+    }
+
     fn nativeArrayIndexOf(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         if (!this.isObject()) return JsValue.initNumber(-1);
         const obj = this.asJsObject();
@@ -2690,7 +2699,8 @@ pub const VM = struct {
         const obj = this.asJsObject();
         if (obj.obj_type != .array or args.len == 0) return JsValue.initBool(false);
         for (obj.data.array.items) |item| {
-            if (JsValue.jsStrictEq(item, args[0]).asBool()) return JsValue.initBool(true);
+            // ES2023 §23.1.3.11: includes uses SameValueZero (NaN matches NaN).
+            if (sameValueZero(item, args[0])) return JsValue.initBool(true);
         }
         return JsValue.initBool(false);
     }
@@ -3025,9 +3035,10 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            _ = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            _ = try vm.callJsFunction(callback, thisArg, &cb_args);
         }
         return JsValue.undefined_val;
     }
@@ -3038,12 +3049,13 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         const new_arr = try vm.allocator.create(JsObject);
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             try new_arr.data.array.append(vm.allocator, result);
         }
         return JsValue.initObject(new_arr);
@@ -3055,12 +3067,13 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         const new_arr = try vm.allocator.create(JsObject);
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (result.isTruthy()) {
                 try new_arr.data.array.append(vm.allocator, item);
             }
@@ -3116,9 +3129,10 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (result.isTruthy()) return item;
         }
         return JsValue.undefined_val;
@@ -3130,9 +3144,10 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.initNumber(-1);
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
         }
         return JsValue.initNumber(-1);
@@ -3144,12 +3159,13 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         const items = obj.data.array.items;
         var i: usize = items.len;
         while (i > 0) {
             i -= 1;
             const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (result.isTruthy()) return items[i];
         }
         return JsValue.undefined_val;
@@ -3161,12 +3177,13 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.initNumber(-1);
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         const items = obj.data.array.items;
         var i: usize = items.len;
         while (i > 0) {
             i -= 1;
             const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
         }
         return JsValue.initNumber(-1);
@@ -3178,9 +3195,10 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.initBool(false);
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (result.isTruthy()) return JsValue.initBool(true);
         }
         return JsValue.initBool(false);
@@ -3192,9 +3210,10 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.initBool(true);
         const vm = vmFromCtx(ctx);
         const callback = args[0];
+        const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, JsValue.undefined_val, &cb_args);
+            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
             if (!result.isTruthy()) return JsValue.initBool(false);
         }
         return JsValue.initBool(true);
@@ -3764,11 +3783,91 @@ pub const VM = struct {
         return nativePromiseThen(ctx, this, &.{ JsValue.undefined_val, on_rejected });
     }
 
-    /// promise.finally(onFinally)
+    /// promise.finally(onFinally) — ES2023 §25.4.5.4
+    /// On fulfill: call onFinally(); if it throws, reject with throw value; else resolve with ORIGINAL value.
+    /// On reject:  call onFinally(); if it throws, reject with throw value; else reject with ORIGINAL reason.
+    /// TODO: if onFinally returns a thenable, spec requires waiting for it before settling (not implemented).
     fn nativePromiseFinally(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        // Simplified: just call .then with same callback for both paths
-        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
-        return nativePromiseThen(ctx, this, &.{ callback, callback });
+        const vm = vmFromCtx(ctx);
+        if (!this.isObject()) return JsValue.undefined_val;
+        const promise = this.asJsObject();
+        if (promise.obj_type != .promise) return JsValue.undefined_val;
+
+        const on_finally = if (args.len > 0) args[0] else JsValue.undefined_val;
+
+        // Result promise that finally settles into.
+        const result_promise = try vm.createPromiseObj();
+
+        // Build wrapper native functions that capture on_finally and the result promise.
+        // fulfilled wrapper: calls onFinally(), then resolves result_promise with original value.
+        const fulfill_wrapper = try vm.allocator.create(JsObject);
+        fulfill_wrapper.* = .{ .obj_type = .native_function, .data = .{ .native_fn = &finallyFulfillWrapper } };
+        try vm.objects.append(vm.allocator, fulfill_wrapper);
+        const finally_key = try vm.pool.intern("__finally_cb");
+        const result_key = try vm.pool.intern("__finally_result");
+        try fulfill_wrapper.setProperty(vm.allocator, finally_key, on_finally);
+        try fulfill_wrapper.setProperty(vm.allocator, result_key, JsValue.initObject(result_promise));
+
+        // rejected wrapper: calls onFinally(), then rejects result_promise with original reason.
+        const reject_wrapper = try vm.allocator.create(JsObject);
+        reject_wrapper.* = .{ .obj_type = .native_function, .data = .{ .native_fn = &finallyRejectWrapper } };
+        try vm.objects.append(vm.allocator, reject_wrapper);
+        try reject_wrapper.setProperty(vm.allocator, finally_key, on_finally);
+        try reject_wrapper.setProperty(vm.allocator, result_key, JsValue.initObject(result_promise));
+
+        return nativePromiseThen(ctx, this, &.{
+            JsValue.initObject(fulfill_wrapper),
+            JsValue.initObject(reject_wrapper),
+        });
+    }
+
+    /// Helper: retrieve a property from the native function object on the stack.
+    fn getFinallyProp(vm: *VM, key: []const u8) ?JsValue {
+        const kid = vm.pool.intern(key) catch return null;
+        // Walk stack backwards looking for a native_function with the given property.
+        var i = vm.sp;
+        while (i > 0) {
+            i -= 1;
+            const v = vm.stack[i];
+            if (v.isObject()) {
+                const obj = v.asJsObject();
+                if (obj.obj_type == .native_function) {
+                    if (obj.getProperty(kid)) |prop| return prop;
+                }
+            }
+        }
+        return null;
+    }
+
+    /// Fulfill path for finally: call onFinally(); on success resolve result_promise with original value.
+    fn finallyFulfillWrapper(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const original_value = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const on_finally = getFinallyProp(vm, "__finally_cb") orelse JsValue.undefined_val;
+        const result_val = getFinallyProp(vm, "__finally_result") orelse JsValue.undefined_val;
+        if (!result_val.isObject()) return JsValue.undefined_val;
+        const result_promise = result_val.asJsObject();
+        if (on_finally.isObject()) {
+            // If onFinally throws, the error propagates and rejects result_promise via the caller.
+            _ = try vm.callJsFunction(on_finally, JsValue.undefined_val, &.{});
+        }
+        try vm.resolvePromise(result_promise, original_value);
+        return JsValue.undefined_val;
+    }
+
+    /// Reject path for finally: call onFinally(); on success re-reject with original reason.
+    fn finallyRejectWrapper(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const original_reason = if (args.len > 0) args[0] else JsValue.undefined_val;
+        const on_finally = getFinallyProp(vm, "__finally_cb") orelse JsValue.undefined_val;
+        const result_val = getFinallyProp(vm, "__finally_result") orelse JsValue.undefined_val;
+        if (!result_val.isObject()) return JsValue.undefined_val;
+        const result_promise = result_val.asJsObject();
+        if (on_finally.isObject()) {
+            _ = try vm.callJsFunction(on_finally, JsValue.undefined_val, &.{});
+        }
+        try vm.rejectPromise(result_promise, original_reason);
+        return JsValue.undefined_val;
     }
 
     /// Helper: create a native function that resolves or rejects a specific promise.
