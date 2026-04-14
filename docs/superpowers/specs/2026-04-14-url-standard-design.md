@@ -35,6 +35,7 @@ src/url/
   search_params.zig    — URLSearchParams: all methods + iterator
   idna.zig             — UTS #46 IDNA processing (ToASCII/ToUnicode)
   punycode.zig         — RFC 3492 Punycode encode/decode
+  nfc.zig              — Unicode NFC normalization for IDNA
   tables.zig           — IDNA mapping table + NFC data (comptime generated)
 src/js/
   url_bindings.zig     — QuickJS native class bindings for URL and URLSearchParams
