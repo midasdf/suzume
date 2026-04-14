@@ -411,8 +411,13 @@ fn jsStopImmediatePropagation(
     return quickjs.JS_UNDEFINED();
 }
 
-fn jsComposedPath(ctx: ?*qjs.JSContext, _: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+fn jsComposedPath(ctx: ?*qjs.JSContext, this_val: qjs.JSValue, _: c_int, _: ?[*]qjs.JSValue) callconv(.c) qjs.JSValue {
+    // DOM §4.4.3: return a copy of the event path (touched nodes) built during dispatch.
+    // Dispatch stores `_path` on the event object at events.zig:983.
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const stored = qjs.JS_GetPropertyStr(c, this_val, "_path");
+    if (qjs.JS_IsArray(stored)) return stored;
+    qjs.JS_FreeValue(c, stored);
     return qjs.JS_NewArray(c);
 }
 
@@ -424,7 +429,15 @@ fn jsInitEvent(ctx: ?*qjs.JSContext, this_val: qjs.JSValue, argc: c_int, argv: ?
     const dispatching = qjs.JS_GetPropertyStr(c, this_val, "_dispatching");
     defer qjs.JS_FreeValue(c, dispatching);
     if (qjs.JS_ToBool(c, dispatching) > 0) return quickjs.JS_UNDEFINED();
-    // initEvent(type, bubbles, cancelable)
+    // DOM §4.4.1 step 3: initialize the event — reset all internal flags + target.
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_stopped", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_stopImmediate", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_cancelBubble", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(c, this_val, "defaultPrevented", quickjs.JS_NewBool(false));
+    _ = qjs.JS_SetPropertyStr(c, this_val, "target", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, this_val, "currentTarget", quickjs.JS_NULL());
+    _ = qjs.JS_SetPropertyStr(c, this_val, "eventPhase", qjs.JS_NewInt32(c, 0));
+    // DOM §4.4.1 step 4: type / bubbles / cancelable
     _ = qjs.JS_SetPropertyStr(c, this_val, "type", qjs.JS_DupValue(c, args[0]));
     if (argc >= 2) _ = qjs.JS_SetPropertyStr(c, this_val, "bubbles", qjs.JS_DupValue(c, args[1]));
     if (argc >= 3) _ = qjs.JS_SetPropertyStr(c, this_val, "cancelable", qjs.JS_DupValue(c, args[2]));

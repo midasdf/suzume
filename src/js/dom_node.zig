@@ -664,6 +664,39 @@ fn isAncestorOrSelf(node: *lxb.lxb_dom_node_t, target: *lxb.lxb_dom_node_t) bool
     return false;
 }
 
+// DOM §3.2.4 step 5: helpers for Document child constraints.
+fn documentHasElementChild(doc: *lxb.lxb_dom_node_t) bool {
+    var c: ?*lxb.lxb_dom_node_t = doc.first_child;
+    while (c) |cn| : (c = cn.next) {
+        if (cn.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) return true;
+    }
+    return false;
+}
+
+fn documentHasDoctypeChild(doc: *lxb.lxb_dom_node_t) bool {
+    var c: ?*lxb.lxb_dom_node_t = doc.first_child;
+    while (c) |cn| : (c = cn.next) {
+        if (cn.type == @as(u32, 10)) return true;
+    }
+    return false;
+}
+
+fn documentHasElementChildExcluding(doc: *lxb.lxb_dom_node_t, exclude: *lxb.lxb_dom_node_t) bool {
+    var c: ?*lxb.lxb_dom_node_t = doc.first_child;
+    while (c) |cn| : (c = cn.next) {
+        if (cn.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT and @intFromPtr(cn) != @intFromPtr(exclude)) return true;
+    }
+    return false;
+}
+
+fn documentHasDoctypeChildExcluding(doc: *lxb.lxb_dom_node_t, exclude: *lxb.lxb_dom_node_t) bool {
+    var c: ?*lxb.lxb_dom_node_t = doc.first_child;
+    while (c) |cn| : (c = cn.next) {
+        if (cn.type == @as(u32, 10) and @intFromPtr(cn) != @intFromPtr(exclude)) return true;
+    }
+    return false;
+}
+
 pub fn elementAppendChild(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -767,6 +800,17 @@ pub fn elementAppendChild(
         return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
     if (child.type == @as(u32, 10) and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
         return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+    // DOM §3.2.4 step 5: Document can have at most one Element child.
+    // Also: appending an Element to a Document with an existing Element child throws.
+    if (parent.?.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and child.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        if (documentHasElementChild(parent.?))
+            return api.throwDOMException(c, "HierarchyRequestError", "Document already has an Element child.");
+    }
+    // DOM §3.2.4 step 5: Document can have at most one DocumentType child, and only as a child.
+    if (parent.?.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and child.type == @as(u32, 10)) {
+        if (documentHasDoctypeChild(parent.?))
+            return api.throwDOMException(c, "HierarchyRequestError", "Document already has a DocumentType child.");
+    }
     // DOM spec: DocumentFragment — collect children, then insert them individually
     // Note: our fragments are lexbor divs with JS nodeType overridden to 11, so check JS property
     var is_fragment = child.type == 11;
@@ -1011,6 +1055,15 @@ pub fn elementInsertBefore(
         return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
     if (new_node_type == 10 and parent.?.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
         return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+    // DOM §3.2.4 step 5: Document can have at most one Element child / one DocumentType child.
+    if (parent.?.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node_type == 1) {
+        if (documentHasElementChild(parent.?))
+            return api.throwDOMException(c, "HierarchyRequestError", "Document already has an Element child.");
+    }
+    if (parent.?.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node_type == 10) {
+        if (documentHasDoctypeChild(parent.?))
+            return api.throwDOMException(c, "HierarchyRequestError", "Document already has a DocumentType child.");
+    }
 
     // JS-level node — delegate to appendJsNode
     if (new_node_opt == null)
@@ -1188,6 +1241,16 @@ pub fn elementReplaceChild(
         return api.throwDOMException(c, "HierarchyRequestError", "Cannot insert a Text node as a child of a Document.");
     if (new_node_type == 10 and parent.type != lxb.LXB_DOM_NODE_TYPE_DOCUMENT)
         return api.throwDOMException(c, "HierarchyRequestError", "DocumentType can only be a child of a Document.");
+    // DOM §3.2.4 (replace) step 6: Document can have at most one Element / DocumentType child,
+    // excluding the node being replaced.
+    if (parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node_type == 1) {
+        if (documentHasElementChildExcluding(parent, old_node))
+            return api.throwDOMException(c, "HierarchyRequestError", "Document already has an Element child.");
+    }
+    if (parent.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT and new_node_type == 10) {
+        if (documentHasDoctypeChildExcluding(parent, old_node))
+            return api.throwDOMException(c, "HierarchyRequestError", "Document already has a DocumentType child.");
+    }
 
     // JS-level node — cannot insert into lexbor tree
     if (new_node_opt == null)
