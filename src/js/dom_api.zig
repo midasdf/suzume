@@ -5424,11 +5424,37 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  function _canonSel(s){var parts=_splitTop(s.trim(),',');for(var i=0;i<parts.length;i++)parts[i]=_canonOne(parts[i].trim());return parts.join(', ');}
             \\
+            \\  // ── CSSGroupingRule base ──
+            \\  function CSSGroupingRule(){}
+            \\  CSSGroupingRule.prototype.insertRule=function(rule,index){
+            \\    if(index===void 0)index=this.cssRules.length;
+            \\    if(index<0||index>this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
+            \\    var parsed=_parseOneRule(rule);if(!parsed)throw new DOMException('Invalid rule','SyntaxError');
+            \\    this.cssRules.splice(index,0,parsed);return index;
+            \\  };
+            \\  CSSGroupingRule.prototype.deleteRule=function(index){
+            \\    if(index<0||index>=this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
+            \\    this.cssRules.splice(index,1);
+            \\  };
+            \\  globalThis.CSSGroupingRule=CSSGroupingRule;
+            \\
             \\  // ── CSSStyleRule ──
-            \\  function CSSStyleRule(sel,body){this.type=1;this._sel=sel;this._body=body||'';}
+            \\  function CSSStyleRule(sel,decls,childRules){this.type=1;this._sel=sel;this._decls=decls||'';this.cssRules=childRules||[];this.style={cssText:decls||'',getPropertyValue:function(){return '';},setProperty:function(){},removeProperty:function(){return '';}};}
+            \\  CSSStyleRule.prototype=Object.create(CSSGroupingRule.prototype);
+            \\  CSSStyleRule.prototype.constructor=CSSStyleRule;
+            \\  CSSStyleRule.__proto__=CSSGroupingRule;
             \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{get:function(){return this._sel;},set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=_canonSel(c);}catch(e){}},enumerable:true,configurable:true});
-            \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){return this._sel+' { '+this._body+' }';},enumerable:true,configurable:true});
-            \\  CSSStyleRule.prototype.style={cssText:'',getPropertyValue:function(){return '';},setProperty:function(){},removeProperty:function(){return '';}};
+            \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){
+            \\    var t=this._sel+' {\n';
+            \\    if(this._decls)t+='  '+this._decls+'\n';
+            \\    for(var i=0;i<this.cssRules.length;i++)t+='  '+this.cssRules[i].cssText+'\n';
+            \\    return t+'}';
+            \\  },enumerable:true,configurable:true});
+            \\
+            \\  // ── CSSNestedDeclarations ──
+            \\  function CSSNestedDeclarations(decls){this.type=32;this._decls=decls;this.style={cssText:decls,getPropertyValue:function(){return '';},setProperty:function(){},removeProperty:function(){return '';}};}
+            \\  Object.defineProperty(CSSNestedDeclarations.prototype,'cssText',{get:function(){return this._decls;},enumerable:true,configurable:true});
+            \\  globalThis.CSSNestedDeclarations=CSSNestedDeclarations;
             \\
             \\  // ── CSSStyleSheet ──
             \\  function _Sheet(){this.cssRules=[];this.disabled=false;this.ownerNode=null;this.type='text/css';}
@@ -5468,17 +5494,52 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\
             \\  // ── style.sheet property via Element prototype getter ──
             \\  var _sheetMap=new WeakMap();
+            \\  function _parseOneRule(text){
+            \\    var bi=text.indexOf('{');if(bi===-1)return null;
+            \\    var sel=text.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+            \\    var ei=text.lastIndexOf('}');var body=ei>bi?text.substring(bi+1,ei).trim():'';
+            \\    if(!sel)return null;
+            \\    var parsed=_parseBody(body);
+            \\    return new CSSStyleRule(_canonSel(sel),parsed.decls,parsed.children);
+            \\  }
+            \\  function _parseBody(body){
+            \\    var decls='',children=[],pendingDecls='',i=0;
+            \\    while(i<body.length){
+            \\      while(i<body.length&&' \n\r\t'.indexOf(body[i])!==-1)i++;
+            \\      if(i>=body.length)break;
+            \\      if(body[i]==='@'){var bi=body.indexOf('{',i);if(bi===-1)break;var d=1,j=bi+1;while(j<body.length&&d>0){if(body[j]==='{')d++;if(body[j]==='}')d--;j++;}i=j;continue;}
+            \\      var bi=body.indexOf('{',i);var si=body.indexOf(';',i);
+            \\      if(bi!==-1&&(si===-1||bi<si)){
+            \\        var sel=body.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+            \\        var d=1,j=bi+1;while(j<body.length&&d>0){if(body[j]==='{')d++;if(body[j]==='}')d--;j++;}
+            \\        var innerBody=body.substring(bi+1,j-1).trim();
+            \\        if(pendingDecls){children.push(new CSSNestedDeclarations(pendingDecls.replace(/;\s*$/,'').trim()));pendingDecls='';}
+            \\        if(sel){var inner=_parseBody(innerBody);children.push(new CSSStyleRule(_canonSel(sel),inner.decls,inner.children));}
+            \\        i=j;
+            \\      }else if(si!==-1){
+            \\        var d3=body.substring(i,si+1).trim();
+            \\        if(d3){if(children.length===0)decls+=(decls?' ':'')+d3;else pendingDecls+=(pendingDecls?' ':'')+d3;}
+            \\        i=si+1;
+            \\      }else{
+            \\        var d4=body.substring(i).trim();
+            \\        if(d4){if(children.length===0)decls+=(decls?' ':'')+d4;else pendingDecls+=(pendingDecls?' ':'')+d4;}
+            \\        break;
+            \\      }
+            \\    }
+            \\    if(pendingDecls)children.push(new CSSNestedDeclarations(pendingDecls.replace(/;\s*$/,'').trim()));
+            \\    return{decls:decls,children:children};
+            \\  }
             \\  function _parseStyleRules(css){
-            \\    var rules=[];var i=0;
+            \\    var rules=[],i=0;
             \\    while(i<css.length){
-            \\      while(i<css.length&&(css[i]===' '||css[i]==='\n'||css[i]==='\r'||css[i]==='\t'))i++;
+            \\      while(i<css.length&&' \n\r\t'.indexOf(css[i])!==-1)i++;
             \\      if(i>=css.length)break;
-            \\      if(css[i]==='@'){var end=css.indexOf('}',i);if(end===-1)break;var inner=css.indexOf('{',i);if(inner!==-1&&inner<end){var d=1;var j=inner+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}i=j;continue;}i=end+1;continue;}
+            \\      if(css[i]==='@'){var bi=css.indexOf('{',i);if(bi===-1)break;var d=1,j=bi+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}i=j;continue;}
             \\      var bi=css.indexOf('{',i);if(bi===-1)break;
             \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
-            \\      var d2=1;var j2=bi+1;while(j2<css.length&&d2>0){if(css[j2]==='{')d2++;if(css[j2]==='}')d2--;j2++;}
-            \\      var body=css.substring(bi+1,j2-1).trim();
-            \\      if(sel){try{document.querySelector(sel);var c=_canonSel(sel);rules.push(new CSSStyleRule(c,body));}catch(e){}}
+            \\      var d2=1,j2=bi+1;while(j2<css.length&&d2>0){if(css[j2]==='{')d2++;if(css[j2]==='}')d2--;j2++;}
+            \\      var innerBody=css.substring(bi+1,j2-1).trim();
+            \\      if(sel){var parsed=_parseBody(innerBody);rules.push(new CSSStyleRule(_canonSel(sel),parsed.decls,parsed.children));}
             \\      i=j2;
             \\    }
             \\    return rules;
@@ -5490,6 +5551,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var txt=this.textContent||'';
             \\    if(txt!==sh._lastText){sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;}
             \\    return sh;
+            \\  },configurable:true,enumerable:true});
+            \\
+            \\  // ── document.styleSheets ──
+            \\  Object.defineProperty(document,'styleSheets',{get:function(){
+            \\    var styles=document.querySelectorAll('style');
+            \\    var sheets=[];
+            \\    for(var i=0;i<styles.length;i++){if(styles[i].sheet)sheets.push(styles[i].sheet);}
+            \\    sheets.item=function(i){return this[i]||null;};
+            \\    return sheets;
             \\  },configurable:true,enumerable:true});
             \\
             \\  // ── CSS.supports("selector(...)") ──
