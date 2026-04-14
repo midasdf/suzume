@@ -395,3 +395,98 @@ test "removeChild detaches node" {
     const html = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("", html);
 }
+
+// ── Shadow DOM Phase 1: JS-runtime behavioral tests ──────────────────
+
+test "attachShadow-twice-throws NotSupportedError" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\host.attachShadow({ mode: "open" });
+        \\var caught = "";
+        \\try {
+        \\  host.attachShadow({ mode: "open" });
+        \\} catch (e) {
+        \\  caught = e.name;
+        \\}
+        \\caught;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const name = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("NotSupportedError", name);
+}
+
+test "querySelector-scoping: light tree querySelector does not find shadow tree elements" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\inner.setAttribute("id", "inner-span");
+        \\sr.appendChild(inner);
+        \\var found = document.querySelector("#inner-span");
+        \\found === null ? "null" : "found";
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("null", val);
+}
+
+test "outerHTML-excludes-shadow: host outerHTML does not contain shadow content" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var p = document.createElement("p");
+        \\p.textContent = "shadow-content";
+        \\sr.appendChild(p);
+        \\host.outerHTML;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const html = ctx.getResultStr(result) orelse unreachable;
+    // outerHTML must not contain the shadow tree paragraph
+    const has_shadow = std.mem.indexOf(u8, html, "shadow-content") != null;
+    try std.testing.expect(!has_shadow);
+}
+
+test "getRootNode-composed: false returns ShadowRoot, true returns document" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\sr.appendChild(inner);
+        \\var rootDefault = inner.getRootNode();
+        \\var rootComposed = inner.getRootNode({ composed: true });
+        \\var isShadowRoot = (rootDefault.__isShadowRoot === true) ? "shadow" : "other";
+        \\var isDoc = (rootComposed === document) ? "document" : "other";
+        \\isShadowRoot + "+" + isDoc;
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("shadow+document", val);
+}
+
+test "isConnected-in-shadow: element inside shadow tree of connected host is connected" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"host\"></div></body></html>",
+        \\var host = document.getElementById("host");
+        \\var sr = host.attachShadow({ mode: "open" });
+        \\var inner = document.createElement("span");
+        \\sr.appendChild(inner);
+        \\inner.isConnected ? "connected" : "disconnected";
+    );
+    defer ctx.deinit();
+
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("connected", val);
+}

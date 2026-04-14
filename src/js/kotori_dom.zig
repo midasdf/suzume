@@ -27,6 +27,110 @@ const lxb = @cImport({
     @cInclude("lexbor/dom/interfaces/node.h");
 });
 
+// ── Shadow DOM Phase 1 — inline scope (no cross-module import needed) ──
+// These mirror src/js/shadow_root.zig but use the lxb types already
+// available via the @cImport block below. Global state is shared within
+// this compilation unit (the kotori test binary).
+const sr = struct {
+    extern fn lxb_dom_document_create_document_fragment(document: *anyopaque) ?*lxb.lxb_dom_node_t;
+
+    pub const Mode = enum { open, closed };
+    pub const SlotAssignment = enum { named, manual };
+
+    pub const ShadowRoot = struct {
+        id: u32,
+        host: *lxb.lxb_dom_element_t,
+        fragment: *lxb.lxb_dom_node_t,
+        mode: Mode,
+    };
+
+    var g_allocator: std.mem.Allocator = std.heap.c_allocator;
+    var g_shadow_roots: ?std.AutoHashMap(u32, *ShadowRoot) = null;
+    var g_node_scope: ?std.AutoHashMap(usize, u32) = null;
+    var g_host_to_shadow: ?std.AutoHashMap(usize, *ShadowRoot) = null;
+    var g_next_id: u32 = 1;
+
+    fn ensureInit() void {
+        if (g_shadow_roots == null) g_shadow_roots = std.AutoHashMap(u32, *ShadowRoot).init(g_allocator);
+        if (g_node_scope == null) g_node_scope = std.AutoHashMap(usize, u32).init(g_allocator);
+        if (g_host_to_shadow == null) g_host_to_shadow = std.AutoHashMap(usize, *ShadowRoot).init(g_allocator);
+    }
+
+    pub fn nodeScope(node: *lxb.lxb_dom_node_t) u32 {
+        if (g_node_scope) |map| return map.get(@intFromPtr(node)) orelse 0;
+        return 0;
+    }
+
+    pub fn setNodeScope(node: *lxb.lxb_dom_node_t, id: u32) void {
+        ensureInit();
+        if (id == 0) { _ = g_node_scope.?.remove(@intFromPtr(node)); return; }
+        g_node_scope.?.put(@intFromPtr(node), id) catch {};
+    }
+
+    pub fn tagSubtreeScope(node: *lxb.lxb_dom_node_t, id: u32) void {
+        setNodeScope(node, id);
+        var ch: ?*lxb.lxb_dom_node_t = @ptrCast(node.first_child);
+        while (ch) |c| : (ch = @ptrCast(c.next)) tagSubtreeScope(c, id);
+    }
+
+    pub fn propagateScopeFromParent(parent: *lxb.lxb_dom_node_t, new_child: *lxb.lxb_dom_node_t) void {
+        const sid = nodeScope(parent);
+        if (sid == 0) return;
+        tagSubtreeScope(new_child, sid);
+    }
+
+    pub fn shadowRootForHost(host: *lxb.lxb_dom_element_t) ?*ShadowRoot {
+        if (g_host_to_shadow) |map| return map.get(@intFromPtr(host));
+        return null;
+    }
+
+    pub fn shadowRootById(id: u32) ?*ShadowRoot {
+        if (g_shadow_roots) |map| return map.get(id);
+        return null;
+    }
+
+    pub fn create(document: *anyopaque, host: *lxb.lxb_dom_element_t, mode: Mode) ?*ShadowRoot {
+        ensureInit();
+        const fragment = lxb_dom_document_create_document_fragment(document) orelse return null;
+        const root = g_allocator.create(ShadowRoot) catch return null;
+        const id = g_next_id;
+        g_next_id += 1;
+        root.* = .{ .id = id, .host = host, .fragment = fragment, .mode = mode };
+        g_shadow_roots.?.put(id, root) catch { g_allocator.destroy(root); return null; };
+        g_host_to_shadow.?.put(@intFromPtr(host), root) catch {};
+        setNodeScope(fragment, id);
+        return root;
+    }
+
+    pub fn isAllowedShadowHost(local_name: []const u8) bool {
+        if (std.mem.indexOfScalar(u8, local_name, '-') != null) return true;
+        const allow = [_][]const u8{
+            "article", "aside", "blockquote", "body", "div", "footer",
+            "h1", "h2", "h3", "h4", "h5", "h6",
+            "header", "main", "nav", "p", "section", "span",
+        };
+        for (allow) |name| if (std.mem.eql(u8, local_name, name)) return true;
+        return false;
+    }
+
+    pub fn shadowInclusiveRoot(node: *lxb.lxb_dom_node_t, composed: bool) *lxb.lxb_dom_node_t {
+        var current: *lxb.lxb_dom_node_t = node;
+        while (true) {
+            while (current.parent) |p| : (current = @ptrCast(p)) {}
+            const sid = nodeScope(current);
+            if (sid == 0) return current;
+            const root = shadowRootById(sid) orelse return current;
+            if (!composed) return current;
+            current = @ptrCast(root.host);
+        }
+    }
+
+    pub fn isShadowInclusiveConnected(node: *lxb.lxb_dom_node_t) bool {
+        const root = shadowInclusiveRoot(node, true);
+        return root.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT;
+    }
+};
+
 // ── Lexbor extern functions ─────────────────────────────────────────
 const dom_b = struct {
     // Node operations
@@ -123,6 +227,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "removeAttribute", &nativeRemoveAttribute);
     try vm.registerNativeMethod(ep, "addEventListener", &nativeAddEventListener);
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
+    try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
+    try vm.registerNativeMethod(ep, "getRootNode", &nativeGetRootNode);
 
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
@@ -238,6 +344,22 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "body")) return findByTag(vm, node, "body");
     if (eql(name, "head")) return findByTag(vm, node, "head");
     if (eql(name, "documentElement")) return findByTag(vm, node, "html");
+
+    // Shadow DOM Phase 1
+    if (eql(name, "isConnected"))
+        return JsValue.initBool(sr.isShadowInclusiveConnected(node));
+
+    if (eql(name, "shadowRoot")) {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            if (sr.shadowRootForHost(elem)) |host_sr| {
+                if (host_sr.mode == .open) {
+                    return wrapShadowRoot(vm, host_sr) orelse JsValue.null_val;
+                }
+            }
+        }
+        return JsValue.null_val;
+    }
 
     return null; // fall through to prototype chain (methods live there)
 }
@@ -381,10 +503,12 @@ fn nativeCreateTextNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anye
 fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     _ = ctx;
     if (args.len == 0) return JsValue.null_val;
-    const parent = getThisNode(this) orelse return JsValue.null_val;
+    const parent = getThisNodeOrFragment(this) orelse return JsValue.null_val;
     const child = getArgNode(args[0]) orelse return JsValue.null_val;
     dom_b.lxb_dom_node_remove(child);
     dom_b.lxb_dom_node_insert_child(parent, child);
+    // Shadow DOM Phase 1: propagate scope tag if parent is in a shadow tree.
+    sr.propagateScopeFromParent(parent, child);
     setDomDirty();
     return args[0];
 }
@@ -484,6 +608,116 @@ fn nativeQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     return JsValue.null_val;
 }
 
+// ── Shadow DOM Phase 1 native methods ───────────────────────────────
+
+fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    // Parse mode from init dict (required).
+    var mode: sr.Mode = .open;
+    var has_mode = false;
+    if (args.len >= 1 and args[0].isObject()) {
+        const init_obj = args[0].asJsObject();
+        const mode_sid = vm.pool.intern("mode") catch return JsValue.undefined_val;
+        if (init_obj.getProperty(mode_sid)) |mode_val| {
+            if (mode_val.isString()) {
+                const mode_str = vm.pool.get(mode_val.asStringId()) orelse "";
+                if (std.mem.eql(u8, mode_str, "open")) {
+                    mode = .open;
+                    has_mode = true;
+                } else if (std.mem.eql(u8, mode_str, "closed")) {
+                    mode = .closed;
+                    has_mode = true;
+                }
+            }
+        }
+    }
+    if (!has_mode) return JsValue.undefined_val;
+
+    // Check allowlist.
+    var name_len: usize = 0;
+    const name_ptr = dom_b.lxb_dom_element_local_name(elem, &name_len) orelse return JsValue.undefined_val;
+    if (!sr.isAllowedShadowHost(name_ptr[0..name_len])) {
+        return throwDomError(vm, "NotSupportedError");
+    }
+
+    // Second-call guard: throw NotSupportedError.
+    if (sr.shadowRootForHost(elem) != null) {
+        return throwDomError(vm, "NotSupportedError");
+    }
+
+    const doc = g_document orelse return JsValue.undefined_val;
+    const shadow = sr.create(doc, elem, mode) orelse return JsValue.undefined_val;
+
+    return wrapShadowRoot(vm, shadow) orelse JsValue.undefined_val;
+}
+
+fn nativeGetRootNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNodeOrFragment(this) orelse return JsValue.undefined_val;
+
+    var composed: bool = false;
+    if (args.len >= 1 and args[0].isObject()) {
+        const opts = args[0].asJsObject();
+        const composed_sid = vm.pool.intern("composed") catch return JsValue.undefined_val;
+        if (opts.getProperty(composed_sid)) |cv| {
+            composed = cv.isTruthy();
+        }
+    }
+
+    const root = sr.shadowInclusiveRoot(node, composed);
+
+    // If the root is the document, return the JS document object.
+    if (root.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        return vm.globals.get(vm.pool.intern("document") catch return JsValue.undefined_val) orelse JsValue.undefined_val;
+    }
+
+    // If root is a shadow fragment, return the ShadowRoot wrapper.
+    const sid = sr.nodeScope(root);
+    if (sid != 0) {
+        if (sr.shadowRootById(sid)) |root_sr| {
+            if (root_sr.mode == .open) {
+                return wrapShadowRoot(vm, root_sr) orelse JsValue.undefined_val;
+            }
+            // Closed: return a wrapper of the fragment itself.
+            return wrapNode(vm, root) orelse JsValue.undefined_val;
+        }
+    }
+
+    return wrapNode(vm, root) orelse JsValue.undefined_val;
+}
+
+/// Wrap a ShadowRoot as a kotori JsObject (dom_node backed by the fragment).
+/// Sets __isShadowRoot = true on the object so JS can detect it.
+fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
+    const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
+    obj.data = .{ .dom_node = @ptrCast(root_sr.fragment) };
+    obj.prototype = vm.element_proto;
+    // Mark as shadow root for JS detection.
+    const is_sr_sid = vm.pool.intern("__isShadowRoot") catch return JsValue.initObject(obj);
+    obj.setProperty(vm.allocator, is_sr_sid, JsValue.initBool(true)) catch {};
+    const mode_sid = vm.pool.intern("mode") catch return JsValue.initObject(obj);
+    const mode_str: []const u8 = switch (root_sr.mode) { .open => "open", .closed => "closed" };
+    const mode_val = JsValue.initString(vm.pool.intern(mode_str) catch return JsValue.initObject(obj));
+    obj.setProperty(vm.allocator, mode_sid, mode_val) catch {};
+    return JsValue.initObject(obj);
+}
+
+/// Set a pending JS throw on the VM so JS try/catch can catch it.
+/// The VM checks pending_throw after each native call and executes a JS throw.
+fn throwDomError(vm: *VM, name: []const u8) JsValue {
+    // Build a plain object with .name = name so `e.name` works in catch.
+    const err_obj = vm.createObj(.{}) catch return JsValue.undefined_val;
+    const name_sid = vm.pool.intern("name") catch return JsValue.undefined_val;
+    const msg_sid = vm.pool.intern(name) catch return JsValue.undefined_val;
+    err_obj.setProperty(vm.allocator, name_sid, JsValue.initString(msg_sid)) catch {};
+    vm.pending_throw = JsValue.initObject(err_obj);
+    return JsValue.undefined_val;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Helpers — value extraction
 // ══════════════════════════════════════════════════════════════════════
@@ -497,6 +731,12 @@ fn getThisNode(this: JsValue) ?*lxb.lxb_dom_node_t {
     const obj = this.asJsObject();
     if (obj.obj_type != .dom_node) return null;
     return @ptrCast(@alignCast(obj.data.dom_node));
+}
+
+/// Like getThisNode but also accepts ShadowRoot wrappers (dom_node backed
+/// by a document fragment). Used for appendChild/getRootNode on shadow roots.
+fn getThisNodeOrFragment(this: JsValue) ?*lxb.lxb_dom_node_t {
+    return getThisNode(this);
 }
 
 fn getArgNode(val: JsValue) ?*lxb.lxb_dom_node_t {

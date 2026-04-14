@@ -88,6 +88,8 @@ pub const VM = struct {
     // Exception handling
     try_stack: [32]TryContext = undefined,
     try_depth: u32 = 0,
+    /// Set by native functions (e.g. DOM) to inject a JS-catchable throw.
+    pending_throw: ?JsValue = null,
 
     pub const TimerEntry = struct {
         id: u32,
@@ -562,6 +564,24 @@ pub const VM = struct {
                         const base = self.sp - arg_count;
                         const result = try native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]);
                         self.sp = base - 1; // pop func
+                        if (self.pending_throw) |thrown| {
+                            self.pending_throw = null;
+                            if (self.try_depth == 0) {
+                                self.push(JsValue.undefined_val);
+                            } else {
+                                self.try_depth -= 1;
+                                const tc = self.try_stack[self.try_depth];
+                                while (self.frame_count > tc.frame_idx + 1) {
+                                    const f = self.frames[self.frame_count - 1];
+                                    self.closeUpvaluesAbove(f.base_sp);
+                                    self.frame_count -= 1;
+                                }
+                                self.sp = tc.sp;
+                                self.push(thrown);
+                                self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                            }
+                            continue;
+                        }
                         self.push(result);
                         continue;
                     }
@@ -1224,6 +1244,24 @@ pub const VM = struct {
                         const base = self.sp - arg_count;
                         const result = try native(@ptrCast(self), this_val, self.stack[base..self.sp]);
                         self.sp = this_pos;
+                        if (self.pending_throw) |thrown| {
+                            self.pending_throw = null;
+                            if (self.try_depth == 0) {
+                                self.push(JsValue.undefined_val);
+                            } else {
+                                self.try_depth -= 1;
+                                const tc = self.try_stack[self.try_depth];
+                                while (self.frame_count > tc.frame_idx + 1) {
+                                    const f = self.frames[self.frame_count - 1];
+                                    self.closeUpvaluesAbove(f.base_sp);
+                                    self.frame_count -= 1;
+                                }
+                                self.sp = tc.sp;
+                                self.push(thrown);
+                                self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                            }
+                            continue;
+                        }
                         self.push(result);
                         continue;
                     }
