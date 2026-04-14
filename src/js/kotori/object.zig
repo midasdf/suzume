@@ -333,6 +333,146 @@ pub const JsObject = struct {
         const current = self.getOwnDescriptor(name);
         return self.validateAndApply(allocator, name, current, desc);
     }
+
+    // ── Bulk attribute mutations ─────────────────────────────────────
+
+    /// Promote all fast-path properties to the slow (descriptors) map with
+    /// the given attribute overrides applied.  Symbol properties are treated
+    /// symmetrically.
+    fn promoteAllToDescriptors(
+        self: *JsObject,
+        allocator: std.mem.Allocator,
+        make_non_configurable: bool,
+        make_non_writable: bool,
+    ) !void {
+        // String fast-path → slow-path promotion.
+        if (self.properties.count() > 0) {
+            if (self.descriptors == null) self.descriptors = .{};
+            const keys = self.properties.keys();
+            const vals = self.properties.values();
+            for (keys, vals) |k, v| {
+                const new_attrs = PropertyAttrs{
+                    .writable = if (make_non_writable) false else true,
+                    .enumerable = true,
+                    .configurable = if (make_non_configurable) false else true,
+                    .is_accessor = false,
+                };
+                try self.descriptors.?.put(allocator, k, .{ .data = .{ .value = v, .attrs = new_attrs } });
+            }
+            self.properties.clearRetainingCapacity();
+        }
+        // String slow-path: patch existing descriptor attrs.
+        if (self.descriptors) |*d| {
+            for (d.values()) |*pd| {
+                switch (pd.*) {
+                    .data => |*dat| {
+                        if (make_non_configurable) dat.attrs.configurable = false;
+                        if (make_non_writable) dat.attrs.writable = false;
+                    },
+                    .accessor => |*acc| {
+                        if (make_non_configurable) acc.attrs.configurable = false;
+                    },
+                }
+            }
+        }
+        // Symbol fast-path → slow-path promotion.
+        if (self.symbol_props) |*sp| {
+            if (sp.count() > 0) {
+                if (self.symbol_descriptors == null) self.symbol_descriptors = .{};
+                const keys = sp.keys();
+                const vals = sp.values();
+                for (keys, vals) |k, v| {
+                    const new_attrs = PropertyAttrs{
+                        .writable = if (make_non_writable) false else true,
+                        .enumerable = true,
+                        .configurable = if (make_non_configurable) false else true,
+                        .is_accessor = false,
+                    };
+                    try self.symbol_descriptors.?.put(allocator, k, .{ .data = .{ .value = v, .attrs = new_attrs } });
+                }
+                sp.clearRetainingCapacity();
+            }
+        }
+        // Symbol slow-path: patch existing descriptor attrs.
+        if (self.symbol_descriptors) |*sd| {
+            for (sd.values()) |*pd| {
+                switch (pd.*) {
+                    .data => |*dat| {
+                        if (make_non_configurable) dat.attrs.configurable = false;
+                        if (make_non_writable) dat.attrs.writable = false;
+                    },
+                    .accessor => |*acc| {
+                        if (make_non_configurable) acc.attrs.configurable = false;
+                    },
+                }
+            }
+        }
+    }
+
+    /// Object.freeze — marks all own props non-configurable + non-writable
+    /// (data only), then prevents extension.
+    pub fn freeze(self: *JsObject, allocator: std.mem.Allocator) !void {
+        try self.promoteAllToDescriptors(allocator, true, true);
+        self.extensible = false;
+    }
+
+    /// Object.seal — marks all own props non-configurable, preserves writable,
+    /// then prevents extension.
+    pub fn seal(self: *JsObject, allocator: std.mem.Allocator) !void {
+        try self.promoteAllToDescriptors(allocator, true, false);
+        self.extensible = false;
+    }
+
+    /// Object.isFrozen — true when !extensible AND all own props are
+    /// non-configurable AND (accessor or non-writable data).
+    pub fn isFrozen(self: *const JsObject) bool {
+        if (self.extensible) return false;
+        // Fast-path properties are writable=true — any remaining means not frozen.
+        if (self.properties.count() > 0) return false;
+        if (self.descriptors) |*d| {
+            for (d.values()) |pd| {
+                if (pd.attrs().configurable) return false;
+                switch (pd) {
+                    .data => |dat| if (dat.attrs.writable) return false,
+                    .accessor => {},
+                }
+            }
+        }
+        if (self.symbol_props) |*sp| {
+            if (sp.count() > 0) return false;
+        }
+        if (self.symbol_descriptors) |*sd| {
+            for (sd.values()) |pd| {
+                if (pd.attrs().configurable) return false;
+                switch (pd) {
+                    .data => |dat| if (dat.attrs.writable) return false,
+                    .accessor => {},
+                }
+            }
+        }
+        return true;
+    }
+
+    /// Object.isSealed — true when !extensible AND all own props are
+    /// non-configurable.
+    pub fn isSealed(self: *const JsObject) bool {
+        if (self.extensible) return false;
+        if (self.properties.count() > 0) return false;
+        if (self.descriptors) |*d| {
+            for (d.values()) |pd| {
+                if (pd.attrs().configurable) return false;
+            }
+        }
+        if (self.symbol_props) |*sp| {
+            if (sp.count() > 0) return false;
+        }
+        if (self.symbol_descriptors) |*sd| {
+            for (sd.values()) |pd| {
+                if (pd.attrs().configurable) return false;
+            }
+        }
+        return true;
+    }
 };
 
 pub const IteratorData = struct {

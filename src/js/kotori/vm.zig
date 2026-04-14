@@ -1373,8 +1373,17 @@ pub const VM = struct {
                     const arr = try self.createArray();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Fast-path: all-default attrs are enumerable=true.
                         for (obj.properties.keys()) |key_id| {
                             arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
+                        }
+                        // Slow-path: filter by enumerable (for-in skips non-enumerable).
+                        if (obj.descriptors) |*d| {
+                            for (d.keys(), d.values()) |key_id, pd| {
+                                if (pd.attrs().enumerable) {
+                                    arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
+                                }
+                            }
                         }
                     }
                     self.push(JsValue.initObject(arr));
@@ -2071,11 +2080,11 @@ pub const VM = struct {
         try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor);
         try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptors", &nativeObjectGetOwnPropertyDescriptors);
         try self.registerNativeMethod(obj_constructor, "getOwnPropertySymbols", &nativeObjectGetOwnPropertySymbols);
-        try self.registerNativeMethod(obj_constructor, "freeze", &nativeObjectPassthrough);
-        try self.registerNativeMethod(obj_constructor, "seal", &nativeObjectPassthrough);
+        try self.registerNativeMethod(obj_constructor, "freeze", &nativeObjectFreeze);
+        try self.registerNativeMethod(obj_constructor, "seal", &nativeObjectSeal);
         try self.registerNativeMethod(obj_constructor, "preventExtensions", &nativeObjectPreventExtensions);
-        try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeReturnFalse);
-        try self.registerNativeMethod(obj_constructor, "isSealed", &nativeReturnFalse);
+        try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeObjectIsFrozen);
+        try self.registerNativeMethod(obj_constructor, "isSealed", &nativeObjectIsSealed);
         try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeObjectIsExtensible);
         try self.registerNativeMethod(obj_constructor, "is", &nativeObjectIs);
         try self.registerNativeMethod(obj_constructor, "hasOwn", &nativeObjectHasOwn);
@@ -4080,8 +4089,17 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Fast-path: all-default attrs are enumerable=true.
         for (obj.properties.keys()) |key_id| {
             try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+        }
+        // Slow-path: filter by enumerable.
+        if (obj.descriptors) |*d| {
+            for (d.keys(), d.values()) |key_id, pd| {
+                if (pd.attrs().enumerable) {
+                    try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+                }
+            }
         }
         return JsValue.initObject(new_arr);
     }
@@ -4091,8 +4109,21 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Fast-path: all-default attrs are enumerable=true.
         for (obj.properties.values()) |val| {
             try new_arr.data.array.append(vm.allocator, val);
+        }
+        // Slow-path: filter by enumerable.
+        if (obj.descriptors) |*d| {
+            for (d.values()) |pd| {
+                if (pd.attrs().enumerable) {
+                    const val = switch (pd) {
+                        .data => |dat| dat.value,
+                        .accessor => JsValue.undefined_val,
+                    };
+                    try new_arr.data.array.append(vm.allocator, val);
+                }
+            }
         }
         return JsValue.initObject(new_arr);
     }
@@ -4102,6 +4133,7 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Fast-path: all-default attrs are enumerable=true.
         const keys = obj.properties.keys();
         const vals = obj.properties.values();
         for (keys, vals) |key_id, val| {
@@ -4109,6 +4141,21 @@ pub const VM = struct {
             try pair.data.array.append(vm.allocator, JsValue.initString(key_id));
             try pair.data.array.append(vm.allocator, val);
             try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+        }
+        // Slow-path: filter by enumerable.
+        if (obj.descriptors) |*d| {
+            for (d.keys(), d.values()) |key_id, pd| {
+                if (pd.attrs().enumerable) {
+                    const val = switch (pd) {
+                        .data => |dat| dat.value,
+                        .accessor => JsValue.undefined_val,
+                    };
+                    const pair = try vm.createArray();
+                    try pair.data.array.append(vm.allocator, JsValue.initString(key_id));
+                    try pair.data.array.append(vm.allocator, val);
+                    try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+                }
+            }
         }
         return JsValue.initObject(new_arr);
     }
@@ -4120,8 +4167,21 @@ pub const VM = struct {
         for (args[1..]) |src_val| {
             if (!src_val.isObject()) continue;
             const src = src_val.asJsObject();
+            // Fast-path: all enumerable.
             for (src.properties.keys(), src.properties.values()) |key, val| {
                 try target.setProperty(vm.allocator, key, val);
+            }
+            // Slow-path: filter by enumerable.
+            if (src.descriptors) |*d| {
+                for (d.keys(), d.values()) |key, pd| {
+                    if (pd.attrs().enumerable) {
+                        const val = switch (pd) {
+                            .data => |dat| dat.value,
+                            .accessor => JsValue.undefined_val,
+                        };
+                        try target.setProperty(vm.allocator, key, val);
+                    }
+                }
             }
         }
         return args[0];
@@ -4316,6 +4376,34 @@ pub const VM = struct {
 
     fn nativeObjectPassthrough(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         return if (args.len > 0) args[0] else JsValue.undefined_val;
+    }
+
+    // ── Object.freeze ─────────────────────────────────────────────────
+    fn nativeObjectFreeze(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        try args[0].asJsObject().freeze(vm.allocator);
+        return args[0];
+    }
+
+    // ── Object.seal ───────────────────────────────────────────────────
+    fn nativeObjectSeal(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        try args[0].asJsObject().seal(vm.allocator);
+        return args[0];
+    }
+
+    // ── Object.isFrozen ───────────────────────────────────────────────
+    fn nativeObjectIsFrozen(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initBool(true); // primitives are frozen
+        return JsValue.initBool(args[0].asJsObject().isFrozen());
+    }
+
+    // ── Object.isSealed ───────────────────────────────────────────────
+    fn nativeObjectIsSealed(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initBool(true); // primitives are sealed
+        return JsValue.initBool(args[0].asJsObject().isSealed());
     }
 
     fn nativeObjHasOwnProperty(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
