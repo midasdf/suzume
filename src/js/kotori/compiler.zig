@@ -1273,13 +1273,13 @@ pub const Compiler = struct {
                         .get => {
                             try self.emitOp(.dup);
                             try self.compileNode(prop.value);
-                            try self.emitOpU16(.define_getter, ci);
+                            try self.emitOpU16(.define_getter_lit, ci);
                             try self.emitOp(.pop); // pop dup'd obj
                         },
                         .set => {
                             try self.emitOp(.dup);
                             try self.compileNode(prop.value);
-                            try self.emitOpU16(.define_setter, ci);
+                            try self.emitOpU16(.define_setter_lit, ci);
                             try self.emitOp(.pop); // pop dup'd obj
                         },
                     }
@@ -1514,8 +1514,20 @@ pub const Compiler = struct {
                     }
                     // [ctor, ctor, static_fn]
                     const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_id)));
-                    try self.emitOpU16(.set_prop, ci); // [ctor, static_fn]
-                    try self.emitOp(.pop); // [ctor]
+                    switch (prop.kind) {
+                        .init => {
+                            try self.emitOpU16(.set_prop, ci); // [ctor, static_fn]
+                            try self.emitOp(.pop); // [ctor]
+                        },
+                        .get => {
+                            try self.emitOpU16(.define_getter, ci);
+                            try self.emitOp(.pop); // pop dup'd ctor
+                        },
+                        .set => {
+                            try self.emitOpU16(.define_setter, ci);
+                            try self.emitOp(.pop); // pop dup'd ctor
+                        },
+                    }
                 },
                 else => {},
             }

@@ -5347,3 +5347,93 @@ test "eval: object literal getter and setter shorthand" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 55.0), result.asNumber(), 0.001);
 }
+
+// ── Phase 4 follow-up: class/literal accessor descriptor verification ──
+
+test "eval: object literal getter returns value" {
+    const result = try evalExpr(
+        \\const o = { get foo() { return 42; }, set foo(v) { this._v = v; } };
+        \\o.foo
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: object literal setter stores via this" {
+    const result = try evalExpr(
+        \\const o = { get foo() { return this._v; }, set foo(v) { this._v = v; } };
+        \\o.foo = 5;
+        \\o._v
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: class instance getter and setter" {
+    const result = try evalExpr(
+        \\class C {
+        \\  get x() { return this._x; }
+        \\  set x(v) { this._x = v; }
+        \\}
+        \\const c = new C();
+        \\c.x = 10;
+        \\c.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: class static getter" {
+    const result = try evalExpr(
+        \\class C {
+        \\  static get y() { return 99; }
+        \\}
+        \\C.y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: class static getter and setter" {
+    const result = try evalExpr(
+        \\class C {
+        \\  static get y() { return C._y; }
+        \\  static set y(v) { C._y = v; }
+        \\}
+        \\C.y = 7;
+        \\C.y
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: inherited accessor via class extends" {
+    const result = try evalExpr(
+        \\class A { get x() { return 1; } }
+        \\class B extends A {}
+        \\new B().x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.001);
+}
+
+test "eval: class accessor enumerable is false" {
+    const result = try evalExpr(
+        \\class C { get x() { return 1; } }
+        \\Object.getOwnPropertyDescriptor(C.prototype, 'x').enumerable
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: object literal accessor enumerable is true" {
+    const result = try evalExpr(
+        \\const o = { get x() { return 1; } };
+        \\Object.getOwnPropertyDescriptor(o, 'x').enumerable
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: class accessor configurable is true" {
+    const result = try evalExpr(
+        \\class C { get x() { return 1; } }
+        \\Object.getOwnPropertyDescriptor(C.prototype, 'x').configurable
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

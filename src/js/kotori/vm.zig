@@ -813,7 +813,8 @@ pub const VM = struct {
                     }
                 },
 
-                .define_getter => {
+                .define_getter, .define_getter_lit => {
+                    const enumerable = op == .define_getter_lit;
                     const ci = self.readU16(frame);
                     const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
                     const func = self.pop(); // getter function
@@ -833,11 +834,12 @@ pub const VM = struct {
                         try obj.descriptors.?.put(self.allocator, name_id, .{ .accessor = .{
                             .get = func,
                             .set = existing_set,
-                            .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+                            .attrs = .{ .writable = false, .enumerable = enumerable, .configurable = true, .is_accessor = true },
                         } });
                     }
                 },
-                .define_setter => {
+                .define_setter, .define_setter_lit => {
+                    const enumerable = op == .define_setter_lit;
                     const ci = self.readU16(frame);
                     const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
                     const func = self.pop(); // setter function
@@ -857,7 +859,7 @@ pub const VM = struct {
                         try obj.descriptors.?.put(self.allocator, name_id, .{ .accessor = .{
                             .get = existing_get,
                             .set = func,
-                            .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+                            .attrs = .{ .writable = false, .enumerable = enumerable, .configurable = true, .is_accessor = true },
                         } });
                     }
                 },

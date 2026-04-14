@@ -112,8 +112,10 @@ pub const OpCode = enum(u8) {
     yield_delegate, // yield*: delegate to sub-iterator
 
     // Getters/Setters
-    define_getter, // operand: u16 (property name), stack: [obj, func] → [obj]
-    define_setter, // operand: u16 (property name), stack: [obj, func] → [obj]
+    define_getter, // operand: u16 (property name), stack: [obj, func] → [obj], enumerable:false (class)
+    define_setter, // operand: u16 (property name), stack: [obj, func] → [obj], enumerable:false (class)
+    define_getter_lit, // operand: u16 (property name), stack: [obj, func] → [obj], enumerable:true (object literal)
+    define_setter_lit, // operand: u16 (property name), stack: [obj, func] → [obj], enumerable:true (object literal)
 
     // Spread
     spread_into_array, // stack: [array, iterable] → [array]
