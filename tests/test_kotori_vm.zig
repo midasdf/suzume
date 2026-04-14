@@ -5255,3 +5255,95 @@ test "eval: Object.getOwnPropertyDescriptors includes symbol keys" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
+
+// ── Phase 4: accessor descriptor tests ─────────────────────────────
+
+test "eval: Object.defineProperty accessor get returns value" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, 'x', { get: function() { return 42; } });
+        \\o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: accessor getter this is receiver" {
+    const result = try evalExpr(
+        \\var o = { y: 99 };
+        \\Object.defineProperty(o, 'x', { get: function() { return this.y; } });
+        \\o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: accessor setter stores value" {
+    const result = try evalExpr(
+        \\var o = { _v: 0 };
+        \\Object.defineProperty(o, 'x', {
+        \\  get: function() { return this._v; },
+        \\  set: function(v) { this._v = v; }
+        \\});
+        \\o.x = 7;
+        \\o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+test "eval: inherited accessor via __proto__" {
+    const result = try evalExpr(
+        \\var proto = {};
+        \\Object.defineProperty(proto, 'x', { get: function() { return this.y; } });
+        \\var child = { __proto__: proto, y: 99 };
+        \\child.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 99.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.freeze accessor get still works" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, 'x', { get: function() { return 42; }, configurable: true });
+        \\Object.freeze(o);
+        \\o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: Object.freeze accessor set still fires (setter is not blocked by freeze)" {
+    const result = try evalExpr(
+        \\var o = { _v: 5 };
+        \\Object.defineProperty(o, 'x', {
+        \\  get: function() { return this._v; },
+        \\  set: function(v) { this._v = v; },
+        \\  configurable: true
+        \\});
+        \\Object.freeze(o);
+        \\o.x = 99;
+        \\o.x
+    );
+    // After freeze accessor is non-configurable, but existing setter still fires per spec.
+    // _v itself was promoted to non-writable by freeze, so setter's this._v = v silently fails.
+    // Result: getter returns the frozen _v = 5.
+    try std.testing.expectApproxEqAbs(@as(f64, 5.0), result.asNumber(), 0.001);
+}
+
+test "eval: object literal getter shorthand" {
+    const result = try evalExpr(
+        \\var o = { _x: 10, get x() { return this._x * 2; } };
+        \\o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
+}
+
+test "eval: object literal getter and setter shorthand" {
+    const result = try evalExpr(
+        \\var o = {
+        \\  _x: 1,
+        \\  get x() { return this._x; },
+        \\  set x(v) { this._x = v; }
+        \\};
+        \\o.x = 55;
+        \\o.x
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 55.0), result.asNumber(), 0.001);
+}

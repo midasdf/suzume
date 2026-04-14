@@ -68,8 +68,6 @@ pub const JsObject = struct {
     extensible: bool = true,
     prototype: ?*JsObject = null,
     data: ObjData = .none,
-    getters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
-    setters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
     symbol_props: ?std.AutoArrayHashMapUnmanaged(u32, JsValue) = null,
     symbol_descriptors: ?std.AutoArrayHashMapUnmanaged(u32, PropertyDescriptor) = null,
 
@@ -131,8 +129,6 @@ pub const JsObject = struct {
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
         self.properties.deinit(allocator);
         if (self.descriptors) |*d| d.deinit(allocator);
-        if (self.getters) |*g| g.deinit(allocator);
-        if (self.setters) |*s| s.deinit(allocator);
         if (self.symbol_props) |*sp| sp.deinit(allocator);
         if (self.symbol_descriptors) |*sd| sd.deinit(allocator);
         switch (self.data) {
@@ -150,6 +146,25 @@ pub const JsObject = struct {
             .bytes_data => |b| if (b.len > 0) allocator.free(b),
             .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .bytes_view, .proxy_data => {},
         }
+    }
+
+    /// Find an accessor descriptor for `name` walking the prototype chain.
+    /// Returns the accessor struct (get/set/attrs) or null if none found.
+    pub fn findAccessorDescriptor(self: *const JsObject, name: StringId) ?struct { get: JsValue, set: JsValue, attrs: PropertyAttrs } {
+        var cur: ?*const JsObject = self;
+        while (cur) |obj| {
+            if (obj.descriptors) |*d| {
+                if (d.get(name)) |desc| {
+                    switch (desc) {
+                        .accessor => |a| return .{ .get = a.get, .set = a.set, .attrs = a.attrs },
+                        .data => return null, // data property shadows any prototype accessor
+                    }
+                }
+            }
+            if (obj.properties.contains(name)) return null; // fast-path data shadows prototype accessor
+            cur = obj.prototype;
+        }
+        return null;
     }
 
     pub fn getProperty(self: *const JsObject, name: StringId) ?JsValue {
@@ -178,7 +193,7 @@ pub const JsObject = struct {
                         if (dat.attrs.writable) dat.value = val;
                         return;
                     },
-                    .accessor => return, // setters handled externally
+                    .accessor => return, // setter invocation handled by VM ordinarySet
                 }
             }
         }

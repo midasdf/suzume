@@ -710,22 +710,15 @@ pub const VM = struct {
                                 continue;
                             }
                         }
-                        // Check for getter (own or prototype)
-                        if (obj.getters) |getters| {
-                            if (getters.get(name_id)) |getter_fn| {
-                                const result = try self.callJsFunction(getter_fn, obj_val, &.{});
+                        // Check for accessor descriptor (own or prototype chain)
+                        if (obj.findAccessorDescriptor(name_id)) |acc| {
+                            if (!acc.get.isUndefined()) {
+                                const result = try self.callJsFunction(acc.get, obj_val, &.{});
                                 self.push(result);
                                 continue;
                             }
-                        }
-                        if (obj.prototype) |proto| {
-                            if (proto.getters) |getters| {
-                                if (getters.get(name_id)) |getter_fn| {
-                                    const result = try self.callJsFunction(getter_fn, obj_val, &.{});
-                                    self.push(result);
-                                    continue;
-                                }
-                            }
+                            self.push(JsValue.undefined_val);
+                            continue;
                         }
                         // Array .length
                         if (obj.obj_type == .array) {
@@ -827,10 +820,21 @@ pub const VM = struct {
                     const obj_val = self.peek(); // object stays on stack
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
-                        if (obj.getters == null) {
-                            obj.getters = .{};
-                        }
-                        try obj.getters.?.put(self.allocator, name_id, func);
+                        if (obj.descriptors == null) obj.descriptors = .{};
+                        // Merge with existing accessor descriptor if present (preserve setter).
+                        const existing_set = if (obj.descriptors.?.get(name_id)) |existing|
+                            switch (existing) {
+                                .accessor => |a| a.set,
+                                .data => JsValue.undefined_val,
+                            }
+                        else
+                            JsValue.undefined_val;
+                        _ = obj.properties.swapRemove(name_id);
+                        try obj.descriptors.?.put(self.allocator, name_id, .{ .accessor = .{
+                            .get = func,
+                            .set = existing_set,
+                            .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+                        } });
                     }
                 },
                 .define_setter => {
@@ -840,10 +844,21 @@ pub const VM = struct {
                     const obj_val = self.peek(); // object stays on stack
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
-                        if (obj.setters == null) {
-                            obj.setters = .{};
-                        }
-                        try obj.setters.?.put(self.allocator, name_id, func);
+                        if (obj.descriptors == null) obj.descriptors = .{};
+                        // Merge with existing accessor descriptor if present (preserve getter).
+                        const existing_get = if (obj.descriptors.?.get(name_id)) |existing|
+                            switch (existing) {
+                                .accessor => |a| a.get,
+                                .data => JsValue.undefined_val,
+                            }
+                        else
+                            JsValue.undefined_val;
+                        _ = obj.properties.swapRemove(name_id);
+                        try obj.descriptors.?.put(self.allocator, name_id, .{ .accessor = .{
+                            .get = existing_get,
+                            .set = func,
+                            .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+                        } });
                     }
                 },
 
@@ -860,22 +875,14 @@ pub const VM = struct {
                             self.push(val);
                             continue;
                         }
-                        // Check for setter (own or prototype)
-                        if (obj.setters) |setters_map| {
-                            if (setters_map.get(name_id)) |setter_fn| {
-                                _ = try self.callJsFunction(setter_fn, obj_val, &.{val});
-                                self.push(val);
-                                continue;
+                        // Check for accessor descriptor setter (own or prototype chain)
+                        if (obj.findAccessorDescriptor(name_id)) |acc| {
+                            if (!acc.set.isUndefined()) {
+                                _ = try self.callJsFunction(acc.set, obj_val, &.{val});
                             }
-                        }
-                        if (obj.prototype) |proto| {
-                            if (proto.setters) |setters_map| {
-                                if (setters_map.get(name_id)) |setter_fn| {
-                                    _ = try self.callJsFunction(setter_fn, obj_val, &.{val});
-                                    self.push(val);
-                                    continue;
-                                }
-                            }
+                            // No setter: silent fail (non-strict mode)
+                            self.push(val);
+                            continue;
                         }
                         // DOM node/style property interception
                         if ((obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_set_prop != null) {
@@ -8539,11 +8546,12 @@ pub const VM = struct {
                 return try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{ JsValue.initObject(pd.target), key_str, receiver });
             }
         }
-        // Default: read from target (with getter support)
-        if (pd.target.getters) |getters| {
-            if (getters.get(name_id)) |getter_fn| {
-                return try self.callJsFunction(getter_fn, JsValue.initObject(pd.target), &.{});
+        // Default: read from target (with accessor descriptor support)
+        if (pd.target.findAccessorDescriptor(name_id)) |acc| {
+            if (!acc.get.isUndefined()) {
+                return try self.callJsFunction(acc.get, JsValue.initObject(pd.target), &.{});
             }
+            return JsValue.undefined_val;
         }
         return pd.target.getProperty(name_id) orelse JsValue.undefined_val;
     }
@@ -8559,12 +8567,12 @@ pub const VM = struct {
                 return result.isTruthy();
             }
         }
-        // Default: set on target
-        if (pd.target.setters) |setters_map| {
-            if (setters_map.get(name_id)) |setter_fn| {
-                _ = try self.callJsFunction(setter_fn, JsValue.initObject(pd.target), &.{val});
-                return true;
+        // Default: set on target (with accessor descriptor support)
+        if (pd.target.findAccessorDescriptor(name_id)) |acc| {
+            if (!acc.set.isUndefined()) {
+                _ = try self.callJsFunction(acc.set, JsValue.initObject(pd.target), &.{val});
             }
+            return true;
         }
         try pd.target.setProperty(self.allocator, name_id, val);
         return true;
