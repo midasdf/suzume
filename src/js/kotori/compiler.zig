@@ -65,8 +65,8 @@ const ClassField = struct {
 };
 
 const FunctionScope = struct {
-    locals: FixedArray(Local, 256) = .{},
-    upvalues: FixedArray(UpvalueInfo, 256) = .{},
+    locals: FixedArray(Local, 4096) = .{},
+    upvalues: FixedArray(UpvalueInfo, 512) = .{},
     scope_depth: i32 = 0,
     bc: Bytecode = Bytecode.init(),
     parent: ?*FunctionScope = null,
