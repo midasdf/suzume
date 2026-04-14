@@ -297,6 +297,20 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     if (box.style.padding_bottom_is_pct) box.padding.bottom = box.style.padding_bottom * containing_width / 100.0;
     if (box.style.padding_left_is_pct) box.padding.left = box.style.padding_left * containing_width / 100.0;
 
+    // Pre-resolve definite height for flex/grid containers so they can distribute space.
+    // Must happen BEFORE delegation to flex/grid layout.
+    switch (box.style.height) {
+        .px => |h| {
+            box.content.height = h;
+        },
+        .percent => |pct| {
+            if (viewport_height > 0) {
+                box.content.height = pct * viewport_height / 100.0;
+            }
+        },
+        else => {},
+    }
+
     // Delegate to flex layout if display is flex
     if (box.style.display == .flex or box.style.display == .inline_flex) {
         flex.layoutFlex(box, containing_width, cursor_y, fonts);
@@ -456,12 +470,30 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         }
     }
 
+    // Pre-resolve definite height BEFORE laying out children, so children can
+    // resolve their percentage heights against this box's height.
+    // (Auto height remains 0 and is computed from content after children layout.)
+    switch (box.style.height) {
+        .px => |h| {
+            box.content.height = h;
+        },
+        .percent => |pct| {
+            if (viewport_height > 0) {
+                box.content.height = pct * viewport_height / 100.0;
+            }
+        },
+        else => {}, // auto — determined by content
+    }
+
     if (has_inline and !has_block) {
         // Inline formatting context: lay out children horizontally with wrapping
         layoutInlineFormattingContext(box, fonts);
     } else {
         // Block formatting context (also handles empty children)
-        layoutBlockChildren(box, fonts);
+        // Pass containing height for percentage height resolution in children.
+        // If this box has a definite height, use it; otherwise pass viewport_height.
+        const child_containing_height = if (box.content.height > 0) box.content.height else viewport_height;
+        layoutBlockChildren(box, fonts, child_containing_height);
     }
 
     // Apply aspect-ratio: if ratio is set and height is auto, derive height from width
@@ -526,11 +558,21 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
 
     // Vertically center inline children when explicit height is larger than content
     // This makes button text appear centered within the button height
+    // Only apply to boxes with inline/text children (not block-level children)
     if (box.content.height > content_height_before and content_height_before > 0) {
-        const y_offset = (box.content.height - content_height_before) / 2.0;
-        if (y_offset > 0.5) {
-            for (box.children.items) |child| {
-                adjustYPositions(child, y_offset);
+        var has_only_inline = true;
+        for (box.children.items) |child| {
+            if (child.box_type == .block or child.box_type == .anonymous_block) {
+                has_only_inline = false;
+                break;
+            }
+        }
+        if (has_only_inline) {
+            const y_offset = (box.content.height - content_height_before) / 2.0;
+            if (y_offset > 0.5) {
+                for (box.children.items) |child| {
+                    adjustYPositions(child, y_offset);
+                }
             }
         }
     }
@@ -609,7 +651,7 @@ fn createsBfc(style: ComputedStyle) bool {
 }
 
 /// Layout children in block formatting context (all children are block-level).
-fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
+fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) void {
     var child_y: f32 = 0;
     var prev_margin_bottom: f32 = 0;
     var is_first_child = true; // Track first in-flow child for parent-child margin collapsing
@@ -632,7 +674,7 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
         // They should NOT push siblings down or contribute to parent height.
         // Layout them at (0,0) relative to parent content area but don't advance child_y.
         if (child.style.position == .absolute or child.style.position == .fixed) {
-            layoutBlock(child, box.content.width, box.content.y, fonts);
+            layoutBlockVp(child, box.content.width, box.content.y, fonts, containing_height);
             applyAbsolutePositionOffsets(child, box);
             continue;
         }
@@ -699,7 +741,7 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache) void {
                 const active_right_w = if (child_y < float_right_bottom) float_right_width else 0;
                 const avail_width = @max(box.content.width - active_left_w - active_right_w, 0);
 
-                layoutBlock(child, avail_width, box.content.y + child_y, fonts);
+                layoutBlockVp(child, avail_width, box.content.y + child_y, fonts, containing_height);
 
                 // Adjust child x position relative to parent content area
                 var x_offset = box.content.x;

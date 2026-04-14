@@ -801,9 +801,10 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     total_main += gap_total;
 
     // Explicit height for justify-content distribution
-    const explicit_h = switch (style.height) {
+    const explicit_h: ?f32 = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
+        .percent => |pct| if (box.content.height > 0) box.content.height else pct * dom_api.g_viewport_height / 100.0,
+        .auto, .none, .min_content, .max_content, .fit_content => null,
     };
     const container_main = explicit_h orelse total_main;
 

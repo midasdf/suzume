@@ -322,6 +322,8 @@ const PageState = struct {
     loaded_script_urls: ?std.StringHashMap(void) = null,
     /// CSS animation state.
     anim_state: ?anim_mod.AnimationState = null,
+    /// Deferred JS init: run after first paint for faster initial render.
+    pending_js_init: bool = false,
 
     fn deinit(self: *PageState) void {
         // Clear dynamic script execution globals (safe — just nulls pointers)
@@ -854,40 +856,8 @@ fn navigateTo(
     g_restyle_height = layout_height;
     dom_api.restyle_fn = &syncRestyle;
 
-    // Initialize JavaScript: DOM APIs, execute scripts, fire events
-    initPageJs(&page.doc.?, page, allocator, loader, base_url_copy, fonts);
-
-    // After JS execution, remove anti-flicker class if present.
-    // Only add w-mod-ix3 if anti-flicker was found (indicates Webflow site).
-    if (page.js_rt) |*rt| {
-        const cleanup = rt.eval(
-            \\(function() {
-            \\  var h = document.documentElement;
-            \\  if (!h) return;
-            \\  var had = !!(h.className && /\banti-flicker\b/.test(h.className));
-            \\  if (had) {
-            \\    h.className = h.className.replace(/\banti-flicker\b/g, '').trim();
-            \\    if (h.classList) h.classList.add('w-mod-ix3');
-            \\  }
-            \\})()
-        );
-        if (!cleanup.isOk()) {
-            std.debug.print("[JS] cleanup eval failed: {s}\n", .{cleanup.value()});
-        }
-        cleanup.deinit();
-    }
-
-    // Re-style if JS mutated the DOM during script execution
-    if (dom_api.dom_dirty or kotori_dom.dom_dirty) {
-        dom_api.dom_dirty = false;
-        kotori_dom.dom_dirty = false;
-        restylePage(page, allocator, fonts, layout_width, layout_height);
-    }
-
-    // Execute user scripts after page load
-    if (page.js_rt) |*js_rt| {
-        userscript.executeUserScripts(js_rt, allocator);
-    }
+    // Defer JavaScript execution until after first paint for faster initial render.
+    page.pending_js_init = true;
 
     return true;
 }
@@ -1426,6 +1396,52 @@ pub fn main() !void {
 
             surface.update();
             needs_repaint = false;
+        }
+
+        // Deferred JS init: execute scripts after first paint for faster initial render
+        {
+            const active_pg = activePageState(&tab_mgr, &page_states);
+            if (active_pg) |pg| {
+                if (pg.pending_js_init) {
+                    pg.pending_js_init = false;
+                    if (pg.doc) |*doc| {
+                        initPageJs(doc, pg, allocator, &loader, if (pg.base_url) |bu| bu else null, &fonts);
+
+                        // Post-JS anti-flicker cleanup
+                        if (pg.js_rt) |*rt| {
+                            const cleanup = rt.eval(
+                                \\(function() {
+                                \\  var h = document.documentElement;
+                                \\  if (!h) return;
+                                \\  var had = !!(h.className && /\banti-flicker\b/.test(h.className));
+                                \\  if (had) {
+                                \\    h.className = h.className.replace(/\banti-flicker\b/g, '').trim();
+                                \\    if (h.classList) h.classList.add('w-mod-ix3');
+                                \\  }
+                                \\})()
+                            );
+                            if (!cleanup.isOk()) {
+                                std.debug.print("[JS] cleanup eval failed: {s}\n", .{cleanup.value()});
+                            }
+                            cleanup.deinit();
+                        }
+
+                        // Re-style if JS mutated the DOM
+                        if (dom_api.dom_dirty or kotori_dom.dom_dirty) {
+                            dom_api.dom_dirty = false;
+                            kotori_dom.dom_dirty = false;
+                            restylePage(pg, allocator, &fonts, surface.width, surface.height);
+                        }
+
+                        // Execute user scripts
+                        if (pg.js_rt) |*js_rt| {
+                            userscript.executeUserScripts(js_rt, allocator);
+                        }
+
+                        needs_repaint = true;
+                    }
+                }
+            }
         }
 
         // Tick JS timers (setTimeout/setInterval) and check for DOM mutations
