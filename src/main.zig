@@ -404,6 +404,7 @@ const ImageUrlEntry = struct {
     intrinsic_width: f32,
     intrinsic_height: f32,
     is_retry: bool = false, // true if this is a retry attempt (don't retry again)
+    dom_node: ?*lxb.lxb_dom_node_t = null, // For firing onload/onerror events
 };
 
 fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry), allocator: std.mem.Allocator) void {
@@ -416,6 +417,7 @@ fn collectImageUrls(box: *const Box, urls: *std.ArrayListUnmanaged(ImageUrlEntry
                 .url = url_copy,
                 .intrinsic_width = box.intrinsic_width,
                 .intrinsic_height = box.intrinsic_height,
+                .dom_node = if (box.dom_node) |dn| dn.lxb_node else null,
             }) catch {
                 allocator.free(url_copy);
                 return;
@@ -1082,6 +1084,8 @@ pub fn main() !void {
     // Scroll
     var scroll_y: f32 = 0;
     var scroll_x: f32 = 0;
+    var prev_scroll_y: f32 = 0;
+    var prev_scroll_x: f32 = 0;
 
     // History
     var history: std.ArrayListUnmanaged([]u8) = .empty;
@@ -1481,6 +1485,16 @@ pub fn main() !void {
                         dom_api.pending_scroll_x = null;
                         needs_repaint = true;
                     }
+
+                    // Dispatch 'scroll' event when scroll position changed
+                    if (scroll_y != prev_scroll_y or scroll_x != prev_scroll_x) {
+                        prev_scroll_y = scroll_y;
+                        prev_scroll_x = scroll_x;
+                        dom_api.scroll_x = scroll_x;
+                        dom_api.scroll_y = scroll_y;
+                        events.dispatchWindowEvent(js_rt.ctx, "scroll");
+                        js_rt.executePending();
+                    }
                 }
 
                 // Tick CSS animations
@@ -1598,6 +1612,13 @@ pub fn main() !void {
                                         };
                                         pg.pending_images_loaded += 1;
                                         needs_repaint = true;
+                                        // Fire 'load' event on SVG img element
+                                        if (entry.dom_node) |node| {
+                                            if (pg.js_rt) |*jrt| {
+                                                _ = events.dispatchEvent(jrt.ctx, node, "load");
+                                                jrt.executePending();
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1633,12 +1654,27 @@ pub fn main() !void {
                                                             }
                                                         }
                                                         needs_repaint = true;
+                                                        // Fire 'load' event on the img element
+                                                        if (entry.dom_node) |node| {
+                                                            if (pg.js_rt) |*jrt| {
+                                                                _ = events.dispatchEvent(jrt.ctx, node, "load");
+                                                                jrt.executePending();
+                                                            }
+                                                        }
                                                     }
                                                 } else {
                                                     var mimg = img;
                                                     mimg.deinit();
                                                 }
-                                            } else |_| {}
+                                            } else |_| {
+                                                // Image decode failed — fire 'error' event
+                                                if (entry.dom_node) |node| {
+                                                    if (pg.js_rt) |*jrt| {
+                                                        _ = events.dispatchEvent(jrt.ctx, node, "error");
+                                                        jrt.executePending();
+                                                    }
+                                                }
+                                            }
                                         }
                                     } else |_| {
                                         // HTTP fetch failed — retry once if not already a retry
@@ -1648,7 +1684,16 @@ pub fn main() !void {
                                                 .intrinsic_width = entry.intrinsic_width,
                                                 .intrinsic_height = entry.intrinsic_height,
                                                 .is_retry = true,
+                                                .dom_node = entry.dom_node,
                                             }) catch {};
+                                        } else {
+                                            // Final retry failed — fire 'error' event
+                                            if (entry.dom_node) |node| {
+                                                if (pg.js_rt) |*jrt| {
+                                                    _ = events.dispatchEvent(jrt.ctx, node, "error");
+                                                    jrt.executePending();
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -2064,6 +2109,8 @@ pub fn main() !void {
                                 dom_api.active_element = focused_input_node;
                                 if (page.js_rt) |*js_rt| {
                                     if (prev_focused_input_node) |prev_node| {
+                                        // Fire 'change' event on blur (value may have changed)
+                                        _ = events.dispatchEvent(js_rt.ctx, prev_node, "change");
                                         _ = events.dispatchEvent(js_rt.ctx, prev_node, "blur");
                                         js_rt.executePending();
                                     }
