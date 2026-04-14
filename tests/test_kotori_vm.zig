@@ -4963,7 +4963,7 @@ test "eval: String as function" {
     try std.testing.expect(result.asBool());
 }
 
-test "eval: Array.from string" {
+test "eval: Array.from string length" {
     const result = try evalExpr(
         \\Array.from("abc").length
     );
@@ -5135,7 +5135,7 @@ test "eval: Date.now" {
     try std.testing.expect(result.asBool());
 }
 
-test "eval: JSON.stringify object" {
+test "eval: JSON.stringify object multi-key" {
     const result = try evalExpr(
         \\JSON.stringify({a:1, b:"two"})
     );

@@ -348,139 +348,41 @@ pub const Loader = struct {
 
 /// Resolve a possibly-relative URL against a base URL.
 /// Returns a sentinel-terminated owned string.
-pub fn resolveUrl(allocator: std.mem.Allocator, base: []const u8, relative: []const u8) ![:0]const u8 {
-    // Absolute URL (has scheme)
-    if (hasScheme(relative)) {
-        const result = try allocator.allocSentinel(u8, relative.len, 0);
-        @memcpy(result, relative);
-        return result;
+/// Uses the WHATWG URL parser for spec-compliant resolution.
+pub fn resolveUrl(allocator: std.mem.Allocator, base_str: []const u8, relative: []const u8) ![:0]const u8 {
+    const url_parser = @import("../url/parser.zig");
+
+    // Try parsing as absolute URL first (fast path)
+    if (relative.len > 0) {
+        var base_url = url_parser.parse(allocator, base_str, null) catch {
+            // Base parse failed — fall back to treating relative as absolute
+            const result = try allocator.allocSentinel(u8, relative.len, 0);
+            @memcpy(result, relative);
+            return result;
+        };
+        if (base_url) |*b| {
+            defer b.deinit();
+            var resolved = url_parser.parse(allocator, relative, b) catch {
+                const result = try allocator.allocSentinel(u8, relative.len, 0);
+                @memcpy(result, relative);
+                return result;
+            };
+            if (resolved) |*r| {
+                defer r.deinit();
+                return r.serializeZ(allocator);
+            }
+        }
     }
 
-    // Empty reference resolves to the current document URL without its fragment.
+    // Fallback: return relative as-is (or base without fragment for empty relative)
     if (relative.len == 0) {
-        const base_no_frag = stripFragment(base);
-        const result = try allocator.allocSentinel(u8, base_no_frag.len, 0);
-        @memcpy(result, base_no_frag);
+        const hash = std.mem.indexOfScalar(u8, base_str, '#') orelse base_str.len;
+        const result = try allocator.allocSentinel(u8, hash, 0);
+        @memcpy(result, base_str[0..hash]);
         return result;
     }
 
-    // Fragment-only: keep the current URL/path/query, replace the fragment.
-    if (relative[0] == '#') {
-        const base_no_frag = stripFragment(base);
-        const result = try allocator.allocSentinel(u8, base_no_frag.len + relative.len, 0);
-        @memcpy(result[0..base_no_frag.len], base_no_frag);
-        @memcpy(result[base_no_frag.len..][0..relative.len], relative);
-        return result;
-    }
-
-    // Query-only: keep the current URL/path, replace query and fragment.
-    if (relative[0] == '?') {
-        const base_no_query = stripQueryAndFragment(base);
-        const result = try allocator.allocSentinel(u8, base_no_query.len + relative.len, 0);
-        @memcpy(result[0..base_no_query.len], base_no_query);
-        @memcpy(result[base_no_query.len..][0..relative.len], relative);
-        return result;
-    }
-
-    // Protocol-relative: //host/path
-    if (std.mem.startsWith(u8, relative, "//")) {
-        const scheme = extractScheme(base);
-        const result = try allocator.allocSentinel(u8, scheme.len + relative.len, 0);
-        @memcpy(result[0..scheme.len], scheme);
-        @memcpy(result[scheme.len..][0..relative.len], relative);
-        return result;
-    }
-
-    // Root-relative: /path
-    if (relative.len > 0 and relative[0] == '/') {
-        const origin = extractOrigin(base);
-        const result = try allocator.allocSentinel(u8, origin.len + relative.len, 0);
-        @memcpy(result[0..origin.len], origin);
-        @memcpy(result[origin.len..][0..relative.len], relative);
-        return result;
-    }
-
-    // Relative path: strip last component from base, append relative
-    const base_dir = extractBaseDir(base);
-    const clean_rel = if (std.mem.startsWith(u8, relative, "./")) relative[2..] else relative;
-
-    // Handle ../ by walking up base_dir
-    var dir = base_dir;
-    var rel = clean_rel;
-    while (std.mem.startsWith(u8, rel, "../")) {
-        rel = rel[3..];
-        // Walk up one directory
-        if (std.mem.lastIndexOf(u8, dir[0..dir.len -| 1], "/")) |idx| {
-            dir = dir[0 .. idx + 1];
-        }
-    }
-
-    // Check if dir needs a trailing / (origin-only URL like "https://example.com")
-    const needs_slash = dir.len > 0 and dir[dir.len - 1] != '/';
-    const slash_len: usize = if (needs_slash) 1 else 0;
-    const result = try allocator.allocSentinel(u8, dir.len + slash_len + rel.len, 0);
-    @memcpy(result[0..dir.len], dir);
-    if (needs_slash) result[dir.len] = '/';
-    @memcpy(result[dir.len + slash_len ..][0..rel.len], rel);
+    const result = try allocator.allocSentinel(u8, relative.len, 0);
+    @memcpy(result, relative);
     return result;
-}
-
-fn hasScheme(url: []const u8) bool {
-    if (url.len == 0) return false;
-    const first = url[0];
-    if (!std.ascii.isAlphabetic(first)) return false;
-
-    for (url[1..]) |ch| {
-        switch (ch) {
-            ':' => return true,
-            '/', '?', '#' => return false,
-            'A'...'Z', 'a'...'z', '0'...'9', '+', '-', '.' => {},
-            else => return false,
-        }
-    }
-    return false;
-}
-
-fn stripFragment(url: []const u8) []const u8 {
-    const hash = std.mem.indexOfScalar(u8, url, '#') orelse return url;
-    return url[0..hash];
-}
-
-fn stripQueryAndFragment(url: []const u8) []const u8 {
-    const query = std.mem.indexOfScalar(u8, url, '?') orelse url.len;
-    const hash = std.mem.indexOfScalar(u8, url, '#') orelse url.len;
-    return url[0..@min(query, hash)];
-}
-
-fn extractScheme(url: []const u8) []const u8 {
-    if (std.mem.indexOf(u8, url, "://")) |idx| {
-        return url[0 .. idx + 1]; // e.g. "https:"
-    }
-    return "https:";
-}
-
-fn extractOrigin(url: []const u8) []const u8 {
-    // Find scheme://
-    const scheme_end = (std.mem.indexOf(u8, url, "://") orelse return url) + 3;
-    // Find next /
-    if (std.mem.indexOfPos(u8, url, scheme_end, "/")) |idx| {
-        return url[0..idx];
-    }
-    return url;
-}
-
-fn extractBaseDir(url: []const u8) []const u8 {
-    // Find the last / after the scheme
-    const scheme_end = (std.mem.indexOf(u8, url, "://") orelse return url) + 3;
-    if (std.mem.lastIndexOf(u8, url, "/")) |idx| {
-        if (idx >= scheme_end) {
-            return url[0 .. idx + 1];
-        }
-    }
-    // No path component — origin-only URL like "https://example.com"
-    // The last / is inside the scheme "://", so we need to treat the whole URL as the base
-    // and append "/" for proper relative resolution
-    // We can't allocate here, so return the full URL — resolveUrl handles this case
-    // by checking if scheme_end == url.len (no path after host)
-    return url;
 }

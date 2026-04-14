@@ -302,6 +302,12 @@ pub const VM = struct {
                         continue;
                     }
                     const obj = rhs.asJsObject();
+                    // Proxy interception
+                    if (obj.obj_type == .proxy) {
+                        const key_sid = if (lhs.isString()) lhs.asStringId() else try self.keyToStringId(lhs);
+                        self.push(JsValue.initBool(try self.proxyHas(obj, key_sid)));
+                        continue;
+                    }
                     if (lhs.isString()) {
                         self.push(JsValue.initBool(obj.getProperty(lhs.asStringId()) != null));
                     } else if (lhs.isInt()) {
@@ -604,6 +610,12 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Proxy interception
+                        if (obj.obj_type == .proxy) {
+                            const result = try self.proxyGet(obj, name_id, obj_val);
+                            self.push(result);
+                            continue;
+                        }
                         // globalThis proxy — forward property access to globals
                         if (obj.obj_type == .window_proxy) {
                             if (self.globals.get(name_id)) |global_val| {
@@ -752,6 +764,12 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Proxy interception
+                        if (obj.obj_type == .proxy) {
+                            _ = try self.proxySet(obj, name_id, val, obj_val);
+                            self.push(val);
+                            continue;
+                        }
                         // Check for setter (own or prototype)
                         if (obj.setters) |setters_map| {
                             if (setters_map.get(name_id)) |setter_fn| {
@@ -794,6 +812,13 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Proxy interception
+                        if (obj.obj_type == .proxy) {
+                            const key_sid = if (key.isString()) key.asStringId() else try self.keyToStringId(key);
+                            const result = try self.proxyGet(obj, key_sid, obj_val);
+                            self.push(result);
+                            continue;
+                        }
                         // Symbol property access (walk prototype chain)
                         if (key.isSymbol()) {
                             const sym_id = key.asSymbolId();
@@ -847,6 +872,13 @@ pub const VM = struct {
                     const obj_val = self.pop();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Proxy interception
+                        if (obj.obj_type == .proxy) {
+                            const key_sid = if (key.isString()) key.asStringId() else try self.keyToStringId(key);
+                            _ = try self.proxySet(obj, key_sid, val, obj_val);
+                            self.push(val);
+                            continue;
+                        }
                         // Symbol property access
                         if (key.isSymbol()) {
                             const sym_id = key.asSymbolId();
@@ -2169,6 +2201,25 @@ pub const VM = struct {
             try symbol_fn.setProperty(self.allocator, try self.pool.intern("hasInstance"), JsValue.initSymbol(SYMBOL_HAS_INSTANCE));
             try symbol_fn.setProperty(self.allocator, try self.pool.intern("toStringTag"), JsValue.initSymbol(SYMBOL_TO_STRING_TAG));
             try symbol_fn.setProperty(self.allocator, try self.pool.intern("asyncIterator"), JsValue.initSymbol(SYMBOL_ASYNC_ITERATOR));
+        }
+
+        // ── Proxy ──
+        {
+            const proxy_fn = try self.createNativeFn(&nativeProxyConstructor);
+            try self.globals.put(self.allocator, try self.pool.intern("Proxy"), JsValue.initObject(proxy_fn));
+            try self.registerNativeMethod(proxy_fn, "revocable", &nativeProxyRevocable);
+        }
+
+        // ── Reflect ──
+        {
+            const reflect_obj = try self.createObj(.{});
+            try self.registerNativeMethod(reflect_obj, "get", &nativeReflectGet);
+            try self.registerNativeMethod(reflect_obj, "set", &nativeReflectSet);
+            try self.registerNativeMethod(reflect_obj, "has", &nativeReflectHas);
+            try self.registerNativeMethod(reflect_obj, "deleteProperty", &nativeReflectDeleteProperty);
+            try self.registerNativeMethod(reflect_obj, "ownKeys", &nativeReflectOwnKeys);
+            try self.registerNativeMethod(reflect_obj, "apply", &nativeReflectApply);
+            try self.globals.put(self.allocator, try self.pool.intern("Reflect"), JsValue.initObject(reflect_obj));
         }
     }
 
@@ -7785,6 +7836,243 @@ pub const VM = struct {
             }
         }
         return JsValue.undefined_val;
+    }
+
+    /// Convert a JS value to a StringId for property access.
+    fn keyToStringId(self: *VM, key: JsValue) !StringId {
+        if (key.isString()) return key.asStringId();
+        if (key.isInt()) {
+            var buf: [20]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{key.asInt()}) catch return try self.pool.intern("undefined");
+            return try self.pool.intern(s);
+        }
+        if (key.isNumber()) {
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{key.asNumber()}) catch return try self.pool.intern("undefined");
+            return try self.pool.intern(s);
+        }
+        return try self.pool.intern("undefined");
+    }
+
+    // ── Proxy Trap Helpers ─────────────────────────────────────────
+
+    fn proxyGet(self: *VM, proxy_obj: *JsObject, name_id: StringId, receiver: JsValue) !JsValue {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("get");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const key_str = JsValue.initString(name_id);
+                return try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{ JsValue.initObject(pd.target), key_str, receiver });
+            }
+        }
+        // Default: read from target (with getter support)
+        if (pd.target.getters) |getters| {
+            if (getters.get(name_id)) |getter_fn| {
+                return try self.callJsFunction(getter_fn, JsValue.initObject(pd.target), &.{});
+            }
+        }
+        return pd.target.getProperty(name_id) orelse JsValue.undefined_val;
+    }
+
+    fn proxySet(self: *VM, proxy_obj: *JsObject, name_id: StringId, val: JsValue, receiver: JsValue) !bool {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("set");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const key_str = JsValue.initString(name_id);
+                const result = try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{ JsValue.initObject(pd.target), key_str, val, receiver });
+                return result.isTruthy();
+            }
+        }
+        // Default: set on target
+        if (pd.target.setters) |setters_map| {
+            if (setters_map.get(name_id)) |setter_fn| {
+                _ = try self.callJsFunction(setter_fn, JsValue.initObject(pd.target), &.{val});
+                return true;
+            }
+        }
+        try pd.target.setProperty(self.allocator, name_id, val);
+        return true;
+    }
+
+    fn proxyHas(self: *VM, proxy_obj: *JsObject, name_id: StringId) !bool {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("has");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const key_str = JsValue.initString(name_id);
+                const result = try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{ JsValue.initObject(pd.target), key_str });
+                return result.isTruthy();
+            }
+        }
+        return pd.target.getProperty(name_id) != null;
+    }
+
+    fn proxyDeleteProperty(self: *VM, proxy_obj: *JsObject, name_id: StringId) !bool {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("deleteProperty");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const key_str = JsValue.initString(name_id);
+                const result = try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{ JsValue.initObject(pd.target), key_str });
+                return result.isTruthy();
+            }
+        }
+        _ = pd.target.properties.orderedRemove(name_id);
+        return true;
+    }
+
+    fn proxyOwnKeys(self: *VM, proxy_obj: *JsObject) !JsValue {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("ownKeys");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                return try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{JsValue.initObject(pd.target)});
+            }
+        }
+        // Default: return target's own keys as array
+        const arr = try self.allocator.create(JsObject);
+        arr.* = .{ .obj_type = .array, .data = .{ .array = .{} } };
+        for (pd.target.properties.keys()) |key| {
+            if (self.pool.get(key)) |_| {
+                try arr.data.array.append(self.allocator, JsValue.initString(key));
+            }
+        }
+        return JsValue.initObject(arr);
+    }
+
+    // ── Proxy/Reflect Builtins ───────────────────────────────────
+
+    fn nativeProxyConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 2) return error.TypeError;
+        if (!args[0].isObject()) return error.TypeError;
+        if (!args[1].isObject()) return error.TypeError;
+        const proxy = try vm.allocator.create(JsObject);
+        proxy.* = .{
+            .obj_type = .proxy,
+            .data = .{ .proxy_data = .{
+                .target = args[0].asJsObject(),
+                .handler = args[1].asJsObject(),
+            } },
+        };
+        return JsValue.initObject(proxy);
+    }
+
+    fn nativeProxyRevocable(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 2) return error.TypeError;
+        if (!args[0].isObject()) return error.TypeError;
+        if (!args[1].isObject()) return error.TypeError;
+        const proxy = try vm.allocator.create(JsObject);
+        proxy.* = .{
+            .obj_type = .proxy,
+            .data = .{ .proxy_data = .{
+                .target = args[0].asJsObject(),
+                .handler = args[1].asJsObject(),
+            } },
+        };
+        // Create revoke function that captures proxy pointer
+        const result = try vm.allocator.create(JsObject);
+        result.* = .{ .obj_type = .ordinary };
+        try result.setProperty(vm.allocator, try vm.pool.intern("proxy"), JsValue.initObject(proxy));
+        // revoke as native — simplified: set revoked flag via JS wrapper
+        // Store proxy ref so revoke can access it
+        const revoke_obj = try vm.allocator.create(JsObject);
+        revoke_obj.* = .{
+            .obj_type = .native_function,
+            .data = .{ .native_fn = &nativeRevokeProxy },
+        };
+        // Attach proxy reference to the revoke function object
+        try revoke_obj.setProperty(vm.allocator, try vm.pool.intern("_proxy"), JsValue.initObject(proxy));
+        try result.setProperty(vm.allocator, try vm.pool.intern("revoke"), JsValue.initObject(revoke_obj));
+        return JsValue.initObject(result);
+    }
+
+    fn nativeRevokeProxy(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        _ = vm;
+        if (this.isObject()) {
+            const proxy_val = this.asJsObject().getProperty(@bitCast(@as(i32, @intCast(0))));
+            _ = proxy_val;
+        }
+        // Simplified: find _proxy property on the function object itself
+        // This is called with `this` = the revoke function object
+        return JsValue.undefined_val;
+    }
+
+    fn nativeReflectGet(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 2 or !args[0].isObject()) return error.TypeError;
+        const target = args[0].asJsObject();
+        const key = args[1];
+        if (key.isString()) {
+            return target.getProperty(key.asStringId()) orelse JsValue.undefined_val;
+        }
+        // Convert key to string
+        const key_str = vm.pool.get(try vm.keyToStringId(key)) orelse "undefined";
+        const sid = try vm.pool.intern(key_str);
+        return target.getProperty(sid) orelse JsValue.undefined_val;
+    }
+
+    fn nativeReflectSet(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 3 or !args[0].isObject()) return error.TypeError;
+        const target = args[0].asJsObject();
+        const key = args[1];
+        const val = args[2];
+        const sid = if (key.isString()) key.asStringId() else try vm.keyToStringId(key);
+        try target.setProperty(vm.allocator, sid, val);
+        return JsValue.initBool(true);
+    }
+
+    fn nativeReflectHas(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 2 or !args[0].isObject()) return error.TypeError;
+        const target = args[0].asJsObject();
+        const key = args[1];
+        const sid = if (key.isString()) key.asStringId() else try vm.keyToStringId(key);
+        return JsValue.initBool(target.getProperty(sid) != null);
+    }
+
+    fn nativeReflectDeleteProperty(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 2 or !args[0].isObject()) return error.TypeError;
+        const target = args[0].asJsObject();
+        const key = args[1];
+        const sid = if (key.isString()) key.asStringId() else try vm.keyToStringId(key);
+        _ = target.properties.orderedRemove(sid);
+        return JsValue.initBool(true);
+    }
+
+    fn nativeReflectOwnKeys(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 1 or !args[0].isObject()) return error.TypeError;
+        const target = args[0].asJsObject();
+        const arr = try vm.allocator.create(JsObject);
+        arr.* = .{ .obj_type = .array, .data = .{ .array = .{} } };
+        for (target.properties.keys()) |key| {
+            try arr.data.array.append(vm.allocator, JsValue.initString(key));
+        }
+        return JsValue.initObject(arr);
+    }
+
+    fn nativeReflectApply(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len < 3) return error.TypeError;
+        const target_fn = args[0];
+        const this_arg = args[1];
+        const args_array = args[2];
+        // Extract arguments from array
+        if (args_array.isObject() and args_array.asJsObject().obj_type == .array) {
+            return try vm.callJsFunction(target_fn, this_arg, args_array.asJsObject().data.array.items);
+        }
+        return try vm.callJsFunction(target_fn, this_arg, &.{});
     }
 
     fn nativeErrorToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {

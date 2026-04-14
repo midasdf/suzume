@@ -29,6 +29,7 @@ pub const ObjType = enum(u8) {
     async_generator,
     typed_array,
     array_buffer,
+    proxy,
 };
 
 pub const JsObject = struct {
@@ -68,6 +69,12 @@ pub const JsObject = struct {
         handlers: std.ArrayListUnmanaged(PromiseHandler) = .{},
     };
 
+    pub const ProxyData = struct {
+        target: *JsObject,
+        handler: *JsObject,
+        revoked: bool = false,
+    };
+
     pub const ObjData = union(enum) {
         none,
         function: FunctionObj,
@@ -85,6 +92,7 @@ pub const JsObject = struct {
         generator_data: GeneratorData,
         iterator_data: IteratorData,
         bytes_data: []u8,
+        proxy_data: ProxyData,
     };
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
@@ -105,7 +113,7 @@ pub const JsObject = struct {
                 if (g.init_args.len > 0) allocator.free(g.init_args);
             },
             .bytes_data => |b| if (b.len > 0) allocator.free(b),
-            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data => {},
+            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .proxy_data => {},
         }
     }
 

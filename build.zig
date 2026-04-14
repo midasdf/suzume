@@ -425,6 +425,100 @@ pub fn build(b: *std.Build) void {
     const run_url_resolve_tests = b.addRunArtifact(url_resolve_tests);
     test_step.dependOn(&run_url_resolve_tests.step);
 
+    // ── URL module tests ──────────────────────────────────────
+    const url_pe_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/percent_encode.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const url_pe_tests = b.addTest(.{ .root_module = url_pe_mod });
+    const run_url_pe_tests = b.addRunArtifact(url_pe_tests);
+    const test_url_pe_step = b.step("test-url-percent-encode", "Run URL percent-encode tests");
+    test_url_pe_step.dependOn(&run_url_pe_tests.step);
+    test_step.dependOn(&run_url_pe_tests.step);
+
+    const url_tables_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/tables.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const url_tables_tests = b.addTest(.{ .root_module = url_tables_mod });
+    const run_url_tables_tests = b.addRunArtifact(url_tables_tests);
+    const test_url_tables_step = b.step("test-url-tables", "Run URL IDNA/NFC table tests");
+    test_url_tables_step.dependOn(&run_url_tables_tests.step);
+    test_step.dependOn(&run_url_tables_tests.step);
+
+    const url_pc_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/punycode.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const url_pc_tests = b.addTest(.{ .root_module = url_pc_mod });
+    const run_url_pc_tests = b.addRunArtifact(url_pc_tests);
+    const test_url_pc_step = b.step("test-url-punycode", "Run URL Punycode tests");
+    test_url_pc_step.dependOn(&run_url_pc_tests.step);
+    test_step.dependOn(&run_url_pc_tests.step);
+
+    const url_nfc_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/nfc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // nfc.zig uses @import("tables.zig") — no addImport needed
+    const url_nfc_tests = b.addTest(.{ .root_module = url_nfc_mod });
+    const run_url_nfc_tests = b.addRunArtifact(url_nfc_tests);
+    const test_url_nfc_step = b.step("test-url-nfc", "Run URL NFC normalization tests");
+    test_url_nfc_step.dependOn(&run_url_nfc_tests.step);
+    test_step.dependOn(&run_url_nfc_tests.step);
+
+    const url_idna_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/idna.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // idna.zig uses @import("tables.zig"), @import("nfc.zig"), @import("punycode.zig")
+    const url_idna_tests = b.addTest(.{ .root_module = url_idna_mod });
+    const run_url_idna_tests = b.addRunArtifact(url_idna_tests);
+    const test_url_idna_step = b.step("test-url-idna", "Run URL IDNA tests");
+    test_url_idna_step.dependOn(&run_url_idna_tests.step);
+    test_step.dependOn(&run_url_idna_tests.step);
+
+    const url_host_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/host.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // host.zig uses @import("idna.zig"), @import("percent_encode.zig")
+    const url_host_tests = b.addTest(.{ .root_module = url_host_mod });
+    const run_url_host_tests = b.addRunArtifact(url_host_tests);
+    const test_url_host_step = b.step("test-url-host", "Run URL host parsing tests");
+    test_url_host_step.dependOn(&run_url_host_tests.step);
+    test_step.dependOn(&run_url_host_tests.step);
+
+    const url_sp_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/search_params.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // search_params.zig uses @import("percent_encode.zig")
+    const url_sp_tests = b.addTest(.{ .root_module = url_sp_mod });
+    const run_url_sp_tests = b.addRunArtifact(url_sp_tests);
+    const test_url_sp_step = b.step("test-url-searchparams", "Run URLSearchParams tests");
+    test_url_sp_step.dependOn(&run_url_sp_tests.step);
+    test_step.dependOn(&run_url_sp_tests.step);
+
+    const url_parser_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // parser.zig uses @import("host.zig"), @import("percent_encode.zig")
+    const url_parser_tests = b.addTest(.{ .root_module = url_parser_mod });
+    const run_url_parser_tests = b.addRunArtifact(url_parser_tests);
+    const test_url_parser_step = b.step("test-url-parser", "Run URL parser tests");
+    test_url_parser_step.dependOn(&run_url_parser_tests.step);
+    test_step.dependOn(&run_url_parser_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);

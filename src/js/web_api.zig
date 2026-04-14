@@ -1644,8 +1644,9 @@ pub fn registerWebApis(js_rt: anytype) void {
         _ = qjs.JS_SetPropertyStr(ctx, global, "location", loc);
     }
 
-    // -- URL class (JS-based) --
-    evalInitScript(ctx, url_class_js, url_class_js.len);
+    // -- URL + URLSearchParams (native parse + JS wrapper) --
+    const url_bindings = @import("url_bindings.zig");
+    url_bindings.registerUrlBindings(ctx);
 
     // -- queueMicrotask, structuredClone (JS-based) --
     evalInitScript(ctx, utility_apis_js, utility_apis_js.len);

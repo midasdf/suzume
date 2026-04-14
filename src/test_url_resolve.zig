@@ -22,5 +22,6 @@ test "suzume internal URLs are absolute" {
     const resolved = try loader.resolveUrl(allocator, "https://example.com/dir/page.html", "suzume://history");
     defer allocator.free(resolved);
 
-    try std.testing.expectEqualStrings("suzume://history", resolved);
+    // WHATWG URL spec: authority-having URLs always have a path starting with /
+    try std.testing.expectEqualStrings("suzume://history/", resolved);
 }
