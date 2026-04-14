@@ -498,6 +498,18 @@ pub fn build(b: *std.Build) void {
     test_url_host_step.dependOn(&run_url_host_tests.step);
     test_step.dependOn(&run_url_host_tests.step);
 
+    const url_sp_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/search_params.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_sp_mod.addImport("percent_encode", url_pe_mod);
+    const url_sp_tests = b.addTest(.{ .root_module = url_sp_mod });
+    const run_url_sp_tests = b.addRunArtifact(url_sp_tests);
+    const test_url_sp_step = b.step("test-url-searchparams", "Run URLSearchParams tests");
+    test_url_sp_step.dependOn(&run_url_sp_tests.step);
+    test_step.dependOn(&run_url_sp_tests.step);
+
     const url_parser_mod = b.createModule(.{
         .root_source_file = b.path("src/url/parser.zig"),
         .target = target,
