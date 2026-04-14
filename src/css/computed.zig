@@ -476,6 +476,8 @@ pub const ComputedStyle = struct {
         min_content,
         max_content,
         fit_content,
+        /// CSS Flexbox §9.2: flex-basis: content — size to max-content of the item
+        content,
     };
 
     pub const ReadingFlow = enum {

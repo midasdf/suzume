@@ -587,6 +587,8 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
             .min_content => qjs.JS_NewStringLen(c, "min-content", 11),
             .max_content => qjs.JS_NewStringLen(c, "max-content", 11),
             .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
+            // CSS Flexbox §9.2: flex-basis: content
+            .content => qjs.JS_NewStringLen(c, "content", 7),
         };
     } else if (std.mem.eql(u8, prop, "flex-flow")) {
         // Shorthand: flex-direction flex-wrap
@@ -623,6 +625,7 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
             .min_content => "min-content",
             .max_content => "max-content",
             .fit_content => "fit-content",
+            .content => "content",
         };
         const result = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ grow_s, shrink_s, basis_s }) catch return qjs.JS_NewStringLen(c, "0 1 auto", 8);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
@@ -2216,6 +2219,7 @@ pub fn dimensionToString(c: *qjs.JSContext, dim: ComputedStyle.Dimension, buf: *
         .min_content => qjs.JS_NewStringLen(c, "min-content", 11),
         .max_content => qjs.JS_NewStringLen(c, "max-content", 11),
         .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
+        .content => qjs.JS_NewStringLen(c, "content", 7),
     };
 }
 

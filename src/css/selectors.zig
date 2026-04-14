@@ -261,6 +261,45 @@ const SelectorParser = struct {
         };
     }
 
+    /// Compute the max specificity across all comma-separated selectors in `inner`.
+    /// Used by :is(), :has(), :not() per CSS Selectors §4.2.
+    /// Returns (0,0,0) for an empty or unparseable argument list.
+    fn maxInnerSpecificity(inner: []const u8, allocator: std.mem.Allocator) Specificity {
+        var max = Specificity{};
+        // Split on top-level commas (respect nested parens/brackets)
+        var start: usize = 0;
+        var paren_depth: u32 = 0;
+        var bracket_depth: u32 = 0;
+        var i: usize = 0;
+        while (i <= inner.len) : (i += 1) {
+            const at_end = (i == inner.len);
+            const c: u8 = if (at_end) ',' else inner[i];
+            if (!at_end) {
+                if (c == '(') { paren_depth += 1; continue; }
+                if (c == ')') { if (paren_depth > 0) paren_depth -= 1; continue; }
+                if (c == '[') { bracket_depth += 1; continue; }
+                if (c == ']') { if (bracket_depth > 0) bracket_depth -= 1; continue; }
+                if (c != ',' or paren_depth > 0 or bracket_depth > 0) continue;
+            }
+            // We have a token from start..i
+            const token = std.mem.trim(u8, inner[start..i], " \t\n\r");
+            if (token.len > 0) {
+                if (parseSelector(token, allocator)) |sel| {
+                    var owned = sel;
+                    defer owned.deinit(allocator);
+                    if (sel.specificity.a > max.a or
+                        (sel.specificity.a == max.a and sel.specificity.b > max.b) or
+                        (sel.specificity.a == max.a and sel.specificity.b == max.b and sel.specificity.c > max.c))
+                    {
+                        max = sel.specificity;
+                    }
+                }
+            }
+            start = i + 1;
+        }
+        return max;
+    }
+
     fn parse(self: *SelectorParser) !?ParsedSelector {
         self.skipWhitespace();
 
@@ -402,7 +441,10 @@ const SelectorParser = struct {
                         .pc = .not,
                         .not_inner = not_inner,
                     } } });
-                    self.specificity.b += 1;
+                    const not_max = SelectorParser.maxInnerSpecificity(not_inner, self.allocator);
+                    self.specificity.a += not_max.a;
+                    self.specificity.b += not_max.b;
+                    self.specificity.c += not_max.c;
                 } else if (self.peek() == '(' and eqlIgnoreCase(name, "has")) {
                     // :has() pseudo-class — relational selector
                     self.advance(); // skip '('
@@ -419,7 +461,10 @@ const SelectorParser = struct {
                         .pc = .has,
                         .has_inner = has_inner,
                     } } });
-                    self.specificity.b += 1;
+                    const has_max = SelectorParser.maxInnerSpecificity(has_inner, self.allocator);
+                    self.specificity.a += has_max.a;
+                    self.specificity.b += has_max.b;
+                    self.specificity.c += has_max.c;
                 } else if (self.peek() == '(' and (eqlIgnoreCase(name, "where") or eqlIgnoreCase(name, "is"))) {
                     // CSS Selectors L4 §4.1-4.2: :is()/:where() — store raw inner string
                     // Matching uses OR semantics (match if ANY inner selector matches)
@@ -446,10 +491,11 @@ const SelectorParser = struct {
                             .pc = .is,
                             .is_inner = inner,
                         } } });
-                        // :is() specificity = max of inner selectors (approximate: count classes/ids)
-                        // For a proper implementation, parse each selector and take max specificity
-                        // Simplified: add b+1 for now (most :is() contains class-level selectors)
-                        self.specificity.b += 1;
+                        // :is() specificity = max specificity of inner selectors (CSS Selectors §4.2)
+                        const is_max = SelectorParser.maxInnerSpecificity(inner, self.allocator);
+                        self.specificity.a += is_max.a;
+                        self.specificity.b += is_max.b;
+                        self.specificity.c += is_max.c;
                     }
                 } else {
                     // Unknown pseudo-class: per CSS spec, a selector with an unknown

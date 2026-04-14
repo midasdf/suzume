@@ -53,7 +53,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         box.content.height = switch (style.height) {
             .px => |h| h,
             .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
-            .auto, .none, .min_content, .max_content, .fit_content => 0,
+            .auto, .none, .min_content, .max_content, .fit_content, .content => 0,
         };
         return;
     }
@@ -252,7 +252,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     const explicit_h = switch (style.height) {
         .px => |h| h,
         .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
-        .auto, .none, .min_content, .max_content, .fit_content => null,
+        .auto, .none, .min_content, .max_content, .fit_content, .content => null,
     };
     const container_cross = explicit_h orelse max_cross;
 
@@ -597,7 +597,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
 
     const explicit_h = switch (style.height) {
         .px => |h| h,
-        .percent, .auto, .none, .min_content, .max_content, .fit_content => null,
+        .percent, .auto, .none, .min_content, .max_content, .fit_content, .content => null,
     };
     const container_cross = explicit_h orelse total_cross;
 
@@ -782,7 +782,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
         box.content.height = switch (style.height) {
             .px => |h| h,
             .percent => |pct| pct * dom_api.g_viewport_height / 100.0,
-            .auto, .none, .min_content, .max_content, .fit_content => 0,
+            .auto, .none, .min_content, .max_content, .fit_content, .content => 0,
         };
         return;
     }
@@ -816,7 +816,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     const explicit_h: ?f32 = switch (style.height) {
         .px => |h| h,
         .percent => |pct| if (box.content.height > 0) box.content.height else pct * dom_api.g_viewport_height / 100.0,
-        .auto, .none, .min_content, .max_content, .fit_content => null,
+        .auto, .none, .min_content, .max_content, .fit_content, .content => null,
     };
 
     // Phase 2: Calculate total base main size and flex totals

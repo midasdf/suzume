@@ -3306,6 +3306,7 @@ fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle
     if (eqlIgnoreCase(s, "min-content")) return .min_content;
     if (eqlIgnoreCase(s, "max-content")) return .max_content;
     if (eqlIgnoreCase(s, "fit-content")) return .fit_content;
+    if (eqlIgnoreCase(s, "content")) return .content;
     if (eqlIgnoreCase(s, "-webkit-fill-available")) return .auto;
     if (eqlIgnoreCase(s, "-moz-available")) return .auto;
     if (properties.parseLength(s)) |len| {

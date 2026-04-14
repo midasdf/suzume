@@ -1259,7 +1259,7 @@ fn layoutInlineFormattingContext(box: *Box, fonts: *FontCache) void {
 
                 // Determine if this inline-box has an explicit width
                 const has_explicit_width = switch (child.style.width) {
-                    .px, .percent, .min_content, .max_content, .fit_content => true,
+                    .px, .percent, .min_content, .max_content, .fit_content, .content => true,
                     else => false,
                 };
 
