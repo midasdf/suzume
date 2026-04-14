@@ -218,7 +218,7 @@ pub fn getDeclListForElem(elem: *lxb.lxb_dom_element_t) ?*style_decl_mod.StyleDe
 /// Serialize a StyleDeclList back to the lxb "style" attribute.
 fn syncDeclListToAttr(elem: *lxb.lxb_dom_element_t, list: *style_decl_mod.StyleDeclList) void {
     var serialized = list.serialize(std.heap.c_allocator) catch return;
-    defer serialized.deinit();
+    defer serialized.deinit(std.heap.c_allocator);
     _ = lxb_dom_element_set_attribute(elem, "style", 5, serialized.items.ptr, serialized.items.len);
 }
 
