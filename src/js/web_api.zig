@@ -1892,8 +1892,9 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  XMLHttpRequest.prototype.send=function(body){
         \\    var self=this,opts={method:this._method,headers:this._headers};
         \\    if(body)opts.body=body;
+        \\    var STATUS_TEXT={200:'OK',201:'Created',204:'No Content',301:'Moved Permanently',302:'Found',304:'Not Modified',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable'};
         \\    fetch(this._url,opts).then(function(resp){
-        \\      self.status=resp.status;self.statusText=resp.statusText||'';self.responseURL=resp.url||self._url;
+        \\      self.status=resp.status;self.statusText=resp.statusText||STATUS_TEXT[resp.status]||'';self.responseURL=resp.url||self._url;
         \\      self._responseHeaders={};if(resp.headers&&resp.headers.forEach)resp.headers.forEach(function(v,k){self._responseHeaders[k]=v;});
         \\      self.readyState=2;self._fireReadyState();
         \\      return resp.text();
@@ -2041,7 +2042,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\}
         \\if(typeof dispatchEvent==='undefined'){globalThis.dispatchEvent=function(e){return true;};}
         \\if(typeof FormData==='undefined'){
-        \\  globalThis.FormData=function(form){this._data=[];};
+        \\  globalThis.FormData=function(form){if(!(this instanceof FormData))throw new TypeError("Failed to construct 'FormData': please use 'new'.");if(arguments.length>0&&form!=null&&(typeof form!=='object'||form.nodeType!==1||String(form.tagName).toLowerCase()!=='form'))throw new TypeError("FormData argument must be a form element");this._data=[];};
         \\  FormData.prototype.append=function(k,v){this._data.push([k,v]);};
         \\  FormData.prototype.get=function(k){for(var i=0;i<this._data.length;i++)if(this._data[i][0]===k)return this._data[i][1];return null;};
         \\  FormData.prototype.has=function(k){return this._data.some(function(p){return p[0]===k;});};
@@ -2056,6 +2057,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\}
         \\if(typeof URLSearchParams==='undefined'){
         \\  globalThis.URLSearchParams=function(init){
+        \\    if(!(this instanceof URLSearchParams))throw new TypeError("Failed to construct 'URLSearchParams': please use 'new'.");
         \\    this._params=[];
         \\    if(typeof init==='string'){
         \\      var s=init.replace(/^\?/,'');
@@ -2075,10 +2077,10 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  USPp.values=function(){return this._params.map(function(p){return p[1];});};
         \\  USPp.getAll=function(n){return this._params.filter(function(p){return p[0]===n;}).map(function(p){return p[1];});};
         \\}
-        \\if(typeof Event==='undefined'){globalThis.Event=function(type,opts){this.type=type;this.bubbles=!!(opts&&opts.bubbles);this.cancelable=!!(opts&&opts.cancelable);this.defaultPrevented=false;this.eventPhase=0;this.target=null;this.currentTarget=null;this.isTrusted=false;this.timeStamp=Date.now();this.preventDefault=function(){if(this.cancelable)this.defaultPrevented=true;};this.stopPropagation=function(){};this.stopImmediatePropagation=function(){};this.composedPath=function(){return[];};};}
-        \\if(typeof CustomEvent==='undefined'){globalThis.CustomEvent=function(type,opts){Event.call(this,type,opts);this.detail=(opts&&opts.detail!==undefined)?opts.detail:null;};CustomEvent.prototype=Object.create(Event.prototype);CustomEvent.prototype.constructor=CustomEvent;}
-        \\if(typeof Headers==='undefined'){globalThis.Headers=function(init){this._h={};if(init)for(var k in init)this._h[k.toLowerCase()]=init[k];};Headers.prototype.get=function(n){return this._h[n.toLowerCase()]||null;};Headers.prototype.set=function(n,v){this._h[n.toLowerCase()]=v;};Headers.prototype.has=function(n){return n.toLowerCase() in this._h;};Headers.prototype.forEach=function(cb){for(var k in this._h)cb(this._h[k],k);};}
-        \\if(typeof Response==='undefined'){globalThis.Response=function(body,opts){this.body=body;this.status=(opts&&opts.status)||200;this.ok=this.status>=200&&this.status<300;this.headers=new Headers((opts&&opts.headers)||{});this.text=function(){return Promise.resolve(String(body||''));};this.json=function(){return Promise.resolve(JSON.parse(body||'null'));};};}
+        \\if(typeof Event==='undefined'){globalThis.Event=function(type,opts){if(!(this instanceof Event))throw new TypeError("Failed to construct 'Event': please use 'new'.");this.type=type;this.bubbles=!!(opts&&opts.bubbles);this.cancelable=!!(opts&&opts.cancelable);this.defaultPrevented=false;this.eventPhase=0;this.target=null;this.currentTarget=null;this.isTrusted=false;this.timeStamp=Date.now();this.preventDefault=function(){if(this.cancelable)this.defaultPrevented=true;};this.stopPropagation=function(){};this.stopImmediatePropagation=function(){};this.composedPath=function(){return[];};};}
+        \\if(typeof CustomEvent==='undefined'){globalThis.CustomEvent=function(type,opts){if(!(this instanceof CustomEvent))throw new TypeError("Failed to construct 'CustomEvent': please use 'new'.");Event.call(this,type,opts);this.detail=(opts&&opts.detail!==undefined)?opts.detail:null;};CustomEvent.prototype=Object.create(Event.prototype);CustomEvent.prototype.constructor=CustomEvent;}
+        \\if(typeof Headers==='undefined'){globalThis.Headers=function(init){if(!(this instanceof Headers))throw new TypeError("Failed to construct 'Headers': please use 'new'.");this._h={};if(init)for(var k in init)this._h[k.toLowerCase()]=init[k];};Headers.prototype.get=function(n){return this._h[n.toLowerCase()]||null;};Headers.prototype.set=function(n,v){this._h[n.toLowerCase()]=v;};Headers.prototype.has=function(n){return n.toLowerCase() in this._h;};Headers.prototype.forEach=function(cb,thisArg){for(var k in this._h)cb.call(thisArg,this._h[k],k.toLowerCase(),this);};}
+        \\if(typeof Response==='undefined'){globalThis.Response=function(body,opts){if(!(this instanceof Response))throw new TypeError("Failed to construct 'Response': please use 'new'.");if(opts&&opts.status!==undefined){var st=Number(opts.status);if(!isFinite(st)||st<200||st>599)throw new RangeError("Response status out of range");this.status=st;}else this.status=200;this.body=body;this.ok=this.status>=200&&this.status<300;this.headers=new Headers((opts&&opts.headers)||{});this.url='';var self=this;this.text=function(){return Promise.resolve(String(body||''));};this.json=function(){return Promise.resolve(JSON.parse(body||'null'));};this.clone=function(){return new Response(body,opts);};};}
         \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
         \\if(typeof matchMedia==='undefined'){
         \\  globalThis.matchMedia=function(q){
@@ -2186,17 +2188,17 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  };
         \\}
         \\if(typeof AbortController==='undefined'){
-        \\  function AbortSignal(){this.aborted=false;this.reason=undefined;this._evtMap={};this.onabort=null;}
+        \\  function AbortSignal(){if(!(this instanceof AbortSignal))throw new TypeError("Failed to construct 'AbortSignal': please use 'new'.");this.aborted=false;this.reason=undefined;this._evtMap={};this.onabort=null;}
         \\  AbortSignal.prototype.addEventListener=function(t,fn,o){if(!this._evtMap[t])this._evtMap[t]=[];this._evtMap[t].push({fn:fn,once:!!(o&&o.once)});};
         \\  AbortSignal.prototype.removeEventListener=function(t,fn){var a=this._evtMap[t];if(a)for(var i=a.length-1;i>=0;i--)if(a[i].fn===fn)a.splice(i,1);};
         \\  AbortSignal.prototype.dispatchEvent=function(e){e.target=this;e.currentTarget=this;var a=this._evtMap[e.type];if(a){a=a.slice();for(var i=0;i<a.length;i++){try{a[i].fn.call(this,e);}catch(ex){}if(a[i].once)this.removeEventListener(e.type,a[i].fn);}}e.currentTarget=null;return!e.defaultPrevented;};
         \\  AbortSignal.prototype.throwIfAborted=function(){if(this.aborted)throw this.reason;};
         \\  AbortSignal.abort=function(reason){var s=new AbortSignal();s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');return s;};
         \\  AbortSignal.timeout=function(ms){var s=new AbortSignal();setTimeout(function(){s.aborted=true;s.reason=new DOMException('The operation timed out.','TimeoutError');var e=new Event('abort');e._trusted=true;e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);},ms);return s;};
-        \\  AbortSignal.any=function(signals){var s=new AbortSignal();for(var i=0;i<signals.length;i++){if(signals[i].aborted){s.aborted=true;s.reason=signals[i].reason;return s;}}
+        \\  AbortSignal.any=function(signals){if(!signals||signals.length===0)return new AbortSignal();var s=new AbortSignal();for(var i=0;i<signals.length;i++){if(signals[i].aborted){s.aborted=true;s.reason=signals[i].reason;return s;}}
         \\    var hs=[];for(var i=0;i<signals.length;i++){(function(sig){var h=function(){if(!s.aborted){s.aborted=true;s.reason=sig.reason;for(var k=0;k<hs.length;k++)hs[k].sig.removeEventListener('abort',hs[k].h);var e=new Event('abort');e._trusted=true;e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};hs.push({sig:sig,h:h});sig.addEventListener('abort',h);})(signals[i]);}return s;};
         \\  globalThis.AbortSignal=AbortSignal;
-        \\  function AbortController(){this.signal=new AbortSignal();}
+        \\  function AbortController(){if(!(this instanceof AbortController))throw new TypeError("Failed to construct 'AbortController': please use 'new'.");this.signal=new AbortSignal();}
         \\  AbortController.prototype.abort=function(reason){var s=this.signal;if(!s.aborted){s.aborted=true;s.reason=reason!==undefined?reason:new DOMException('The operation was aborted.','AbortError');var e=new Event('abort');e._trusted=true;e.target=s;e.currentTarget=s;if(s.onabort)try{s.onabort(e);}catch(ex){}s.dispatchEvent(e);}};
         \\  globalThis.AbortController=AbortController;
         \\}
@@ -2330,6 +2332,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\}
         \\if(typeof Request==='undefined'){
         \\  globalThis.Request=function(input,init){
+        \\    if(!(this instanceof Request))throw new TypeError("Failed to construct 'Request': please use 'new'.");
         \\    if(input instanceof Request){this.url=input.url;this.method=input.method;this.headers=new Headers(input.headers);}
         \\    else{this.url=String(input);this.method='GET';this.headers=new Headers();}
         \\    if(init){if(init.method)this.method=init.method;if(init.headers)this.headers=new Headers(init.headers);this.body=init.body||null;this.mode=init.mode||'cors';this.credentials=init.credentials||'same-origin';this.redirect=init.redirect||'follow';this.signal=init.signal||null;}
@@ -2354,6 +2357,26 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  FileReader.prototype.readAsDataURL=function(blob){var self=this;self.readyState=1;blob.text().then(function(t){self.result='data:'+(blob.type||'')+';base64,'+btoa(t);self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
         \\  FileReader.prototype.abort=function(){this.readyState=2;if(this.onerror)this.onerror({target:this});};
         \\}
+        \\// TODO: localStorage persistence — requires native file I/O binding (aio write/read per key or full JSON flush). Not implemented here.
+        \\// TODO: XHR async=false (synchronous HTTP) — requires blocking fetch, not feasible with async-only HTTP stack.
+        \\// TODO: TextEncoder/TextDecoder UTF-16 surrogate handling — lone surrogates should encode as CESU-8 or replacement char per spec.
+        \\// performance.mark / performance.measure / entry storage (Wave 3)
+        \\;(function(){
+        \\  var _perfEntries=[];
+        \\  performance.mark=function(name,options){var entry={name:String(name),entryType:'mark',startTime:performance.now(),duration:0,detail:(options&&options.detail)||null};_perfEntries.push(entry);return entry;};
+        \\  performance.measure=function(name,startMark,endMark){
+        \\    var start=0,end=performance.now();
+        \\    if(typeof startMark==='string'){var s=_perfEntries.find(function(e){return e.name===startMark;});if(s)start=s.startTime;}
+        \\    else if(startMark&&typeof startMark==='object'&&startMark.start!==undefined){start=Number(startMark.start);if(startMark.end!==undefined)end=Number(startMark.end);}
+        \\    if(typeof endMark==='string'){var em=_perfEntries.find(function(x){return x.name===endMark;});if(em)end=em.startTime;}
+        \\    var entry={name:String(name),entryType:'measure',startTime:start,duration:end-start};_perfEntries.push(entry);return entry;
+        \\  };
+        \\  performance.clearMarks=function(name){_perfEntries=_perfEntries.filter(function(e){return e.entryType!=='mark'||(name!==undefined&&e.name!==name);});};
+        \\  performance.clearMeasures=function(name){_perfEntries=_perfEntries.filter(function(e){return e.entryType!=='measure'||(name!==undefined&&e.name!==name);});};
+        \\  performance.getEntriesByName=function(name,type){return _perfEntries.filter(function(e){return e.name===name&&(!type||e.entryType===type);});};
+        \\  performance.getEntriesByType=function(type){return _perfEntries.filter(function(e){return e.entryType===type;});};
+        \\  performance.getEntries=function(){return _perfEntries.slice();};
+        \\})();
     ;
     evalInitScript(ctx, compat_stubs, compat_stubs.len);
 }
