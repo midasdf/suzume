@@ -18,6 +18,35 @@ pub var wpt_result_sent: bool = false;
 const WindowManager = @import("window_manager.zig").WindowManager;
 pub var global_window_mgr: ?*WindowManager = null;
 
+// ── WebCrypto: secure RNG backing ──────────────────────────────────
+// [[spec]] WebCrypto §14.1 — getRandomValues MUST use a cryptographically
+// secure PRNG. We back it with std.crypto.random (OS entropy / ChaCha8).
+fn jsSuzumeSecureRandom(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return qjs.JS_ThrowTypeError(c, "expected TypedArray");
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    var byte_offset: usize = 0;
+    var byte_length: usize = 0;
+    var bytes_per_element: usize = 0;
+    const ab = qjs.JS_GetTypedArrayBuffer(c, args[0], &byte_offset, &byte_length, &bytes_per_element);
+    if (quickjs.JS_IsException(ab)) return ab;
+    defer qjs.JS_FreeValue(c, ab);
+    // WebCrypto §14.1: throw QuotaExceededError when > 65536 bytes.
+    if (byte_length > 65536) return qjs.JS_ThrowRangeError(c, "QuotaExceededError: more than 65536 bytes requested");
+    var ab_size: usize = 0;
+    const base = qjs.JS_GetArrayBuffer(c, &ab_size, ab);
+    if (base == null) return qjs.JS_ThrowTypeError(c, "not an ArrayBuffer");
+    if (byte_offset + byte_length > ab_size) return qjs.JS_ThrowRangeError(c, "buffer out of range");
+    const dest = base[byte_offset .. byte_offset + byte_length];
+    std.crypto.random.bytes(dest);
+    return qjs.JS_DupValue(c, args[0]);
+}
+
 /// window.open(url, target, features)
 /// Returns a WindowProxy-like object with .closed, .close(), .name, .postMessage()
 fn jsWindowOpen(
@@ -1488,6 +1517,9 @@ pub fn registerWebApis(js_rt: anytype) void {
     const dom_doc = @import("dom_document.zig");
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_dom_parse", qjs.JS_NewCFunction(ctx, &dom_doc.suzumeDomParse, "__suzume_dom_parse", 1));
 
+    // -- WebCrypto CSPRNG: used by crypto.getRandomValues polyfill --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_secure_random", qjs.JS_NewCFunction(ctx, &jsSuzumeSecureRandom, "__suzume_secure_random", 1));
+
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
     _ = qjs.JS_SetPropertyStr(ctx, console_obj, "log", qjs.JS_NewCFunction(ctx, &consoleLog, "log", 1));
@@ -2236,11 +2268,19 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  Blob.prototype.slice=function(s,e,t){return new Blob([this._data.slice(s,e)],{type:t||this.type});};
         \\}
         \\if(typeof crypto==='undefined'){
+        \\  // WebCrypto §14.1: CSPRNG backed by native std.crypto.random (OS entropy / ChaCha8).
         \\  globalThis.crypto={
-        \\    getRandomValues:function(arr){for(var i=0;i<arr.length;i++)arr[i]=Math.floor(Math.random()*256);return arr;},
-        \\    randomUUID:function(){var h='0123456789abcdef',s='';for(var i=0;i<36;i++){if(i===8||i===13||i===18||i===23)s+='-';else if(i===14)s+='4';else if(i===19)s+=h[8+(Math.random()*4|0)];else s+=h[Math.random()*16|0];}return s;},
+        \\    getRandomValues:function(arr){if(!arr||typeof arr.byteLength!=='number')throw new TypeError('getRandomValues requires a TypedArray');return globalThis.__suzume_secure_random(arr);},
+        \\    randomUUID:function(){var b=new Uint8Array(16);globalThis.__suzume_secure_random(b);b[6]=(b[6]&0x0f)|0x40;b[8]=(b[8]&0x3f)|0x80;var h='0123456789abcdef',s='';for(var i=0;i<16;i++){if(i===4||i===6||i===8||i===10)s+='-';s+=h[b[i]>>4]+h[b[i]&0x0f];}return s;},
         \\    subtle:{digest:function(){return Promise.reject('not implemented');},encrypt:function(){return Promise.reject('not implemented');}}
         \\  };
+        \\}
+        \\// DOM §4.8: DOMException constructor — polyfills for AbortSignal etc. construct it.
+        \\if(typeof DOMException==='undefined'){
+        \\  globalThis.DOMException=function DOMException(message,name){this.message=String(message||'');this.name=String(name||'Error');this.code=0;};
+        \\  DOMException.prototype=Object.create(Error.prototype);
+        \\  DOMException.prototype.constructor=DOMException;
+        \\  DOMException.prototype.toString=function(){return this.name+': '+this.message;};
         \\}
         \\if(typeof NodeFilter==='undefined'){
         \\  globalThis.NodeFilter={SHOW_ALL:0xFFFFFFFF,SHOW_ELEMENT:0x1,SHOW_ATTRIBUTE:0x2,SHOW_TEXT:0x4,SHOW_CDATA_SECTION:0x8,SHOW_ENTITY_REFERENCE:0x10,SHOW_ENTITY:0x20,SHOW_PROCESSING_INSTRUCTION:0x40,SHOW_COMMENT:0x80,SHOW_DOCUMENT:0x100,SHOW_DOCUMENT_TYPE:0x200,SHOW_DOCUMENT_FRAGMENT:0x400,SHOW_NOTATION:0x800,FILTER_ACCEPT:1,FILTER_REJECT:2,FILTER_SKIP:3};
