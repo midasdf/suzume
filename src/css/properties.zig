@@ -2000,6 +2000,32 @@ fn isBackgroundKeyword(tok: []const u8) bool {
     return false;
 }
 
+/// Check if a flex shorthand token is a flex-basis value (has units) vs a number (grow/shrink).
+fn isFlexBasisValue(s: []const u8) bool {
+    if (s.len >= 4 and eqlIgnoreCase(s[0..4], "calc")) {
+        // calc() with length/percent units = basis, unitless = number
+        for (s) |c| {
+            if (c == '%') return true;
+        }
+        if (std.mem.indexOf(u8, s, "px") != null or
+            std.mem.indexOf(u8, s, "em") != null or
+            std.mem.indexOf(u8, s, "rem") != null or
+            std.mem.indexOf(u8, s, "vw") != null or
+            std.mem.indexOf(u8, s, "vh") != null or
+            std.mem.indexOf(u8, s, "cqw") != null)
+            return true;
+        return false;
+    }
+    if (eqlIgnoreCase(s, "auto") or eqlIgnoreCase(s, "content") or
+        eqlIgnoreCase(s, "min-content") or eqlIgnoreCase(s, "max-content") or
+        eqlIgnoreCase(s, "fit-content"))
+        return true;
+    for (s) |c| {
+        if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '%') return true;
+    }
+    return false;
+}
+
 fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaration {
     const decls = allocator.alloc(ast.Declaration, 3) catch return null;
 
@@ -2026,24 +2052,38 @@ fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaratio
         return decls;
     }
 
+    // Split into tokens respecting parentheses (calc(), var(), etc.)
     var parts: [3][]const u8 = undefined;
     var count: usize = 0;
-    var iter = std.mem.tokenizeAny(u8, value, " \t");
-    while (iter.next()) |tok| {
-        if (count >= 3) break;
-        parts[count] = tok;
-        count += 1;
+    {
+        var i: usize = 0;
+        while (i < value.len and count < 3) {
+            // Skip whitespace
+            while (i < value.len and (value[i] == ' ' or value[i] == '\t')) i += 1;
+            if (i >= value.len) break;
+            const start = i;
+            var paren_depth: usize = 0;
+            while (i < value.len) {
+                if (value[i] == '(') {
+                    paren_depth += 1;
+                } else if (value[i] == ')') {
+                    if (paren_depth > 0) paren_depth -= 1;
+                } else if ((value[i] == ' ' or value[i] == '\t') and paren_depth == 0) {
+                    break;
+                }
+                i += 1;
+            }
+            if (i > start) {
+                parts[count] = value[start..i];
+                count += 1;
+            }
+        }
     }
 
     if (count == 1) {
         // Single value: if it has units (%, px, em, etc.), it's flex-basis
-        // Otherwise it's flex-grow
-        const is_basis = blk: {
-            for (parts[0]) |c| {
-                if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '%') break :blk true;
-            }
-            break :blk false;
-        };
+        // Otherwise it's flex-grow. calc() with units = basis, calc() without = number.
+        const is_basis = isFlexBasisValue(parts[0]);
         if (is_basis) {
             // flex: <basis> → grow=1, shrink=1, basis=value
             decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = "1", .important = false };
@@ -2056,22 +2096,21 @@ fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaratio
             decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
         }
     } else if (count == 2) {
-        // flex: <grow> <shrink|basis>
-        // If parts[1] contains a letter or '%', treat as basis (grow=parts[0], shrink=1, basis=parts[1])
-        // If parts[1] is purely numeric, treat as shrink (grow=parts[0], shrink=parts[1], basis=0%)
-        const second_is_basis = blk: {
-            for (parts[1]) |c| {
-                if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or c == '%') break :blk true;
-            }
-            break :blk false;
-        };
-        if (second_is_basis) {
-            // flex: grow basis
+        // flex: <grow> <shrink|basis> OR <basis> <grow>
+        const first_is_basis = isFlexBasisValue(parts[0]);
+        const second_is_basis = isFlexBasisValue(parts[1]);
+        if (first_is_basis and !second_is_basis) {
+            // flex: <basis> <grow> → grow=parts[1], shrink=1, basis=parts[0]
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[1], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[0], .important = false };
+        } else if (second_is_basis) {
+            // flex: <grow> <basis>
             decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
             decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = "1", .important = false };
             decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[1], .important = false };
         } else {
-            // flex: grow shrink
+            // flex: <grow> <shrink>
             decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
             decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
             decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };

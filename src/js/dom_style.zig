@@ -540,7 +540,7 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "align-items")) {
         const s = switch (style.align_items) {
-            .auto => "stretch", // initial value
+            .auto => "normal", // CSS Box Alignment: initial value is "normal"
             .stretch => "stretch",
             .flex_start => "flex-start",
             .flex_end => "flex-end",
@@ -577,6 +577,44 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
             .max_content => qjs.JS_NewStringLen(c, "max-content", 11),
             .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
         };
+    } else if (std.mem.eql(u8, prop, "flex-flow")) {
+        // Shorthand: flex-direction flex-wrap
+        const dir_s = switch (style.flex_direction) {
+            .row => "row",
+            .row_reverse => "row-reverse",
+            .column => "column",
+            .column_reverse => "column-reverse",
+        };
+        const wrap_s = switch (style.flex_wrap) {
+            .nowrap => "nowrap",
+            .wrap => "wrap",
+            .wrap_reverse => "wrap-reverse",
+        };
+        const result = std.fmt.bufPrint(&buf, "{s} {s}", .{ dir_s, wrap_s }) catch return qjs.JS_NewStringLen(c, "row nowrap", 10);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
+    } else if (std.mem.eql(u8, prop, "flex")) {
+        // Shorthand: flex-grow flex-shrink flex-basis
+        var grow_buf: [32]u8 = undefined;
+        var shrink_buf: [32]u8 = undefined;
+        const grow_s = std.fmt.bufPrint(&grow_buf, "{d}", .{style.flex_grow}) catch "0";
+        const shrink_s = std.fmt.bufPrint(&shrink_buf, "{d}", .{style.flex_shrink}) catch "1";
+        const basis_s: []const u8 = switch (style.flex_basis) {
+            .auto => "auto",
+            .none => "auto",
+            .px => |v| blk: {
+                const s = std.fmt.bufPrint(buf[64..], "{d}px", .{v}) catch break :blk "auto";
+                break :blk s;
+            },
+            .percent => |v| blk: {
+                const s = std.fmt.bufPrint(buf[64..], "{d}%", .{v}) catch break :blk "auto";
+                break :blk s;
+            },
+            .min_content => "min-content",
+            .max_content => "max-content",
+            .fit_content => "fit-content",
+        };
+        const result = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ grow_s, shrink_s, basis_s }) catch return qjs.JS_NewStringLen(c, "0 1 auto", 8);
+        return qjs.JS_NewStringLen(c, result.ptr, result.len);
     } else if (std.mem.eql(u8, prop, "order")) {
         const result = std.fmt.bufPrint(&buf, "{d}", .{style.order}) catch return qjs.JS_NewStringLen(c, "0", 1);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
@@ -2806,6 +2844,7 @@ pub fn windowGetComputedStyle(
         .{ "overflow-clip-margin", "overflowClipMargin" },
         .{ "text-overflow", "textOverflow" },
         // CSS Flexbox (ensure all are in computed style)
+        .{ "flex", "flex" },
         .{ "flex-wrap", "flexWrap" },
         .{ "flex-flow", "flexFlow" },
         .{ "flex-basis", "flexBasis" },
@@ -3053,12 +3092,22 @@ pub fn windowGetComputedStyle(
         }
     }
 
+    @setEvalBranchQuota(20000);
     inline for (prop_pairs) |pair| {
         const css_name = pair[0];
         const js_name = pair[1];
         // Priority: inline style > cascade computed style
+        // Exception: shorthand properties (flex, flex-flow) must always reconstruct
+        // from computed longhands, not raw inline shorthand values
+        const is_reconstructed_shorthand = comptime (std.mem.eql(u8, css_name, "flex") or std.mem.eql(u8, css_name, "flex-flow"));
         var val: qjs.JSValue = undefined;
-        if (inline_style.len > 0) {
+        if (is_reconstructed_shorthand) {
+            if (style_opt) |style| {
+                val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
+            } else {
+                val = cssInitialValue(c, css_name);
+            }
+        } else if (inline_style.len > 0) {
             if (getStyleProperty(inline_style, css_name)) |inline_val| {
                 const t = std.mem.trim(u8, inline_val, " \t\r\n");
                 if (eqlIgnoreCase(t, "initial")) {
@@ -3072,6 +3121,13 @@ pub fn windowGetComputedStyle(
                         val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
                     } else {
                         val = cssInitialValue(c, css_name);
+                    }
+                } else if (t.len >= 4 and eqlIgnoreCase(t[0..4], "calc")) {
+                    // calc() values: use cascade computed style which resolves units
+                    if (style_opt) |style| {
+                        val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
+                    } else {
+                        val = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                     }
                 } else {
                     val = resolveInlineForComputed(c, css_name, inline_val, args[0]);
@@ -3094,7 +3150,13 @@ pub fn windowGetComputedStyle(
         // Also set kebab-case name if different from camelCase
         if (!std.mem.eql(u8, css_name, js_name)) {
             var val2: qjs.JSValue = undefined;
-            if (inline_style.len > 0) {
+            if (is_reconstructed_shorthand) {
+                if (style_opt) |style| {
+                    val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
+                } else {
+                    val2 = cssInitialValue(c, css_name);
+                }
+            } else if (inline_style.len > 0) {
                 if (getStyleProperty(inline_style, css_name)) |inline_val| {
                     const t2 = std.mem.trim(u8, inline_val, " \t\r\n");
                     if (eqlIgnoreCase(t2, "initial")) {
@@ -3108,6 +3170,12 @@ pub fn windowGetComputedStyle(
                             val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
                         } else {
                             val2 = cssInitialValue(c, css_name);
+                        }
+                    } else if (t2.len >= 4 and eqlIgnoreCase(t2[0..4], "calc")) {
+                        if (style_opt) |style| {
+                            val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
+                        } else {
+                            val2 = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                         }
                     } else {
                         val2 = resolveInlineForComputed(c, css_name, inline_val, args[0]);

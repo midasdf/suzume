@@ -1776,10 +1776,18 @@ fn applyDeclaration(
             if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start")) style.align_self = .flex_start else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end")) style.align_self = .flex_end else if (eqlIgnoreCase(trimmed, "center")) style.align_self = .center else if (eqlIgnoreCase(trimmed, "stretch")) style.align_self = .stretch else if (eqlIgnoreCase(trimmed, "baseline")) style.align_self = .baseline else if (eqlIgnoreCase(trimmed, "auto")) style.align_self = .auto;
         },
         .flex_grow => {
-            if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_grow = v else |_| {}
+            if (std.fmt.parseFloat(f32, trimmed)) |v| {
+                style.flex_grow = @max(v, 0);
+            } else |_| {
+                if (parseCalcSimple(trimmed, fs, vw, vh, 0)) |v| style.flex_grow = @max(v, 0);
+            }
         },
         .flex_shrink => {
-            if (std.fmt.parseFloat(f32, trimmed)) |v| style.flex_shrink = v else |_| {}
+            if (std.fmt.parseFloat(f32, trimmed)) |v| {
+                style.flex_shrink = @max(v, 0);
+            } else |_| {
+                if (parseCalcSimple(trimmed, fs, vw, vh, 0)) |v| style.flex_shrink = @max(v, 0);
+            }
         },
         .order => {
             if (std.fmt.parseInt(i32, trimmed, 10)) |v| style.order = v else |_| {}
@@ -2357,8 +2365,11 @@ fn parseLengthValueDepth(s: []const u8, font_size: f32, vw: f32, vh: f32, depth:
     if (properties.parseLength(s)) |len| {
         return resolveLengthToPx(len.value, len.unit, font_size, vw, vh);
     }
-    // Try as bare number (px)
-    if (std.fmt.parseFloat(f32, s)) |v| return v else |_| {}
+    // Try as bare number (px) — guard against strings starting with letters
+    // (parseFloat can panic on certain malformed inputs like "sign")
+    if (s.len > 0 and (s[0] == '-' or s[0] == '+' or s[0] == '.' or (s[0] >= '0' and s[0] <= '9'))) {
+        if (std.fmt.parseFloat(f32, s)) |v| return v else |_| {}
+    }
     return null;
 }
 
@@ -2445,9 +2456,12 @@ fn parseMinMax(s: []const u8, font_size: f32, vw: f32, vh: f32, is_min: bool, de
 }
 
 fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) ?f32 {
+    // Minimum valid input: "calc(X)" = 7 chars, must have "calc(" prefix
+    if (s.len < 6 or !startsWithIgnoreCase(s, "calc(")) return null;
     const start = 5; // "calc(".len
     var end = s.len;
     if (end > 0 and s[end - 1] == ')') end -= 1;
+    if (end <= start) return null;
     const inner = std.mem.trim(u8, s[start..end], " \t");
     const result = parseCalcExpr(inner, font_size, vw, vh, depth) orelse return null;
     // CSS Values 4 §10.11: NaN → 0 (Infinity passes through for property-level clamping)
@@ -3275,6 +3289,32 @@ fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle
     }
     if (std.mem.eql(u8, s, "0")) return .{ .px = 0 };
     if (std.fmt.parseFloat(f32, s)) |v| return .{ .px = v } else |_| {}
+    // calc() expressions: resolve to px if no %, preserve calc() if % involved
+    if (s.len >= 6 and eqlIgnoreCase(s[0..4], "calc") and s[4] == '(' and s[s.len - 1] == ')') {
+        if (std.mem.indexOf(u8, s, "%") != null) {
+            // calc() with %: percentages can't be resolved at computed-value time
+            // for properties like flex-basis where % depends on layout.
+            // But simplify calc(N%) → N%
+            {
+                const inner = std.mem.trim(u8, s[5 .. s.len - 1], " \t");
+                const has_op = std.mem.indexOf(u8, inner, "+") != null or
+                    std.mem.indexOf(u8, inner, "-") != null or
+                    std.mem.indexOf(u8, inner, "*") != null or
+                    std.mem.indexOf(u8, inner, "/") != null;
+                if (!has_op and inner.len > 1 and inner[inner.len - 1] == '%') {
+                    if (std.fmt.parseFloat(f32, inner[0 .. inner.len - 1])) |pct| {
+                        return .{ .percent = pct };
+                    } else |_| {}
+                }
+            }
+            // Can't represent mixed calc(% + px) in Dimension — fall through to .auto
+        } else {
+            // Pure calc without %: resolve to px
+            if (parseCalcSimple(s, font_size, vw, vh, 0)) |px_val| {
+                return .{ .px = @max(px_val, 0) };
+            }
+        }
+    }
     return .auto;
 }
 

@@ -341,7 +341,17 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         const effective_align = resolveAlignment(child, style.align_items);
         switch (effective_align) {
             .auto => {
-                cross_offset = 0; // unreachable: resolveAlignment always resolves auto
+                // "normal" in flex context behaves as "stretch"
+                cross_offset = 0;
+                const child_non_content_a = child.padding.top + child.padding.bottom +
+                    child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+                const stretched_height_a = @max(container_cross - child_non_content_a, 0);
+                if (switch (child.style.height) {
+                    .auto => true,
+                    else => false,
+                }) {
+                    child.content.height = stretched_height_a;
+                }
             },
             .flex_start => {
                 cross_offset = 0;
@@ -706,7 +716,17 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
             const effective_align_w = resolveAlignment(child, style.align_items);
             switch (effective_align_w) {
                 .auto => {
-                    cross_offset = 0; // unreachable: resolveAlignment always resolves auto
+                    // "normal" in flex context behaves as "stretch"
+                    cross_offset = 0;
+                    const child_non_content_a2 = child.padding.top + child.padding.bottom +
+                        child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+                    const stretched_height_a2 = @max(line_height - child_non_content_a2, 0);
+                    if (switch (child.style.height) {
+                        .auto => true,
+                        else => false,
+                    }) {
+                        child.content.height = stretched_height_a2;
+                    }
                 },
                 .flex_start => {
                     cross_offset = 0;
@@ -952,7 +972,19 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
 
         const effective_align_c = resolveAlignment(child, style.align_items);
         switch (effective_align_c) {
-            .auto, .flex_start => {},
+            .auto => {
+                // "normal" in flex context behaves as "stretch"
+                const child_non_content_ac = child.padding.left + child.padding.right +
+                    child.border.left + child.border.right + child.margin.left + child.margin.right;
+                const stretched_width_ac = @max(container_width - child_non_content_ac, 0);
+                if (switch (child.style.width) {
+                    .auto => true,
+                    else => false,
+                }) {
+                    child.content.width = stretched_width_ac;
+                }
+            },
+            .flex_start => {},
             .flex_end => {
                 cross_offset = container_width - child_cross_size;
             },

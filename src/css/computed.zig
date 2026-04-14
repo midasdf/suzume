@@ -150,7 +150,7 @@ pub const ComputedStyle = struct {
     flex_wrap: FlexWrap = .nowrap,
     justify_content: JustifyContent = .flex_start,
     align_content: AlignContent = .stretch,
-    align_items: AlignItems = .stretch,
+    align_items: AlignItems = .auto, // CSS Box Alignment: initial "normal" (auto = normal internally)
     align_self: AlignItems = .auto,
     flex_grow: f32 = 0,
     flex_shrink: f32 = 1,

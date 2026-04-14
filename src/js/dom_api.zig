@@ -1119,6 +1119,7 @@ fn createStyleObject(ctx: *qjs.JSContext, element_val: qjs.JSValue) qjs.JSValue 
         .{ .camel = "overflowWrap", .css = "overflow-wrap" },
         .{ .camel = "flexDirection", .css = "flex-direction" },
         .{ .camel = "flexWrap", .css = "flex-wrap" },
+        .{ .camel = "flexFlow", .css = "flex-flow" },
         .{ .camel = "justifyContent", .css = "justify-content" },
         .{ .camel = "alignItems", .css = "align-items" },
         .{ .camel = "alignSelf", .css = "align-self" },
@@ -1502,6 +1503,24 @@ fn stylePropDataGet(
 }
 
 /// Setter for CSS property via JS_NewCFunctionData. func_data[0] = CSS name string.
+/// Check if a value is a single calc() expression (not multiple like "calc(1) calc(2)")
+fn isSingleCalcExpr(val: []const u8) bool {
+    if (val.len < 6) return false;
+    var depth: usize = 0;
+    for (val, 0..) |c, i| {
+        if (c == '(') depth += 1;
+        if (c == ')') {
+            if (depth > 0) depth -= 1;
+            if (depth == 0) {
+                // Closing paren of outermost calc — check if anything non-space follows
+                const rest = std.mem.trim(u8, val[i + 1 ..], " \t");
+                return rest.len == 0;
+            }
+        }
+    }
+    return true; // no close paren found, treat as single
+}
+
 fn stylePropDataSet(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -1568,7 +1587,7 @@ fn styleSetProperty(
         zero_px
     else if (dom_style.eqlIgnoreCase(prop, "display"))
         dom_style.canonicalizeDisplayValue(val)
-    else if (val.len >= 5 and dom_style.eqlIgnoreCase(val[0..5], "calc("))
+    else if (val.len >= 5 and dom_style.eqlIgnoreCase(val[0..5], "calc(") and isSingleCalcExpr(val))
         dom_style.canonicalizeCalcValue(val, &calc_buf) orelse val
     else if (val.len >= 4 and (dom_style.eqlIgnoreCase(val[0..4], "min(") or dom_style.eqlIgnoreCase(val[0..4], "max(")))
         dom_style.canonicalizeSingleArgMath(val, &calc_buf) orelse val
