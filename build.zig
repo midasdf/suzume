@@ -425,6 +425,29 @@ pub fn build(b: *std.Build) void {
     const run_url_resolve_tests = b.addRunArtifact(url_resolve_tests);
     test_step.dependOn(&run_url_resolve_tests.step);
 
+    // ── URL module tests ──────────────────────────────────────
+    const url_pe_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/percent_encode.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const url_pe_tests = b.addTest(.{ .root_module = url_pe_mod });
+    const run_url_pe_tests = b.addRunArtifact(url_pe_tests);
+    const test_url_pe_step = b.step("test-url-percent-encode", "Run URL percent-encode tests");
+    test_url_pe_step.dependOn(&run_url_pe_tests.step);
+    test_step.dependOn(&run_url_pe_tests.step);
+
+    const url_pc_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/punycode.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const url_pc_tests = b.addTest(.{ .root_module = url_pc_mod });
+    const run_url_pc_tests = b.addRunArtifact(url_pc_tests);
+    const test_url_pc_step = b.step("test-url-punycode", "Run URL Punycode tests");
+    test_url_pc_step.dependOn(&run_url_pc_tests.step);
+    test_step.dependOn(&run_url_pc_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
