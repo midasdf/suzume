@@ -459,6 +459,18 @@ pub fn build(b: *std.Build) void {
     test_url_pc_step.dependOn(&run_url_pc_tests.step);
     test_step.dependOn(&run_url_pc_tests.step);
 
+    const url_nfc_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/nfc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_nfc_mod.addImport("tables", url_tables_mod);
+    const url_nfc_tests = b.addTest(.{ .root_module = url_nfc_mod });
+    const run_url_nfc_tests = b.addRunArtifact(url_nfc_tests);
+    const test_url_nfc_step = b.step("test-url-nfc", "Run URL NFC normalization tests");
+    test_url_nfc_step.dependOn(&run_url_nfc_tests.step);
+    test_step.dependOn(&run_url_nfc_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
