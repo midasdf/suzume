@@ -153,6 +153,11 @@ pub fn elementSetInnerHTML(
     defer if (added_buf.len > 0) std.heap.c_allocator.free(added_buf);
     events.recordMutationChildListBulk(node, added_buf, removed_buf, null, null);
     api.setDomDirty();
+    // Shadow DOM Phase 1: if we're inside a shadow scope, tag the new subtree.
+    {
+        const shadow_root = @import("shadow_root.zig");
+        for (added_buf) |an| shadow_root.propagateScopeFromParent(node, an);
+    }
     // Execute scripts in new content
     maybeExecuteScriptsInSubtree(c, node);
     return quickjs.JS_UNDEFINED();

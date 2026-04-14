@@ -849,6 +849,11 @@ pub fn elementAppendChild(
             lxb_dom_node_remove(fnode);
             lxb_dom_node_insert_child(parent.?, fnode);
         }
+        // Shadow DOM Phase 1: propagate scope tag to each inserted subtree.
+        {
+            const shadow_root = @import("shadow_root.zig");
+            for (frag_children) |fnode| shadow_root.propagateScopeFromParent(parent.?, fnode);
+        }
         // Record mutation on parent with addedNodes
         events.recordMutationChildListMulti(parent.?, frag_children, ins_prev, null);
         // DOM spec: also record removal mutation on the fragment itself (removedNodes)
@@ -871,6 +876,11 @@ pub fn elementAppendChild(
     // Capture siblings at insertion point (append = after last child)
     const ins_prev = lxb_dom_node_last_child_noi(parent.?);
     lxb_dom_node_insert_child(parent.?, child);
+    // Shadow DOM Phase 1: propagate scope tag if parent is in a shadow tree.
+    {
+        const shadow_root = @import("shadow_root.zig");
+        shadow_root.propagateScopeFromParent(parent.?, child);
+    }
     events.recordMutationChildList(parent.?, child, null, ins_prev, null);
     api.setDomDirty();
     // Dynamic script execution: if a <script> is appended, fetch and execute it
@@ -1109,6 +1119,11 @@ pub fn elementInsertBefore(
             lxb_dom_node_remove(fnode);
             if (eff_ref2) |er| lxb_dom_node_insert_before(er, fnode) else lxb_dom_node_insert_child(parent.?, fnode);
         }
+        // Shadow DOM Phase 1: propagate scope tag to each inserted subtree.
+        {
+            const shadow_root = @import("shadow_root.zig");
+            for (frag_ch) |fnode| shadow_root.propagateScopeFromParent(parent.?, fnode);
+        }
         events.recordMutationChildListMulti(parent.?, frag_ch, frag_prev, eff_ref2);
         // DOM spec: record removal mutation on the fragment itself
         events.recordMutationChildListRemovedMulti(new_node, frag_ch);
@@ -1145,6 +1160,11 @@ pub fn elementInsertBefore(
         lxb_dom_node_insert_child(parent.?, new_node);
     } else {
         lxb_dom_node_insert_before(effective_ref.?, new_node);
+    }
+    // Shadow DOM Phase 1: propagate scope tag if parent is in a shadow tree.
+    {
+        const shadow_root = @import("shadow_root.zig");
+        shadow_root.propagateScopeFromParent(parent.?, new_node);
     }
     events.recordMutationChildList(parent.?, new_node, null, ins_prev, ins_next);
     api.setDomDirty();
@@ -2238,27 +2258,55 @@ pub fn nodeCompareDocumentPosition(
 pub fn nodeGetRootNode(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Parse `options.composed` (defaults to false).
+    var composed: bool = false;
+    if (argc >= 1) {
+        if (argv) |a| {
+            const opts = a[0];
+            if (!quickjs.JS_IsUndefined(opts) and !quickjs.JS_IsNull(opts)) {
+                const cv = qjs.JS_GetPropertyStr(c, opts, "composed");
+                defer qjs.JS_FreeValue(c, cv);
+                if (!quickjs.JS_IsUndefined(cv)) {
+                    composed = qjs.JS_ToBool(c, cv) != 0;
+                }
+            }
+        }
+    }
+
+    const shadow_root = @import("shadow_root.zig");
     const node = api.getNode(c, this_val) orelse {
         // Document object: return itself (document is its own root)
         return qjs.JS_DupValue(c, this_val);
     };
-    // Walk up to root (document node)
-    var current: *lxb.lxb_dom_node_t = node;
-    while (current.parent) |p| {
-        current = p;
-    }
-    // If root is document node, return the JS document object
-    if (current.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+    // Shadow-aware root walk.
+    const root = shadow_root.shadowInclusiveRoot(node, composed);
+    // If root is document node, return the JS document object.
+    if (root.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
         const global = qjs.JS_GetGlobalObject(c);
         defer qjs.JS_FreeValue(c, global);
         return qjs.JS_GetPropertyStr(c, global, "document");
     }
-    // Otherwise return the root element
-    return api.wrapNode(c, current);
+    // If root is a shadow fragment, return its JS ShadowRoot wrapper
+    // (exposed on the host as __shadowWrapper) when possible.
+    const sid = shadow_root.nodeScope(root);
+    if (sid != 0) {
+        if (shadow_root.shadowRootById(sid)) |sr| {
+            const host_val = api.wrapNode(c, @ptrCast(sr.host));
+            defer qjs.JS_FreeValue(c, host_val);
+            const exposed = qjs.JS_GetPropertyStr(c, host_val, "shadowRoot");
+            if (!quickjs.JS_IsNull(exposed) and !quickjs.JS_IsUndefined(exposed)) {
+                return exposed;
+            }
+            qjs.JS_FreeValue(c, exposed);
+            // closed mode — fall through to wrapping the fragment directly.
+        }
+    }
+    // Otherwise return the root element/fragment.
+    return api.wrapNode(c, root);
 }
 
 pub fn nodeGetOwnerDocument(
@@ -2301,12 +2349,9 @@ pub fn nodeGetIsConnected(
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NewBool(false);
     const node = api.getNode(c, this_val) orelse return quickjs.JS_NewBool(false);
-    // Walk up to root — if root is document, node is connected
-    var current: *lxb.lxb_dom_node_t = node;
-    while (current.parent) |p| {
-        current = p;
-    }
-    return quickjs.JS_NewBool(current.type == lxb.LXB_DOM_NODE_TYPE_DOCUMENT);
+    // Shadow-inclusive connectivity: walk up, jump through shadow boundaries.
+    const shadow_root = @import("shadow_root.zig");
+    return quickjs.JS_NewBool(shadow_root.isShadowInclusiveConnected(node));
 }
 
 pub fn elementGetNodeType(
