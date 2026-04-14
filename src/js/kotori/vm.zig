@@ -4293,6 +4293,24 @@ pub const VM = struct {
                 try result.setProperty(vm.allocator, key, try vm.descriptorToObject(pd));
             }
         }
+        // Symbol fast-path properties
+        if (obj.symbol_props) |*sp| {
+            for (sp.keys(), sp.values()) |sym_id, val| {
+                const pd = object_mod.PropertyDescriptor{ .data = .{
+                    .value = val,
+                    .attrs = .{ .writable = true, .enumerable = true, .configurable = true },
+                } };
+                if (result.symbol_props == null) result.symbol_props = .{};
+                try result.symbol_props.?.put(vm.allocator, sym_id, try vm.descriptorToObject(pd));
+            }
+        }
+        // Symbol slow-path descriptors
+        if (obj.symbol_descriptors) |*sd| {
+            for (sd.keys(), sd.values()) |sym_id, pd| {
+                if (result.symbol_props == null) result.symbol_props = .{};
+                try result.symbol_props.?.put(vm.allocator, sym_id, try vm.descriptorToObject(pd));
+            }
+        }
         return JsValue.initObject(result);
     }
 

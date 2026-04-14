@@ -5244,3 +5244,14 @@ test "eval: Uint8Array slice" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
 }
+
+test "eval: Object.getOwnPropertyDescriptors includes symbol keys" {
+    const result = try evalExpr(
+        \\var sym = Symbol("test");
+        \\var obj = {};
+        \\obj[sym] = 42;
+        \\var descs = Object.getOwnPropertyDescriptors(obj);
+        \\descs[sym].value
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
