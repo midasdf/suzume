@@ -2053,8 +2053,8 @@ pub const VM = struct {
         try self.registerNativeMethod(op, "hasOwnProperty", &nativeObjHasOwnProperty);
         try self.registerNativeMethod(op, "toString", &nativeObjToString);
         try self.registerNativeMethod(op, "valueOf", &nativeObjValueOf);
-        try self.registerNativeMethod(op, "isPrototypeOf", &nativeReturnFalse);
-        try self.registerNativeMethod(op, "propertyIsEnumerable", &nativeReturnTrue);
+        try self.registerNativeMethod(op, "isPrototypeOf", &nativeObjIsPrototypeOf);
+        try self.registerNativeMethod(op, "propertyIsEnumerable", &nativeObjPropertyIsEnumerable);
 
         // ── Object ──
         const obj_constructor = try self.createObj(.{});
@@ -2067,14 +2067,16 @@ pub const VM = struct {
         try self.registerNativeMethod(obj_constructor, "defineProperties", &nativeObjectDefineProperties);
         try self.registerNativeMethod(obj_constructor, "setPrototypeOf", &nativeObjectSetPrototypeOf);
         try self.registerNativeMethod(obj_constructor, "getPrototypeOf", &nativeObjectGetPrototypeOf);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyNames", &nativeObjectKeys); // same as keys for now
+        try self.registerNativeMethod(obj_constructor, "getOwnPropertyNames", &nativeObjectGetOwnPropertyNames);
         try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor);
+        try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptors", &nativeObjectGetOwnPropertyDescriptors);
+        try self.registerNativeMethod(obj_constructor, "getOwnPropertySymbols", &nativeObjectGetOwnPropertySymbols);
         try self.registerNativeMethod(obj_constructor, "freeze", &nativeObjectPassthrough);
         try self.registerNativeMethod(obj_constructor, "seal", &nativeObjectPassthrough);
-        try self.registerNativeMethod(obj_constructor, "preventExtensions", &nativeObjectPassthrough);
+        try self.registerNativeMethod(obj_constructor, "preventExtensions", &nativeObjectPreventExtensions);
         try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeReturnFalse);
         try self.registerNativeMethod(obj_constructor, "isSealed", &nativeReturnFalse);
-        try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeReturnTrue);
+        try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeObjectIsExtensible);
         try self.registerNativeMethod(obj_constructor, "is", &nativeObjectIs);
         try self.registerNativeMethod(obj_constructor, "hasOwn", &nativeObjectHasOwn);
         try self.registerNativeMethod(obj_constructor, "fromEntries", &nativeObjectFromEntries);
@@ -4128,36 +4130,86 @@ pub const VM = struct {
     fn nativeObjectCreate(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const new_obj = try vm.createObj(.{});
-        if (args.len > 0 and args[0].isObject()) {
-            new_obj.prototype = args[0].asJsObject();
+        if (args.len > 0) {
+            if (args[0].isObject()) {
+                new_obj.prototype = args[0].asJsObject();
+            } else if (args[0].isNull()) {
+                new_obj.prototype = null;
+            }
+        }
+        // Second argument: property descriptor map (Object.create(proto, props))
+        if (args.len > 1 and args[1].isObject()) {
+            const props = args[1].asJsObject();
+            for (props.properties.keys(), props.properties.values()) |key, desc_val| {
+                if (!desc_val.isObject()) continue;
+                const desc = try vm.parsePropertyDescriptor(desc_val);
+                _ = try new_obj.defineOwnProperty(vm.allocator, key, desc);
+            }
         }
         return JsValue.initObject(new_obj);
+    }
+
+    /// Parse a JS descriptor object into a PropertyDescriptor.
+    /// Reads value/writable/enumerable/configurable/get/set from the object.
+    fn parsePropertyDescriptor(self: *VM, desc_val: JsValue) anyerror!object_mod.PropertyDescriptor {
+        const desc = desc_val.asJsObject();
+        const value_id = try self.pool.intern("value");
+        const writable_id = try self.pool.intern("writable");
+        const enumerable_id = try self.pool.intern("enumerable");
+        const configurable_id = try self.pool.intern("configurable");
+        const get_id = try self.pool.intern("get");
+        const set_id = try self.pool.intern("set");
+
+        const has_get = desc.getOwnDescriptor(get_id) != null;
+        const has_set = desc.getOwnDescriptor(set_id) != null;
+        const has_value = desc.getOwnDescriptor(value_id) != null;
+        const has_writable = desc.getOwnDescriptor(writable_id) != null;
+
+        // Accessor descriptor
+        if (has_get or has_set) {
+            if (has_value or has_writable) return error.TypeError; // mixed descriptor
+            const getter = desc.getProperty(get_id) orelse JsValue.undefined_val;
+            const setter = desc.getProperty(set_id) orelse JsValue.undefined_val;
+            const enum_val = desc.getProperty(enumerable_id);
+            const conf_val = desc.getProperty(configurable_id);
+            return .{ .accessor = .{
+                .get = getter,
+                .set = setter,
+                .attrs = .{
+                    .writable = false,
+                    .enumerable = if (enum_val) |v| v.isTruthy() else true,
+                    .configurable = if (conf_val) |v| v.isTruthy() else true,
+                    .is_accessor = true,
+                },
+            } };
+        }
+
+        // Data descriptor
+        const value = desc.getProperty(value_id) orelse JsValue.undefined_val;
+        const writable = if (desc.getProperty(writable_id)) |v| v.isTruthy() else true;
+        const enumerable = if (desc.getProperty(enumerable_id)) |v| v.isTruthy() else true;
+        const configurable = if (desc.getProperty(configurable_id)) |v| v.isTruthy() else true;
+        return .{ .data = .{
+            .value = value,
+            .attrs = .{
+                .writable = writable,
+                .enumerable = enumerable,
+                .configurable = configurable,
+                .is_accessor = false,
+            },
+        } };
     }
 
     fn nativeObjectDefineProperty(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         if (args.len < 3 or !args[0].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const target = args[0].asJsObject();
-        // Get property name from string arg
         if (!args[1].isString()) return args[0];
         const name_id = args[1].asStringId();
-        // Descriptor object
         if (!args[2].isObject()) return args[0];
-        const desc = args[2].asJsObject();
-        // Check for value property
-        const value_id = try vm.pool.intern("value");
-        if (desc.getProperty(value_id)) |val| {
-            try target.setProperty(vm.allocator, name_id, val);
-        }
-        // Check for get property (getter)
-        const get_id = try vm.pool.intern("get");
-        if (desc.getProperty(get_id)) |getter| {
-            // For now, just call the getter and store its result
-            if (getter.isObject()) {
-                const result = try vm.callJsFunction(getter, args[0], &.{});
-                try target.setProperty(vm.allocator, name_id, result);
-            }
-        }
+        const desc = try vm.parsePropertyDescriptor(args[2]);
+        const ok = try target.defineOwnProperty(vm.allocator, name_id, desc);
+        if (!ok) return error.TypeError;
         return args[0];
     }
 
@@ -4166,13 +4218,10 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         const target = args[0].asJsObject();
         const props = args[1].asJsObject();
-        const value_id = try vm.pool.intern("value");
         for (props.properties.keys(), props.properties.values()) |key, desc_val| {
             if (!desc_val.isObject()) continue;
-            const desc = desc_val.asJsObject();
-            if (desc.getProperty(value_id)) |val| {
-                try target.setProperty(vm.allocator, key, val);
-            }
+            const desc = try vm.parsePropertyDescriptor(desc_val);
+            _ = try target.defineOwnProperty(vm.allocator, key, desc);
         }
         return args[0];
     }
@@ -4196,23 +4245,55 @@ pub const VM = struct {
         return JsValue.null_val;
     }
 
+    /// Serialize a PropertyDescriptor to a plain JS object.
+    fn descriptorToObject(self: *VM, pd: object_mod.PropertyDescriptor) anyerror!JsValue {
+        const desc_obj = try self.createObj(.{});
+        switch (pd) {
+            .data => |d| {
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("value"), d.value);
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("writable"), JsValue.initBool(d.attrs.writable));
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("enumerable"), JsValue.initBool(d.attrs.enumerable));
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("configurable"), JsValue.initBool(d.attrs.configurable));
+            },
+            .accessor => |a| {
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("get"), a.get);
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("set"), a.set);
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("enumerable"), JsValue.initBool(a.attrs.enumerable));
+                try desc_obj.setProperty(self.allocator, try self.pool.intern("configurable"), JsValue.initBool(a.attrs.configurable));
+            },
+        }
+        return JsValue.initObject(desc_obj);
+    }
+
     fn nativeObjectGetOwnPropertyDescriptor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         if (args.len < 2 or !args[0].isObject() or !args[1].isString()) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const obj = args[0].asJsObject();
         const name_id = args[1].asStringId();
-        // Only check own properties (not prototype chain)
-        const val = obj.properties.get(name_id) orelse return JsValue.undefined_val;
-        const desc = try vm.createObj(.{});
-        const value_id = try vm.pool.intern("value");
-        try desc.setProperty(vm.allocator, value_id, val);
-        const writable_id = try vm.pool.intern("writable");
-        try desc.setProperty(vm.allocator, writable_id, JsValue.initBool(true));
-        const enumerable_id = try vm.pool.intern("enumerable");
-        try desc.setProperty(vm.allocator, enumerable_id, JsValue.initBool(true));
-        const configurable_id = try vm.pool.intern("configurable");
-        try desc.setProperty(vm.allocator, configurable_id, JsValue.initBool(true));
-        return JsValue.initObject(desc);
+        const pd = obj.getOwnDescriptor(name_id) orelse return JsValue.undefined_val;
+        return try vm.descriptorToObject(pd);
+    }
+
+    fn nativeObjectGetOwnPropertyDescriptors(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return JsValue.undefined_val;
+        const vm = vmFromCtx(ctx);
+        const obj = args[0].asJsObject();
+        const result = try vm.createObj(.{});
+        // Fast-path properties (all-default attrs)
+        for (obj.properties.keys(), obj.properties.values()) |key, val| {
+            const pd = object_mod.PropertyDescriptor{ .data = .{
+                .value = val,
+                .attrs = .{ .writable = true, .enumerable = true, .configurable = true },
+            } };
+            try result.setProperty(vm.allocator, key, try vm.descriptorToObject(pd));
+        }
+        // Slow-path descriptors
+        if (obj.descriptors) |*d| {
+            for (d.keys(), d.values()) |key, pd| {
+                try result.setProperty(vm.allocator, key, try vm.descriptorToObject(pd));
+            }
+        }
+        return JsValue.initObject(result);
     }
 
     fn nativeObjectPassthrough(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -4727,6 +4808,69 @@ pub const VM = struct {
 
     fn nativeReturnTrue(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
         return JsValue.initBool(true);
+    }
+
+    // ── Object.prototype.isPrototypeOf ────────────────────────────────
+    fn nativeObjIsPrototypeOf(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0 or !args[0].isObject()) return JsValue.initBool(false);
+        const proto_target = this.asJsObject();
+        var current: ?*JsObject = args[0].asJsObject().prototype;
+        while (current) |p| {
+            if (p == proto_target) return JsValue.initBool(true);
+            current = p.prototype;
+        }
+        return JsValue.initBool(false);
+    }
+
+    // ── Object.prototype.propertyIsEnumerable ─────────────────────────
+    fn nativeObjPropertyIsEnumerable(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        const name_id = args[0].asStringId();
+        const pd = obj.getOwnDescriptor(name_id) orelse return JsValue.initBool(false);
+        return JsValue.initBool(pd.attrs().enumerable);
+    }
+
+    // ── Object.isExtensible ───────────────────────────────────────────
+    fn nativeObjectIsExtensible(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initBool(false);
+        return JsValue.initBool(args[0].asJsObject().isExtensible_());
+    }
+
+    // ── Object.preventExtensions ──────────────────────────────────────
+    fn nativeObjectPreventExtensions(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0 or !args[0].isObject()) return if (args.len > 0) args[0] else JsValue.undefined_val;
+        args[0].asJsObject().preventExtensions_();
+        return args[0];
+    }
+
+    // ── Object.getOwnPropertyNames ────────────────────────────────────
+    fn nativeObjectGetOwnPropertyNames(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
+        const obj = args[0].asJsObject();
+        // Fast-path keys
+        for (obj.properties.keys()) |key_id| {
+            try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+        }
+        // Slow-path keys (includes non-enumerable)
+        if (obj.descriptors) |*d| {
+            for (d.keys()) |key_id| {
+                try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
+            }
+        }
+        return JsValue.initObject(new_arr);
+    }
+
+    // ── Object.getOwnPropertySymbols ──────────────────────────────────
+    fn nativeObjectGetOwnPropertySymbols(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
+        // Symbol representation is not yet fully surfaced to JS; return empty array.
+        _ = args[0].asJsObject();
+        return JsValue.initObject(new_arr);
     }
 
     // ── Array static methods ───────────────────────────────────────

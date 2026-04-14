@@ -32,14 +32,46 @@ pub const ObjType = enum(u8) {
     proxy,
 };
 
+/// Per-property attribute bits (packed into one byte).
+pub const PropertyAttrs = packed struct(u8) {
+    writable: bool = true,
+    enumerable: bool = true,
+    configurable: bool = true,
+    is_accessor: bool = false,
+    _pad: u4 = 0,
+};
+
+/// Full property descriptor — either a data property or an accessor property.
+/// `get` / `set` are each a callable JsValue or undefined.
+pub const PropertyDescriptor = union(enum) {
+    data: struct { value: JsValue, attrs: PropertyAttrs },
+    accessor: struct { get: JsValue, set: JsValue, attrs: PropertyAttrs },
+
+    pub fn attrs(self: PropertyDescriptor) PropertyAttrs {
+        return switch (self) {
+            .data => |d| d.attrs,
+            .accessor => |a| a.attrs,
+        };
+    }
+};
+
 pub const JsObject = struct {
     obj_type: ObjType = .ordinary,
+    /// Fast path: value-only map. An entry here implies all-default attrs
+    /// (writable=true, enumerable=true, configurable=true, data property).
     properties: std.AutoArrayHashMapUnmanaged(StringId, JsValue) = .{},
+    /// Slow path: only allocated when at least one property has non-default
+    /// attrs or is an accessor. When present for a key, `properties` must NOT
+    /// also contain that key — the slow map is authoritative.
+    descriptors: ?std.AutoArrayHashMapUnmanaged(StringId, PropertyDescriptor) = null,
+    /// [[Extensible]] internal slot. Defaults to true.
+    extensible: bool = true,
     prototype: ?*JsObject = null,
     data: ObjData = .none,
     getters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
     setters: ?std.AutoArrayHashMapUnmanaged(StringId, JsValue) = null,
     symbol_props: ?std.AutoArrayHashMapUnmanaged(u32, JsValue) = null,
+    symbol_descriptors: ?std.AutoArrayHashMapUnmanaged(u32, PropertyDescriptor) = null,
 
     pub const NativeFn = *const fn (ctx: *anyopaque, this: value_mod.JsValue, args: []const value_mod.JsValue) anyerror!value_mod.JsValue;
 
@@ -98,9 +130,11 @@ pub const JsObject = struct {
 
     pub fn deinit(self: *JsObject, allocator: std.mem.Allocator) void {
         self.properties.deinit(allocator);
+        if (self.descriptors) |*d| d.deinit(allocator);
         if (self.getters) |*g| g.deinit(allocator);
         if (self.setters) |*s| s.deinit(allocator);
         if (self.symbol_props) |*sp| sp.deinit(allocator);
+        if (self.symbol_descriptors) |*sd| sd.deinit(allocator);
         switch (self.data) {
             .function => |*f| f.deinit(allocator),
             .array => |*a| a.deinit(allocator),
@@ -119,13 +153,185 @@ pub const JsObject = struct {
     }
 
     pub fn getProperty(self: *const JsObject, name: StringId) ?JsValue {
+        // Slow-path first: if this key has a descriptor, honour it.
+        if (self.descriptors) |*d| {
+            if (d.get(name)) |desc| {
+                return switch (desc) {
+                    .data => |dat| dat.value,
+                    // Accessor: caller must invoke the getter; return null here
+                    // so higher-level code falls back to getter invocation.
+                    .accessor => null,
+                };
+            }
+        }
         if (self.properties.get(name)) |v| return v;
         if (self.prototype) |proto| return proto.getProperty(name);
         return null;
     }
 
     pub fn setProperty(self: *JsObject, allocator: std.mem.Allocator, name: StringId, val: JsValue) !void {
+        // If already in the slow map, update value in place (respecting attrs).
+        if (self.descriptors) |*d| {
+            if (d.getPtr(name)) |desc| {
+                switch (desc.*) {
+                    .data => |*dat| {
+                        if (dat.attrs.writable) dat.value = val;
+                        return;
+                    },
+                    .accessor => return, // setters handled externally
+                }
+            }
+        }
         try self.properties.put(allocator, name, val);
+    }
+
+    // ── Abstract operations ─────────────────────────────────────────
+
+    /// OrdinaryGetOwnProperty (§10.1.5.1).
+    /// Returns the descriptor for an own property, or null if not found.
+    pub fn getOwnDescriptor(self: *const JsObject, name: StringId) ?PropertyDescriptor {
+        if (self.descriptors) |*d| {
+            if (d.get(name)) |desc| return desc;
+        }
+        if (self.properties.get(name)) |v| {
+            return .{ .data = .{
+                .value = v,
+                .attrs = .{ .writable = true, .enumerable = true, .configurable = true },
+            } };
+        }
+        return null;
+    }
+
+    /// OrdinaryIsExtensible (§10.1.3.1).
+    pub fn isExtensible_(self: *const JsObject) bool {
+        return self.extensible;
+    }
+
+    /// OrdinaryPreventExtensions (§10.1.4.1).
+    pub fn preventExtensions_(self: *JsObject) void {
+        self.extensible = false;
+    }
+
+    /// OrdinaryDelete (§10.1.10.1).
+    /// Returns false (and does nothing) for non-configurable properties.
+    pub fn ordinaryDelete(self: *JsObject, allocator: std.mem.Allocator, name: StringId) bool {
+        if (self.descriptors) |*d| {
+            if (d.get(name)) |desc| {
+                if (!desc.attrs().configurable) return false;
+                _ = d.swapRemove(name);
+                return true;
+            }
+        }
+        _ = self.properties.swapRemove(name);
+        _ = allocator; // kept for signature consistency
+        return true;
+    }
+
+    /// ValidateAndApplyPropertyDescriptor (§10.1.6.3) helper.
+    /// Returns true on success, false when the change is not allowed.
+    /// Mutates `self` on success.
+    fn validateAndApply(
+        self: *JsObject,
+        allocator: std.mem.Allocator,
+        name: StringId,
+        current_opt: ?PropertyDescriptor,
+        incoming: PropertyDescriptor,
+    ) !bool {
+        // No current descriptor: installing a new property.
+        if (current_opt == null) {
+            if (!self.extensible) return false;
+            // Promote to slow map.
+            if (self.descriptors == null)
+                self.descriptors = .{};
+            try self.descriptors.?.put(allocator, name, incoming);
+            // Remove from fast map if present.
+            _ = self.properties.swapRemove(name);
+            return true;
+        }
+
+        const current = current_opt.?;
+
+        // If incoming descriptor carries no fields that differ, it's a no-op.
+        // Non-configurable invariants:
+        if (!current.attrs().configurable) {
+            const inc_attrs = incoming.attrs();
+            // Cannot change configurable from false to true.
+            if (inc_attrs.configurable) return false;
+            // Cannot change enumerability on a non-configurable property.
+            if (inc_attrs.enumerable != current.attrs().enumerable) return false;
+        }
+
+        // Compute the merged descriptor.
+        var merged = current;
+        switch (incoming) {
+            .data => |inc_d| {
+                switch (merged) {
+                    .data => |*cur_d| {
+                        // Update only the fields that the incoming descriptor explicitly sets.
+                        if (!cur_d.attrs.configurable and !cur_d.attrs.writable) {
+                            // SameValue check — allow write only if values are identical.
+                            if (inc_d.value.bits != cur_d.value.bits) return false;
+                        }
+                        // Apply fields present in the incoming descriptor.
+                        cur_d.value = inc_d.value;
+                        if (current.attrs().configurable or current.attrs().writable) {
+                            cur_d.attrs.writable = inc_d.attrs.writable;
+                        }
+                        cur_d.attrs.enumerable = inc_d.attrs.enumerable;
+                        if (current.attrs().configurable) {
+                            cur_d.attrs.configurable = inc_d.attrs.configurable;
+                        }
+                    },
+                    .accessor => {
+                        // data → accessor conversion requires configurable.
+                        if (!current.attrs().configurable) return false;
+                        merged = incoming;
+                    },
+                }
+            },
+            .accessor => |inc_a| {
+                switch (merged) {
+                    .accessor => |*cur_a| {
+                        if (!current.attrs().configurable) {
+                            // Check that get/set haven't changed.
+                            if (inc_a.get.bits != cur_a.get.bits) return false;
+                            if (inc_a.set.bits != cur_a.set.bits) return false;
+                        }
+                        cur_a.get = inc_a.get;
+                        cur_a.set = inc_a.set;
+                        cur_a.attrs.enumerable = inc_a.attrs.enumerable;
+                        if (current.attrs().configurable) {
+                            cur_a.attrs.configurable = inc_a.attrs.configurable;
+                        }
+                    },
+                    .data => {
+                        // data → accessor conversion requires configurable.
+                        if (!current.attrs().configurable) return false;
+                        merged = incoming;
+                    },
+                }
+            },
+        }
+
+        // Write back to slow map.
+        if (self.descriptors == null)
+            self.descriptors = .{};
+        try self.descriptors.?.put(allocator, name, merged);
+        _ = self.properties.swapRemove(name);
+        return true;
+    }
+
+    /// OrdinaryDefineOwnProperty (§10.1.6.1).
+    /// Returns true on success.  On invariant failure returns false (non-strict
+    /// callers should ignore; strict callers should throw TypeError).
+    pub fn defineOwnProperty(
+        self: *JsObject,
+        allocator: std.mem.Allocator,
+        name: StringId,
+        desc: PropertyDescriptor,
+    ) !bool {
+        const current = self.getOwnDescriptor(name);
+        return self.validateAndApply(allocator, name, current, desc);
     }
 };
 
