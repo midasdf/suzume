@@ -75,34 +75,22 @@ pub const StyleDeclList = struct {
     }
 
     /// Serialize entries to "name: value[ !important];" format suitable for the
-    /// style attribute. Result is written into `buf`; returns the used slice.
-    pub fn serialize(self: *const StyleDeclList, buf: []u8) []const u8 {
-        var pos: usize = 0;
+    /// style attribute. Caller owns the returned ArrayList and must call deinit().
+    pub fn serialize(self: *const StyleDeclList, allocator: std.mem.Allocator) !std.ArrayList(u8) {
+        var out = std.ArrayList(u8).init(allocator);
+        errdefer out.deinit();
         for (self.entries.items) |e| {
-            // "name: value" or "name: value !important"
-            const needed = e.name.len + 2 + e.value.len + (if (e.important) @as(usize, 11) else @as(usize, 2));
-            if (pos + needed > buf.len) break;
-            @memcpy(buf[pos..][0..e.name.len], e.name);
-            pos += e.name.len;
-            buf[pos] = ':';
-            pos += 1;
-            buf[pos] = ' ';
-            pos += 1;
-            @memcpy(buf[pos..][0..e.value.len], e.value);
-            pos += e.value.len;
-            if (e.important) {
-                const imp = " !important";
-                @memcpy(buf[pos..][0..imp.len], imp);
-                pos += imp.len;
-            }
-            buf[pos] = ';';
-            pos += 1;
-            buf[pos] = ' ';
-            pos += 1;
+            try out.appendSlice(e.name);
+            try out.appendSlice(": ");
+            try out.appendSlice(e.value);
+            if (e.important) try out.appendSlice(" !important");
+            try out.appendSlice("; ");
         }
         // Trim trailing space
-        if (pos > 0 and buf[pos - 1] == ' ') pos -= 1;
-        return buf[0..pos];
+        if (out.items.len > 0 and out.items[out.items.len - 1] == ' ') {
+            out.items.len -= 1;
+        }
+        return out;
     }
 
     /// Clear all entries and reset the arena.
@@ -231,9 +219,9 @@ test "StyleDeclList upsert and serialize" {
     try list.upsert(alloc, "color", "red", false);
     try list.upsert(alloc, "margin-top", "1px", false);
 
-    var buf: [256]u8 = undefined;
-    const s = list.serialize(&buf);
-    try std.testing.expectEqualStrings("color: red; margin-top: 1px;", s);
+    var out = try list.serialize(alloc);
+    defer out.deinit();
+    try std.testing.expectEqualStrings("color: red; margin-top: 1px;", out.items);
 }
 
 test "StyleDeclList important serialization" {
@@ -244,9 +232,9 @@ test "StyleDeclList important serialization" {
     try list.upsert(alloc, "color", "red", true);
     try list.upsert(alloc, "margin-top", "1px", false);
 
-    var buf: [256]u8 = undefined;
-    const s = list.serialize(&buf);
-    try std.testing.expectEqualStrings("color: red !important; margin-top: 1px;", s);
+    var out = try list.serialize(alloc);
+    defer out.deinit();
+    try std.testing.expectEqualStrings("color: red !important; margin-top: 1px;", out.items);
 }
 
 test "StyleDeclList upsert replaces existing" {
@@ -302,4 +290,32 @@ test "parseIntoList calc value" {
     try parseIntoList(&list, alloc, "width: calc(100% - 20px); color: blue");
     try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
     try std.testing.expectEqualStrings("calc(100% - 20px)", list.entries.items[0].value);
+}
+
+test "StyleDeclList serialize large inline style — no truncation" {
+    // Generates >8192 bytes worth of declarations to verify no truncation occurs.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Insert 200 properties with long values (~50 bytes each → ~10 000 bytes total)
+    var name_buf: [32]u8 = undefined;
+    var val_buf: [32]u8 = undefined;
+    var i: usize = 0;
+    while (i < 200) : (i += 1) {
+        const name = std.fmt.bufPrint(&name_buf, "--custom-prop-{d:0>3}", .{i}) catch unreachable;
+        const val = std.fmt.bufPrint(&val_buf, "value-long-enough-{d:0>3}", .{i}) catch unreachable;
+        try list.upsert(alloc, name, val, false);
+    }
+
+    var out = try list.serialize(alloc);
+    defer out.deinit();
+
+    // All 200 entries must be present — check count via semicolons
+    var count: usize = 0;
+    for (out.items) |c| if (c == ';') { count += 1; };
+    try std.testing.expectEqual(@as(usize, 200), count);
+
+    // Last entry must be present (would be lost with the old 8192-byte buffer)
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "--custom-prop-199") != null);
 }
