@@ -308,6 +308,13 @@ pub const Compiler = struct {
             },
 
             .binary => |bin| {
+                // Comma operator: evaluate lhs (discard), evaluate rhs (keep)
+                if (bin.op == .comma) {
+                    try self.compileNode(bin.lhs);
+                    try self.emitOp(.pop);
+                    try self.compileNode(bin.rhs);
+                    return;
+                }
                 // Short-circuit for logical_and / logical_or
                 if (bin.op == .logical_and) {
                     try self.compileNode(bin.lhs);

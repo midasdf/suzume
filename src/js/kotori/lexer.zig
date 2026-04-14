@@ -323,7 +323,11 @@ pub const Lexer = struct {
             // ?  ?.  ??  ??=
             '?' => {
                 _ = self.advance();
-                if (self.match('.')) return self.makeToken(.optional_chain, start);
+                // ?. is optional chaining UNLESS followed by digit (then ? is ternary, .N is number)
+                if (self.peek() == '.' and self.pos + 1 < self.source.len and !(self.source[self.pos + 1] >= '0' and self.source[self.pos + 1] <= '9')) {
+                    _ = self.advance(); // consume .
+                    return self.makeToken(.optional_chain, start);
+                }
                 if (self.match('?')) {
                     // ??= — no dedicated token, emit nullish for now
                     if (self.match('=')) return self.makeToken(.nullish, start);

@@ -168,7 +168,7 @@ pub const Parser = struct {
     // ---------------------------------------------------------------
 
     pub fn parseExpression(self: *Parser) ParseError!NodeIndex {
-        return self.parsePrecedence(.assignment);
+        return self.parsePrecedence(.comma);
     }
 
     // ---------------------------------------------------------------
@@ -221,6 +221,18 @@ pub const Parser = struct {
                     self.pending_async = true;
                     return self.parseFunctionExpr();
                 }
+                // async arrow: async () => ... or async (a, b) => ...
+                if (self.peek_token.type == .lparen) {
+                    self.advance(); // consume 'async'
+                    self.pending_async = true;
+                    return self.parseGrouped();
+                }
+                // async x => ... (single param async arrow)
+                if (self.peek_token.type == .identifier) {
+                    self.advance(); // consume 'async'
+                    self.pending_async = true;
+                    return self.parseIdentifier();
+                }
                 // Treat as identifier
                 return self.parseIdentifier();
             },
@@ -248,6 +260,11 @@ pub const Parser = struct {
                 } }) catch return error.OutOfMemory;
             },
             .kw_this => return self.parseThis(),
+            .kw_super => {
+                const super_node = self.ast.addNode(self.allocator, .{ .identifier = self.pool.intern("super") catch return error.OutOfMemory }) catch return error.OutOfMemory;
+                self.advance();
+                return super_node;
+            },
             .lparen => return self.parseGrouped(),
             .lbracket => return self.parseArrayLiteral(),
             .lbrace => return self.parseObjectLiteral(),
@@ -264,6 +281,9 @@ pub const Parser = struct {
             .kw_function => return self.parseFunctionExpr(),
             .template => return self.parseTemplateLiteral(),
             .template_head => return self.parseTemplateLiteral(),
+            .kw_class => return self.parseClassDecl(),
+            // 'of' is not a reserved word — only contextual in for-of
+            .kw_of => return self.parseIdentifier(),
             .slash => return self.parseRegex(),
             else => return error.UnexpectedToken,
         }
@@ -460,13 +480,20 @@ pub const Parser = struct {
         const source = self.lexer.source;
         var pos: u32 = self.current.start + 1; // skip opening /
 
-        // Read pattern (until unescaped /)
+        // Read pattern (until unescaped / outside character class)
+        var in_char_class = false;
         while (pos < source.len) {
             const ch = source[pos];
-            if (ch == '/') break;
             if (ch == '\\' and pos + 1 < source.len) {
                 pos += 2; // skip escaped char
                 continue;
+            }
+            if (ch == '[') {
+                in_char_class = true;
+            } else if (ch == ']' and in_char_class) {
+                in_char_class = false;
+            } else if (ch == '/' and !in_char_class) {
+                break;
             }
             if (ch == '\n' or ch == '\r') break;
             pos += 1;
@@ -547,6 +574,22 @@ pub const Parser = struct {
             return error.UnexpectedToken;
         }
 
+        // Check for rest parameter: (...x) => ... — must be arrow function
+        if (self.check(.ellipsis)) {
+            var items = std.ArrayListUnmanaged(NodeIndex){};
+            defer items.deinit(self.allocator);
+            while (!self.check(.rparen) and !self.check(.eof)) {
+                const param = try self.parseFunctionParam();
+                items.append(self.allocator, param) catch return error.OutOfMemory;
+                if (!self.match(.comma)) break;
+            }
+            try self.expect(.rparen);
+            if (self.check(.eq_gt) or self.check(.arrow)) {
+                return self.parseArrowFunction(items.items);
+            }
+            return error.UnexpectedToken;
+        }
+
         const first = try self.parsePrecedence(.assignment);
 
         // Collect comma-separated expressions (potential param list)
@@ -592,9 +635,12 @@ pub const Parser = struct {
 
         // param_exprs are identifier nodes (already in AST), use them directly as params
         const params_list = self.ast.addNodeList(self.allocator, param_exprs) catch return error.OutOfMemory;
+        const is_async = self.pending_async;
+        self.pending_async = false;
         return self.ast.addNode(self.allocator, .{ .arrow_function = .{
             .params = params_list,
             .body = body,
+            .is_async = is_async,
             .is_expression = true,
         } }) catch return error.OutOfMemory;
     }
@@ -605,6 +651,12 @@ pub const Parser = struct {
         defer items.deinit(self.allocator);
 
         while (!self.check(.rbracket) and !self.check(.eof)) {
+            // Handle elision (holes): [,x] or [,,x] or [,...rest]
+            if (self.check(.comma)) {
+                items.append(self.allocator, null_node) catch return error.OutOfMemory;
+                self.advance(); // consume comma
+                continue;
+            }
             if (self.check(.ellipsis)) {
                 self.advance(); // consume ...
                 const operand = try self.parsePrecedence(.assignment);
@@ -780,18 +832,39 @@ pub const Parser = struct {
 
     fn parseNew(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume 'new'
+
+        // new.target — meta-property
+        if (self.check(.dot)) {
+            self.advance(); // consume .
+            if (self.current.type == .identifier) {
+                const text = self.tokenSlice(self.current);
+                if (std.mem.eql(u8, text, "target")) {
+                    self.advance(); // consume 'target'
+                    const sid = self.pool.intern("new.target") catch return error.OutOfMemory;
+                    return self.ast.addNode(self.allocator, .{ .identifier = sid }) catch return error.OutOfMemory;
+                }
+            }
+        }
+
         // Parse callee — use member_ precedence to allow `new Foo.Bar()`
         const callee = try self.parsePrecedence(.member_);
 
-        // Parse arguments
+        // Parse arguments (with spread support)
         var args_list: NodeList = .{ .start = 0, .len = 0 };
         if (self.check(.lparen)) {
             self.advance(); // consume (
             var args = std.ArrayListUnmanaged(NodeIndex){};
             defer args.deinit(self.allocator);
             while (!self.check(.rparen) and !self.check(.eof)) {
-                const arg = try self.parsePrecedence(.assignment);
-                args.append(self.allocator, arg) catch return error.OutOfMemory;
+                if (self.current.type == .ellipsis) {
+                    self.advance(); // consume ...
+                    const operand = try self.parsePrecedence(.assignment);
+                    const spread_node = self.ast.addNode(self.allocator, .{ .spread = operand }) catch return error.OutOfMemory;
+                    args.append(self.allocator, spread_node) catch return error.OutOfMemory;
+                } else {
+                    const arg = try self.parsePrecedence(.assignment);
+                    args.append(self.allocator, arg) catch return error.OutOfMemory;
+                }
                 if (!self.match(.comma)) break;
             }
             try self.expect(.rparen);
@@ -858,6 +931,13 @@ pub const Parser = struct {
     fn parseFunctionExpr(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume 'function'
 
+        // Check for generator: function*
+        var is_generator = false;
+        if (self.check(.star)) {
+            is_generator = true;
+            self.advance(); // consume *
+        }
+
         // Optional name
         var name: ?StringId = null;
         if (self.current.type == .identifier) {
@@ -890,6 +970,7 @@ pub const Parser = struct {
             .body = body,
             .is_expression = true,
             .is_async = is_async,
+            .is_generator = is_generator,
         } }) catch return error.OutOfMemory;
     }
 
@@ -1509,24 +1590,13 @@ pub const Parser = struct {
                 continue;
             }
 
-            // Parse parameters
+            // Parse parameters (use parseFunctionParam to handle rest, defaults, destructuring)
             try self.expect(.lparen);
             var params = std.ArrayListUnmanaged(NodeIndex){};
             defer params.deinit(self.allocator);
             while (!self.check(.rparen) and !self.check(.eof)) {
-                const param = try self.parseBindingTarget();
-                // Check for default value
-                if (self.check(.eq) or self.check(.assign)) {
-                    self.advance();
-                    const default_val = try self.parsePrecedence(.assignment);
-                    const ap = self.ast.addNode(self.allocator, .{ .assign_pattern = .{
-                        .left = param,
-                        .right = default_val,
-                    } }) catch return error.OutOfMemory;
-                    params.append(self.allocator, ap) catch return error.OutOfMemory;
-                } else {
-                    params.append(self.allocator, param) catch return error.OutOfMemory;
-                }
+                const param = try self.parseFunctionParam();
+                params.append(self.allocator, param) catch return error.OutOfMemory;
                 if (!self.match(.comma)) break;
             }
             try self.expect(.rparen);
@@ -1598,8 +1668,6 @@ pub const Parser = struct {
 
     fn infixPrecedence(tt: TokenType) Precedence {
         return switch (tt) {
-            .comma => .comma,
-
             // Assignment operators
             .assign, .eq,
             .plus_assign, .plus_eq,
@@ -1631,6 +1699,7 @@ pub const Parser = struct {
             .plus, .minus => .additive,
             .star, .slash, .percent => .multiplicative,
             .star_star => .exponentiation,
+            .comma => .comma,
             .plus_plus, .minus_minus => .postfix,
             .lparen => .call_,
             .dot, .optional_chain, .question_dot => .member_,

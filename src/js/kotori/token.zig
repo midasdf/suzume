@@ -137,7 +137,7 @@ pub const TokenType = enum(u8) {
 pub const Token = struct {
     type: TokenType,
     start: u32,
-    len: u16,
+    len: u32,
     line: u32,
 
     pub fn slice(self: Token, source: []const u8) []const u8 {
