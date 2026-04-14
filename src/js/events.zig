@@ -2355,29 +2355,23 @@ var mutation_observers: std.ArrayListUnmanaged(MutationObserverEntry) = .empty;
 /// While suppressed, added/removed nodes are collected in deferred buffers.
 pub var suppress_childlist: bool = false;
 var deferred_target: ?*lxb.lxb_dom_node_t = null;
-var deferred_added: [64]?*lxb.lxb_dom_node_t = .{null} ** 64;
-var deferred_added_count: usize = 0;
-var deferred_removed: [64]?*lxb.lxb_dom_node_t = .{null} ** 64;
-var deferred_removed_count: usize = 0;
+// DOM §4.9: deferred mutation buffers — dynamic, no artificial cap.
+var deferred_added: std.ArrayList(*lxb.lxb_dom_node_t) = .{};
+var deferred_removed: std.ArrayList(*lxb.lxb_dom_node_t) = .{};
 
 /// Begin suppressing childList mutations (call before replaceChildren loop).
 pub fn beginSuppressChildList(target: *lxb.lxb_dom_node_t) void {
     suppress_childlist = true;
     deferred_target = target;
-    deferred_added_count = 0;
-    deferred_removed_count = 0;
+    deferred_added.clearRetainingCapacity();
+    deferred_removed.clearRetainingCapacity();
 }
 
 /// End suppression and emit one bulk MutationRecord.
 pub fn endSuppressChildList() void {
     suppress_childlist = false;
     const target = deferred_target orelse return;
-    // Build added/removed slices
-    var added_buf: [64]*lxb.lxb_dom_node_t = undefined;
-    for (deferred_added[0..deferred_added_count], 0..) |n, i| added_buf[i] = n.?;
-    var removed_buf: [64]*lxb.lxb_dom_node_t = undefined;
-    for (deferred_removed[0..deferred_removed_count], 0..) |n, i| removed_buf[i] = n.?;
-    recordMutationChildListBulk(target, added_buf[0..deferred_added_count], removed_buf[0..deferred_removed_count], null, null);
+    recordMutationChildListBulk(target, deferred_added.items, deferred_removed.items, null, null);
     deferred_target = null;
 }
 
@@ -2400,18 +2394,12 @@ pub fn recordMutationChildList(
     next_sib: ?*lxb.lxb_dom_node_t,
 ) void {
     if (suppress_childlist) {
-        // Collect for deferred bulk record
+        // Collect for deferred bulk record (dynamic — no cap).
         if (added) |a| {
-            if (deferred_added_count < deferred_added.len) {
-                deferred_added[deferred_added_count] = a;
-                deferred_added_count += 1;
-            }
+            deferred_added.append(std.heap.c_allocator, a) catch {};
         }
         if (removed) |r| {
-            if (deferred_removed_count < deferred_removed.len) {
-                deferred_removed[deferred_removed_count] = r;
-                deferred_removed_count += 1;
-            }
+            deferred_removed.append(std.heap.c_allocator, r) catch {};
         }
         return;
     }
@@ -2464,10 +2452,7 @@ pub fn recordMutationChildListMulti(
 ) void {
     if (suppress_childlist) {
         for (added_nodes) |a| {
-            if (deferred_added_count < deferred_added.len) {
-                deferred_added[deferred_added_count] = a;
-                deferred_added_count += 1;
-            }
+            deferred_added.append(std.heap.c_allocator, a) catch {};
         }
         return;
     }

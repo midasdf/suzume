@@ -569,12 +569,13 @@ pub fn documentImportNode(
     var clone_args = [1]qjs.JSValue{deep_val};
     const cloned = qjs.JS_Call(c, clone_fn, args[0], 1, &clone_args);
     if (quickjs.JS_IsException(cloned)) return cloned;
-    // Set ownerDocument to the importing document (main document)
+    // DOM §3.5.1 step 3: adopt the clone into this document — set ownerDocument on
+    // the clone AND all descendants, matching adoptNode semantics.
     const global = qjs.JS_GetGlobalObject(c);
     defer qjs.JS_FreeValue(c, global);
     const doc_obj = qjs.JS_GetPropertyStr(c, global, "document");
     defer qjs.JS_FreeValue(c, doc_obj);
-    _ = qjs.JS_SetPropertyStr(c, cloned, "ownerDocument", qjs.JS_DupValue(c, doc_obj));
+    setOwnerDocumentRecursive(c, cloned, doc_obj);
     return cloned;
 }
 

@@ -20,6 +20,26 @@ extern fn lxb_dom_node_destroy(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_before(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
 
+// Collect all direct children of `node` into a newly-allocated slice.
+// Caller owns the slice and must free with std.heap.c_allocator.
+// Returns empty slice (length 0, no alloc) when node has no children.
+fn collectChildren(node: *lxb.lxb_dom_node_t) ![]*lxb.lxb_dom_node_t {
+    var count: usize = 0;
+    {
+        var ch: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (ch) |child| : (ch = child.next) count += 1;
+    }
+    if (count == 0) return &[_]*lxb.lxb_dom_node_t{};
+    const buf = try std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, count);
+    var i: usize = 0;
+    var ch: ?*lxb.lxb_dom_node_t = node.first_child;
+    while (ch) |child| : (ch = child.next) {
+        buf[i] = child;
+        i += 1;
+    }
+    return buf;
+}
+
 // ── Serialization Accumulator ──────────────────────────────────────
 
 pub const SerializeAccum = struct {
@@ -102,39 +122,19 @@ pub fn elementSetInnerHTML(
 
     const s = api.jsStringToSlice(c, args[0]) orelse {
         // null/undefined → clear children
-        // Collect removed nodes for MutationObserver
-        var removed_buf: [64]*lxb.lxb_dom_node_t = undefined;
-        var removed_count: usize = 0;
-        {
-            var ch: ?*lxb.lxb_dom_node_t = node.first_child;
-            while (ch) |child| {
-                if (removed_count < removed_buf.len) {
-                    removed_buf[removed_count] = child;
-                    removed_count += 1;
-                }
-                ch = child.next;
-            }
-        }
+        // DOM §4.9: record all removed children (no artificial cap).
+        const removed_buf = collectChildren(node) catch return quickjs.JS_UNDEFINED();
+        defer if (removed_buf.len > 0) std.heap.c_allocator.free(removed_buf);
         removeAllChildren(node);
-        events.recordMutationChildListBulk(node, &.{}, removed_buf[0..removed_count], null, null);
+        events.recordMutationChildListBulk(node, &.{}, removed_buf, null, null);
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    // Collect removed nodes for MutationObserver
-    var removed_buf: [64]*lxb.lxb_dom_node_t = undefined;
-    var removed_count: usize = 0;
-    {
-        var ch: ?*lxb.lxb_dom_node_t = node.first_child;
-        while (ch) |child| {
-            if (removed_count < removed_buf.len) {
-                removed_buf[removed_count] = child;
-                removed_count += 1;
-            }
-            ch = child.next;
-        }
-    }
+    // Collect removed nodes for MutationObserver (dynamic — no cap)
+    const removed_buf = collectChildren(node) catch return quickjs.JS_UNDEFINED();
+    defer if (removed_buf.len > 0) std.heap.c_allocator.free(removed_buf);
 
     // Remove existing children
     removeAllChildren(node);
@@ -148,20 +148,10 @@ pub fn elementSetInnerHTML(
         _ = lxb_dom_node_destroy(frag);
     }
 
-    // Collect added nodes for MutationObserver
-    var added_buf: [64]*lxb.lxb_dom_node_t = undefined;
-    var added_count: usize = 0;
-    {
-        var ch: ?*lxb.lxb_dom_node_t = node.first_child;
-        while (ch) |child| {
-            if (added_count < added_buf.len) {
-                added_buf[added_count] = child;
-                added_count += 1;
-            }
-            ch = child.next;
-        }
-    }
-    events.recordMutationChildListBulk(node, added_buf[0..added_count], removed_buf[0..removed_count], null, null);
+    // Collect added nodes for MutationObserver (dynamic — no cap)
+    const added_buf = collectChildren(node) catch return quickjs.JS_UNDEFINED();
+    defer if (added_buf.len > 0) std.heap.c_allocator.free(added_buf);
+    events.recordMutationChildListBulk(node, added_buf, removed_buf, null, null);
     api.setDomDirty();
     // Execute scripts in new content
     maybeExecuteScriptsInSubtree(c, node);
@@ -215,25 +205,15 @@ pub fn elementSetOuterHTML(
     const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     const frag = lxb_html_document_parse_fragment(doc, elem, s.ptr, s.len) orelse return quickjs.JS_UNDEFINED();
 
-    // Collect fragment's children before moving (these will be the addedNodes)
-    var added_buf: [64]*lxb.lxb_dom_node_t = undefined;
-    var added_count: usize = 0;
-    {
-        var ch: ?*lxb.lxb_dom_node_t = frag.first_child;
-        while (ch) |child| {
-            if (added_count < added_buf.len) {
-                added_buf[added_count] = child;
-                added_count += 1;
-            }
-            ch = child.next;
-        }
-    }
+    // Collect fragment's children before moving (these will be the addedNodes) — dynamic, no cap.
+    const added_buf = collectChildren(frag) catch return quickjs.JS_UNDEFINED();
+    defer if (added_buf.len > 0) std.heap.c_allocator.free(added_buf);
 
     // Insert all fragment children before this node, then remove this node
     moveChildrenBefore(frag, node);
     _ = lxb_dom_node_destroy(frag);
     lxb_dom_node_remove(node);
-    events.recordMutationChildListBulk(parent, added_buf[0..added_count], &.{node}, null, null);
+    events.recordMutationChildListBulk(parent, added_buf, &.{node}, null, null);
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
