@@ -437,6 +437,17 @@ pub fn build(b: *std.Build) void {
     test_url_pe_step.dependOn(&run_url_pe_tests.step);
     test_step.dependOn(&run_url_pe_tests.step);
 
+    const url_tables_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/tables.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const url_tables_tests = b.addTest(.{ .root_module = url_tables_mod });
+    const run_url_tables_tests = b.addRunArtifact(url_tables_tests);
+    const test_url_tables_step = b.step("test-url-tables", "Run URL IDNA/NFC table tests");
+    test_url_tables_step.dependOn(&run_url_tables_tests.step);
+    test_step.dependOn(&run_url_tables_tests.step);
+
     const url_pc_mod = b.createModule(.{
         .root_source_file = b.path("src/url/punycode.zig"),
         .target = target,
