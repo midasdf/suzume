@@ -47,6 +47,70 @@ fn jsSuzumeSecureRandom(
     return qjs.JS_DupValue(c, args[0]);
 }
 
+// ── localStorage persistence ─────────────────────────────────────────
+// [[spec]] HTML §15.1.1 — localStorage MUST survive navigation.
+// Strategy: flush the entire store as JSON to
+//   $XDG_DATA_HOME/suzume/localStorage.json (or ~/.local/share/suzume/).
+// JS calls __suzume_ls_load() on init → returns JSON string (or null).
+// JS calls __suzume_ls_save(jsonStr) on every mutation.
+
+fn localStoragePath(buf: []u8) ![]const u8 {
+    // Prefer XDG_DATA_HOME; fall back to $HOME/.local/share
+    const base = std.posix.getenv("XDG_DATA_HOME") orelse blk: {
+        const home = std.posix.getenv("HOME") orelse return error.NoHome;
+        const joined = try std.fmt.bufPrint(buf, "{s}/.local/share", .{home});
+        break :blk joined;
+    };
+    return try std.fmt.bufPrint(buf, "{s}/suzume/localStorage.json", .{base});
+}
+
+fn jsSuzumeLsLoad(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    var path_buf: [512]u8 = undefined;
+    const path = localStoragePath(&path_buf) catch return quickjs.JS_NULL();
+    const file = std.fs.openFileAbsolute(path, .{}) catch return quickjs.JS_NULL();
+    defer file.close();
+    const contents = file.readToEndAlloc(std.heap.c_allocator, 4 * 1024 * 1024) catch return quickjs.JS_NULL();
+    defer std.heap.c_allocator.free(contents);
+    return qjs.JS_NewStringLen(c, contents.ptr, contents.len);
+}
+
+fn jsSuzumeLsSave(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const dom_api = @import("dom_api.zig");
+    const json_s = dom_api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, json_s.ptr);
+    const json = json_s.ptr[0..json_s.len];
+
+    var path_buf: [512]u8 = undefined;
+    const path = localStoragePath(&path_buf) catch return quickjs.JS_UNDEFINED();
+
+    // Ensure directory exists
+    const dir_end = std.mem.lastIndexOfScalar(u8, path, '/') orelse return quickjs.JS_UNDEFINED();
+    const dir = path[0..dir_end];
+    std.fs.makeDirAbsolute(dir) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => return quickjs.JS_UNDEFINED(),
+    };
+
+    const file = std.fs.createFileAbsolute(path, .{ .truncate = true }) catch return quickjs.JS_UNDEFINED();
+    defer file.close();
+    file.writeAll(json) catch {};
+    return quickjs.JS_UNDEFINED();
+}
+
 /// window.open(url, target, features)
 /// Returns a WindowProxy-like object with .closed, .close(), .name, .postMessage()
 fn jsWindowOpen(
@@ -1497,6 +1561,113 @@ fn defineGetter(
     );
 }
 
+// ── XHR synchronous request ─────────────────────────────────────────
+// [[spec]] XHR §4.7.3 — when async=false, send() MUST block until complete.
+// JS calls __suzume_xhr_sync(method, url, body, headersObj) synchronously.
+// Returns {status, statusText, responseText} or null on network error.
+
+fn jsSuzumeXhrSync(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 2) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+    const dom_api = @import("dom_api.zig");
+    const allocator = std.heap.c_allocator;
+
+    // method → sentinel string
+    const method_s = dom_api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, method_s.ptr);
+    const method_z = allocator.allocSentinel(u8, method_s.len, 0) catch return quickjs.JS_NULL();
+    defer allocator.free(method_z);
+    for (method_s.ptr[0..method_s.len], 0..) |ch, i| method_z[i] = std.ascii.toUpper(ch);
+
+    // url → sentinel string
+    const url_s = dom_api.jsStringToSlice(c, args[1]) orelse return quickjs.JS_NULL();
+    defer qjs.JS_FreeCString(c, url_s.ptr);
+    const url_z = allocator.allocSentinel(u8, url_s.len, 0) catch return quickjs.JS_NULL();
+    defer allocator.free(url_z);
+    @memcpy(url_z[0..url_s.len], url_s.ptr[0..url_s.len]);
+
+    // body (optional)
+    var body_owned: ?[]u8 = null;
+    defer if (body_owned) |b| allocator.free(b);
+    if (argc >= 3 and !quickjs.JS_IsNull(args[2]) and !quickjs.JS_IsUndefined(args[2])) {
+        if (dom_api.jsStringToSlice(c, args[2])) |bs| {
+            defer qjs.JS_FreeCString(c, bs.ptr);
+            body_owned = allocator.dupe(u8, bs.ptr[0..bs.len]) catch null;
+        }
+    }
+
+    // headers object (optional: {key: value, ...})
+    var headers_buf: [32][2][]const u8 = undefined;
+    var headers_count: usize = 0;
+    var header_strs: [64][]const u8 = undefined;
+    var header_str_count: usize = 0;
+    defer for (header_strs[0..header_str_count]) |s| allocator.free(s);
+
+    if (argc >= 4 and !quickjs.JS_IsNull(args[3]) and !quickjs.JS_IsUndefined(args[3])) {
+        var prop_enum: [*c]qjs.JSPropertyEnum = null;
+        var prop_count: u32 = 0;
+        if (qjs.JS_GetOwnPropertyNames(c, &prop_enum, &prop_count, args[3], qjs.JS_GPN_STRING_MASK | qjs.JS_GPN_ENUM_ONLY) == 0) {
+            defer {
+                var pi: u32 = 0;
+                while (pi < prop_count) : (pi += 1) qjs.JS_FreeAtom(c, prop_enum[pi].atom);
+                qjs.js_free(c, prop_enum);
+            }
+            var pi: u32 = 0;
+            while (pi < prop_count and headers_count < 32) : (pi += 1) {
+                const key_cstr = qjs.JS_AtomToCString(c, prop_enum[pi].atom);
+                if (key_cstr == null) continue;
+                defer qjs.JS_FreeCString(c, key_cstr);
+                const val_js = qjs.JS_GetProperty(c, args[3], prop_enum[pi].atom);
+                defer qjs.JS_FreeValue(c, val_js);
+                const val_s = dom_api.jsStringToSlice(c, val_js) orelse continue;
+                defer qjs.JS_FreeCString(c, val_s.ptr);
+                const k = allocator.dupe(u8, std.mem.span(key_cstr)) catch continue;
+                const v = allocator.dupe(u8, val_s.ptr[0..val_s.len]) catch { allocator.free(k); continue; };
+                header_strs[header_str_count] = k; header_str_count += 1;
+                header_strs[header_str_count] = v; header_str_count += 1;
+                headers_buf[headers_count] = .{ k, v };
+                headers_count += 1;
+            }
+        }
+    }
+
+    const client = getOrInitHttpClient() orelse return quickjs.JS_NULL();
+    var resp = client.request(allocator, url_z, .{
+        .method = method_z,
+        .body = body_owned,
+        .headers = if (headers_count > 0) headers_buf[0..headers_count] else null,
+        .timeout_secs = 30,
+    }) catch return quickjs.JS_NULL();
+    defer resp.deinit();
+
+    // Map status code to text
+    const STATUS_TEXT = [_][2][]const u8{
+        .{ "200", "OK" }, .{ "201", "Created" }, .{ "204", "No Content" },
+        .{ "301", "Moved Permanently" }, .{ "302", "Found" }, .{ "304", "Not Modified" },
+        .{ "400", "Bad Request" }, .{ "401", "Unauthorized" }, .{ "403", "Forbidden" },
+        .{ "404", "Not Found" }, .{ "500", "Internal Server Error" },
+        .{ "502", "Bad Gateway" }, .{ "503", "Service Unavailable" },
+    };
+    var status_text: []const u8 = "";
+    var st_buf: [8]u8 = undefined;
+    const st_str = std.fmt.bufPrint(&st_buf, "{d}", .{resp.status_code}) catch "";
+    for (STATUS_TEXT) |pair| {
+        if (std.mem.eql(u8, pair[0], st_str)) { status_text = pair[1]; break; }
+    }
+
+    const result = qjs.JS_NewObject(c);
+    _ = qjs.JS_SetPropertyStr(c, result, "status", qjs.JS_NewInt32(c, @intCast(resp.status_code)));
+    _ = qjs.JS_SetPropertyStr(c, result, "statusText", qjs.JS_NewStringLen(c, status_text.ptr, status_text.len));
+    _ = qjs.JS_SetPropertyStr(c, result, "responseText", qjs.JS_NewStringLen(c, resp.body.ptr, resp.body.len));
+    return result;
+}
+
 // ── Registration ────────────────────────────────────────────────────
 
 pub fn registerWebApis(js_rt: anytype) void {
@@ -1519,6 +1690,13 @@ pub fn registerWebApis(js_rt: anytype) void {
 
     // -- WebCrypto CSPRNG: used by crypto.getRandomValues polyfill --
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_secure_random", qjs.JS_NewCFunction(ctx, &jsSuzumeSecureRandom, "__suzume_secure_random", 1));
+
+    // -- localStorage persistence helpers --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_ls_load", qjs.JS_NewCFunction(ctx, &jsSuzumeLsLoad, "__suzume_ls_load", 0));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_ls_save", qjs.JS_NewCFunction(ctx, &jsSuzumeLsSave, "__suzume_ls_save", 1));
+
+    // -- XHR synchronous request helper --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_xhr_sync", qjs.JS_NewCFunction(ctx, &jsSuzumeXhrSync, "__suzume_xhr_sync", 4));
 
     // -- console object --
     const console_obj = qjs.JS_NewObject(ctx);
@@ -1871,7 +2049,18 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof requestIdleCallback==='undefined'){globalThis.requestIdleCallback=function(cb){return setTimeout(cb,1);};}
         \\if(typeof cancelIdleCallback==='undefined'){globalThis.cancelIdleCallback=function(id){clearTimeout(id);};}
         \\if(typeof localStorage==='undefined'){
-        \\  var _ls={};globalThis.localStorage={getItem:function(k){return _ls[k]||null;},setItem:function(k,v){_ls[k]=String(v);},removeItem:function(k){delete _ls[k];},clear:function(){_ls={};},get length(){return Object.keys(_ls).length;},key:function(i){return Object.keys(_ls)[i]||null;}};
+        \\  // [[spec]] HTML §15.1.1 — persist to disk via native helpers
+        \\  var _ls={};
+        \\  (function(){var raw=typeof __suzume_ls_load==='function'?__suzume_ls_load():null;if(raw){try{_ls=JSON.parse(raw);}catch(e){_ls={};}}})();
+        \\  function _lsSave(){if(typeof __suzume_ls_save==='function')__suzume_ls_save(JSON.stringify(_ls));}
+        \\  globalThis.localStorage={
+        \\    getItem:function(k){var v=_ls[String(k)];return v===undefined?null:v;},
+        \\    setItem:function(k,v){_ls[String(k)]=String(v);_lsSave();},
+        \\    removeItem:function(k){delete _ls[String(k)];_lsSave();},
+        \\    clear:function(){_ls={};_lsSave();},
+        \\    get length(){return Object.keys(_ls).length;},
+        \\    key:function(i){return Object.keys(_ls)[i]||null;}
+        \\  };
         \\}
         \\if(typeof sessionStorage==='undefined'){
         \\  var _ss={};globalThis.sessionStorage={getItem:function(k){return _ss[k]||null;},setItem:function(k,v){_ss[k]=String(v);},removeItem:function(k){delete _ss[k];},clear:function(){_ss={};},get length(){return Object.keys(_ss).length;},key:function(i){return Object.keys(_ss)[i]||null;}};
@@ -1890,7 +2079,27 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  XMLHttpRequest.prototype.getResponseHeader=function(name){return this._responseHeaders?this._responseHeaders[name.toLowerCase()]||null:null;};
         \\  XMLHttpRequest.prototype.getAllResponseHeaders=function(){if(!this._responseHeaders)return'';var r='';for(var k in this._responseHeaders)r+=k+': '+this._responseHeaders[k]+'\r\n';return r;};
         \\  XMLHttpRequest.prototype.send=function(body){
-        \\    var self=this,opts={method:this._method,headers:this._headers};
+        \\    var self=this;
+        \\    // [[spec]] XHR §4.7.3 — async=false: block synchronously via native helper
+        \\    if(!this._async&&typeof __suzume_xhr_sync==='function'){
+        \\      var r=null;try{r=__suzume_xhr_sync(this._method,this._url,body||null,this._headers);}catch(e){}
+        \\      if(r){
+        \\        self.status=r.status;self.statusText=r.statusText;self.responseURL=self._url;
+        \\        self._responseHeaders={};self.readyState=2;self._fireReadyState();
+        \\        self.readyState=3;self._fireReadyState();
+        \\        self.responseText=r.responseText;self.response=self.responseType==='json'?(function(){try{return JSON.parse(r.responseText);}catch(e){return null;}})():r.responseText;
+        \\        self.readyState=4;self._fireReadyState();
+        \\        if(self.onload)try{self.onload({target:self,type:'load'});}catch(e){}
+        \\        self._fire('load',{target:self});
+        \\      }else{
+        \\        self.readyState=4;self.status=0;self._fireReadyState();
+        \\        if(self.onerror)try{self.onerror({target:self,type:'error'});}catch(e){}
+        \\        self._fire('error',{target:self});
+        \\      }
+        \\      return;
+        \\    }
+        \\    // async=true: use fetch Promise chain
+        \\    var opts={method:this._method,headers:this._headers};
         \\    if(body)opts.body=body;
         \\    var STATUS_TEXT={200:'OK',201:'Created',204:'No Content',301:'Moved Permanently',302:'Found',304:'Not Modified',400:'Bad Request',401:'Unauthorized',403:'Forbidden',404:'Not Found',500:'Internal Server Error',502:'Bad Gateway',503:'Service Unavailable'};
         \\    fetch(this._url,opts).then(function(resp){
@@ -2167,8 +2376,15 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof TextEncoder==='undefined'){
         \\  globalThis.TextEncoder=function(){};
         \\  TextEncoder.prototype.encode=function(s){
+        \\    // [[spec]] Encoding §9.1: encode as UTF-8; surrogate pairs → 4-byte seq; lone surrogates → U+FFFD
         \\    var a=[];for(var i=0;i<s.length;i++){var c=s.charCodeAt(i);
-        \\      if(c<0x80)a.push(c);else if(c<0x800){a.push(0xC0|(c>>6));a.push(0x80|(c&0x3F));}
+        \\      if(c>=0xD800&&c<=0xDBFF){
+        \\        var lo=s.charCodeAt(i+1);
+        \\        if(lo>=0xDC00&&lo<=0xDFFF){var cp=0x10000+((c-0xD800)<<10)+(lo-0xDC00);a.push(0xF0|(cp>>18));a.push(0x80|((cp>>12)&0x3F));a.push(0x80|((cp>>6)&0x3F));a.push(0x80|(cp&0x3F));i++;}
+        \\        else{a.push(0xEF);a.push(0xBF);a.push(0xBD);}
+        \\      }else if(c>=0xDC00&&c<=0xDFFF){a.push(0xEF);a.push(0xBF);a.push(0xBD);}
+        \\      else if(c<0x80)a.push(c);
+        \\      else if(c<0x800){a.push(0xC0|(c>>6));a.push(0x80|(c&0x3F));}
         \\      else{a.push(0xE0|(c>>12));a.push(0x80|((c>>6)&0x3F));a.push(0x80|(c&0x3F));}
         \\    }return new Uint8Array(a);
         \\  };
@@ -2357,9 +2573,9 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  FileReader.prototype.readAsDataURL=function(blob){var self=this;self.readyState=1;blob.text().then(function(t){self.result='data:'+(blob.type||'')+';base64,'+btoa(t);self.readyState=2;if(self.onload)self.onload({target:self});if(self.onloadend)self.onloadend({target:self});});};
         \\  FileReader.prototype.abort=function(){this.readyState=2;if(this.onerror)this.onerror({target:this});};
         \\}
-        \\// TODO: localStorage persistence — requires native file I/O binding (aio write/read per key or full JSON flush). Not implemented here.
-        \\// TODO: XHR async=false (synchronous HTTP) — requires blocking fetch, not feasible with async-only HTTP stack.
-        \\// TODO: TextEncoder/TextDecoder UTF-16 surrogate handling — lone surrogates should encode as CESU-8 or replacement char per spec.
+        \\// localStorage: disk-persisted via __suzume_ls_load/__suzume_ls_save (implemented above).
+        \\// XHR async=false: blocking via __suzume_xhr_sync (implemented above).
+        \\// TextEncoder: surrogate pair and lone-surrogate handling implemented above.
         \\// performance.mark / performance.measure / entry storage (Wave 3)
         \\;(function(){
         \\  var _perfEntries=[];
