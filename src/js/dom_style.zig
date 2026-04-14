@@ -15,6 +15,7 @@ const cascade_mod = @import("../css/cascade.zig");
 const css_ast = @import("../css/ast.zig");
 const css_properties = @import("../css/properties.zig");
 const computed_mod = @import("../css/computed.zig");
+const style_decl_mod = @import("../css/cssom/style_decl.zig");
 
 // ── Helpers (delegated to dom_api) ───────────────────────────────────
 
@@ -154,6 +155,12 @@ pub fn styleGetCssText(
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
     const elem = getElement(c, elem_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+    // Prefer the structured list so mutations via setProperty are reflected.
+    if (api.getDeclListForElem(elem)) |list| {
+        const css_text = list.getCssText() catch "";
+        return qjs.JS_NewStringLen(c, css_text.ptr, css_text.len);
+    }
+    // Fallback: no list yet — read attribute directly (element has never been mutated via CSSOM).
     var style_len: usize = 0;
     const style_ptr = lxb_dom_element_get_attribute(elem, "style", 5, &style_len);
     if (style_ptr == null or style_len == 0) return qjs.JS_NewStringLen(c, "", 0);
@@ -174,7 +181,21 @@ pub fn styleSetCssText(
     const elem = getElement(c, elem_val) orelse return quickjs.JS_UNDEFINED();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, s.ptr);
-    _ = lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
+    const input = s.ptr[0..s.len];
+    // Reparse into the structured list, replacing all prior declarations.
+    if (api.getDeclListForElem(elem)) |list| {
+        style_decl_mod.parseIntoList(list, std.heap.c_allocator, input) catch {
+            // On OOM fallback: write the raw string to the attribute.
+            _ = lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
+            api.setDomDirty();
+            return quickjs.JS_UNDEFINED();
+        };
+        // Serialize the parsed list back to the attribute for cascade consistency.
+        api.syncDeclListToAttrPub(elem, list);
+    } else {
+        // OOM creating the list — fall back to raw attribute write.
+        _ = lxb_dom_element_set_attribute(elem, "style", 5, s.ptr, s.len);
+    }
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();
 }

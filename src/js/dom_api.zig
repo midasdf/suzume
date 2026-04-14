@@ -197,10 +197,22 @@ fn styleDeclMap() *style_decl_mod.DeclMap {
     return &g_style_decl_map;
 }
 
+/// Free all StyleDeclLists and the map itself (call on page navigation / VM shutdown).
+pub fn shutdownStyleDeclMap() void {
+    if (!g_style_decl_map_inited) return;
+    style_decl_mod.shutdownMap(&g_style_decl_map, std.heap.c_allocator);
+    g_style_decl_map_inited = false;
+}
+
 /// Get or create a StyleDeclList for an element. Returns null on OOM.
 fn getDeclList(elem: *lxb.lxb_dom_element_t) ?*style_decl_mod.StyleDeclList {
     const key = @intFromPtr(elem);
     return style_decl_mod.getOrCreate(styleDeclMap(), std.heap.c_allocator, key) catch null;
+}
+
+/// Public variant for use by dom_style.zig.
+pub fn getDeclListForElem(elem: *lxb.lxb_dom_element_t) ?*style_decl_mod.StyleDeclList {
+    return getDeclList(elem);
 }
 
 /// Serialize a StyleDeclList back to the lxb "style" attribute.
@@ -208,6 +220,11 @@ fn syncDeclListToAttr(elem: *lxb.lxb_dom_element_t, list: *style_decl_mod.StyleD
     var serialized = list.serialize(std.heap.c_allocator) catch return;
     defer serialized.deinit();
     _ = lxb_dom_element_set_attribute(elem, "style", 5, serialized.items.ptr, serialized.items.len);
+}
+
+/// Public variant for use by dom_style.zig.
+pub fn syncDeclListToAttrPub(elem: *lxb.lxb_dom_element_t, list: *style_decl_mod.StyleDeclList) void {
+    syncDeclListToAttr(elem, list);
 }
 
 /// Global styles pointer — set from main after cascade, used for getComputedStyle.
@@ -563,6 +580,7 @@ pub fn resetNodeCacheLeaky() void {
     text_proto_val = quickjs.JS_UNDEFINED();
     comment_proto_val = quickjs.JS_UNDEFINED();
     pi_proto_val = quickjs.JS_UNDEFINED();
+    shutdownStyleDeclMap();
 }
 
 /// Clear the node identity cache (called on page navigation).

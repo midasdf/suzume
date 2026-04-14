@@ -474,3 +474,128 @@ test "parseIntoList url single-quoted multiple semicolons in string" {
     try std.testing.expectEqualStrings("color", list.entries.items[1].name);
     try std.testing.expectEqualStrings("blue", list.entries.items[1].value);
 }
+
+// ── Phase 2 tests ─────────────────────────────────────────────────────
+
+test "getCssText cached — returns serialized text, caches on second call" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "red", true);
+    try list.upsert(alloc, "margin-top", "1px", false);
+
+    // First call serializes
+    const first = try list.getCssText();
+    try std.testing.expectEqualStrings("color: red !important; margin-top: 1px;", first);
+    try std.testing.expect(!list.dirty_css_text);
+
+    // Second call returns same slice (no re-allocation)
+    const second = try list.getCssText();
+    try std.testing.expectEqual(first.ptr, second.ptr);
+}
+
+test "getCssText dirty after upsert" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "red", false);
+    _ = try list.getCssText(); // cache it
+    try std.testing.expect(!list.dirty_css_text);
+
+    // Mutation marks dirty
+    try list.upsert(alloc, "color", "blue", false);
+    try std.testing.expect(list.dirty_css_text);
+
+    const text = try list.getCssText();
+    try std.testing.expectEqualStrings("color: blue;", text);
+}
+
+test "getCssText dirty after remove" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "red", false);
+    try list.upsert(alloc, "display", "block", false);
+    _ = try list.getCssText();
+    try std.testing.expect(!list.dirty_css_text);
+
+    _ = list.remove("color");
+    try std.testing.expect(list.dirty_css_text);
+    const text = try list.getCssText();
+    try std.testing.expectEqualStrings("display: block;", text);
+}
+
+test "cssText reparse replaces prior declarations" {
+    // Simulate styleSetCssText: parse new text into existing list, replacing all prior.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Populate with initial declarations
+    try list.upsert(alloc, "color", "red", false);
+    try list.upsert(alloc, "display", "block", false);
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+
+    // Reparse — prior entries must be discarded
+    try parseIntoList(&list, alloc, "margin: 2px; color: blue !important");
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+    try std.testing.expectEqualStrings("margin", list.entries.items[0].name);
+    try std.testing.expectEqualStrings("2px", list.entries.items[0].value);
+    try std.testing.expect(!list.entries.items[0].important);
+    try std.testing.expectEqualStrings("color", list.entries.items[1].name);
+    try std.testing.expectEqualStrings("blue", list.entries.items[1].value);
+    try std.testing.expect(list.entries.items[1].important);
+
+    // getCssText reflects the new state
+    const text = try list.getCssText();
+    try std.testing.expectEqualStrings("margin: 2px; color: blue !important;", text);
+}
+
+test "cascade important ordering — inline important wins over non-important" {
+    // Verify that a list with mixed important/non-important serializes so that
+    // the cascade (which reads !important suffix from the attribute) will pick
+    // the important entry over the non-important one.
+    //
+    // Cascade sort key: important bit at position 63 → inline important > author non-important.
+    // This test checks the serialize output that the cascade attribute-read path receives.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Author non-important color is set first, then inline important overrides it.
+    try list.upsert(alloc, "color", "red", false);   // author non-important (lower priority)
+    try list.upsert(alloc, "color", "blue", true);   // inline important (higher priority — replaces)
+
+    // After upsert the list has only one entry (the important one).
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expect(list.entries.items[0].important);
+
+    // The serialized attribute contains "!important" so the cascade parser sets the bit.
+    var out = try list.serialize(alloc);
+    defer out.deinit();
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "!important") != null);
+    try std.testing.expectEqualStrings("color: blue !important;", out.items);
+}
+
+test "cascade important ordering — multiple props, important flags preserved independently" {
+    // Verify that important and non-important entries can coexist in the same list
+    // and each serializes with the correct suffix.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "red", true);        // important
+    try list.upsert(alloc, "margin-top", "4px", false);  // non-important
+    try list.upsert(alloc, "display", "flex", true);     // important
+
+    var out = try list.serialize(alloc);
+    defer out.deinit();
+
+    // color and display must carry !important; margin-top must not.
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "color: red !important") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "margin-top: 4px;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out.items, "display: flex !important") != null);
+}
