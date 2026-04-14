@@ -888,3 +888,103 @@ test "upsertShorthand replaces prior shorthand expansion" {
     try std.testing.expectEqual(@as(usize, 4), list.entries.items.len);
     try std.testing.expectEqualStrings("8px", list.entries.items[0].value);
 }
+
+// ── Phase 4: CSSRule.style backing store round-trip tests ─────────────
+//
+// The JS CSSStyleDeclaration class uses parseIntoList / serialize as its
+// semantic model. These tests verify that model directly (no JS runtime
+// needed) so `zig build test-css` covers Phase 4 correctness.
+
+test "Phase4 rule.style setProperty round-trip via parseIntoList+upsert" {
+    // Simulates: rule.style.setProperty("color", "red", "")
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Parse initial decls string (mirrors CSSStyleDeclaration constructor)
+    try parseIntoList(&list, alloc, "font-size: 14px;");
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+
+    // setProperty → upsert
+    try list.upsert(alloc, "color", "red", false);
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+
+    // Serialize back (_commit: write to rule._decls)
+    const css = try list.getCssText();
+    try std.testing.expectEqualStrings("font-size: 14px; color: red;", css);
+}
+
+test "Phase4 rule.style setProperty with important" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "color: blue;");
+    try list.upsert(alloc, "color", "red", true);
+
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(list.entries.items[0].important);
+
+    const css = try list.getCssText();
+    try std.testing.expectEqualStrings("color: red !important;", css);
+}
+
+test "Phase4 rule.style removeProperty" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "color: red; margin-top: 4px;");
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+
+    const old = list.remove("color");
+    try std.testing.expectEqualStrings("red", old.?);
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expectEqualStrings("margin-top", list.entries.items[0].name);
+}
+
+test "Phase4 rule.style length and item" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "color: red; display: block; font-size: 12px;");
+    try std.testing.expectEqual(@as(usize, 3), list.entries.items.len);
+    try std.testing.expectEqualStrings("color", list.entries.items[0].name);
+    try std.testing.expectEqualStrings("display", list.entries.items[1].name);
+    try std.testing.expectEqualStrings("font-size", list.entries.items[2].name);
+}
+
+test "Phase4 rule.style cssText setter replaces declarations" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "color: red;");
+    // Simulate cssText= setter: re-parse replaces all prior declarations
+    try parseIntoList(&list, alloc, "background: blue; font-weight: bold;");
+    try std.testing.expectEqual(@as(usize, 2), list.entries.items.len);
+    try std.testing.expectEqualStrings("background", list.entries.items[0].name);
+    try std.testing.expectEqualStrings("font-weight", list.entries.items[1].name);
+}
+
+test "Phase4 rule.style getPropertyValue and getPropertyPriority" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try parseIntoList(&list, alloc, "color: green !important; margin: 0;");
+
+    // getPropertyValue
+    const color_idx = list.indexOf("color");
+    try std.testing.expect(color_idx != null);
+    try std.testing.expectEqualStrings("green", list.entries.items[color_idx.?].value);
+
+    // getPropertyPriority
+    try std.testing.expect(list.entries.items[color_idx.?].important);
+
+    const margin_idx = list.indexOf("margin");
+    try std.testing.expect(margin_idx != null);
+    try std.testing.expect(!list.entries.items[margin_idx.?].important);
+}
