@@ -464,7 +464,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    url_nfc_mod.addImport("tables", url_tables_mod);
+    // nfc.zig uses @import("tables.zig") — no addImport needed
     const url_nfc_tests = b.addTest(.{ .root_module = url_nfc_mod });
     const run_url_nfc_tests = b.addRunArtifact(url_nfc_tests);
     const test_url_nfc_step = b.step("test-url-nfc", "Run URL NFC normalization tests");
@@ -476,9 +476,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    url_idna_mod.addImport("tables", url_tables_mod);
-    url_idna_mod.addImport("nfc", url_nfc_mod);
-    url_idna_mod.addImport("punycode", url_pc_mod);
+    // idna.zig uses @import("tables.zig"), @import("nfc.zig"), @import("punycode.zig")
     const url_idna_tests = b.addTest(.{ .root_module = url_idna_mod });
     const run_url_idna_tests = b.addRunArtifact(url_idna_tests);
     const test_url_idna_step = b.step("test-url-idna", "Run URL IDNA tests");
@@ -490,8 +488,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    url_host_mod.addImport("idna", url_idna_mod);
-    url_host_mod.addImport("percent_encode", url_pe_mod);
+    // host.zig uses @import("idna.zig"), @import("percent_encode.zig")
     const url_host_tests = b.addTest(.{ .root_module = url_host_mod });
     const run_url_host_tests = b.addRunArtifact(url_host_tests);
     const test_url_host_step = b.step("test-url-host", "Run URL host parsing tests");
@@ -503,7 +500,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    url_sp_mod.addImport("percent_encode", url_pe_mod);
+    // search_params.zig uses @import("percent_encode.zig")
     const url_sp_tests = b.addTest(.{ .root_module = url_sp_mod });
     const run_url_sp_tests = b.addRunArtifact(url_sp_tests);
     const test_url_sp_step = b.step("test-url-searchparams", "Run URLSearchParams tests");
@@ -515,8 +512,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    url_parser_mod.addImport("host", url_host_mod);
-    url_parser_mod.addImport("percent_encode", url_pe_mod);
+    // parser.zig uses @import("host.zig"), @import("percent_encode.zig")
     const url_parser_tests = b.addTest(.{ .root_module = url_parser_mod });
     const run_url_parser_tests = b.addRunArtifact(url_parser_tests);
     const test_url_parser_step = b.step("test-url-parser", "Run URL parser tests");

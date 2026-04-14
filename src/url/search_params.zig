@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const pe = @import("percent_encode");
+const pe = @import("percent_encode.zig");
 
 pub const Entry = struct {
     name: []u8,

@@ -5,8 +5,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const host_mod = @import("host");
-const pe = @import("percent_encode");
+const host_mod = @import("host.zig");
+const pe = @import("percent_encode.zig");
 
 pub const Host = host_mod.Host;
 

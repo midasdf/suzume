@@ -5,9 +5,9 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const tables = @import("tables");
-const nfc = @import("nfc");
-const punycode = @import("punycode");
+const tables = @import("tables.zig");
+const nfc = @import("nfc.zig");
+const punycode = @import("punycode.zig");
 
 /// Convert a domain to its ASCII representation (ACE form).
 /// Returns null on failure (invalid domain).

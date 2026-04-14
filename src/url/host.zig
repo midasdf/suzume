@@ -5,8 +5,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const idna = @import("idna");
-const pe = @import("percent_encode");
+const idna = @import("idna.zig");
+const pe = @import("percent_encode.zig");
 
 pub const Host = union(enum) {
     domain: []u8,

@@ -10,7 +10,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const tables = @import("tables");
+const tables = @import("tables.zig");
 
 // ── Hangul constants (Unicode Ch. 3.12) ──────────────────────────────
 
