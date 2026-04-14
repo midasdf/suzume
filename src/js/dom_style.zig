@@ -3290,7 +3290,8 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             }
             break :blk std.fmt.parseFloat(f32, trimmed) != error.InvalidCharacter;
         },
-        .z_index, .order => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter or eqlIgnoreCase(trimmed, "auto"),
+        .z_index => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter or eqlIgnoreCase(trimmed, "auto"),
+        .order => std.fmt.parseInt(i32, trimmed, 10) != error.InvalidCharacter,
         .flex_grow, .flex_shrink => isNonNegNumber(trimmed),
         // Font size: non-negative length or keyword
         .font_size => isValidFontSize(trimmed),
@@ -3399,8 +3400,9 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .overflow_wrap,
         .text_overflow,
         .list_style_type,
-        .flex_direction,
-        .flex_basis,
+        .flex_direction => eqlIgnoreCase(trimmed, "row") or eqlIgnoreCase(trimmed, "row-reverse") or
+            eqlIgnoreCase(trimmed, "column") or eqlIgnoreCase(trimmed, "column-reverse"),
+        .flex_basis => isValidFlexBasis(trimmed),
         .gap,
         .grid_column_end,
         .grid_row_end,
@@ -5160,8 +5162,22 @@ fn isColorFuncWithCalc(val: []const u8) bool {
 }
 
 pub fn isNonNegNumber(val: []const u8) bool {
+    if (val.len == 0) return false;
+    // CSS: trailing dot "1." is not a valid number
+    if (val[val.len - 1] == '.') return false;
     const n = std.fmt.parseFloat(f32, val) catch return false;
     return n >= 0;
+}
+
+pub fn isValidFlexBasis(val: []const u8) bool {
+    // Keywords
+    if (eqlIgnoreCase(val, "auto") or eqlIgnoreCase(val, "content") or
+        eqlIgnoreCase(val, "min-content") or eqlIgnoreCase(val, "max-content") or
+        eqlIgnoreCase(val, "fit-content"))
+        return true;
+    // Non-negative length or percentage (single value only)
+    if (std.mem.indexOf(u8, val, " ") != null) return false; // reject multi-value
+    return isValidNonNegLength(val);
 }
 
 pub fn isValidFontSize(val: []const u8) bool {
