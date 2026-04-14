@@ -49,37 +49,139 @@ fn jsSuzumeSecureRandom(
 
 // ── localStorage persistence ─────────────────────────────────────────
 // [[spec]] HTML §15.1.1 — localStorage MUST survive navigation.
-// Strategy: flush the entire store as JSON to
-//   $XDG_DATA_HOME/suzume/localStorage.json (or ~/.local/share/suzume/).
-// JS calls __suzume_ls_load() on init → returns JSON string (or null).
-// JS calls __suzume_ls_save(jsonStr) on every mutation.
+// Strategy: flush the entire store as JSON to a per-origin file:
+//   $XDG_DATA_HOME/suzume/localStorage/<origin-key>.json
+// where <origin-key> is scheme_host_port with non-alnum chars hex-escaped.
+// JS passes location.origin as first arg to __suzume_ls_load/__suzume_ls_save.
+// 5MB quota enforced in JS setItem before calling __suzume_ls_save.
+// Migration: old flat localStorage.json is loaded and moved to current-origin
+// partition on first load.
 
-fn localStoragePath(buf: []u8) ![]const u8 {
-    // Prefer XDG_DATA_HOME; fall back to $HOME/.local/share.
-    // When XDG_DATA_HOME is unset we must build the base path in a *separate*
-    // buffer before writing the final path into `buf`, otherwise the second
-    // bufPrint reads and overwrites the same memory (aliasing → corrupted path).
+/// Encode an origin string to a filesystem-safe ASCII key.
+/// Non-alphanumeric, non-dot/hyphen chars → %XX hex escape.
+/// Result is written into `out`; returns the used slice.
+fn encodeOriginKey(origin: []const u8, out: []u8) ![]const u8 {
+    var pos: usize = 0;
+    for (origin) |ch| {
+        const safe = std.ascii.isAlphanumeric(ch) or ch == '.' or ch == '-';
+        if (safe) {
+            if (pos >= out.len) return error.NoSpaceLeft;
+            out[pos] = ch;
+            pos += 1;
+        } else {
+            if (pos + 3 > out.len) return error.NoSpaceLeft;
+            _ = try std.fmt.bufPrint(out[pos..][0..3], "%{X:0>2}", .{ch});
+            pos += 3;
+        }
+    }
+    if (pos == 0) {
+        // empty origin (e.g. file://) → use literal "null"
+        if (out.len < 4) return error.NoSpaceLeft;
+        @memcpy(out[0..4], "null");
+        pos = 4;
+    }
+    return out[0..pos];
+}
+
+/// Returns the suzume data dir (no trailing slash) into `base_buf`.
+fn suzumeDataDir(base_buf: []u8) ![]const u8 {
     if (std.posix.getenv("XDG_DATA_HOME")) |xdg| {
-        return try std.fmt.bufPrint(buf, "{s}/suzume/localStorage.json", .{xdg});
+        return try std.fmt.bufPrint(base_buf, "{s}/suzume", .{xdg});
     }
     const home = std.posix.getenv("HOME") orelse return error.NoHome;
+    return try std.fmt.bufPrint(base_buf, "{s}/.local/share/suzume", .{home});
+}
+
+/// Build the partition path for a given origin.
+/// `path_buf` must be at least 768 bytes.
+fn localStoragePartitionPath(origin: []const u8, path_buf: []u8) ![]const u8 {
     var base_buf: [512]u8 = undefined;
-    const base = try std.fmt.bufPrint(&base_buf, "{s}/.local/share", .{home});
-    return try std.fmt.bufPrint(buf, "{s}/suzume/localStorage.json", .{base});
+    const base = try suzumeDataDir(&base_buf);
+    var key_buf: [256]u8 = undefined;
+    const key = try encodeOriginKey(origin, &key_buf);
+    return try std.fmt.bufPrint(path_buf, "{s}/localStorage/{s}.json", .{ base, key });
+}
+
+/// Legacy flat path (pre-partitioning).
+fn localStorageLegacyPath(buf: []u8) ![]const u8 {
+    var base_buf: [512]u8 = undefined;
+    const base = try suzumeDataDir(&base_buf);
+    return try std.fmt.bufPrint(buf, "{s}/localStorage.json", .{base});
+}
+
+/// Ensure a directory exists (create if absent).
+fn ensureDir(path: []const u8) void {
+    std.fs.makeDirAbsolute(path) catch |e| switch (e) {
+        error.PathAlreadyExists => {},
+        else => {},
+    };
 }
 
 fn jsSuzumeLsLoad(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_NULL();
-    var path_buf: [512]u8 = undefined;
-    const path = localStoragePath(&path_buf) catch return quickjs.JS_NULL();
+    const dom_api = @import("dom_api.zig");
+
+    // arg[0] = location.origin (may be absent for backwards compat)
+    var origin: []const u8 = "null";
+    var origin_cstr: ?[*:0]const u8 = null;
+    if (argc >= 1) {
+        const args = argv orelse return quickjs.JS_NULL();
+        origin_cstr = qjs.JS_ToCString(c, args[0]);
+        if (origin_cstr) |cs| {
+            const len = std.mem.len(cs);
+            if (len > 0) origin = cs[0..len];
+        }
+    }
+    defer if (origin_cstr) |cs| qjs.JS_FreeCString(c, cs);
+    _ = dom_api; // suppress unused import warning
+
+    var path_buf: [768]u8 = undefined;
+    const path = localStoragePartitionPath(origin, &path_buf) catch return quickjs.JS_NULL();
+
+    // Ensure localStorage/ subdir exists
+    var ls_dir_buf: [512]u8 = undefined;
+    const ls_dir = blk: {
+        var base_buf: [512]u8 = undefined;
+        const base = suzumeDataDir(&base_buf) catch break :blk null;
+        break :blk std.fmt.bufPrint(&ls_dir_buf, "{s}/localStorage", .{base}) catch null;
+    };
+    if (ls_dir) |d| ensureDir(d);
+
+    // Migration: if partition file absent but legacy flat file exists, migrate it
+    const partition_exists = blk: {
+        std.fs.accessAbsolute(path, .{}) catch break :blk false;
+        break :blk true;
+    };
+    if (!partition_exists) {
+        var legacy_buf: [768]u8 = undefined;
+        if (localStorageLegacyPath(&legacy_buf) catch null) |legacy_path| {
+            if (std.fs.openFileAbsolute(legacy_path, .{}) catch null) |lf| {
+                defer lf.close();
+                if (lf.readToEndAlloc(std.heap.c_allocator, 6 * 1024 * 1024) catch null) |contents| {
+                    defer std.heap.c_allocator.free(contents);
+                    // Write to partition
+                    if (std.fs.createFileAbsolute(path, .{ .truncate = true }) catch null) |pf| {
+                        defer pf.close();
+                        pf.writeAll(contents) catch {};
+                        std.log.warn("localStorage: migrated legacy localStorage.json → {s}", .{path});
+                    }
+                    // Remove legacy file
+                    std.fs.deleteFileAbsolute(legacy_path) catch {};
+                    return qjs.JS_NewStringLen(c, contents.ptr, contents.len);
+                }
+            }
+        }
+        return quickjs.JS_NULL();
+    }
+
     const file = std.fs.openFileAbsolute(path, .{}) catch return quickjs.JS_NULL();
     defer file.close();
-    const contents = file.readToEndAlloc(std.heap.c_allocator, 4 * 1024 * 1024) catch return quickjs.JS_NULL();
+    const contents = file.readToEndAlloc(std.heap.c_allocator, 6 * 1024 * 1024) catch return quickjs.JS_NULL();
     defer std.heap.c_allocator.free(contents);
     return qjs.JS_NewStringLen(c, contents.ptr, contents.len);
 }
@@ -91,23 +193,37 @@ fn jsSuzumeLsSave(
     argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    if (argc < 1) return quickjs.JS_UNDEFINED();
+    // args: (origin: string, jsonStr: string)
+    if (argc < 2) return quickjs.JS_UNDEFINED();
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const dom_api = @import("dom_api.zig");
-    const json_s = dom_api.jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+
+    // origin
+    var origin: []const u8 = "null";
+    const origin_cstr = qjs.JS_ToCString(c, args[0]);
+    if (origin_cstr) |cs| {
+        const len = std.mem.len(cs);
+        if (len > 0) origin = cs[0..len];
+    }
+    defer if (origin_cstr) |cs| qjs.JS_FreeCString(c, cs);
+
+    // json
+    const json_s = dom_api.jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, json_s.ptr);
     const json = json_s.ptr[0..json_s.len];
 
-    var path_buf: [512]u8 = undefined;
-    const path = localStoragePath(&path_buf) catch return quickjs.JS_UNDEFINED();
+    var path_buf: [768]u8 = undefined;
+    const path = localStoragePartitionPath(origin, &path_buf) catch return quickjs.JS_UNDEFINED();
 
-    // Ensure directory exists
-    const dir_end = std.mem.lastIndexOfScalar(u8, path, '/') orelse return quickjs.JS_UNDEFINED();
-    const dir = path[0..dir_end];
-    std.fs.makeDirAbsolute(dir) catch |e| switch (e) {
-        error.PathAlreadyExists => {},
-        else => return quickjs.JS_UNDEFINED(),
-    };
+    // Ensure parent dirs exist
+    var base_buf: [512]u8 = undefined;
+    if (suzumeDataDir(&base_buf) catch null) |base| {
+        ensureDir(base);
+        var ls_dir_buf: [512]u8 = undefined;
+        if (std.fmt.bufPrint(&ls_dir_buf, "{s}/localStorage", .{base}) catch null) |d| {
+            ensureDir(d);
+        }
+    }
 
     const file = std.fs.createFileAbsolute(path, .{ .truncate = true }) catch return quickjs.JS_UNDEFINED();
     defer file.close();
@@ -1606,12 +1722,15 @@ fn jsSuzumeXhrSync(
         }
     }
 
-    // headers object (optional: {key: value, ...})
-    var headers_buf: [32][2][]const u8 = undefined;
-    var headers_count: usize = 0;
-    var header_strs: [64][]const u8 = undefined;
-    var header_str_count: usize = 0;
-    defer for (header_strs[0..header_str_count]) |s| allocator.free(s);
+    // headers object (optional: {key: value, ...}) — dynamic to handle >32 headers
+    var headers_list: std.ArrayListUnmanaged([2][]const u8) = .empty;
+    defer {
+        for (headers_list.items) |pair| {
+            allocator.free(pair[0]);
+            allocator.free(pair[1]);
+        }
+        headers_list.deinit(allocator);
+    }
 
     if (argc >= 4 and !quickjs.JS_IsNull(args[3]) and !quickjs.JS_IsUndefined(args[3])) {
         var prop_enum: [*c]qjs.JSPropertyEnum = null;
@@ -1623,7 +1742,7 @@ fn jsSuzumeXhrSync(
                 qjs.js_free(c, prop_enum);
             }
             var pi: u32 = 0;
-            while (pi < prop_count and headers_count < 32) : (pi += 1) {
+            while (pi < prop_count) : (pi += 1) {
                 const key_cstr = qjs.JS_AtomToCString(c, prop_enum[pi].atom);
                 if (key_cstr == null) continue;
                 defer qjs.JS_FreeCString(c, key_cstr);
@@ -1633,10 +1752,7 @@ fn jsSuzumeXhrSync(
                 defer qjs.JS_FreeCString(c, val_s.ptr);
                 const k = allocator.dupe(u8, std.mem.span(key_cstr)) catch continue;
                 const v = allocator.dupe(u8, val_s.ptr[0..val_s.len]) catch { allocator.free(k); continue; };
-                header_strs[header_str_count] = k; header_str_count += 1;
-                header_strs[header_str_count] = v; header_str_count += 1;
-                headers_buf[headers_count] = .{ k, v };
-                headers_count += 1;
+                headers_list.append(allocator, .{ k, v }) catch { allocator.free(k); allocator.free(v); continue; };
             }
         }
     }
@@ -1645,7 +1761,7 @@ fn jsSuzumeXhrSync(
     var resp = client.request(allocator, url_z, .{
         .method = method_z,
         .body = body_owned,
-        .headers = if (headers_count > 0) headers_buf[0..headers_count] else null,
+        .headers = if (headers_list.items.len > 0) headers_list.items else null,
         .timeout_secs = 30,
     }) catch return quickjs.JS_NULL();
     defer resp.deinit();
@@ -1695,9 +1811,9 @@ pub fn registerWebApis(js_rt: anytype) void {
     // -- WebCrypto CSPRNG: used by crypto.getRandomValues polyfill --
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_secure_random", qjs.JS_NewCFunction(ctx, &jsSuzumeSecureRandom, "__suzume_secure_random", 1));
 
-    // -- localStorage persistence helpers --
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_ls_load", qjs.JS_NewCFunction(ctx, &jsSuzumeLsLoad, "__suzume_ls_load", 0));
-    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_ls_save", qjs.JS_NewCFunction(ctx, &jsSuzumeLsSave, "__suzume_ls_save", 1));
+    // -- localStorage persistence helpers (origin-partitioned) --
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_ls_load", qjs.JS_NewCFunction(ctx, &jsSuzumeLsLoad, "__suzume_ls_load", 1));
+    _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_ls_save", qjs.JS_NewCFunction(ctx, &jsSuzumeLsSave, "__suzume_ls_save", 2));
 
     // -- XHR synchronous request helper --
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_xhr_sync", qjs.JS_NewCFunction(ctx, &jsSuzumeXhrSync, "__suzume_xhr_sync", 4));
@@ -2053,13 +2169,17 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof requestIdleCallback==='undefined'){globalThis.requestIdleCallback=function(cb){return setTimeout(cb,1);};}
         \\if(typeof cancelIdleCallback==='undefined'){globalThis.cancelIdleCallback=function(id){clearTimeout(id);};}
         \\if(typeof localStorage==='undefined'){
-        \\  // [[spec]] HTML §15.1.1 — persist to disk via native helpers
+        \\  // [[spec]] HTML §15.1.1 — persist to disk via native helpers (origin-partitioned)
         \\  var _ls={};
-        \\  (function(){var raw=typeof __suzume_ls_load==='function'?__suzume_ls_load():null;if(raw){try{_ls=JSON.parse(raw);}catch(e){_ls={};}}})();
-        \\  function _lsSave(){if(typeof __suzume_ls_save==='function')__suzume_ls_save(JSON.stringify(_ls));}
+        \\  var _lsOrigin=(typeof location!=='undefined'&&location.origin)?location.origin:'null';
+        \\  (function(){var raw=typeof __suzume_ls_load==='function'?__suzume_ls_load(_lsOrigin):null;if(raw){try{_ls=JSON.parse(raw);}catch(e){_ls={};}}})();
+        \\  // [[spec]] HTML §15.1.1 — 5MB quota (UTF-16 code unit × 2 bytes)
+        \\  var LS_QUOTA=5*1024*1024;
+        \\  function _lsSize(){var n=0;for(var k in _ls){n+=k.length+_ls[k].length;}return n*2;}
+        \\  function _lsSave(){if(typeof __suzume_ls_save==='function')__suzume_ls_save(_lsOrigin,JSON.stringify(_ls));}
         \\  globalThis.localStorage={
         \\    getItem:function(k){var v=_ls[String(k)];return v===undefined?null:v;},
-        \\    setItem:function(k,v){_ls[String(k)]=String(v);_lsSave();},
+        \\    setItem:function(k,v){var ks=String(k),vs=String(v);var old=_ls[ks];var delta=(ks.length+vs.length-(old!==undefined?ks.length+old.length:0))*2;if(_lsSize()+delta>LS_QUOTA){var e=new Error('QuotaExceededError: localStorage quota exceeded');e.name='QuotaExceededError';e.code=22;throw e;}_ls[ks]=vs;_lsSave();},
         \\    removeItem:function(k){delete _ls[String(k)];_lsSave();},
         \\    clear:function(){_ls={};_lsSave();},
         \\    get length(){return Object.keys(_ls).length;},
