@@ -6,6 +6,8 @@ const bytecode_mod = @import("bytecode.zig");
 const value_mod = @import("value.zig");
 const object_mod = @import("object.zig");
 
+const compiler_mod = @import("compiler.zig");
+const Compiler = compiler_mod.Compiler;
 const Bytecode = bytecode_mod.Bytecode;
 const OpCode = bytecode_mod.OpCode;
 const JsValue = value_mod.JsValue;
@@ -1511,15 +1513,48 @@ pub const VM = struct {
                         self.push(val);
                     } else {
                         // Module not loaded yet — try loader callback
+                        var loaded = false;
                         if (self.module_loader_fn) |loader| {
                             if (self.pool.get(module_sid)) |specifier| {
-                                if (loader(self.module_loader_ctx.?, self.allocator, specifier)) |_source| {
-                                    _ = _source; // TODO: compile and execute module, then retry
+                                if (loader(self.module_loader_ctx.?, self.allocator, specifier)) |source| {
+                                    // Compile the module source
+                                    var compiler = Compiler.initWithPool(self.allocator, source, self.pool);
+                                    if (compiler.compile()) |module_bc| {
+                                        // Execute module via new call frame
+                                        const saved_frame_count = self.frame_count;
+                                        const saved_sp = self.sp;
+                                        self.frames[self.frame_count] = .{
+                                            .bc = &module_bc,
+                                            .ip = 0,
+                                            .base_sp = self.sp,
+                                            .upvalues = &.{},
+                                        };
+                                        self.frame_count += 1;
+                                        // Reserve locals
+                                        var li: u16 = 0;
+                                        while (li < module_bc.local_count) : (li += 1) {
+                                            self.push(JsValue.undefined_val);
+                                        }
+                                        _ = self.run(saved_frame_count) catch {};
+                                        self.sp = saved_sp;
+                                        // Check if binding is now available
+                                        if (self.module_exports.get(binding_sid)) |val| {
+                                            self.push(val);
+                                            loaded = true;
+                                        }
+                                    } else |_| {}
+                                    compiler.deinit();
                                 }
                             }
                         }
-                        // Fallback: push undefined for unresolved import
-                        self.push(JsValue.undefined_val);
+                        if (!loaded) {
+                            // Also check globals — some "exports" are just global assignments
+                            if (self.globals.get(binding_sid)) |val| {
+                                self.push(val);
+                            } else {
+                                self.push(JsValue.undefined_val);
+                            }
+                        }
                     }
                 },
                 .export_binding => {

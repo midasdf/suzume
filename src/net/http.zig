@@ -106,6 +106,9 @@ pub const HttpClient = struct {
 
         const handle = c.curl_easy_init() orelse return error.CurlEasyInitFailed;
 
+        // Enable HTTP/2 with fallback to HTTP/1.1
+        _ = c.curl_easy_setopt(handle, c.CURLOPT_HTTP_VERSION, c.CURL_HTTP_VERSION_2TLS);
+
         // Enable curl's in-memory cookie engine (handles Set-Cookie automatically)
         _ = c.curl_easy_setopt(handle, c.CURLOPT_COOKIEFILE, @as([*c]const u8, ""));
 
