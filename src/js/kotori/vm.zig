@@ -27,6 +27,7 @@ const CallFrame = struct {
     has_this_on_stack: bool = false,
     is_construct: bool = false,
     async_promise: ?*JsObject = null, // Promise to resolve when async function returns
+    arg_count: u16 = 0,
 };
 
 pub const VM = struct {
@@ -238,32 +239,108 @@ pub const VM = struct {
                         self.push(JsValue.jsAdd(a, b));
                     }
                 },
-                .sub => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsSub(a, b)); },
-                .mul => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsMul(a, b)); },
-                .div => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsDiv(a, b)); },
-                .mod => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsMod(a, b)); },
-                .power => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsPow(a, b)); },
+                .sub => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsSub(a, b));
+                },
+                .mul => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsMul(a, b));
+                },
+                .div => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsDiv(a, b));
+                },
+                .mod => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsMod(a, b));
+                },
+                .power => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsPow(a, b));
+                },
                 .neg => self.push(JsValue.jsNeg(self.pop())),
 
                 // ── Comparison ───────────────────────────────────────
-                .eq => { const b = self.pop(); const a = self.pop(); self.push(self.abstractEq(a, b)); },
-                .ne => { const b = self.pop(); const a = self.pop(); self.push(JsValue.initBool(!self.abstractEq(a, b).asBool())); },
-                .strict_eq => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsStrictEq(a, b)); },
-                .strict_ne => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsStrictNe(a, b)); },
-                .lt => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsLt(a, b)); },
-                .le => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsLe(a, b)); },
-                .gt => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsGt(a, b)); },
-                .ge => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsGe(a, b)); },
+                .eq => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(self.abstractEq(a, b));
+                },
+                .ne => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.initBool(!self.abstractEq(a, b).asBool()));
+                },
+                .strict_eq => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsStrictEq(a, b));
+                },
+                .strict_ne => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsStrictNe(a, b));
+                },
+                .lt => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsLt(a, b));
+                },
+                .le => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsLe(a, b));
+                },
+                .gt => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsGt(a, b));
+                },
+                .ge => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsGe(a, b));
+                },
 
                 // ── Logical / Bitwise ────────────────────────────────
                 .not => self.push(JsValue.jsNot(self.pop())),
                 .bit_not => self.push(JsValue.jsBitNot(self.pop())),
-                .bit_and => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsBitAnd(a, b)); },
-                .bit_or => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsBitOr(a, b)); },
-                .bit_xor => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsBitXor(a, b)); },
-                .shl => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsShl(a, b)); },
-                .shr => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsShr(a, b)); },
-                .ushr => { const b = self.pop(); const a = self.pop(); self.push(JsValue.jsUshr(a, b)); },
+                .bit_and => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsBitAnd(a, b));
+                },
+                .bit_or => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsBitOr(a, b));
+                },
+                .bit_xor => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsBitXor(a, b));
+                },
+                .shl => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsShl(a, b));
+                },
+                .shr => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsShr(a, b));
+                },
+                .ushr => {
+                    const b = self.pop();
+                    const a = self.pop();
+                    self.push(JsValue.jsUshr(a, b));
+                },
 
                 .instanceof_ => {
                     const rhs = self.pop(); // constructor (right)
@@ -558,6 +635,7 @@ pub const VM = struct {
                         .base_sp = base,
                         .upvalues = uv_array,
                         .async_promise = async_p,
+                        .arg_count = arg_count,
                     };
                     self.frame_count += 1;
                 },
@@ -658,13 +736,23 @@ pub const VM = struct {
                                 }
                             }
                         }
+                        if (obj.obj_type == .map or obj.obj_type == .set) {
+                            if (self.pool.get(name_id)) |name_str| {
+                                if (std.mem.eql(u8, name_str, "size")) {
+                                    const len = switch (obj.data) {
+                                        .map_data => |m| m.items.len,
+                                        .set_data => |s| s.items.len,
+                                        else => 0,
+                                    };
+                                    self.push(JsValue.initNumber(@floatFromInt(len)));
+                                    continue;
+                                }
+                            }
+                        }
                         if (obj.obj_type == .typed_array or obj.obj_type == .array_buffer) {
                             if (self.pool.get(name_id)) |name_str| {
                                 if (std.mem.eql(u8, name_str, "length") or std.mem.eql(u8, name_str, "byteLength")) {
-                                    const len = switch (obj.data) {
-                                        .bytes_data => |b| b.len,
-                                        else => 0,
-                                    };
+                                    const len = objectBytesLen(obj);
                                     self.push(JsValue.initNumber(@floatFromInt(len)));
                                     continue;
                                 }
@@ -809,6 +897,22 @@ pub const VM = struct {
                     self.push(val); // set_prop is expression, leaves value
                 },
 
+                .delete_prop => {
+                    const ci = self.readU16(frame);
+                    const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
+                    const obj_val = self.pop();
+                    var ok = true;
+                    if (obj_val.isObject()) {
+                        const obj = obj_val.asJsObject();
+                        if (obj.obj_type == .proxy) {
+                            ok = try self.proxyDeleteProperty(obj, name_id);
+                        } else {
+                            _ = obj.properties.orderedRemove(name_id);
+                        }
+                    }
+                    self.push(JsValue.initBool(ok));
+                },
+
                 .get_elem => {
                     const key = self.pop();
                     const obj_val = self.pop();
@@ -842,17 +946,18 @@ pub const VM = struct {
                         }
                         if (obj.obj_type == .typed_array) {
                             if (self.toArrayIndex(key)) |i| {
-                                const bytes = obj.data.bytes_data;
-                                if (i < bytes.len) {
-                                    self.push(JsValue.initNumber(@floatFromInt(bytes[i])));
-                                    continue;
+                                if (objectBytes(obj)) |bytes| {
+                                    if (i < bytes.len) {
+                                        self.push(JsValue.initNumber(@floatFromInt(bytes[i])));
+                                        continue;
+                                    }
                                 }
                             }
                             // .length for typed arrays
                             if (key.isString()) {
                                 const name = self.pool.get(key.asStringId()) orelse "";
                                 if (std.mem.eql(u8, name, "length") or std.mem.eql(u8, name, "byteLength")) {
-                                    self.push(JsValue.initNumber(@floatFromInt(obj.data.bytes_data.len)));
+                                    self.push(JsValue.initNumber(@floatFromInt(objectBytesLen(obj))));
                                     continue;
                                 }
                             }
@@ -901,9 +1006,10 @@ pub const VM = struct {
                             }
                         } else if (obj.obj_type == .typed_array) {
                             if (self.toArrayIndex(key)) |i| {
-                                const bytes = obj.data.bytes_data;
-                                if (i < bytes.len) {
-                                    bytes[i] = @intFromFloat(@mod(@trunc(val.toNumber()), 256.0));
+                                if (objectBytes(obj)) |bytes| {
+                                    if (i < bytes.len) {
+                                        bytes[i] = @intFromFloat(@mod(@trunc(val.toNumber()), 256.0));
+                                    }
                                 }
                             }
                         } else if (key.isString()) {
@@ -911,6 +1017,29 @@ pub const VM = struct {
                         }
                     }
                     self.push(val);
+                },
+
+                .delete_elem => {
+                    const key = self.pop();
+                    const obj_val = self.pop();
+                    var ok = true;
+                    if (obj_val.isObject()) {
+                        const obj = obj_val.asJsObject();
+                        if (obj.obj_type == .proxy) {
+                            const key_sid = if (key.isString()) key.asStringId() else try self.keyToStringId(key);
+                            ok = try self.proxyDeleteProperty(obj, key_sid);
+                        } else if (key.isString()) {
+                            _ = obj.properties.orderedRemove(key.asStringId());
+                        } else if (self.toArrayIndex(key)) |i| {
+                            if (obj.obj_type == .array and i < obj.data.array.items.len) {
+                                obj.data.array.items[i] = JsValue.undefined_val;
+                            }
+                        } else {
+                            const sid = try self.keyToStringId(key);
+                            _ = obj.properties.orderedRemove(sid);
+                        }
+                    }
+                    self.push(JsValue.initBool(ok));
                 },
 
                 // ── Arrays ──────────────────────────────────────────
@@ -969,6 +1098,25 @@ pub const VM = struct {
                                         i = end;
                                     }
                                 }
+                            }
+                        }
+                    }
+                },
+
+                .spread_into_object => {
+                    const source_val = self.pop();
+                    const target_val = self.peek();
+                    if (target_val.isObject() and source_val.isObject()) {
+                        const target = target_val.asJsObject();
+                        const source = source_val.asJsObject();
+                        for (source.properties.keys(), source.properties.values()) |k, v| {
+                            try target.setProperty(self.allocator, k, v);
+                        }
+                        if (source.obj_type == .array) {
+                            for (source.data.array.items, 0..) |v, i| {
+                                var buf: [32]u8 = undefined;
+                                const key = try self.pool.intern(std.fmt.bufPrint(&buf, "{d}", .{i}) catch continue);
+                                try target.setProperty(self.allocator, key, v);
                             }
                         }
                     }
@@ -1105,6 +1253,7 @@ pub const VM = struct {
                         .this_val = this_val,
                         .has_this_on_stack = true,
                         .async_promise = async_p,
+                        .arg_count = arg_count,
                     };
                     self.frame_count += 1;
                 },
@@ -1185,6 +1334,7 @@ pub const VM = struct {
                         .upvalues = uv_array,
                         .this_val = this_val,
                         .is_construct = true,
+                        .arg_count = arg_count,
                     };
                     self.frame_count += 1;
                 },
@@ -1502,6 +1652,21 @@ pub const VM = struct {
                     _ = self.pop();
                     self.push(JsValue.undefined_val);
                 },
+                .collect_rest => {
+                    const start = self.readU16(frame);
+                    const arr = try self.createArray();
+                    const actual = frame.arg_count;
+                    if (start < actual) {
+                        var i: u16 = start;
+                        while (i < actual) : (i += 1) {
+                            const slot = frame.base_sp + i;
+                            if (slot < self.sp) {
+                                try arr.data.array.append(self.allocator, self.stack[slot]);
+                            }
+                        }
+                    }
+                    self.push(JsValue.initObject(arr));
+                },
                 // ── Modules ──────────────────────────────────────────
                 .import_binding => {
                     const module_ci = self.readU16(frame);
@@ -1646,6 +1811,18 @@ pub const VM = struct {
             if (@as(f64, @floatFromInt(i)) == n and i >= 0) return @intCast(i);
         }
         return null;
+    }
+
+    fn objectBytes(obj: *JsObject) ?[]u8 {
+        return switch (obj.data) {
+            .bytes_data => |b| b,
+            .bytes_view => |b| b,
+            else => null,
+        };
+    }
+
+    fn objectBytesLen(obj: *JsObject) usize {
+        return if (objectBytes(obj)) |b| b.len else 0;
     }
 
     // ── String helpers ────────────────────────────────────────────────
@@ -1826,7 +2003,7 @@ pub const VM = struct {
 
         // ── String constructor ──
         {
-            const str_ctor = try self.createObj(.{});
+            const str_ctor = try self.createNativeFn(&nativeStringConstructor);
             try self.registerNativeMethod(str_ctor, "fromCharCode", &nativeStringFromCharCode);
             try self.registerNativeMethod(str_ctor, "fromCodePoint", &nativeStringFromCodePoint);
             try str_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(sp));
@@ -1844,7 +2021,7 @@ pub const VM = struct {
 
         // ── Number constructor ──
         {
-            const num_ctor = try self.createObj(.{});
+            const num_ctor = try self.createNativeFn(&nativeNumberConstructor);
             try self.registerNativeMethod(num_ctor, "isNaN", &nativeNumberIsNaN);
             try self.registerNativeMethod(num_ctor, "isFinite", &nativeNumberIsFinite);
             try self.registerNativeMethod(num_ctor, "isInteger", &nativeNumberIsInteger);
@@ -1901,6 +2078,7 @@ pub const VM = struct {
         try self.registerNativeMethod(obj_constructor, "is", &nativeObjectIs);
         try self.registerNativeMethod(obj_constructor, "hasOwn", &nativeObjectHasOwn);
         try self.registerNativeMethod(obj_constructor, "fromEntries", &nativeObjectFromEntries);
+        try obj_constructor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(op));
         const obj_id = try self.pool.intern("Object");
         try self.globals.put(self.allocator, obj_id, JsValue.initObject(obj_constructor));
 
@@ -2831,6 +3009,7 @@ pub const VM = struct {
             .base_sp = base,
             .upvalues = uv_array,
             .this_val = this_val,
+            .arg_count = @intCast(@min(args.len, std.math.maxInt(u16))),
         };
         self.frame_count += 1;
 
@@ -4043,6 +4222,13 @@ pub const VM = struct {
         });
     }
 
+    fn nativeStringConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        if (args.len == 0) return JsValue.initString(try vm.pool.intern(""));
+        var buf: [64]u8 = undefined;
+        return JsValue.initString(try vm.pool.intern(formatValue(vm.pool, args[0], &buf)));
+    }
+
     // ── Function.prototype ─────────────────────────────────────────
 
     fn nativeFunctionCall(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -4084,9 +4270,8 @@ pub const VM = struct {
 
     fn nativeBoundCall(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
-        // Find bound wrapper on stack (pushed by callJsFunction before native call)
-        const wrapper = vm.stack[vm.sp - 1].asJsObject();
         const fn_id = try vm.pool.intern("__fn");
+        const wrapper = findNativeFunctionWithProperty(vm, fn_id) orelse return JsValue.undefined_val;
         const orig_fn = wrapper.properties.get(fn_id) orelse return JsValue.undefined_val;
         const this_id = try vm.pool.intern("__this");
         const bound_this = wrapper.properties.get(this_id) orelse JsValue.undefined_val;
@@ -4108,6 +4293,21 @@ pub const VM = struct {
             }
         }
         return try vm.callJsFunction(orig_fn, bound_this, args);
+    }
+
+    fn findNativeFunctionWithProperty(vm: *VM, prop_id: StringId) ?*JsObject {
+        var i = vm.sp;
+        while (i > 0) {
+            i -= 1;
+            const val = vm.stack[i];
+            if (val.isObject()) {
+                const obj = val.asJsObject();
+                if (obj.obj_type == .native_function and obj.properties.get(prop_id) != null) {
+                    return obj;
+                }
+            }
+        }
+        return null;
     }
 
     fn nativeFunctionToString(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
@@ -4167,9 +4367,18 @@ pub const VM = struct {
             const c: u32 = b64Decode(input[i + 2]);
             const d: u32 = b64Decode(input[i + 3]);
             const triple = (a << 18) | (b << 12) | (c << 6) | d;
-            if (oi < buf.len) { buf[oi] = @intCast((triple >> 16) & 0xFF); oi += 1; }
-            if (input[i + 2] != '=' and oi < buf.len) { buf[oi] = @intCast((triple >> 8) & 0xFF); oi += 1; }
-            if (input[i + 3] != '=' and oi < buf.len) { buf[oi] = @intCast(triple & 0xFF); oi += 1; }
+            if (oi < buf.len) {
+                buf[oi] = @intCast((triple >> 16) & 0xFF);
+                oi += 1;
+            }
+            if (input[i + 2] != '=' and oi < buf.len) {
+                buf[oi] = @intCast((triple >> 8) & 0xFF);
+                oi += 1;
+            }
+            if (input[i + 3] != '=' and oi < buf.len) {
+                buf[oi] = @intCast(triple & 0xFF);
+                oi += 1;
+            }
             i += 4;
         }
         return JsValue.initString(try vm.pool.intern(buf[0..oi]));
@@ -4287,13 +4496,13 @@ pub const VM = struct {
             if (src.obj_type == .array_buffer) {
                 // Uint8Array(arrayBuffer) — share buffer
                 const obj = try vm.createObj(.{ .obj_type = .typed_array });
-                obj.data = .{ .bytes_data = src.data.bytes_data };
+                obj.data = .{ .bytes_view = objectBytes(src) orelse &.{} };
                 if (vm.typed_array_proto) |tap| obj.prototype = tap;
                 return JsValue.initObject(obj);
             }
             if (src.obj_type == .typed_array) {
                 // Uint8Array(otherTypedArray) — copy
-                const src_bytes = src.data.bytes_data;
+                const src_bytes = objectBytes(src) orelse &.{};
                 const buf = try vm.allocator.alloc(u8, src_bytes.len);
                 @memcpy(buf, src_bytes);
                 const obj = try vm.createObj(.{ .obj_type = .typed_array });
@@ -4330,7 +4539,7 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         const obj = this.asJsObject();
         if (obj.obj_type != .typed_array) return JsValue.undefined_val;
-        const bytes = obj.data.bytes_data;
+        const bytes = objectBytes(obj) orelse return JsValue.undefined_val;
         const start: usize = if (args.len > 0) clampToUsize(args[0]) else 0;
         const end: usize = if (args.len > 1) clampToUsize(args[1]) else bytes.len;
         const s = @min(start, bytes.len);
@@ -4355,9 +4564,9 @@ pub const VM = struct {
         if (obj.obj_type != .typed_array) return JsValue.undefined_val;
         const src = args[0].asJsObject();
         const offset: usize = if (args.len > 1) clampToUsize(args[1]) else 0;
-        const dst = obj.data.bytes_data;
+        const dst = objectBytes(obj) orelse return JsValue.undefined_val;
         if (src.obj_type == .typed_array) {
-            const src_bytes = src.data.bytes_data;
+            const src_bytes = objectBytes(src) orelse return JsValue.undefined_val;
             const count = @min(src_bytes.len, dst.len -| offset);
             @memcpy(dst[offset..][0..count], src_bytes[0..count]);
         } else if (src.obj_type == .array) {
@@ -4764,8 +4973,7 @@ pub const VM = struct {
                     var try_n = min_rep;
                     while (try_n <= count) : (try_n += 1) {
                         if (group_id) |gid| if (gid < 16) {
-                            if (try_n > 0) caps[gid] = .{ .start = positions[try_n - 1], .end = positions[try_n] }
-                            else caps[gid] = null;
+                            if (try_n > 0) caps[gid] = .{ .start = positions[try_n - 1], .end = positions[try_n] } else caps[gid] = null;
                         };
                         if (regexSeqAt(pat, quant_end, str, positions[try_n], ic, caps, gc)) |end| return end;
                     }
@@ -4787,8 +4995,7 @@ pub const VM = struct {
                     var try_n = count;
                     while (try_n >= min_rep) {
                         if (group_id) |gid| if (gid < 16) {
-                            if (try_n > 0) caps[gid] = .{ .start = positions[try_n - 1], .end = positions[try_n] }
-                            else caps[gid] = null;
+                            if (try_n > 0) caps[gid] = .{ .start = positions[try_n - 1], .end = positions[try_n] } else caps[gid] = null;
                         };
                         if (regexSeqAt(pat, quant_end, str, positions[try_n], ic, caps, gc)) |end| return end;
                         if (try_n == min_rep) break;
@@ -4887,7 +5094,11 @@ pub const VM = struct {
             if (j < pat.len and pat[j] == '^') j += 1;
             if (j < pat.len and pat[j] == ']') j += 1;
             while (j < pat.len and pat[j] != ']') {
-                if (pat[j] == '\\' and j + 1 < pat.len) { j += 2; } else { j += 1; }
+                if (pat[j] == '\\' and j + 1 < pat.len) {
+                    j += 2;
+                } else {
+                    j += 1;
+                }
             }
             return if (j < pat.len) j - pi + 1 else pat.len - pi;
         }
@@ -4899,12 +5110,19 @@ pub const VM = struct {
         var depth: usize = 0;
         var i = start;
         while (i < pat.len) {
-            if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; continue; }
+            if (pat[i] == '\\' and i + 1 < pat.len) {
+                i += 2;
+                continue;
+            }
             if (pat[i] == '[') {
                 i += 1;
                 if (i < pat.len and pat[i] == ']') i += 1;
                 while (i < pat.len and pat[i] != ']') {
-                    if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; } else { i += 1; }
+                    if (pat[i] == '\\' and i + 1 < pat.len) {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
                 }
                 if (i < pat.len) i += 1;
                 continue;
@@ -4924,18 +5142,27 @@ pub const VM = struct {
         var depth: usize = 0;
         var i: usize = 0;
         while (i < pat.len) {
-            if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; continue; }
+            if (pat[i] == '\\' and i + 1 < pat.len) {
+                i += 2;
+                continue;
+            }
             if (pat[i] == '[') {
                 i += 1;
                 if (i < pat.len and pat[i] == ']') i += 1;
                 while (i < pat.len and pat[i] != ']') {
-                    if (pat[i] == '\\' and i + 1 < pat.len) { i += 2; } else { i += 1; }
+                    if (pat[i] == '\\' and i + 1 < pat.len) {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
                 }
                 if (i < pat.len) i += 1;
                 continue;
             }
             if (pat[i] == '(') depth += 1;
-            if (pat[i] == ')') { if (depth > 0) depth -= 1; }
+            if (pat[i] == ')') {
+                if (depth > 0) depth -= 1;
+            }
             if (pat[i] == '|' and depth == 0) return i;
             i += 1;
         }
@@ -5155,7 +5382,7 @@ pub const VM = struct {
 
     // ── Set methods ──────────────────────────────────────────────
 
-    fn nativeSetConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    fn nativeSetConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const set_obj = try vm.allocator.create(JsObject);
         set_obj.* = .{ .obj_type = .set, .data = .{ .set_data = .{} } };
@@ -5168,6 +5395,29 @@ pub const VM = struct {
         try vm.registerNativeMethod(set_obj, "keys", &nativeSetValues); // keys() === values() for Set
         try vm.registerNativeMethod(set_obj, "values", &nativeSetValues);
         try vm.registerNativeMethod(set_obj, "entries", &nativeSetEntries);
+        if (args.len > 0 and args[0].isObject()) {
+            const src = args[0].asJsObject();
+            if (src.obj_type == .array) {
+                for (src.data.array.items) |item| {
+                    if (setFindIndex(set_obj, item) == null) {
+                        try set_obj.data.set_data.append(vm.allocator, item);
+                    }
+                }
+            } else if (try vm.resolveIterator(args[0])) |iterator| {
+                while (true) {
+                    const next_fn = if (iterator.isObject()) iterator.asJsObject().getProperty(try vm.pool.intern("next")) else null;
+                    if (next_fn == null) break;
+                    const step = try vm.callJsFunction(next_fn.?, iterator, &.{});
+                    if (!step.isObject()) break;
+                    const done = step.asJsObject().getProperty(try vm.pool.intern("done")) orelse JsValue.initBool(false);
+                    if (done.isTruthy()) break;
+                    const value = step.asJsObject().getProperty(try vm.pool.intern("value")) orelse JsValue.undefined_val;
+                    if (setFindIndex(set_obj, value) == null) {
+                        try set_obj.data.set_data.append(vm.allocator, value);
+                    }
+                }
+            }
+        }
         return JsValue.initObject(set_obj);
     }
 
@@ -6701,11 +6951,20 @@ pub const VM = struct {
         var pos: usize = 10;
         if (pos < s.len and s[pos] == 'T') {
             pos += 1;
-            if (pos + 2 <= s.len) { hour = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null; pos += 2; }
+            if (pos + 2 <= s.len) {
+                hour = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null;
+                pos += 2;
+            }
             if (pos < s.len and s[pos] == ':') pos += 1;
-            if (pos + 2 <= s.len) { min = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null; pos += 2; }
+            if (pos + 2 <= s.len) {
+                min = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null;
+                pos += 2;
+            }
             if (pos < s.len and s[pos] == ':') pos += 1;
-            if (pos + 2 <= s.len) { sec = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null; pos += 2; }
+            if (pos + 2 <= s.len) {
+                sec = std.fmt.parseInt(u8, s[pos..][0..2], 10) catch return null;
+                pos += 2;
+            }
             if (pos < s.len and s[pos] == '.') {
                 pos += 1;
                 var frac: i64 = 0;
@@ -6720,7 +6979,9 @@ pub const VM = struct {
                 ms = frac;
             }
             if (pos < s.len) {
-                if (s[pos] == 'Z') { is_utc = true; } else if (s[pos] == '+' or s[pos] == '-') {
+                if (s[pos] == 'Z') {
+                    is_utc = true;
+                } else if (s[pos] == '+' or s[pos] == '-') {
                     const sign: i32 = if (s[pos] == '+') 1 else -1;
                     pos += 1;
                     if (pos + 2 <= s.len) {
@@ -6950,7 +7211,9 @@ pub const VM = struct {
         if (args.len > 1) tm.tm_min = @intFromFloat(args[1].toNumber());
         if (args.len > 2) tm.tm_sec = @intFromFloat(args[2].toNumber());
         var new_ms = tmToLocalMs(&tm, orig);
-        if (args.len > 3) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[3].toNumber())); }
+        if (args.len > 3) {
+            new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[3].toNumber()));
+        }
         setDateMs(this, new_ms);
         return JsValue.initNumber(@floatFromInt(new_ms));
     }
@@ -6961,7 +7224,9 @@ pub const VM = struct {
         tm.tm_min = @intFromFloat(args[0].toNumber());
         if (args.len > 1) tm.tm_sec = @intFromFloat(args[1].toNumber());
         var new_ms = tmToLocalMs(&tm, orig);
-        if (args.len > 2) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[2].toNumber())); }
+        if (args.len > 2) {
+            new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[2].toNumber()));
+        }
         setDateMs(this, new_ms);
         return JsValue.initNumber(@floatFromInt(new_ms));
     }
@@ -6971,7 +7236,9 @@ pub const VM = struct {
         var tm = msToLocalTm(orig);
         tm.tm_sec = @intFromFloat(args[0].toNumber());
         var new_ms = tmToLocalMs(&tm, orig);
-        if (args.len > 1) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[1].toNumber())); }
+        if (args.len > 1) {
+            new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[1].toNumber()));
+        }
         setDateMs(this, new_ms);
         return JsValue.initNumber(@floatFromInt(new_ms));
     }
@@ -7023,7 +7290,9 @@ pub const VM = struct {
         if (args.len > 1) tm.tm_min = @intFromFloat(args[1].toNumber());
         if (args.len > 2) tm.tm_sec = @intFromFloat(args[2].toNumber());
         var new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
-        if (args.len > 3) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[3].toNumber())); }
+        if (args.len > 3) {
+            new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[3].toNumber()));
+        }
         setDateMs(this, new_ms);
         return JsValue.initNumber(@floatFromInt(new_ms));
     }
@@ -7034,7 +7303,9 @@ pub const VM = struct {
         tm.tm_min = @intFromFloat(args[0].toNumber());
         if (args.len > 1) tm.tm_sec = @intFromFloat(args[1].toNumber());
         var new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
-        if (args.len > 2) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[2].toNumber())); }
+        if (args.len > 2) {
+            new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[2].toNumber()));
+        }
         setDateMs(this, new_ms);
         return JsValue.initNumber(@floatFromInt(new_ms));
     }
@@ -7044,7 +7315,9 @@ pub const VM = struct {
         var tm = msToUtcTm(orig);
         tm.tm_sec = @intFromFloat(args[0].toNumber());
         var new_ms = @as(i64, timegm(&tm)) * 1000 + @rem(orig, 1000);
-        if (args.len > 1) { new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[1].toNumber())); }
+        if (args.len > 1) {
+            new_ms = new_ms - @rem(new_ms, 1000) + @as(i64, @intFromFloat(args[1].toNumber()));
+        }
         setDateMs(this, new_ms);
         return JsValue.initNumber(@floatFromInt(new_ms));
     }
@@ -7101,10 +7374,10 @@ pub const VM = struct {
         const tz_str = fmtTzOffset(&tz_buf, tm.tm_gmtoff);
         var buf: [64]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{s} {s} {d:0>2} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT{s}", .{
-            day_names[wday], month_names[mon],
+            day_names[wday],                month_names[mon],
             @as(u32, @intCast(tm.tm_mday)), @as(i32, tm.tm_year) + 1900,
-            @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)),
-            tz_str,
+            @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)),
+            @as(u32, @intCast(tm.tm_sec)),  tz_str,
         }) catch return JsValue.undefined_val;
         return JsValue.initString(try vm.pool.intern(s));
     }
@@ -7144,9 +7417,9 @@ pub const VM = struct {
         const mon: usize = @intCast(tm.tm_mon);
         var buf: [40]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{s}, {d:0>2} {s} {d} {d:0>2}:{d:0>2}:{d:0>2} GMT", .{
-            day_names[wday], @as(u32, @intCast(tm.tm_mday)), month_names[mon],
-            @as(i32, tm.tm_year) + 1900,
-            @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)),
+            day_names[wday],               @as(u32, @intCast(tm.tm_mday)), month_names[mon],
+            @as(i32, tm.tm_year) + 1900,   @as(u32, @intCast(tm.tm_hour)), @as(u32, @intCast(tm.tm_min)),
+            @as(u32, @intCast(tm.tm_sec)),
         }) catch return JsValue.undefined_val;
         return JsValue.initString(try vm.pool.intern(s));
     }
@@ -7186,7 +7459,8 @@ pub const VM = struct {
         var buf: [32]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{d}/{d}/{d}, {d}:{d:0>2}:{d:0>2} {s}", .{
             @as(u32, @intCast(tm.tm_mon)) + 1, @as(u32, @intCast(tm.tm_mday)), @as(i32, tm.tm_year) + 1900,
-            h12, @as(u32, @intCast(tm.tm_min)), @as(u32, @intCast(tm.tm_sec)), ampm,
+            h12,                               @as(u32, @intCast(tm.tm_min)),  @as(u32, @intCast(tm.tm_sec)),
+            ampm,
         }) catch return JsValue.undefined_val;
         return JsValue.initString(try vm.pool.intern(s));
     }
@@ -7311,6 +7585,21 @@ pub const VM = struct {
 
     fn nativeNumberValueOf(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
         return JsValue.initNumber(this.toNumber());
+    }
+
+    fn nativeNumberConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.initNumber(0);
+        return JsValue.initNumber(try toNumberForConstructor(vmFromCtx(ctx), args[0]));
+    }
+
+    fn toNumberForConstructor(vm: *VM, val: JsValue) !f64 {
+        if (val.isString()) {
+            const raw = vm.pool.get(val.asStringId()) orelse "";
+            const s = std.mem.trim(u8, raw, " \t\n\r");
+            if (s.len == 0) return 0;
+            return std.fmt.parseFloat(f64, s) catch std.math.nan(f64);
+        }
+        return val.toNumber();
     }
 
     fn nativeNumberIsNaN(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {

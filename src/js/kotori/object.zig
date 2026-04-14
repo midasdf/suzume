@@ -92,6 +92,7 @@ pub const JsObject = struct {
         generator_data: GeneratorData,
         iterator_data: IteratorData,
         bytes_data: []u8,
+        bytes_view: []u8,
         proxy_data: ProxyData,
     };
 
@@ -113,7 +114,7 @@ pub const JsObject = struct {
                 if (g.init_args.len > 0) allocator.free(g.init_args);
             },
             .bytes_data => |b| if (b.len > 0) allocator.free(b),
-            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .proxy_data => {},
+            .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .bytes_view, .proxy_data => {},
         }
     }
 

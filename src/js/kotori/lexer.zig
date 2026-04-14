@@ -329,8 +329,7 @@ pub const Lexer = struct {
                     return self.makeToken(.optional_chain, start);
                 }
                 if (self.match('?')) {
-                    // ??= — no dedicated token, emit nullish for now
-                    if (self.match('=')) return self.makeToken(.nullish, start);
+                    if (self.match('=')) return self.makeToken(.question_question_eq, start);
                     return self.makeToken(.nullish, start);
                 }
                 return self.makeToken(.question, start);

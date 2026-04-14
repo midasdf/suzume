@@ -252,6 +252,7 @@ pub const ComputedStyle = struct {
     transform_scale_x: f32 = 1.0,
     transform_scale_y: f32 = 1.0,
     transform_rotate_deg: f32 = 0,
+    will_change_transform: bool = false,
 
     // Transitions
     transition_duration: f32 = 0,

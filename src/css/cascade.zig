@@ -1923,6 +1923,17 @@ fn applyDeclaration(
         .transform => {
             parseTransform(trimmed, &style.transform_translate_x, &style.transform_translate_y, &style.transform_scale_x, &style.transform_scale_y, &style.transform_rotate_deg, fs, vw, vh);
         },
+        .will_change => {
+            style.will_change_transform = false;
+            var iter = std.mem.splitScalar(u8, trimmed, ',');
+            while (iter.next()) |item| {
+                const feature = std.mem.trim(u8, item, " \t\r\n");
+                if (eqlIgnoreCase(feature, "transform") or eqlIgnoreCase(feature, "perspective") or eqlIgnoreCase(feature, "filter")) {
+                    style.will_change_transform = true;
+                    break;
+                }
+            }
+        },
         .counter_reset => style.counter_reset = arena.dupe(u8, trimmed) catch null,
         .counter_increment => style.counter_increment = arena.dupe(u8, trimmed) catch null,
         .transition_duration => {

@@ -660,7 +660,7 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
     // If parent has no top border AND no top padding AND doesn't create BFC,
     // the first child's top margin collapses with the parent's top margin.
     // The collapsed margin = max(parent_margin, child_margin).
-    const parent_blocks_collapse = box.border.top > 0 or box.padding.top > 0 or
+    const parent_blocks_collapse = box.parent == null or box.border.top > 0 or box.padding.top > 0 or
         createsBfc(box.style);
 
     // Track floats for basic float support

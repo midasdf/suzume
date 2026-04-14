@@ -1406,7 +1406,7 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
 
     // Shorthand margin/padding: resolve each value individually
     if (eqlIgnoreCase(prop, "margin") or eqlIgnoreCase(prop, "padding")) {
-        return resolveBoxShorthandForComputed(c, trimmed, elem_val);
+        return resolveBoxShorthandForComputed(c, trimmed, elem_val, eqlIgnoreCase(prop, "padding"));
     }
 
     // Only resolve length-type properties
@@ -1427,7 +1427,8 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
     if (cascade_mod.resolveValueToPx(trimmed, font_size, api.g_viewport_width, api.g_viewport_height, pct_base)) |px| {
         var buf: [128]u8 = undefined;
         // CSS Values 4 §10.11: NaN → 0, ±Infinity → clamped to allowable range
-        const clamped = if (std.math.isNan(px)) 0.0 else if (std.math.isInf(px)) @as(f32, 3.4028235e+38) else px;
+        var clamped = if (std.math.isNan(px)) 0.0 else if (std.math.isInf(px)) @as(f32, 3.4028235e+38) else px;
+        if (isPaddingLonghand(prop) and clamped < 0) clamped = 0;
         return fmtPx(c, clamped, &buf);
     }
 
@@ -2035,7 +2036,7 @@ pub fn getContainingBlockWidth(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
         var ancestor = box.parent;
         while (ancestor) |a| {
             // Non-static position or root element forms a containing block
-            if (a.style.position != .static_ or a.parent == null) {
+            if (a.style.position != .static_ or establishesContainingBlock(a) or a.parent == null) {
                 return a.content.width + a.padding.left + a.padding.right;
             }
             ancestor = a.parent;
@@ -2056,7 +2057,7 @@ pub fn getContainingBlockHeight(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
     if (box.style.position == .absolute or box.style.position == .fixed) {
         var ancestor = box.parent;
         while (ancestor) |a| {
-            if (a.style.position != .static_ or a.parent == null) {
+            if (a.style.position != .static_ or establishesContainingBlock(a) or a.parent == null) {
                 return a.content.height + a.padding.top + a.padding.bottom;
             }
             ancestor = a.parent;
@@ -2068,8 +2069,20 @@ pub fn getContainingBlockHeight(c: *qjs.JSContext, elem_val: qjs.JSValue) f32 {
     return api.g_viewport_height;
 }
 
+fn establishesContainingBlock(box: *const Box) bool {
+    return box.style.will_change_transform or
+        box.style.transform_translate_x != 0 or
+        box.style.transform_translate_y != 0 or
+        box.style.transform_scale_x != 1.0 or
+        box.style.transform_scale_y != 1.0 or
+        box.style.transform_rotate_deg != 0 or
+        box.style.filter_blur != 0 or
+        box.style.filter_grayscale != 0 or
+        box.style.filter_brightness != 1;
+}
+
 /// Resolve a margin/padding shorthand value (1-4 values) to computed px form.
-pub fn resolveBoxShorthandForComputed(c: *qjs.JSContext, val: []const u8, elem_val: qjs.JSValue) qjs.JSValue {
+pub fn resolveBoxShorthandForComputed(c: *qjs.JSContext, val: []const u8, elem_val: qjs.JSValue, clamp_non_negative: bool) qjs.JSValue {
     const font_size = getElementFontSizeFromStyle(c, elem_val);
     const cb_width = getContainingBlockWidth(c, elem_val);
 
@@ -2119,7 +2132,7 @@ pub fn resolveBoxShorthandForComputed(c: *qjs.JSContext, val: []const u8, elem_v
     var all_resolved = true;
     for (0..part_count) |i| {
         if (cascade_mod.resolveValueToPx(parts[i], font_size, api.g_viewport_width, api.g_viewport_height, cb_width)) |px| {
-            resolved[i] = px;
+            resolved[i] = if (clamp_non_negative and px < 0) 0 else px;
         } else {
             all_resolved = false;
             break;
@@ -2136,6 +2149,13 @@ pub fn resolveBoxShorthandForComputed(c: *qjs.JSContext, val: []const u8, elem_v
 
     var buf: [128]u8 = undefined;
     return fmtBoxShorthand(c, top, right, bottom, left_, &buf);
+}
+
+fn isPaddingLonghand(prop: []const u8) bool {
+    return eqlIgnoreCase(prop, "padding-top") or
+        eqlIgnoreCase(prop, "padding-right") or
+        eqlIgnoreCase(prop, "padding-bottom") or
+        eqlIgnoreCase(prop, "padding-left");
 }
 
 /// Canonicalize a margin-trim inline value for getComputedStyle (block before inline).
@@ -3123,12 +3143,7 @@ pub fn windowGetComputedStyle(
                         val = cssInitialValue(c, css_name);
                     }
                 } else if (t.len >= 4 and eqlIgnoreCase(t[0..4], "calc")) {
-                    // calc() values: use cascade computed style which resolves units
-                    if (style_opt) |style| {
-                        val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
-                    } else {
-                        val = resolveInlineForComputed(c, css_name, inline_val, args[0]);
-                    }
+                    val = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                 } else {
                     val = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                 }
@@ -3172,11 +3187,7 @@ pub fn windowGetComputedStyle(
                             val2 = cssInitialValue(c, css_name);
                         }
                     } else if (t2.len >= 4 and eqlIgnoreCase(t2[0..4], "calc")) {
-                        if (style_opt) |style| {
-                            val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
-                        } else {
-                            val2 = resolveInlineForComputed(c, css_name, inline_val, args[0]);
-                        }
+                        val2 = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                     } else {
                         val2 = resolveInlineForComputed(c, css_name, inline_val, args[0]);
                     }
@@ -3400,7 +3411,8 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .overflow_wrap,
         .text_overflow,
         .list_style_type,
-        .flex_direction => eqlIgnoreCase(trimmed, "row") or eqlIgnoreCase(trimmed, "row-reverse") or
+        .flex_direction,
+        => eqlIgnoreCase(trimmed, "row") or eqlIgnoreCase(trimmed, "row-reverse") or
             eqlIgnoreCase(trimmed, "column") or eqlIgnoreCase(trimmed, "column-reverse"),
         .flex_basis => isValidFlexBasis(trimmed),
         .gap,

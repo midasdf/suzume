@@ -68,8 +68,10 @@ pub const OpCode = enum(u8) {
     new_object, // operand: u16 property count
     get_prop, // operand: u16 constant index → StringId
     set_prop, // operand: u16 constant index → StringId
+    delete_prop, // operand: u16 constant index → StringId
     get_elem, // stack: [obj, key] → [value]
     set_elem, // stack: [obj, key, value] → [value]
+    delete_elem, // stack: [obj, key] → [bool]
 
     // Arrays
     new_array, // operand: u16 element count
@@ -115,6 +117,7 @@ pub const OpCode = enum(u8) {
 
     // Spread
     spread_into_array, // stack: [array, iterable] → [array]
+    spread_into_object, // stack: [object, source] → [object]
     call_spread, // stack: [func, args_array] → [result]
     call_method_spread, // stack: [this, func, args_array] → [result]
     construct_spread, // stack: [func, args_array] → [result]
@@ -126,6 +129,7 @@ pub const OpCode = enum(u8) {
     // Special
     typeof_,
     void_,
+    collect_rest, // operand: u16 start index, stack: [] → [array of caller args from start]
     halt,
 };
 

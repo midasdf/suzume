@@ -680,6 +680,14 @@ pub const Parser = struct {
         defer props.deinit(self.allocator);
 
         while (!self.check(.rbrace) and !self.check(.eof)) {
+            if (self.check(.ellipsis)) {
+                self.advance(); // consume ...
+                const operand = try self.parsePrecedence(.assignment);
+                const spread_node = self.ast.addNode(self.allocator, .{ .spread = operand }) catch return error.OutOfMemory;
+                props.append(self.allocator, spread_node) catch return error.OutOfMemory;
+                if (!self.match(.comma)) break;
+                continue;
+            }
             const prop = try self.parseProperty();
             props.append(self.allocator, prop) catch return error.OutOfMemory;
             if (!self.match(.comma)) break;
@@ -699,6 +707,7 @@ pub const Parser = struct {
             {
                 const is_getter = std.mem.eql(u8, text, "get");
                 self.advance(); // consume get/set
+                const computed_key = self.check(.lbracket);
                 const prop_key = try self.parsePropertyKey();
                 try self.expect(.lparen);
                 var params = std.ArrayListUnmanaged(NodeIndex){};
@@ -720,12 +729,14 @@ pub const Parser = struct {
                     .key = prop_key,
                     .value = func_node,
                     .kind = if (is_getter) .get else .set,
+                    .computed = computed_key,
                     .method = true,
                 } }) catch return error.OutOfMemory;
             }
         }
 
         // Check for method shorthand: identifier() { ... }
+        const computed_key = self.check(.lbracket);
         const key = try self.parsePropertyKey();
 
         // Method shorthand: key(...) { body }
@@ -750,6 +761,7 @@ pub const Parser = struct {
                 .key = key,
                 .value = func_node,
                 .kind = .init,
+                .computed = computed_key,
                 .method = true,
             } }) catch return error.OutOfMemory;
         }
@@ -761,6 +773,7 @@ pub const Parser = struct {
                 .key = key,
                 .value = value,
                 .kind = .init,
+                .computed = computed_key,
             } }) catch return error.OutOfMemory;
         }
 
@@ -769,6 +782,7 @@ pub const Parser = struct {
             .key = key,
             .value = key,
             .kind = .init,
+            .computed = computed_key,
             .shorthand = true,
         } }) catch return error.OutOfMemory;
     }
@@ -798,15 +812,48 @@ pub const Parser = struct {
 
     fn isKeyword(tt: TokenType) bool {
         return switch (tt) {
-            .kw_break, .kw_case, .kw_catch, .kw_class, .kw_const,
-            .kw_continue, .kw_debugger, .kw_default, .kw_delete,
-            .kw_do, .kw_else, .kw_export, .kw_extends, .kw_finally,
-            .kw_for, .kw_function, .kw_if, .kw_import, .kw_in,
-            .kw_instanceof, .kw_let, .kw_new, .kw_return, .kw_static,
-            .kw_super, .kw_switch, .kw_this, .kw_throw, .kw_try,
-            .kw_typeof, .kw_var, .kw_void, .kw_while, .kw_with,
-            .kw_yield, .kw_of, .kw_async, .kw_await,
-            .kw_true, .kw_false, .kw_null, .kw_undefined,
+            .kw_break,
+            .kw_case,
+            .kw_catch,
+            .kw_class,
+            .kw_const,
+            .kw_continue,
+            .kw_debugger,
+            .kw_default,
+            .kw_delete,
+            .kw_do,
+            .kw_else,
+            .kw_export,
+            .kw_extends,
+            .kw_finally,
+            .kw_for,
+            .kw_function,
+            .kw_if,
+            .kw_import,
+            .kw_in,
+            .kw_instanceof,
+            .kw_let,
+            .kw_new,
+            .kw_return,
+            .kw_static,
+            .kw_super,
+            .kw_switch,
+            .kw_this,
+            .kw_throw,
+            .kw_try,
+            .kw_typeof,
+            .kw_var,
+            .kw_void,
+            .kw_while,
+            .kw_with,
+            .kw_yield,
+            .kw_of,
+            .kw_async,
+            .kw_await,
+            .kw_true,
+            .kw_false,
+            .kw_null,
+            .kw_undefined,
             => true,
             else => false,
         };
@@ -1669,10 +1716,14 @@ pub const Parser = struct {
     fn infixPrecedence(tt: TokenType) Precedence {
         return switch (tt) {
             // Assignment operators
-            .assign, .eq,
-            .plus_assign, .plus_eq,
-            .minus_assign, .minus_eq,
-            .star_assign, .star_eq,
+            .assign,
+            .eq,
+            .plus_assign,
+            .plus_eq,
+            .minus_assign,
+            .minus_eq,
+            .star_assign,
+            .star_eq,
             .slash_eq,
             .percent_eq,
             .star_star_eq,
@@ -1682,8 +1733,10 @@ pub const Parser = struct {
             .lt_lt_eq,
             .gt_gt_eq,
             .gt_gt_gt_eq,
-            .amp_amp_eq, .amp_amp_assign,
+            .amp_amp_eq,
+            .amp_amp_assign,
             .pipe_pipe_eq,
+            .question_question_eq,
             => .assignment,
 
             .question => .ternary,
@@ -1710,10 +1763,14 @@ pub const Parser = struct {
 
     fn isRightAssociative(tt: TokenType) bool {
         return switch (tt) {
-            .assign, .eq,
-            .plus_assign, .plus_eq,
-            .minus_assign, .minus_eq,
-            .star_assign, .star_eq,
+            .assign,
+            .eq,
+            .plus_assign,
+            .plus_eq,
+            .minus_assign,
+            .minus_eq,
+            .star_assign,
+            .star_eq,
             .slash_eq,
             .percent_eq,
             .star_star_eq,
@@ -1723,8 +1780,10 @@ pub const Parser = struct {
             .lt_lt_eq,
             .gt_gt_eq,
             .gt_gt_gt_eq,
-            .amp_amp_eq, .amp_amp_assign,
+            .amp_amp_eq,
+            .amp_amp_assign,
             .pipe_pipe_eq,
+            .question_question_eq,
             .star_star,
             => true,
             else => false,
@@ -1733,10 +1792,14 @@ pub const Parser = struct {
 
     fn isAssignmentOp(tt: TokenType) bool {
         return switch (tt) {
-            .assign, .eq,
-            .plus_assign, .plus_eq,
-            .minus_assign, .minus_eq,
-            .star_assign, .star_eq,
+            .assign,
+            .eq,
+            .plus_assign,
+            .plus_eq,
+            .minus_assign,
+            .minus_eq,
+            .star_assign,
+            .star_eq,
             .slash_eq,
             .percent_eq,
             .star_star_eq,
@@ -1746,8 +1809,10 @@ pub const Parser = struct {
             .lt_lt_eq,
             .gt_gt_eq,
             .gt_gt_gt_eq,
-            .amp_amp_eq, .amp_amp_assign,
+            .amp_amp_eq,
+            .amp_amp_assign,
             .pipe_pipe_eq,
+            .question_question_eq,
             => true,
             else => false,
         };
@@ -1939,6 +2004,7 @@ pub const Parser = struct {
             .gt_gt_gt_eq => .ushr_assign,
             .amp_amp_eq, .amp_amp_assign => .logical_and_assign,
             .pipe_pipe_eq => .logical_or_assign,
+            .question_question_eq => .nullish_assign,
             .comma => .comma,
             else => .add, // fallback, should not happen
         };

@@ -122,7 +122,7 @@ pub const Compiler = struct {
         self.functions.deinit(self.allocator);
     }
 
-    const CompileError = error{OutOfMemory, Overflow, ParseError};
+    const CompileError = error{ OutOfMemory, Overflow, ParseError };
 
     // ── Scope management ─────────────────────────────────────────────
 
@@ -349,8 +349,12 @@ pub const Compiler = struct {
             },
 
             .unary => |u| {
-                try self.compileNode(u.operand);
-                try self.emitOp(unaryOpToOpCode(u.op));
+                if (u.op == .delete_) {
+                    try self.compileDelete(u.operand);
+                } else {
+                    try self.compileNode(u.operand);
+                    try self.emitOp(unaryOpToOpCode(u.op));
+                }
             },
 
             .conditional => |c| {
@@ -824,6 +828,9 @@ pub const Compiler = struct {
             .identifier => |name_id| {
                 if (op == .assign) {
                     try self.compileNode(rhs);
+                } else if (op == .logical_and_assign or op == .logical_or_assign or op == .nullish_assign) {
+                    try self.compileLogicalAssignment(name_id, rhs, op);
+                    return;
                 } else {
                     // Compound assignment: load current, compute, store
                     try self.compileIdentifierLoad(name_id);
@@ -851,6 +858,42 @@ pub const Compiler = struct {
             else => {
                 // Unsupported LHS — just evaluate RHS
                 try self.compileNode(rhs);
+            },
+        }
+    }
+
+    fn compileLogicalAssignment(self: *Compiler, name_id: StringId, rhs: NodeIndex, op: BinaryOp) CompileError!void {
+        try self.compileIdentifierLoad(name_id);
+        try self.emitOp(.dup);
+        const skip = switch (op) {
+            .logical_and_assign => try self.current.bc.emitJump(self.allocator, .jump_if_false),
+            .logical_or_assign => try self.current.bc.emitJump(self.allocator, .jump_if_true),
+            .nullish_assign => try self.current.bc.emitJump(self.allocator, .jump_if_not_nullish),
+            else => unreachable,
+        };
+        try self.emitOp(.pop);
+        try self.compileNode(rhs);
+        try self.emitOp(.dup);
+        try self.compileIdentifierStore(name_id);
+        self.current.bc.patchJump(skip);
+    }
+
+    fn compileDelete(self: *Compiler, operand: NodeIndex) CompileError!void {
+        switch (self.parser.ast.getNode(operand)) {
+            .member => |m| {
+                try self.compileNode(m.object);
+                const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(m.property)));
+                try self.emitOpU16(.delete_prop, ci);
+            },
+            .computed_member => |m| {
+                try self.compileNode(m.object);
+                try self.compileNode(m.property);
+                try self.emitOp(.delete_elem);
+            },
+            else => {
+                try self.compileNode(operand);
+                try self.emitOp(.pop);
+                try self.emitConstant(JsValue.initBool(true));
             },
         }
     }
@@ -954,9 +997,7 @@ pub const Compiler = struct {
                     }
                 },
                 .rest_element => {
-                    // Rest params: for now, initialize as empty array
-                    // Full implementation collects remaining args (Task #2)
-                    try self.emitOpU16(.new_array, 0);
+                    try self.emitOpU16(.collect_rest, @intCast(i));
                     try self.emitOpU16(.store_local, @intCast(i));
                 },
                 .array_pattern, .array_literal => |list| {
@@ -1205,13 +1246,22 @@ pub const Compiler = struct {
             const p = self.parser.ast.getNode(p_idx);
             switch (p) {
                 .property => |prop| {
-                    // Get key name
-                    const key_node = self.parser.ast.getNode(prop.key);
-                    const key_id: StringId = switch (key_node) {
-                        .identifier => |id| id,
-                        .string_literal => |id| id,
-                        else => 0,
-                    };
+                    if (prop.computed) {
+                        switch (prop.kind) {
+                            .init => {
+                                try self.emitOp(.dup);
+                                try self.compileNode(prop.key);
+                                try self.compileNode(prop.value);
+                                try self.emitOp(.set_elem);
+                                try self.emitOp(.pop);
+                            },
+                            .get, .set => {
+                                // Computed accessors need descriptor support; keep object shape stable.
+                            },
+                        }
+                        continue;
+                    }
+                    const key_id = try self.literalPropertyKeyId(prop.key);
                     const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_id)));
                     switch (prop.kind) {
                         .init => {
@@ -1234,9 +1284,32 @@ pub const Compiler = struct {
                         },
                     }
                 },
+                .spread => |inner| {
+                    try self.emitOp(.dup);
+                    try self.compileNode(inner);
+                    try self.emitOp(.spread_into_object);
+                    try self.emitOp(.pop);
+                },
                 else => {},
             }
         }
+    }
+
+    fn literalPropertyKeyId(self: *Compiler, key_idx: NodeIndex) CompileError!StringId {
+        const key_node = self.parser.ast.getNode(key_idx);
+        return switch (key_node) {
+            .identifier => |id| id,
+            .string_literal => |id| id,
+            .number_literal => |n| blk: {
+                var buf: [64]u8 = undefined;
+                const s = if (n == @trunc(n) and @abs(n) < 1e15)
+                    std.fmt.bufPrint(&buf, "{d}", .{@as(i64, @intFromFloat(n))}) catch return error.OutOfMemory
+                else
+                    std.fmt.bufPrint(&buf, "{d}", .{n}) catch return error.OutOfMemory;
+                break :blk self.parser.pool.intern(s) catch return error.OutOfMemory;
+            },
+            else => self.parser.pool.intern("") catch return error.OutOfMemory,
+        };
     }
 
     fn compileClassDecl(self: *Compiler, cls: ast_mod.Class) CompileError!void {

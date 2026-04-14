@@ -72,6 +72,7 @@ pub const TokenType = enum(u8) {
     comma,
     question,
     question_question,
+    question_question_eq,
     question_dot,
     colon,
     tilde,
