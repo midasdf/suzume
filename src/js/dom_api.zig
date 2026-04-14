@@ -1673,6 +1673,88 @@ fn styleSetProperty(
         return quickjs.JS_UNDEFINED();
     }
 
+    // Flex shorthand expansion: expand to longhands in inline style
+    if (dom_style.eqlIgnoreCase(prop, "flex")) {
+        var buf: [4096]u8 = undefined;
+        const tv = std.mem.trim(u8, effective_val, " \t\r\n");
+        // Determine longhand values
+        var grow_v: []const u8 = "0";
+        var shrink_v: []const u8 = "1";
+        var basis_v: []const u8 = "auto";
+        if (dom_style.eqlIgnoreCase(tv, "none")) {
+            grow_v = "0";
+            shrink_v = "0";
+            basis_v = "auto";
+        } else if (dom_style.eqlIgnoreCase(tv, "auto")) {
+            grow_v = "1";
+            shrink_v = "1";
+            basis_v = "auto";
+        } else {
+            // Use expandFlex-style parsing via CSS properties module
+            const css_props = @import("../css/properties.zig");
+            const arena = std.heap.page_allocator;
+            if (css_props.expandShorthand("flex", tv, arena)) |decls| {
+                for (decls) |d| {
+                    if (std.mem.eql(u8, d.property_name, "flex-grow")) grow_v = d.value_raw;
+                    if (std.mem.eql(u8, d.property_name, "flex-shrink")) shrink_v = d.value_raw;
+                    if (std.mem.eql(u8, d.property_name, "flex-basis")) basis_v = d.value_raw;
+                }
+            }
+        }
+        // Write longhands to inline style (removing shorthand)
+        var style_result = current_style;
+        if (dom_style.setStyleProperty(style_result, "flex", "", &buf)) |s| style_result = s;
+        var buf2: [4096]u8 = undefined;
+        if (dom_style.setStyleProperty(style_result, "flex-grow", grow_v, &buf2)) |s| {
+            @memcpy(buf[0..s.len], s);
+            style_result = buf[0..s.len];
+        }
+        var buf3: [4096]u8 = undefined;
+        if (dom_style.setStyleProperty(style_result, "flex-shrink", shrink_v, &buf3)) |s| {
+            @memcpy(buf[0..s.len], s);
+            style_result = buf[0..s.len];
+        }
+        var buf4: [4096]u8 = undefined;
+        if (dom_style.setStyleProperty(style_result, "flex-basis", basis_v, &buf4)) |s| {
+            @memcpy(buf[0..s.len], s);
+            style_result = buf[0..s.len];
+        }
+        _ = lxb_dom_element_set_attribute(elem, "style", 5, style_result.ptr, style_result.len);
+        setDomDirtyIfConnected(elem);
+        return quickjs.JS_UNDEFINED();
+    }
+
+    // Flex-flow shorthand expansion
+    if (dom_style.eqlIgnoreCase(prop, "flex-flow")) {
+        var buf: [4096]u8 = undefined;
+        const tv = std.mem.trim(u8, effective_val, " \t\r\n");
+        const css_props = @import("../css/properties.zig");
+        const arena = std.heap.page_allocator;
+        var dir_v: []const u8 = "row";
+        var wrap_v: []const u8 = "nowrap";
+        if (css_props.expandShorthand("flex-flow", tv, arena)) |decls| {
+            for (decls) |d| {
+                if (std.mem.eql(u8, d.property_name, "flex-direction")) dir_v = d.value_raw;
+                if (std.mem.eql(u8, d.property_name, "flex-wrap")) wrap_v = d.value_raw;
+            }
+        }
+        var style_result = current_style;
+        if (dom_style.setStyleProperty(style_result, "flex-flow", "", &buf)) |s| style_result = s;
+        var buf2: [4096]u8 = undefined;
+        if (dom_style.setStyleProperty(style_result, "flex-direction", dir_v, &buf2)) |s| {
+            @memcpy(buf[0..s.len], s);
+            style_result = buf[0..s.len];
+        }
+        var buf3: [4096]u8 = undefined;
+        if (dom_style.setStyleProperty(style_result, "flex-wrap", wrap_v, &buf3)) |s| {
+            @memcpy(buf[0..s.len], s);
+            style_result = buf[0..s.len];
+        }
+        _ = lxb_dom_element_set_attribute(elem, "style", 5, style_result.ptr, style_result.len);
+        setDomDirtyIfConnected(elem);
+        return quickjs.JS_UNDEFINED();
+    }
+
     var buf: [4096]u8 = undefined;
     if (dom_style.setStyleProperty(current_style, prop, effective_val, &buf)) |new_style| {
         _ = lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
@@ -1704,6 +1786,40 @@ fn styleGetPropertyValue(
 
     const style = style_ptr.?[0..style_len];
     const prop = prop_s.ptr[0..prop_s.len];
+
+    // Reconstruct flex shorthand from longhands
+    if (dom_style.eqlIgnoreCase(prop, "flex")) {
+        const grow = dom_style.getStyleProperty(style, "flex-grow");
+        const shrink = dom_style.getStyleProperty(style, "flex-shrink");
+        const basis = dom_style.getStyleProperty(style, "flex-basis");
+        if (grow != null or shrink != null or basis != null) {
+            const g = std.mem.trim(u8, grow orelse "0", " \t");
+            const s = std.mem.trim(u8, shrink orelse "1", " \t");
+            const b = std.mem.trim(u8, basis orelse "auto", " \t");
+            var fbuf: [256]u8 = undefined;
+            const result = std.fmt.bufPrint(&fbuf, "{s} {s} {s}", .{ g, s, b }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        }
+    }
+    if (dom_style.eqlIgnoreCase(prop, "flex-flow")) {
+        const dir = dom_style.getStyleProperty(style, "flex-direction");
+        const wrap = dom_style.getStyleProperty(style, "flex-wrap");
+        if (dir != null or wrap != null) {
+            const d = std.mem.trim(u8, dir orelse "row", " \t");
+            const w = std.mem.trim(u8, wrap orelse "nowrap", " \t");
+            // CSS serialization: omit defaults. If both default, return ""
+            // If only wrap is default (nowrap), just return direction
+            if (dom_style.eqlIgnoreCase(w, "nowrap")) {
+                return qjs.JS_NewStringLen(c, d.ptr, d.len);
+            }
+            if (dom_style.eqlIgnoreCase(d, "row")) {
+                return qjs.JS_NewStringLen(c, w.ptr, w.len);
+            }
+            var fbuf: [128]u8 = undefined;
+            const result = std.fmt.bufPrint(&fbuf, "{s} {s}", .{ d, w }) catch return qjs.JS_NewStringLen(c, "", 0);
+            return qjs.JS_NewStringLen(c, result.ptr, result.len);
+        }
+    }
 
     // Direct lookup
     if (dom_style.getStyleProperty(style, prop)) |val| {

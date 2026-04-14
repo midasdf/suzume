@@ -2116,10 +2116,23 @@ fn expandFlex(value: []const u8, allocator: std.mem.Allocator) ?[]ast.Declaratio
             decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = "0%", .important = false };
         }
     } else {
-        // flex: grow shrink basis
-        decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
-        decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
-        decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[2], .important = false };
+        // flex: 3 values — determine which is basis (has units/keyword)
+        if (isFlexBasisValue(parts[0])) {
+            // flex: <basis> <grow> <shrink>
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[1], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[2], .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[0], .important = false };
+        } else if (isFlexBasisValue(parts[2])) {
+            // flex: <grow> <shrink> <basis>
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[2], .important = false };
+        } else {
+            // All numbers — treat as grow shrink basis(=0%)
+            decls[0] = .{ .property = .flex_grow, .property_name = "flex-grow", .value_raw = parts[0], .important = false };
+            decls[1] = .{ .property = .flex_shrink, .property_name = "flex-shrink", .value_raw = parts[1], .important = false };
+            decls[2] = .{ .property = .flex_basis, .property_name = "flex-basis", .value_raw = parts[2], .important = false };
+        }
     }
     return decls;
 }
