@@ -498,6 +498,19 @@ pub fn build(b: *std.Build) void {
     test_url_host_step.dependOn(&run_url_host_tests.step);
     test_step.dependOn(&run_url_host_tests.step);
 
+    const url_parser_mod = b.createModule(.{
+        .root_source_file = b.path("src/url/parser.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    url_parser_mod.addImport("host", url_host_mod);
+    url_parser_mod.addImport("percent_encode", url_pe_mod);
+    const url_parser_tests = b.addTest(.{ .root_module = url_parser_mod });
+    const run_url_parser_tests = b.addRunArtifact(url_parser_tests);
+    const test_url_parser_step = b.step("test-url-parser", "Run URL parser tests");
+    test_url_parser_step.dependOn(&run_url_parser_tests.step);
+    test_step.dependOn(&run_url_parser_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
