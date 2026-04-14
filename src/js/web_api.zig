@@ -55,12 +55,16 @@ fn jsSuzumeSecureRandom(
 // JS calls __suzume_ls_save(jsonStr) on every mutation.
 
 fn localStoragePath(buf: []u8) ![]const u8 {
-    // Prefer XDG_DATA_HOME; fall back to $HOME/.local/share
-    const base = std.posix.getenv("XDG_DATA_HOME") orelse blk: {
-        const home = std.posix.getenv("HOME") orelse return error.NoHome;
-        const joined = try std.fmt.bufPrint(buf, "{s}/.local/share", .{home});
-        break :blk joined;
-    };
+    // Prefer XDG_DATA_HOME; fall back to $HOME/.local/share.
+    // When XDG_DATA_HOME is unset we must build the base path in a *separate*
+    // buffer before writing the final path into `buf`, otherwise the second
+    // bufPrint reads and overwrites the same memory (aliasing → corrupted path).
+    if (std.posix.getenv("XDG_DATA_HOME")) |xdg| {
+        return try std.fmt.bufPrint(buf, "{s}/suzume/localStorage.json", .{xdg});
+    }
+    const home = std.posix.getenv("HOME") orelse return error.NoHome;
+    var base_buf: [512]u8 = undefined;
+    const base = try std.fmt.bufPrint(&base_buf, "{s}/.local/share", .{home});
     return try std.fmt.bufPrint(buf, "{s}/suzume/localStorage.json", .{base});
 }
 
