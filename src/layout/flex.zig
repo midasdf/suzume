@@ -303,6 +303,22 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         final_widths_len += 1;
     }
 
+    // CSS Flexbox L1 §9.3 step 12 — sub-pixel rounding correction.
+    // After distributing free space, floating-point accumulation can push the
+    // total past the available space by a sub-pixel amount. Clamp the sum to
+    // the available space by trimming the last item so that the rightmost edge
+    // never exceeds the container edge (assertion: last.right ≤ container.right).
+    if (final_widths_len > 0) {
+        var sum: f32 = gap_total;
+        for (0..final_widths_len) |idx| sum += final_widths_buf[idx];
+        const overflow = sum - container_width;
+        if (overflow > 0 and overflow < 1.0) {
+            // Trim from the last item — shrink by the sub-pixel excess.
+            const last = final_widths_len - 1;
+            final_widths_buf[last] = @max(final_widths_buf[last] - overflow, 0);
+        }
+    }
+
     // Re-layout children with final widths
     var max_cross: f32 = 0;
     var flex_idx: usize = 0;
