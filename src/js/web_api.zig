@@ -2193,19 +2193,21 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\if(typeof localStorage==='undefined'){
         \\  // [[spec]] HTML §15.1.1 — persist to disk via native helpers (origin-partitioned)
         \\  var _ls={};
+        \\  // [[spec]] HTML §15.1.1 — key(n) returns nth key in insertion order
+        \\  var _lsKeys=[];
         \\  var _lsOrigin=(typeof location!=='undefined'&&location.origin)?location.origin:'null';
-        \\  (function(){var raw=typeof __suzume_ls_load==='function'?__suzume_ls_load(_lsOrigin):null;if(raw){try{_ls=JSON.parse(raw);}catch(e){_ls={};}}})();
+        \\  (function(){var raw=typeof __suzume_ls_load==='function'?__suzume_ls_load(_lsOrigin):null;if(raw){try{_ls=JSON.parse(raw);_lsKeys=Object.keys(_ls);}catch(e){_ls={};_lsKeys=[];}}})();
         \\  // [[spec]] HTML §15.1.1 — 5MB quota (UTF-16 code unit × 2 bytes)
         \\  var LS_QUOTA=5*1024*1024;
         \\  function _lsSize(){var n=0;for(var k in _ls){n+=k.length+_ls[k].length;}return n*2;}
         \\  function _lsSave(){if(typeof __suzume_ls_save==='function')__suzume_ls_save(_lsOrigin,JSON.stringify(_ls));}
         \\  globalThis.localStorage={
         \\    getItem:function(k){var v=_ls[String(k)];return v===undefined?null:v;},
-        \\    setItem:function(k,v){var ks=String(k),vs=String(v);var old=_ls[ks];var delta=(ks.length+vs.length-(old!==undefined?ks.length+old.length:0))*2;if(_lsSize()+delta>LS_QUOTA){var e=new Error('QuotaExceededError: localStorage quota exceeded');e.name='QuotaExceededError';e.code=22;throw e;}_ls[ks]=vs;_lsSave();},
-        \\    removeItem:function(k){delete _ls[String(k)];_lsSave();},
-        \\    clear:function(){_ls={};_lsSave();},
-        \\    get length(){return Object.keys(_ls).length;},
-        \\    key:function(i){return Object.keys(_ls)[i]||null;}
+        \\    setItem:function(k,v){var ks=String(k),vs=String(v);var old=_ls[ks];var delta=(ks.length+vs.length-(old!==undefined?ks.length+old.length:0))*2;if(_lsSize()+delta>LS_QUOTA){var e=new Error('QuotaExceededError: localStorage quota exceeded');e.name='QuotaExceededError';e.code=22;throw e;}if(!(ks in _ls))_lsKeys.push(ks);_ls[ks]=vs;_lsSave();},
+        \\    removeItem:function(k){var ks=String(k);if(ks in _ls){delete _ls[ks];_lsKeys=_lsKeys.filter(function(x){return x!==ks;});_lsSave();}},
+        \\    clear:function(){_ls={};_lsKeys=[];_lsSave();},
+        \\    get length(){return _lsKeys.length;},
+        \\    key:function(i){return i>=0&&i<_lsKeys.length?_lsKeys[i]:null;}
         \\  };
         \\}
         \\if(typeof sessionStorage==='undefined'){
@@ -2433,7 +2435,11 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  USPp.getAll=function(n){return this._params.filter(function(p){return p[0]===n;}).map(function(p){return p[1];});};
         \\}
         \\if(typeof Event==='undefined'){globalThis.Event=function(type,opts){if(!(this instanceof Event))throw new TypeError("Failed to construct 'Event': please use 'new'.");this.type=type;this.bubbles=!!(opts&&opts.bubbles);this.cancelable=!!(opts&&opts.cancelable);this.defaultPrevented=false;this.eventPhase=0;this.target=null;this.currentTarget=null;this.isTrusted=false;this.timeStamp=Date.now();this.preventDefault=function(){if(this.cancelable)this.defaultPrevented=true;};this.stopPropagation=function(){};this.stopImmediatePropagation=function(){};this.composedPath=function(){return[];};};}
-        \\if(typeof CustomEvent==='undefined'){globalThis.CustomEvent=function(type,opts){if(!(this instanceof CustomEvent))throw new TypeError("Failed to construct 'CustomEvent': please use 'new'.");Event.call(this,type,opts);this.detail=(opts&&opts.detail!==undefined)?opts.detail:null;};CustomEvent.prototype=Object.create(Event.prototype);CustomEvent.prototype.constructor=CustomEvent;}
+        \\if(typeof CustomEvent==='undefined'){globalThis.CustomEvent=function(type,opts){if(!(this instanceof CustomEvent))throw new TypeError("Failed to construct 'CustomEvent': please use 'new'.");Event.call(this,type,opts);
+        \\  // [[spec]] DOM §2.7 — detail MUST be a structured clone of the provided value
+        \\  var d=(opts&&opts.detail!==undefined)?opts.detail:null;
+        \\  try{this.detail=typeof structuredClone==='function'?structuredClone(d):(d===null||typeof d!=='object'?d:JSON.parse(JSON.stringify(d)));}catch(e){this.detail=d;}
+        \\};CustomEvent.prototype=Object.create(Event.prototype);CustomEvent.prototype.constructor=CustomEvent;}
         \\if(typeof Headers==='undefined'){globalThis.Headers=function(init){if(!(this instanceof Headers))throw new TypeError("Failed to construct 'Headers': please use 'new'.");this._h={};if(init)for(var k in init)this._h[k.toLowerCase()]=init[k];};Headers.prototype.get=function(n){return this._h[n.toLowerCase()]||null;};Headers.prototype.set=function(n,v){this._h[n.toLowerCase()]=v;};Headers.prototype.has=function(n){return n.toLowerCase() in this._h;};Headers.prototype.forEach=function(cb,thisArg){for(var k in this._h)cb.call(thisArg,this._h[k],k.toLowerCase(),this);};}
         \\if(typeof Response==='undefined'){globalThis.Response=function(body,opts){if(!(this instanceof Response))throw new TypeError("Failed to construct 'Response': please use 'new'.");if(opts&&opts.status!==undefined){var st=Number(opts.status);if(!isFinite(st)||st<200||st>599)throw new RangeError("Response status out of range");this.status=st;}else this.status=200;this.body=body;this.ok=this.status>=200&&this.status<300;this.headers=new Headers((opts&&opts.headers)||{});this.url='';var self=this;this.text=function(){return Promise.resolve(String(body||''));};this.json=function(){return Promise.resolve(JSON.parse(body||'null'));};this.clone=function(){return new Response(body,opts);};};}
         \\if(typeof devicePixelRatio==='undefined'){globalThis.devicePixelRatio=1;}
@@ -2537,15 +2543,30 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  TextEncoder.prototype.encoding='utf-8';
         \\}
         \\if(typeof TextDecoder==='undefined'){
-        \\  globalThis.TextDecoder=function(enc){this.encoding=enc||'utf-8';};
+        \\  globalThis.TextDecoder=function(enc,opts){this.encoding=(enc||'utf-8').toLowerCase();this.fatal=!!(opts&&opts.fatal);this.ignoreBOM=!!(opts&&opts.ignoreBOM);};
         \\  TextDecoder.prototype.decode=function(buf){
-        \\    if(!buf||buf.length===0)return'';var a=buf instanceof Uint8Array?buf:new Uint8Array(buf);
-        \\    var s='',i=0;while(i<a.length){var b=a[i];
+        \\    // [[spec]] Encoding §9.2: invalid UTF-8 sequences → U+FFFD (replacement character)
+        \\    if(!buf||buf.byteLength===0)return'';
+        \\    var a=buf instanceof Uint8Array?buf:new Uint8Array(buf.buffer||buf);
+        \\    var s='',i=0;
+        \\    function isCont(b){return b>=0x80&&b<=0xBF;}
+        \\    while(i<a.length){var b=a[i];
         \\      if(b<0x80){s+=String.fromCharCode(b);i++;}
-        \\      else if(b<0xE0){s+=String.fromCharCode(((b&0x1F)<<6)|(a[i+1]&0x3F));i+=2;}
-        \\      else if(b<0xF0){s+=String.fromCharCode(((b&0x0F)<<12)|((a[i+1]&0x3F)<<6)|(a[i+2]&0x3F));i+=3;}
-        \\      else{var cp=((b&0x07)<<18)|((a[i+1]&0x3F)<<12)|((a[i+2]&0x3F)<<6)|(a[i+3]&0x3F);
-        \\        cp-=0x10000;s+=String.fromCharCode(0xD800+(cp>>10),0xDC00+(cp&0x3FF));i+=4;}
+        \\      else if(b<0xC2){s+='\uFFFD';i++;}// overlong / continuation without lead
+        \\      else if(b<0xE0){
+        \\        if(i+1>=a.length||!isCont(a[i+1])){s+='\uFFFD';i++;}
+        \\        else{s+=String.fromCharCode(((b&0x1F)<<6)|(a[i+1]&0x3F));i+=2;}
+        \\      }else if(b<0xF0){
+        \\        if(i+2>=a.length||!isCont(a[i+1])||!isCont(a[i+2])){s+='\uFFFD';i++;}
+        \\        else{var cp3=((b&0x0F)<<12)|((a[i+1]&0x3F)<<6)|(a[i+2]&0x3F);
+        \\          if(cp3<0x800){s+='\uFFFD';i++;}// overlong 3-byte
+        \\          else{s+=String.fromCharCode(cp3);i+=3;}}
+        \\      }else if(b<0xF5){
+        \\        if(i+3>=a.length||!isCont(a[i+1])||!isCont(a[i+2])||!isCont(a[i+3])){s+='\uFFFD';i++;}
+        \\        else{var cp4=((b&0x07)<<18)|((a[i+1]&0x3F)<<12)|((a[i+2]&0x3F)<<6)|(a[i+3]&0x3F);
+        \\          if(cp4<0x10000||cp4>0x10FFFF){s+='\uFFFD';i++;}// overlong 4-byte or out of Unicode range
+        \\          else{cp4-=0x10000;s+=String.fromCharCode(0xD800+(cp4>>10),0xDC00+(cp4&0x3FF));i+=4;}}
+        \\      }else{s+='\uFFFD';i++;}// F5-FF: invalid
         \\    }return s;
         \\  };
         \\}
