@@ -988,12 +988,9 @@ pub fn classListContains(
 
     const cls_name = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, cls_name.ptr);
-    // DOM spec (current): contains() does NOT validate tokens — just returns false for invalid
+    // DOM §7.1 contains() step 1: run validation steps (throws SyntaxError / InvalidCharacterError)
+    if (validateToken(c, cls_name.ptr[0..cls_name.len])) |exc| return exc;
     const token = cls_name.ptr[0..cls_name.len];
-    if (token.len == 0) return quickjs.JS_NewBool(false);
-    for (token) |ch| {
-        if (ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r' or ch == 0x0c) return quickjs.JS_NewBool(false);
-    }
 
     var cur_len: usize = 0;
     const cur = lxb_dom_element_get_attribute(elem, "class", 5, &cur_len);

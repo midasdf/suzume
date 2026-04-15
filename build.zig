@@ -533,6 +533,18 @@ pub fn build(b: *std.Build) void {
     test_shadow_dom_step.dependOn(&run_shadow_dom_tests.step);
     test_step.dependOn(&run_shadow_dom_tests.step);
 
+    // ── DOMTokenList spec-compliance unit tests ─────────────────
+    const dom_token_list_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_dom_token_list.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const dom_token_list_tests = b.addTest(.{ .root_module = dom_token_list_mod });
+    const run_dom_token_list_tests = b.addRunArtifact(dom_token_list_tests);
+    const test_dom_token_list_step = b.step("test-dom-token-list", "Run DOMTokenList §7.1 spec tests");
+    test_dom_token_list_step.dependOn(&run_dom_token_list_tests.step);
+    test_step.dependOn(&run_dom_token_list_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
