@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const HttpClient = @import("http.zig").HttpClient;
 const Response = @import("http.zig").Response;
 const Document = @import("../dom/tree.zig").Document;
@@ -297,7 +298,7 @@ pub const Loader = struct {
     pub fn saveDownload(allocator: std.mem.Allocator, filename: []const u8, body: []const u8) ![]const u8 {
         const safe_name = sanitizeFilename(filename);
 
-        const home = std.posix.getenv("HOME") orelse "/tmp";
+        const home = env.get("HOME") orelse "/tmp";
         const downloads_dir = try std.fmt.allocPrint(allocator, "{s}/Downloads", .{home});
         defer allocator.free(downloads_dir);
 

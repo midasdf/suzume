@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 
 pub const Config = struct {
     entries: std.StringHashMap([]const u8),
@@ -54,7 +55,7 @@ pub const Config = struct {
     }
 
     fn loadFromFile(self: *Config) void {
-        const home = std.posix.getenv("HOME") orelse return;
+        const home = env.get("HOME") orelse return;
         const config_dir = std.fmt.allocPrint(self.allocator, "{s}/.config/suzume", .{home}) catch return;
         defer self.allocator.free(config_dir);
 

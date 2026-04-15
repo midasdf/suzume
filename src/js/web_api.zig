@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const HttpClient = @import("../net/http.zig").HttpClient;
@@ -85,10 +86,10 @@ fn encodeOriginKey(origin: []const u8, out: []u8) ![]const u8 {
 
 /// Returns the suzume data dir (no trailing slash) into `base_buf`.
 fn suzumeDataDir(base_buf: []u8) ![]const u8 {
-    if (std.posix.getenv("XDG_DATA_HOME")) |xdg| {
+    if (env.get("XDG_DATA_HOME")) |xdg| {
         return try std.fmt.bufPrint(base_buf, "{s}/suzume", .{xdg});
     }
-    const home = std.posix.getenv("HOME") orelse return error.NoHome;
+    const home = env.get("HOME") orelse return error.NoHome;
     return try std.fmt.bufPrint(base_buf, "{s}/.local/share/suzume", .{home});
 }
 

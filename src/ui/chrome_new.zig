@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const coords = @import("../coords.zig");
 const TabBar = @import("tab_bar.zig").TabBar;
 const TabAction = @import("tab_bar.zig").TabAction;
@@ -65,7 +66,7 @@ pub const Chrome = struct {
         url_height: f32,
         status_height: f32,
     } {
-        const override = std.posix.getenv("SUZUME_CHROME_SIZE");
+        const override = env.get("SUZUME_CHROME_SIZE");
         const compact = if (override) |v|
             std.mem.eql(u8, v, "compact")
         else

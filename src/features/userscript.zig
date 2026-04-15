@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const JsRuntime = @import("../js/runtime.zig").JsRuntime;
 
 /// Directory where user scripts are stored.
@@ -7,7 +8,7 @@ const scripts_subdir = "/.local/share/suzume/scripts/";
 /// Load and execute all .js user scripts from the scripts directory.
 /// Called after page load when JS runtime is available.
 pub fn executeUserScripts(js_rt: *JsRuntime, allocator: std.mem.Allocator) void {
-    const home = std.posix.getenv("HOME") orelse return;
+    const home = env.get("HOME") orelse return;
 
     const scripts_dir_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ home, scripts_subdir }) catch return;
     defer allocator.free(scripts_dir_path);
@@ -57,7 +58,7 @@ pub fn executeUserScripts(js_rt: *JsRuntime, allocator: std.mem.Allocator) void 
 
 /// Ensure the user scripts directory exists.
 pub fn ensureScriptsDir(allocator: std.mem.Allocator) void {
-    const home = std.posix.getenv("HOME") orelse return;
+    const home = env.get("HOME") orelse return;
     const dir_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ home, scripts_subdir }) catch return;
     defer allocator.free(dir_path);
     std.fs.cwd().makePath(dir_path) catch {};

@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const Surface = @import("../paint/surface.zig").Surface;
 const FontCache = @import("../paint/painter.zig").FontCache;
 const TextRenderer = @import("../paint/text.zig").TextRenderer;
@@ -19,11 +20,11 @@ pub var default_window_w: i32 = 4096;
 pub var default_window_h: i32 = 4096;
 
 pub fn initWindowSize() void {
-    if (std.posix.getenv("SUZUME_WIDTH")) |w_str| {
+    if (env.get("SUZUME_WIDTH")) |w_str| {
         const w = std.fmt.parseInt(i32, w_str, 10) catch 4096;
         if (w > 0) default_window_w = w;
     }
-    if (std.posix.getenv("SUZUME_HEIGHT")) |h_str| {
+    if (env.get("SUZUME_HEIGHT")) |h_str| {
         const h = std.fmt.parseInt(i32, h_str, 10) catch 4096;
         if (h > 0) default_window_h = h;
     }

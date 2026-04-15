@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("env.zig");
 const Surface = @import("paint/surface.zig").Surface;
 const TextRenderer = @import("paint/text.zig").TextRenderer;
 const GlyphBitmap = @import("paint/text.zig").GlyphBitmap;
@@ -386,7 +387,7 @@ fn initPageJs(doc: *Document, page: *PageState, allocator: std.mem.Allocator, lo
     }
 
     // Check for JS engine flag (default: kotori, set SUZUME_JS=quickjs for legacy)
-    const use_quickjs = if (std.posix.getenv("SUZUME_JS")) |val|
+    const use_quickjs = if (env.get("SUZUME_JS")) |val|
         std.mem.eql(u8, val, "quickjs")
     else
         false;
@@ -910,7 +911,11 @@ fn extractTitle(doc: *Document) ?[]const u8 {
     return null;
 }
 
-pub fn main(init: std.process.Init.Minimal) !void {
+pub fn main(init: std.process.Init) !void {
+    // Stash the Environ.Map pointer so former std.posix.getenv call sites
+    // can still perform global lookups via src/env.zig.
+    env.map = init.environ_map;
+
     // Use GeneralPurposeAllocator in debug mode for double-free / use-after-free detection.
     // In release mode, use c_allocator for performance.
     var gpa: std.heap.DebugAllocator(.{
@@ -923,8 +928,8 @@ pub fn main(init: std.process.Init.Minimal) !void {
     const allocator = if (@import("builtin").mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
     // Parse arguments — Zig 0.16 provides Args via the main parameter rather than
-    // a global std.process.args() helper.
-    var args = init.args.iterate();
+    // a global std.process.args() helper. Init wraps Init.Minimal.
+    var args = init.minimal.args.iterate();
     _ = args.skip();
     var initial_url: ?[]const u8 = null;
     var run_test_dom = false;
@@ -986,7 +991,7 @@ pub fn main(init: std.process.Init.Minimal) !void {
 
     // Set up persistent cookie storage
     const cookie_path = blk: {
-        const home = std.posix.getenv("HOME") orelse break :blk null;
+        const home = env.get("HOME") orelse break :blk null;
         const path = std.fmt.allocPrint(allocator, "{s}/.local/share/suzume/cookies.txt", .{home}) catch break :blk null;
         const path_z = allocator.allocSentinel(u8, path.len, 0) catch {
             allocator.free(path);

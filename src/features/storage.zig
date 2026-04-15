@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 
 const c = @cImport({
     @cInclude("sqlite3.h");
@@ -48,7 +49,7 @@ pub const Storage = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Storage {
         // Ensure XDG data directory exists
-        const home = std.posix.getenv("HOME") orelse "/tmp";
+        const home = env.get("HOME") orelse "/tmp";
         const data_dir = try std.fmt.allocPrint(allocator, "{s}/.local/share/suzume", .{home});
         defer allocator.free(data_dir);
 
