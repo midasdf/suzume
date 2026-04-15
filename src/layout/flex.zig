@@ -341,6 +341,50 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     };
     const container_cross = explicit_h orelse max_cross;
 
+    // Phase 3.5: Re-layout stretched flex items with definite cross size so that
+    // percentage heights in their descendants resolve correctly.
+    //
+    // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3 "Definite and Indefinite Sizes":
+    // A flex item whose cross size is determined by stretch alignment against a
+    // flex container with a definite cross size has a DEFINITE cross size.  This
+    // means percentage heights inside that item MUST resolve against the item's
+    // used cross size rather than being treated as "auto" / falling back to the
+    // viewport height.  To implement this we re-invoke layoutBlockVp on every
+    // stretch-aligned item (height:auto) with the item's used content height as
+    // the `viewport_height` parameter, so that its internal block layout can
+    // resolve `height: <pct>` descendants correctly.
+    {
+        var stretch_idx: usize = 0;
+        for (children) |child| {
+            if (child.style.position == .absolute or child.style.position == .fixed) continue;
+            if (stretch_idx >= final_widths_len) break;
+            defer stretch_idx += 1;
+
+            // Only re-layout if the child has auto height (stretch sets the height)
+            // and the container cross size is definite (either explicit or from content).
+            if (switch (child.style.height) {
+                .auto => true,
+                else => false,
+            }) {
+                const effective_align_s = resolveAlignment(child, style.align_items);
+                const is_stretch = (effective_align_s == .stretch or effective_align_s == .auto);
+                if (is_stretch and container_cross > 0) {
+                    const child_non_content_s = child.padding.top + child.padding.bottom +
+                        child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
+                    const stretched_h = @max(container_cross - child_non_content_s, 0);
+                    // Re-layout the item's block children with the definite height as
+                    // the containing height so `height: <pct>` descendants resolve.
+                    // We do NOT call layoutBlockVp on the item itself (that would
+                    // recompute content.height from children, shrinking the item).
+                    // Instead we only re-layout the children with the definite size.
+                    block.relayoutChildrenWithContainingHeight(child, fonts, stretched_h);
+                }
+            }
+        }
+    }
+    // Recompute container_cross in case children grew after re-layout.
+    const container_cross2 = explicit_h orelse max_cross;
+
     // Phase 4: Position children along main axis
     var total_used: f32 = 0;
     for (0..final_widths_len) |idx| {
@@ -436,7 +480,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 cross_offset = 0;
                 const child_non_content_a = child.padding.top + child.padding.bottom +
                     child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-                const stretched_height_a = @max(container_cross - child_non_content_a, 0);
+                const stretched_height_a = @max(container_cross2 - child_non_content_a, 0);
                 if (switch (child.style.height) {
                     .auto => true,
                     else => false,
@@ -448,17 +492,17 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 cross_offset = 0;
             },
             .flex_end => {
-                cross_offset = container_cross - child_cross;
+                cross_offset = container_cross2 - child_cross;
             },
             .center => {
-                cross_offset = (container_cross - child_cross) / 2;
+                cross_offset = (container_cross2 - child_cross) / 2;
             },
             .stretch => {
                 // Stretch child cross size to fill container cross size
                 cross_offset = 0;
                 const child_non_content = child.padding.top + child.padding.bottom +
                     child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-                const stretched_height = @max(container_cross - child_non_content, 0);
+                const stretched_height = @max(container_cross2 - child_non_content, 0);
                 if (switch (child.style.height) {
                     .auto => true,
                     else => false,
@@ -484,7 +528,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
         if (flex_pos_idx < flex_child_count) cursor_x += per_gap;
     }
 
-    box.content.height = container_cross;
+    box.content.height = container_cross2;
 }
 
 /// Wrap path for flex row layout. Splits children into multiple lines.

@@ -683,6 +683,15 @@ fn createsBfc(style: ComputedStyle) bool {
 }
 
 /// Layout children in block formatting context (all children are block-level).
+/// Re-layout a box's block children with a definite containing height.
+/// Used by flex layout (CSS Flexbox L1 §9.4, CSS Sizing L3 §5.3) after
+/// determining a flex item's definite cross size via stretch alignment,
+/// so that percentage heights in the item's descendants resolve correctly.
+/// Does NOT change the box's own `content.height`.
+pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, containing_height: f32) void {
+    layoutBlockChildren(box, fonts, containing_height);
+}
+
 fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) void {
     var child_y: f32 = 0;
     var prev_margin_bottom: f32 = 0;
@@ -868,11 +877,21 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
                 }
 
                 // Apply CSS height
+                // CSS Sizing L3 §5.3 + CSS Flexbox L1 §9.4: percentage height on a
+                // replaced element resolves against the containing block's height when
+                // that height is definite (passed here via `containing_height`).
                 const css_h: ?f32 = switch (child.style.height) {
                     .px => |h| h,
+                    .percent => |pct| if (containing_height > 0) pct * containing_height / 100.0 else null,
                     else => null,
                 };
                 if (css_h) |h| {
+                    // Only preserve aspect ratio via height when width was NOT explicitly set.
+                    // If both are set, each dimension is applied independently (CSS §10.4).
+                    if (css_w == null and img_w > 0 and img_h > 0) {
+                        const scale = h / img_h;
+                        img_w = img_w * scale;
+                    }
                     img_h = h;
                 }
 
@@ -896,8 +915,11 @@ fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) voi
                 }
 
                 // Apply CSS max-height constraint
+                // CSS Sizing L3 §5.3: percent max-height resolves against the
+                // containing block's height when definite.
                 const css_max_h: ?f32 = switch (child.style.max_height) {
                     .px => |mh| mh,
+                    .percent => |pct| if (containing_height > 0) pct * containing_height / 100.0 else null,
                     else => null,
                 };
                 if (css_max_h) |mh| {
