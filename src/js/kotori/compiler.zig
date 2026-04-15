@@ -81,7 +81,7 @@ pub const Compiler = struct {
     allocator: std.mem.Allocator,
     current: FunctionScope,
     /// Compiled FunctionObj constants (heap-allocated, owned by caller via Bytecode constants)
-    functions: std.ArrayListUnmanaged(*object_mod.JsObject) = .{},
+    functions: std.ArrayListUnmanaged(*object_mod.JsObject) = .empty,
     /// Instance field initializers for current class constructor
     pending_class_fields: ?[]const ClassField = null,
 

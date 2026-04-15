@@ -81,7 +81,7 @@ pub fn clearCurrentScript(ctx: *quickjs.c.JSContext) void {
 pub fn executeScripts(doc: *Document, js_rt: *JsRuntime, alloc: std.mem.Allocator, loader: ?*Loader, base_url: ?[]const u8) void {
     const doc_node = doc.documentNode();
     var ext_count: usize = 0;
-    var deferred = std.ArrayListUnmanaged(DeferredScript){};
+    var deferred: std.ArrayListUnmanaged(DeferredScript) = .empty;
     defer {
         for (deferred.items) |ds| alloc.free(ds.code);
         deferred.deinit(alloc);

@@ -144,8 +144,8 @@ pub const Bytecode = struct {
 
     pub fn init() Bytecode {
         return .{
-            .code = .{},
-            .constants = .{},
+            .code = .empty,
+            .constants = .empty,
             .local_count = 0,
             .param_count = 0,
             .max_stack = 0,

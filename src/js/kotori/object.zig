@@ -96,7 +96,7 @@ pub const JsObject = struct {
     pub const PromiseData = struct {
         state: PromiseState = .pending,
         result: value_mod.JsValue = value_mod.JsValue.undefined_val,
-        handlers: std.ArrayListUnmanaged(PromiseHandler) = .{},
+        handlers: std.ArrayListUnmanaged(PromiseHandler) = .empty,
     };
 
     pub const ProxyData = struct {

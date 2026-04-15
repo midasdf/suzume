@@ -98,7 +98,7 @@ pub const Parser = struct {
 
     /// Parse a full program. Returns root program NodeIndex.
     pub fn parse(self: *Parser) !NodeIndex {
-        var stmts = std.ArrayListUnmanaged(NodeIndex){};
+        var stmts = std.ArrayListUnmanaged(NodeIndex).empty;
         defer stmts.deinit(self.allocator);
 
         while (!self.check(.eof)) {
@@ -418,8 +418,8 @@ pub const Parser = struct {
     }
 
     fn parseTaggedTemplate(self: *Parser, tag: NodeIndex) ParseError!NodeIndex {
-        var quasis = std.ArrayListUnmanaged(NodeIndex){};
-        var exprs = std.ArrayListUnmanaged(NodeIndex){};
+        var quasis = std.ArrayListUnmanaged(NodeIndex).empty;
+        var exprs = std.ArrayListUnmanaged(NodeIndex).empty;
         defer quasis.deinit(self.allocator);
         defer exprs.deinit(self.allocator);
 
@@ -576,7 +576,7 @@ pub const Parser = struct {
 
         // Check for rest parameter: (...x) => ... — must be arrow function
         if (self.check(.ellipsis)) {
-            var items = std.ArrayListUnmanaged(NodeIndex){};
+            var items = std.ArrayListUnmanaged(NodeIndex).empty;
             defer items.deinit(self.allocator);
             while (!self.check(.rparen) and !self.check(.eof)) {
                 const param = try self.parseFunctionParam();
@@ -594,7 +594,7 @@ pub const Parser = struct {
 
         // Collect comma-separated expressions (potential param list)
         if (self.check(.comma)) {
-            var items = std.ArrayListUnmanaged(NodeIndex){};
+            var items = std.ArrayListUnmanaged(NodeIndex).empty;
             defer items.deinit(self.allocator);
             items.append(self.allocator, first) catch return error.OutOfMemory;
             while (self.match(.comma)) {
@@ -647,7 +647,7 @@ pub const Parser = struct {
 
     fn parseArrayLiteral(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume [
-        var items = std.ArrayListUnmanaged(NodeIndex){};
+        var items = std.ArrayListUnmanaged(NodeIndex).empty;
         defer items.deinit(self.allocator);
 
         while (!self.check(.rbracket) and !self.check(.eof)) {
@@ -676,7 +676,7 @@ pub const Parser = struct {
 
     fn parseObjectLiteral(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume {
-        var props = std.ArrayListUnmanaged(NodeIndex){};
+        var props = std.ArrayListUnmanaged(NodeIndex).empty;
         defer props.deinit(self.allocator);
 
         while (!self.check(.rbrace) and !self.check(.eof)) {
@@ -710,7 +710,7 @@ pub const Parser = struct {
                 const computed_key = self.check(.lbracket);
                 const prop_key = try self.parsePropertyKey();
                 try self.expect(.lparen);
-                var params = std.ArrayListUnmanaged(NodeIndex){};
+                var params = std.ArrayListUnmanaged(NodeIndex).empty;
                 defer params.deinit(self.allocator);
                 while (!self.check(.rparen) and !self.check(.eof)) {
                     const param = try self.parseFunctionParam();
@@ -742,7 +742,7 @@ pub const Parser = struct {
         // Method shorthand: key(...) { body }
         if (self.check(.lparen)) {
             self.advance(); // consume (
-            var params = std.ArrayListUnmanaged(NodeIndex){};
+            var params = std.ArrayListUnmanaged(NodeIndex).empty;
             defer params.deinit(self.allocator);
             while (!self.check(.rparen) and !self.check(.eof)) {
                 const param = try self.parseFunctionParam();
@@ -900,7 +900,7 @@ pub const Parser = struct {
         var args_list: NodeList = .{ .start = 0, .len = 0 };
         if (self.check(.lparen)) {
             self.advance(); // consume (
-            var args = std.ArrayListUnmanaged(NodeIndex){};
+            var args = std.ArrayListUnmanaged(NodeIndex).empty;
             defer args.deinit(self.allocator);
             while (!self.check(.rparen) and !self.check(.eof)) {
                 if (self.current.type == .ellipsis) {
@@ -995,7 +995,7 @@ pub const Parser = struct {
 
         // Parameters
         try self.expect(.lparen);
-        var params = std.ArrayListUnmanaged(NodeIndex){};
+        var params = std.ArrayListUnmanaged(NodeIndex).empty;
         defer params.deinit(self.allocator);
         while (!self.check(.rparen) and !self.check(.eof)) {
             const param = try self.parseFunctionParam();
@@ -1078,7 +1078,7 @@ pub const Parser = struct {
 
     fn parseBlock(self: *Parser) ParseError!NodeIndex {
         try self.expect(.lbrace);
-        var stmts = std.ArrayListUnmanaged(NodeIndex){};
+        var stmts = std.ArrayListUnmanaged(NodeIndex).empty;
         defer stmts.deinit(self.allocator);
         while (!self.check(.rbrace) and !self.check(.eof)) {
             const stmt = try self.parseStatement();
@@ -1098,7 +1098,7 @@ pub const Parser = struct {
 
     fn parseArrayPattern(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume [
-        var elements = std.ArrayListUnmanaged(NodeIndex){};
+        var elements = std.ArrayListUnmanaged(NodeIndex).empty;
         defer elements.deinit(self.allocator);
 
         while (!self.check(.rbracket) and !self.check(.eof)) {
@@ -1135,7 +1135,7 @@ pub const Parser = struct {
 
     fn parseObjectPattern(self: *Parser) ParseError!NodeIndex {
         self.advance(); // consume {
-        var props = std.ArrayListUnmanaged(NodeIndex){};
+        var props = std.ArrayListUnmanaged(NodeIndex).empty;
         defer props.deinit(self.allocator);
 
         while (!self.check(.rbrace) and !self.check(.eof)) {
@@ -1200,7 +1200,7 @@ pub const Parser = struct {
         };
         self.advance(); // consume var/let/const
 
-        var declarators = std.ArrayListUnmanaged(NodeIndex){};
+        var declarators = std.ArrayListUnmanaged(NodeIndex).empty;
         defer declarators.deinit(self.allocator);
 
         while (true) {
@@ -1341,7 +1341,7 @@ pub const Parser = struct {
         };
         self.advance();
 
-        var declarators = std.ArrayListUnmanaged(NodeIndex){};
+        var declarators = std.ArrayListUnmanaged(NodeIndex).empty;
         defer declarators.deinit(self.allocator);
 
         while (true) {
@@ -1405,7 +1405,7 @@ pub const Parser = struct {
         try self.expect(.rparen);
         try self.expect(.lbrace);
 
-        var cases = std.ArrayListUnmanaged(NodeIndex){};
+        var cases = std.ArrayListUnmanaged(NodeIndex).empty;
         defer cases.deinit(self.allocator);
 
         while (!self.check(.rbrace) and !self.check(.eof)) {
@@ -1419,7 +1419,7 @@ pub const Parser = struct {
             }
             try self.expect(.colon);
 
-            var body_stmts = std.ArrayListUnmanaged(NodeIndex){};
+            var body_stmts = std.ArrayListUnmanaged(NodeIndex).empty;
             defer body_stmts.deinit(self.allocator);
             while (!self.check(.kw_case) and !self.check(.kw_default) and !self.check(.rbrace) and !self.check(.eof)) {
                 const stmt = try self.parseStatement();
@@ -1536,7 +1536,7 @@ pub const Parser = struct {
 
         // Parameters
         try self.expect(.lparen);
-        var params = std.ArrayListUnmanaged(NodeIndex){};
+        var params = std.ArrayListUnmanaged(NodeIndex).empty;
         defer params.deinit(self.allocator);
         while (!self.check(.rparen) and !self.check(.eof)) {
             const param = try self.parseFunctionParam();
@@ -1577,7 +1577,7 @@ pub const Parser = struct {
 
         try self.expect(.lbrace);
 
-        var methods = std.ArrayListUnmanaged(NodeIndex){};
+        var methods = std.ArrayListUnmanaged(NodeIndex).empty;
         defer methods.deinit(self.allocator);
 
         while (!self.check(.rbrace) and !self.check(.eof)) {
@@ -1639,7 +1639,7 @@ pub const Parser = struct {
 
             // Parse parameters (use parseFunctionParam to handle rest, defaults, destructuring)
             try self.expect(.lparen);
-            var params = std.ArrayListUnmanaged(NodeIndex){};
+            var params = std.ArrayListUnmanaged(NodeIndex).empty;
             defer params.deinit(self.allocator);
             while (!self.check(.rparen) and !self.check(.eof)) {
                 const param = try self.parseFunctionParam();
@@ -1901,7 +1901,7 @@ pub const Parser = struct {
 
     fn parseCall(self: *Parser, callee: NodeIndex) ParseError!NodeIndex {
         self.advance(); // consume (
-        var args = std.ArrayListUnmanaged(NodeIndex){};
+        var args = std.ArrayListUnmanaged(NodeIndex).empty;
         defer args.deinit(self.allocator);
         while (!self.check(.rparen) and !self.check(.eof)) {
             if (self.current.type == .ellipsis) {
@@ -2037,7 +2037,7 @@ pub const Parser = struct {
             } }) catch return error.OutOfMemory;
         }
 
-        var specifiers = std.ArrayListUnmanaged(ast_mod.NodeIndex){};
+        var specifiers = std.ArrayListUnmanaged(ast_mod.NodeIndex).empty;
         defer specifiers.deinit(self.allocator);
 
         // Default import: import foo from "..."
@@ -2208,7 +2208,7 @@ pub const Parser = struct {
 
         // export { a, b as c } or export { a } from "module"
         if (self.check(.lbrace)) {
-            var specifiers = std.ArrayListUnmanaged(ast_mod.NodeIndex){};
+            var specifiers = std.ArrayListUnmanaged(ast_mod.NodeIndex).empty;
             defer specifiers.deinit(self.allocator);
 
             try self.expect(.lbrace);

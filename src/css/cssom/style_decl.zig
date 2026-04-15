@@ -38,7 +38,7 @@ pub const StyleDeclList = struct {
 
     pub fn init(backing_allocator: std.mem.Allocator) StyleDeclList {
         return .{
-            .entries = .{},
+            .entries = .empty,
             .arena = std.heap.ArenaAllocator.init(backing_allocator),
             .dirty_css_text = true,
             .cached_css_text = null,

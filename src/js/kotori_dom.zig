@@ -233,7 +233,7 @@ pub const EventListener = struct {
     capture: bool,
 };
 
-var g_listeners: std.ArrayListUnmanaged(EventListener) = .{};
+var g_listeners: std.ArrayListUnmanaged(EventListener) = .empty;
 
 pub fn getListeners() []const EventListener {
     return g_listeners.items;
@@ -1095,7 +1095,7 @@ fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
 }
 
 fn getInnerHTML(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
     var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
     while (ch) |c| {
@@ -1106,7 +1106,7 @@ fn getInnerHTML(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
 }
 
 fn getOuterHTML(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
-    var buf: std.ArrayListUnmanaged(u8) = .{};
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
     _ = dom_b.lxb_html_serialize_tree_cb(node, &serializeCb, @ptrCast(&buf));
     return JsValue.initString(vm.pool.intern(buf.items) catch return JsValue.null_val);

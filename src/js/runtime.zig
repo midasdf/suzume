@@ -230,7 +230,7 @@ pub const JsRuntime = struct {
         if (!needs_sanitize) return @constCast(input);
 
         const alloc = std.heap.c_allocator;
-        var out = std.ArrayListUnmanaged(u8){};
+        var out: std.ArrayListUnmanaged(u8) = .empty;
         errdefer out.deinit(alloc);
         try out.ensureTotalCapacity(alloc, input.len);
 

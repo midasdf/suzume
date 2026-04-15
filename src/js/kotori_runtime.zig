@@ -49,7 +49,7 @@ pub const KotoriRuntime = struct {
             .vm = vm,
             .allocator = allocator,
             .document_ptr = document_ptr,
-            .bytecodes = .{},
+            .bytecodes = .empty,
         };
 
         // Store the bootstrap bytecode (VM references it)

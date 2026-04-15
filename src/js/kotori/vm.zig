@@ -1077,7 +1077,7 @@ pub const VM = struct {
                     const obj = try self.allocator.create(JsObject);
                     obj.* = .{
                         .obj_type = .array,
-                        .data = .{ .array = .{} },
+                        .data = .{ .array = .empty },
                         .prototype = self.array_proto,
                     };
                     try self.objects.append(self.allocator, obj);
@@ -1888,7 +1888,7 @@ pub const VM = struct {
         var buf_b: [64]u8 = undefined;
         const a_str = formatValue(self.pool, a, &buf_a);
         const b_str = formatValue(self.pool, b, &buf_b);
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(self.allocator);
         try buf.appendSlice(self.allocator, a_str);
         try buf.appendSlice(self.allocator, b_str);
@@ -2772,7 +2772,7 @@ pub const VM = struct {
             vm.pool.get(args[0].asStringId()) orelse ","
         else
             ",";
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         for (obj.data.array.items, 0..) |item, i| {
             if (i > 0) try buf.appendSlice(vm.allocator, sep);
@@ -2805,7 +2805,7 @@ pub const VM = struct {
         end = @min(end, len);
         if (end < start) end = start;
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         const s: usize = @intCast(start);
         const e: usize = @intCast(end);
@@ -2821,7 +2821,7 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items) |item| try new_arr.data.array.append(vm.allocator, item);
         for (args) |arg| {
@@ -2915,7 +2915,7 @@ pub const VM = struct {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
 
         if (args.len == 0 or !args[0].isString()) {
@@ -3000,7 +3000,7 @@ pub const VM = struct {
             if (obj.obj_type == .regexp) {
                 const re = obj.data.regexp_data;
                 const pattern = vm.pool.get(re.source) orelse return this;
-                var buf = std.ArrayListUnmanaged(u8){};
+                var buf: std.ArrayListUnmanaged(u8) = .empty;
                 defer buf.deinit(vm.allocator);
                 if (re.global) {
                     // Replace all matches
@@ -3032,7 +3032,7 @@ pub const VM = struct {
         if (!args[0].isString()) return this;
         const needle = vm.pool.get(args[0].asStringId()) orelse return this;
         if (std.mem.indexOf(u8, s, needle)) |pos| {
-            var buf = std.ArrayListUnmanaged(u8){};
+            var buf: std.ArrayListUnmanaged(u8) = .empty;
             defer buf.deinit(vm.allocator);
             try buf.appendSlice(vm.allocator, s[0..pos]);
             try buf.appendSlice(vm.allocator, replacement);
@@ -3109,7 +3109,7 @@ pub const VM = struct {
         const callback = args[0];
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
@@ -3127,7 +3127,7 @@ pub const VM = struct {
         const callback = args[0];
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
@@ -3329,7 +3329,7 @@ pub const VM = struct {
         const delete_count: usize = if (args.len > 1) @intCast(@min(@max(clampToI64(args[1]), 0), len - start)) else @intCast(len - start);
         // Create return array with deleted elements
         const deleted = try vm.allocator.create(JsObject);
-        deleted.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        deleted.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, deleted);
         const s: usize = @intCast(start);
         for (0..delete_count) |di| {
@@ -3358,7 +3358,7 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         const depth: u32 = if (args.len > 0) @intFromFloat(@max(0, @min(args[0].toNumber(), 100))) else 1;
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         try flattenArray(vm, obj, new_arr, depth);
         return JsValue.initObject(new_arr);
@@ -3384,7 +3384,7 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         const callback = args[0];
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items, 0..) |item, i| {
             const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
@@ -3452,7 +3452,7 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (0..obj.data.array.items.len) |i| {
             try new_arr.data.array.append(vm.allocator, JsValue.initNumber(@floatFromInt(i)));
@@ -3466,7 +3466,7 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items) |item| {
             try new_arr.data.array.append(vm.allocator, item);
@@ -3480,11 +3480,11 @@ pub const VM = struct {
         if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const new_arr = try vm.allocator.create(JsObject);
-        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+        new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
         for (obj.data.array.items, 0..) |item, i| {
             const pair = try vm.allocator.create(JsObject);
-            pair.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = vm.array_proto };
+            pair.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
             try vm.objects.append(vm.allocator, pair);
             try pair.data.array.append(vm.allocator, JsValue.initNumber(@floatFromInt(i)));
             try pair.data.array.append(vm.allocator, item);
@@ -4504,7 +4504,7 @@ pub const VM = struct {
             },
             .map_data => |entries| {
                 const new_map = try self.createObj(.{ .obj_type = .map });
-                new_map.data = .{ .map_data = .{} };
+                new_map.data = .{ .map_data = .empty };
                 new_map.prototype = src.prototype;
                 for (entries.items) |entry| {
                     try new_map.data.map_data.append(self.allocator, .{
@@ -4516,7 +4516,7 @@ pub const VM = struct {
             },
             .set_data => |items| {
                 const new_set = try self.createObj(.{ .obj_type = .set });
-                new_set.data = .{ .set_data = .{} };
+                new_set.data = .{ .set_data = .empty };
                 new_set.prototype = src.prototype;
                 for (items.items) |item| {
                     try new_set.data.set_data.append(self.allocator, try self.deepClone(item));
@@ -5646,7 +5646,7 @@ pub const VM = struct {
     fn nativeMapConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const map_obj = try vm.allocator.create(JsObject);
-        map_obj.* = .{ .obj_type = .map, .data = .{ .map_data = .{} } };
+        map_obj.* = .{ .obj_type = .map, .data = .{ .map_data = .empty } };
         try vm.objects.append(vm.allocator, map_obj);
         // Register methods
         try vm.registerNativeMethod(map_obj, "set", &nativeMapSet);
@@ -5781,7 +5781,7 @@ pub const VM = struct {
     fn nativeSetConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const set_obj = try vm.allocator.create(JsObject);
-        set_obj.* = .{ .obj_type = .set, .data = .{ .set_data = .{} } };
+        set_obj.* = .{ .obj_type = .set, .data = .{ .set_data = .empty } };
         try vm.objects.append(vm.allocator, set_obj);
         try vm.registerNativeMethod(set_obj, "add", &nativeSetAdd);
         try vm.registerNativeMethod(set_obj, "has", &nativeSetHas);
@@ -5914,7 +5914,7 @@ pub const VM = struct {
     fn nativeJsonStringify(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         if (args.len == 0) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         try jsonSerialize(vm, args[0], &buf);
         return JsValue.initString(try vm.pool.intern(buf.items));
@@ -6034,7 +6034,7 @@ pub const VM = struct {
 
     fn jsonParseString(vm: *VM, s: []const u8, pos: *usize) !JsValue {
         pos.* += 1; // skip opening "
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         while (pos.* < s.len and s[pos.*] != '"') {
             if (s[pos.*] == '\\' and pos.* + 1 < s.len) {
@@ -6333,7 +6333,7 @@ pub const VM = struct {
 
     fn percentEncode(allocator: std.mem.Allocator, input: []const u8, preserve_reserved: bool) ![]u8 {
         const hex = "0123456789ABCDEF";
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         for (input) |c| {
             if (isUnreserved(c) or (preserve_reserved and isUriReserved(c))) {
                 try buf.append(allocator, c);
@@ -6354,7 +6354,7 @@ pub const VM = struct {
     }
 
     fn percentDecode(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         var i: usize = 0;
         while (i < input.len) {
             if (input[i] == '%' and i + 2 < input.len) {
@@ -6621,7 +6621,7 @@ pub const VM = struct {
         const count = clampToUsize(args[0]);
         if (count == 0 or s.len == 0) return JsValue.initString(try vm.pool.intern(""));
         if (count > 10000) return JsValue.initString(try vm.pool.intern("")); // safety limit
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         var i: usize = 0;
         while (i < count) : (i += 1) try buf.appendSlice(vm.allocator, s);
@@ -6638,7 +6638,7 @@ pub const VM = struct {
             vm.pool.get(args[1].asStringId()) orelse " "
         else
             " ";
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         const pad_needed = target_len - s.len;
         var i: usize = 0;
@@ -6659,7 +6659,7 @@ pub const VM = struct {
             vm.pool.get(args[1].asStringId()) orelse " "
         else
             " ";
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         try buf.appendSlice(vm.allocator, s);
         var i: usize = 0;
@@ -6691,7 +6691,7 @@ pub const VM = struct {
         const search = if (args[0].isString()) vm.pool.get(args[0].asStringId()) orelse return this else return this;
         const replacement = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse "" else "";
         if (search.len == 0) return this;
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         var i: usize = 0;
         while (i < s.len) {
@@ -6725,7 +6725,7 @@ pub const VM = struct {
     fn nativeStringConcat(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         try buf.appendSlice(vm.allocator, s);
         for (args) |arg| {
@@ -6795,7 +6795,7 @@ pub const VM = struct {
 
     fn nativeStringFromCharCode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         for (args) |a| {
             const code: u21 = @intCast(@as(u32, @bitCast(@as(i32, @intFromFloat(a.toNumber())))) & 0xFFFF);
             var tmp: [4]u8 = undefined;
@@ -6808,7 +6808,7 @@ pub const VM = struct {
 
     fn nativeStringFromCodePoint(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         for (args) |a| {
             const n = a.toNumber();
             if (std.math.isNan(n) or n < 0 or n > 0x10FFFF or n != @trunc(n))
@@ -6860,7 +6860,7 @@ pub const VM = struct {
 
     fn createArray(self: *VM) !*JsObject {
         const obj = try self.allocator.create(JsObject);
-        obj.* = .{ .obj_type = .array, .data = .{ .array = .{} }, .prototype = self.array_proto };
+        obj.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = self.array_proto };
         try self.objects.append(self.allocator, obj);
         return obj;
     }
@@ -7890,7 +7890,7 @@ pub const VM = struct {
         const int_part: u64 = @intFromFloat(abs_val);
         const frac_val = abs_val - @as(f64, @floatFromInt(int_part));
         const frac_scaled: u64 = @intFromFloat(@round(frac_val * factor));
-        var result_buf = std.ArrayListUnmanaged(u8){};
+        var result_buf: std.ArrayListUnmanaged(u8) = .empty;
         defer result_buf.deinit(vm.allocator);
         if (negative) try result_buf.append(vm.allocator, '-');
         const int_str = std.fmt.bufPrint(&buf, "{d}", .{int_part}) catch return JsValue.undefined_val;
@@ -8658,7 +8658,7 @@ pub const VM = struct {
         }
         // Default: return target's own keys as array
         const arr = try self.allocator.create(JsObject);
-        arr.* = .{ .obj_type = .array, .data = .{ .array = .{} } };
+        arr.* = .{ .obj_type = .array, .data = .{ .array = .empty } };
         for (pd.target.properties.keys()) |key| {
             if (self.pool.get(key)) |_| {
                 try arr.data.array.append(self.allocator, JsValue.initString(key));
@@ -8776,7 +8776,7 @@ pub const VM = struct {
         if (args.len < 1 or !args[0].isObject()) return error.TypeError;
         const target = args[0].asJsObject();
         const arr = try vm.allocator.create(JsObject);
-        arr.* = .{ .obj_type = .array, .data = .{ .array = .{} } };
+        arr.* = .{ .obj_type = .array, .data = .{ .array = .empty } };
         for (target.properties.keys()) |key| {
             try arr.data.array.append(vm.allocator, JsValue.initString(key));
         }
@@ -8809,7 +8809,7 @@ pub const VM = struct {
         if (msg_str.len == 0) {
             return JsValue.initString(try vm.pool.intern(name_str));
         }
-        var buf = std.ArrayListUnmanaged(u8){};
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
         defer buf.deinit(vm.allocator);
         try buf.appendSlice(vm.allocator, name_str);
         try buf.appendSlice(vm.allocator, ": ");

@@ -2483,8 +2483,8 @@ var mutation_observers: std.ArrayListUnmanaged(MutationObserverEntry) = .empty;
 pub var suppress_childlist: bool = false;
 var deferred_target: ?*lxb.lxb_dom_node_t = null;
 // DOM §4.9: deferred mutation buffers — dynamic, no artificial cap.
-var deferred_added: std.ArrayList(*lxb.lxb_dom_node_t) = .{};
-var deferred_removed: std.ArrayList(*lxb.lxb_dom_node_t) = .{};
+var deferred_added: std.ArrayList(*lxb.lxb_dom_node_t) = .empty;
+var deferred_removed: std.ArrayList(*lxb.lxb_dom_node_t) = .empty;
 
 /// Begin suppressing childList mutations (call before replaceChildren loop).
 pub fn beginSuppressChildList(target: *lxb.lxb_dom_node_t) void {
