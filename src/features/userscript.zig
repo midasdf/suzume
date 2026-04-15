@@ -37,7 +37,7 @@ pub fn executeUserScripts(js_rt: *JsRuntime, allocator: std.mem.Allocator) void 
 
         // Read up to 1MB
         const max_size = 1024 * 1024;
-        const content = file.readToEndAlloc(allocator, max_size) catch |err| {
+        const content = env.readToEndAlloc(file, allocator, max_size) catch |err| {
             std.debug.print("[UserScript] Failed to read {s}: {}\n", .{ entry.name, err });
             continue;
         };

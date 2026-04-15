@@ -29,3 +29,48 @@ pub fn get(key: []const u8) ?[]const u8 {
 pub fn ioOrPanic() std.Io {
     return io orelse @panic("env.io not initialized — std.Io.Dir op before main() entry");
 }
+
+// ─── File read/write helpers ─────────────────────────────────────────
+//
+// 0.16 replaced `File.{readAll,writeAll,readToEndAlloc}` with the
+// Reader/Writer interfaces that require explicit per-call buffers.
+// These thin wrappers keep call sites one-liners and share `env.io`.
+
+/// Write `bytes` to `file`, flushing the Writer buffer at the end.
+/// Equivalent to the 0.15 `file.writeAll(bytes)`.
+pub fn writeAll(file: std.Io.File, bytes: []const u8) !void {
+    var buf: [4096]u8 = undefined;
+    var w = file.writer(ioOrPanic(), &buf);
+    try w.interface.writeAll(bytes);
+    try w.interface.flush();
+}
+
+/// Read up to `dest.len` bytes into `dest`, returning the number of bytes
+/// actually read. Equivalent to the 0.15 `file.readAll(dest)`.
+pub fn readAll(file: std.Io.File, dest: []u8) !usize {
+    var buf: [4096]u8 = undefined;
+    var r = file.reader(ioOrPanic(), &buf);
+    return r.interface.readSliceShort(dest);
+}
+
+/// Read `file` to EOF, allocating up to `max_size` bytes with `allocator`.
+/// Equivalent to the 0.15 `file.readToEndAlloc(allocator, max_size)`.
+pub fn readToEndAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
+    var buf: [4096]u8 = undefined;
+    var r = file.reader(ioOrPanic(), &buf);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var chunk: [4096]u8 = undefined;
+    while (true) {
+        // readSliceShort returns short reads at EOF (n < chunk.len means
+        // the stream is exhausted; n == 0 confirms EOF on next call).
+        const n = try r.interface.readSliceShort(&chunk);
+        if (n == 0) break;
+        if (out.items.len + n > max_size) return error.StreamTooLong;
+        try out.appendSlice(allocator, chunk[0..n]);
+        if (n < chunk.len) break;
+    }
+    return try out.toOwnedSlice(allocator);
+}

@@ -3419,7 +3419,7 @@ fn handleWebDriverCommand(
             if (surface.dumpToPng(tmp_path)) {
                 const file = std.Io.Dir.cwd().openFile(env.ioOrPanic(), tmp_path, .{}) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
                 defer file.close(env.ioOrPanic());
-                const png_data = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
+                const png_data = env.readToEndAlloc(file, allocator, 10 * 1024 * 1024) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
                 defer allocator.free(png_data);
 
                 // Base64 encode

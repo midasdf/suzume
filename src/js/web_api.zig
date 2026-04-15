@@ -163,12 +163,12 @@ fn jsSuzumeLsLoad(
         if (localStorageLegacyPath(&legacy_buf) catch null) |legacy_path| {
             if (std.Io.Dir.openFileAbsolute(env.ioOrPanic(), legacy_path, .{}) catch null) |lf| {
                 defer lf.close(env.ioOrPanic());
-                if (lf.readToEndAlloc(std.heap.c_allocator, 6 * 1024 * 1024) catch null) |contents| {
+                if (env.readToEndAlloc(lf, std.heap.c_allocator, 6 * 1024 * 1024) catch null) |contents| {
                     defer std.heap.c_allocator.free(contents);
                     // Write to partition
                     if (std.Io.Dir.createFileAbsolute(env.ioOrPanic(), path, .{ .truncate = true }) catch null) |pf| {
                         defer pf.close(env.ioOrPanic());
-                        pf.writeAll(contents) catch {};
+                        env.writeAll(pf, contents) catch {};
                         std.log.warn("localStorage: migrated legacy localStorage.json → {s}", .{path});
                     }
                     // Remove legacy file
@@ -182,7 +182,7 @@ fn jsSuzumeLsLoad(
 
     const file = std.Io.Dir.openFileAbsolute(env.ioOrPanic(), path, .{}) catch return quickjs.JS_NULL();
     defer file.close(env.ioOrPanic());
-    const contents = file.readToEndAlloc(std.heap.c_allocator, 6 * 1024 * 1024) catch return quickjs.JS_NULL();
+    const contents = env.readToEndAlloc(file, std.heap.c_allocator, 6 * 1024 * 1024) catch return quickjs.JS_NULL();
     defer std.heap.c_allocator.free(contents);
     return qjs.JS_NewStringLen(c, contents.ptr, contents.len);
 }
@@ -228,7 +228,7 @@ fn jsSuzumeLsSave(
 
     const file = std.Io.Dir.createFileAbsolute(env.ioOrPanic(), path, .{ .truncate = true }) catch return quickjs.JS_UNDEFINED();
     defer file.close(env.ioOrPanic());
-    file.writeAll(json) catch {};
+    env.writeAll(file, json) catch {};
     return quickjs.JS_UNDEFINED();
 }
 

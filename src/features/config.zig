@@ -75,7 +75,7 @@ pub const Config = struct {
         defer file.close(env.ioOrPanic());
 
         var buf: [4096]u8 = undefined;
-        const content = file.readAll(&buf) catch return;
+        const content = env.readAll(file, &buf) catch return;
         if (content == buf.len) {
             std.debug.print("[Config] Warning: config file may be truncated (>= {d} bytes)\n", .{buf.len});
         }
@@ -128,6 +128,6 @@ pub const Config = struct {
             \\adblock_enabled=true
             \\
         ;
-        _ = file.writeAll(content) catch {};
+        _ = env.writeAll(file, content) catch {};
     }
 };

@@ -330,7 +330,7 @@ pub const Loader = struct {
             // File does not exist, create it
             const file = try std.Io.Dir.cwd().createFile(env.ioOrPanic(), filepath, .{ .exclusive = true });
             defer file.close(env.ioOrPanic());
-            try file.writeAll(body);
+            try env.writeAll(file, body);
 
             return filepath;
         }
@@ -341,7 +341,7 @@ pub const Loader = struct {
 
         const file = try std.Io.Dir.cwd().createFile(env.ioOrPanic(), filepath, .{});
         defer file.close(env.ioOrPanic());
-        try file.writeAll(body);
+        try env.writeAll(file, body);
 
         return filepath;
     }
