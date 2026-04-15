@@ -836,6 +836,84 @@ pub fn initRangePrototype(c: *qjs.JSContext) void {
     qjs.JS_FreeValue(c, r);
 }
 
+// ── elementFromPoint / elementsFromPoint (CSSOM View §7.3) ──────────
+
+const hittest = @import("../layout/hittest.zig");
+
+fn readPointArgs(c: *qjs.JSContext, argc: c_int, argv: ?[*]qjs.JSValue) ?struct { x: f64, y: f64 } {
+    if (argc < 2) return null;
+    const args = argv orelse return null;
+    var x: f64 = 0;
+    var y: f64 = 0;
+    _ = qjs.JS_ToFloat64(c, &x, args[0]);
+    _ = qjs.JS_ToFloat64(c, &y, args[1]);
+    // Reject NaN (CSSOM View §7.3 returns null for NaN coords).
+    if (std.math.isNan(x) or std.math.isNan(y)) return null;
+    return .{ .x = x, .y = y };
+}
+
+pub fn documentElementFromPoint(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const pt = readPointArgs(c, argc, argv) orelse return quickjs.JS_NULL();
+    const root = api.getRootBox(c) orelse return quickjs.JS_NULL();
+    const vp = api.getViewportForCtx(c);
+    const viewport = hittest.Viewport{ .width = vp.w, .height = vp.h };
+    const node = hittest.hitTestPoint(root, viewport, @floatCast(pt.x), @floatCast(pt.y)) orelse
+        return quickjs.JS_NULL();
+    return api.wrapNode(c, node);
+}
+
+pub fn documentElementsFromPoint(
+    ctx: ?*qjs.JSContext,
+    _: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    const arr = qjs.JS_NewArray(c);
+    const pt = readPointArgs(c, argc, argv) orelse return arr;
+    const root = api.getRootBox(c) orelse return arr;
+    const vp = api.getViewportForCtx(c);
+    const viewport = hittest.Viewport{ .width = vp.w, .height = vp.h };
+
+    var list = std.ArrayListUnmanaged(*lxb.lxb_dom_node_t).empty;
+    defer list.deinit(std.heap.c_allocator);
+    hittest.hitTestPointAll(
+        root,
+        viewport,
+        @floatCast(pt.x),
+        @floatCast(pt.y),
+        &list,
+        std.heap.c_allocator,
+    ) catch return arr;
+
+    // Dedupe: anonymous descendants can surface the same element ancestor
+    // multiple times. Keep first-occurrence order (topmost first).
+    var out_idx: u32 = 0;
+    for (list.items) |node| {
+        var dup = false;
+        var j: u32 = 0;
+        while (j < out_idx) : (j += 1) {
+            const prev_val = qjs.JS_GetPropertyUint32(c, arr, j);
+            const prev_node = api.getNodePublic(c, prev_val);
+            qjs.JS_FreeValue(c, prev_val);
+            if (prev_node == node) {
+                dup = true;
+                break;
+            }
+        }
+        if (dup) continue;
+        _ = qjs.JS_SetPropertyUint32(c, arr, out_idx, api.wrapNode(c, node));
+        out_idx += 1;
+    }
+    return arr;
+}
+
 pub fn documentCreateTreeWalker(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,

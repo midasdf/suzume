@@ -702,4 +702,21 @@ pub fn build(b: *std.Build) void {
     const run_kotori_dom_tests = b.addRunArtifact(kotori_dom_tests);
     const test_kotori_dom_step = b.step("test-kotori-dom", "Run kotori DOM binding tests");
     test_kotori_dom_step.dependOn(&run_kotori_dom_tests.step);
+
+    // ── Layout hit-test unit tests (CSSOM View §7.3) ──────────────
+    // Use src/main.zig as root so relative @imports inside layout/hittest.zig
+    // and its transitive deps resolve correctly.
+    const hittest_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_hittest.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    hittest_mod.addIncludePath(lexbor_dep.path("lib"));
+    hittest_mod.link_libc = true;
+    const hittest_tests = b.addTest(.{ .root_module = hittest_mod });
+    hittest_tests.root_module.linkLibrary(lexbor_lib);
+    const run_hittest_tests = b.addRunArtifact(hittest_tests);
+    const test_hittest_step = b.step("test-hittest", "Run layout hit-test tests");
+    test_hittest_step.dependOn(&run_hittest_tests.step);
+    test_step.dependOn(&run_hittest_tests.step);
 }

@@ -4629,12 +4629,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "importNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentImportNode, "importNode", 2));
     // document.createRange (stub)
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createRange", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateRange, "createRange", 0));
-    // document.elementFromPoint(x, y) — stub returns body or documentElement
-    {
-        const efp_js = "(function(x,y){return document.body||document.documentElement||null;})";
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementFromPoint", qjs.JS_Eval(ctx, efp_js, efp_js.len, "<efp>", qjs.JS_EVAL_TYPE_GLOBAL));
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementsFromPoint", qjs.JS_Eval(ctx, "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})", "(function(x,y){var e=document.elementFromPoint(x,y);return e?[e]:[];})".len, "<efps>", qjs.JS_EVAL_TYPE_GLOBAL));
-    }
+    // document.elementFromPoint / elementsFromPoint — CSSOM View §7.3
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementFromPoint", qjs.JS_NewCFunction(ctx, &dom_doc.documentElementFromPoint, "elementFromPoint", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "elementsFromPoint", qjs.JS_NewCFunction(ctx, &dom_doc.documentElementsFromPoint, "elementsFromPoint", 2));
     // document.createTreeWalker
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTreeWalker", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTreeWalker, "createTreeWalker", 3));
     // document.createNodeIterator
