@@ -1,4 +1,6 @@
 // kotori JS engine — public API re-exports.
+pub const io = @import("kotori_io.zig");
+
 pub const token = @import("token.zig");
 pub const TokenType = token.TokenType;
 pub const Token = token.Token;

@@ -1,4 +1,5 @@
 const std = @import("std");
+const kio = @import("kotori_io.zig");
 const ctime = @cImport({
     @cInclude("time.h");
 });
@@ -2518,19 +2519,18 @@ pub const VM = struct {
     // ── console methods ─────────────────────────────────────────────
 
     fn consoleWriteWithPrefix(vm: *VM, prefix: []const u8, args: []const JsValue) void {
-        const stderr = std.fs.File.stderr();
         var indent: u32 = 0;
-        while (indent < vm.console_indent) : (indent += 1) _ = stderr.write("  ") catch 0;
+        while (indent < vm.console_indent) : (indent += 1) kio.stderrWrite("  ");
         if (prefix.len > 0) {
-            _ = stderr.write(prefix) catch 0;
-            _ = stderr.write(" ") catch 0;
+            kio.stderrWrite(prefix);
+            kio.stderrWrite(" ");
         }
         for (args, 0..) |arg, i| {
-            if (i > 0) _ = stderr.write(" ") catch 0;
+            if (i > 0) kio.stderrWrite(" ");
             var buf: [64]u8 = undefined;
-            _ = stderr.write(formatValue(vm.pool, arg, &buf)) catch 0;
+            kio.stderrWrite(formatValue(vm.pool, arg, &buf));
         }
-        _ = stderr.write("\n") catch 0;
+        kio.stderrWrite("\n");
     }
 
     fn nativeConsoleLog(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -2569,25 +2569,24 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         if (args.len == 0) return JsValue.undefined_val;
         const val = args[0];
-        const stderr = std.fs.File.stderr();
         if (val.isObject()) {
             const obj = val.asJsObject();
-            _ = stderr.write("{ ") catch 0;
+            kio.stderrWrite("{ ");
             var first = true;
             var it = obj.properties.iterator();
             while (it.next()) |entry| {
-                if (!first) _ = stderr.write(", ") catch 0;
+                if (!first) kio.stderrWrite(", ");
                 first = false;
-                if (vm.pool.get(entry.key_ptr.*)) |key_str| _ = stderr.write(key_str) catch 0;
-                _ = stderr.write(": ") catch 0;
+                if (vm.pool.get(entry.key_ptr.*)) |key_str| kio.stderrWrite(key_str);
+                kio.stderrWrite(": ");
                 var buf: [64]u8 = undefined;
-                _ = stderr.write(formatValue(vm.pool, entry.value_ptr.*, &buf)) catch 0;
+                kio.stderrWrite(formatValue(vm.pool, entry.value_ptr.*, &buf));
             }
-            _ = stderr.write(" }\n") catch 0;
+            kio.stderrWrite(" }\n");
         } else {
             var buf: [64]u8 = undefined;
-            _ = stderr.write(formatValue(vm.pool, val, &buf)) catch 0;
-            _ = stderr.write("\n") catch 0;
+            kio.stderrWrite(formatValue(vm.pool, val, &buf));
+            kio.stderrWrite("\n");
         }
         return JsValue.undefined_val;
     }
@@ -2598,7 +2597,7 @@ pub const VM = struct {
         else
             "default";
         if (vm.console_timers.count() < 1024) {
-            vm.console_timers.put(vm.allocator, label, std.time.milliTimestamp()) catch {};
+            vm.console_timers.put(vm.allocator, label, kio.nowMs()) catch {};
         }
         return JsValue.undefined_val;
     }
@@ -2609,11 +2608,10 @@ pub const VM = struct {
         else
             "default";
         if (vm.console_timers.get(label)) |start| {
-            const elapsed = std.time.milliTimestamp() - start;
-            const stderr = std.fs.File.stderr();
-            var buf: [128]u8 = undefined;
+            const elapsed = kio.nowMs() - start;
+                var buf: [128]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{s}: {d}ms\n", .{ label, elapsed }) catch return JsValue.undefined_val;
-            _ = stderr.write(s) catch 0;
+            kio.stderrWrite(s);
             _ = vm.console_timers.remove(label);
         }
         return JsValue.undefined_val;
@@ -2625,19 +2623,18 @@ pub const VM = struct {
         else
             "default";
         if (vm.console_timers.get(label)) |start| {
-            const elapsed = std.time.milliTimestamp() - start;
-            const stderr = std.fs.File.stderr();
-            var buf: [128]u8 = undefined;
+            const elapsed = kio.nowMs() - start;
+                var buf: [128]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{s}: {d}ms", .{ label, elapsed }) catch return JsValue.undefined_val;
-            _ = stderr.write(s) catch 0;
+            kio.stderrWrite(s);
             if (args.len > 1) {
                 for (args[1..]) |arg| {
-                    _ = stderr.write(" ") catch 0;
+                    kio.stderrWrite(" ");
                     var vbuf: [64]u8 = undefined;
-                    _ = stderr.write(formatValue(vm.pool, arg, &vbuf)) catch 0;
+                    kio.stderrWrite(formatValue(vm.pool, arg, &vbuf));
                 }
             }
-            _ = stderr.write("\n") catch 0;
+            kio.stderrWrite("\n");
         }
         return JsValue.undefined_val;
     }
@@ -2656,10 +2653,9 @@ pub const VM = struct {
             entry.value_ptr.* = 0;
         }
         entry.value_ptr.* += 1;
-        const stderr = std.fs.File.stderr();
         var buf: [128]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{s}: {d}\n", .{ label, entry.value_ptr.* }) catch return JsValue.undefined_val;
-        _ = stderr.write(s) catch 0;
+        kio.stderrWrite(s);
         return JsValue.undefined_val;
     }
     fn nativeConsoleCountReset(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -2686,17 +2682,16 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         if (args.len == 0) return JsValue.undefined_val;
         const val = args[0];
-        const stderr = std.fs.File.stderr();
         if (val.isObject()) {
             const obj = val.asJsObject();
             if (obj.obj_type == .array) {
                 for (obj.data.array.items, 0..) |item, i| {
                     var ibuf: [20]u8 = undefined;
                     const idx_str = std.fmt.bufPrint(&ibuf, "{d}\t", .{i}) catch continue;
-                    _ = stderr.write(idx_str) catch 0;
+                    kio.stderrWrite(idx_str);
                     var buf: [64]u8 = undefined;
-                    _ = stderr.write(formatValue(vm.pool, item, &buf)) catch 0;
-                    _ = stderr.write("\n") catch 0;
+                    kio.stderrWrite(formatValue(vm.pool, item, &buf));
+                    kio.stderrWrite("\n");
                 }
             } else {
                 return nativeConsoleDir(ctx, JsValue.undefined_val, args);
@@ -4747,7 +4742,7 @@ pub const VM = struct {
     // ── performance ─────────────────────────────────────────────────
 
     fn nativePerformanceNow(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
-        const ts = std.time.milliTimestamp();
+        const ts = kio.nowMs();
         return JsValue.initNumber(@floatFromInt(ts));
     }
 
@@ -6673,14 +6668,14 @@ pub const VM = struct {
     fn nativeStringTrimStart(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const trimmed = std.mem.trimLeft(u8, s, " \t\r\n");
+        const trimmed = std.mem.trimStart(u8, s, " \t\r\n");
         return JsValue.initString(try vm.pool.intern(trimmed));
     }
 
     fn nativeStringTrimEnd(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const trimmed = std.mem.trimRight(u8, s, " \t\r\n");
+        const trimmed = std.mem.trimEnd(u8, s, " \t\r\n");
         return JsValue.initString(try vm.pool.intern(trimmed));
     }
 
@@ -7263,7 +7258,7 @@ pub const VM = struct {
         obj.* = .{ .obj_type = .date, .data = .{ .date_ms = 0 }, .prototype = vm.date_proto };
         try vm.objects.append(vm.allocator, obj);
         if (args.len == 0) {
-            obj.data = .{ .date_ms = std.time.milliTimestamp() };
+            obj.data = .{ .date_ms = kio.nowMs() };
         } else if (args.len == 1) {
             if (args[0].isNumber()) {
                 obj.data = .{ .date_ms = @intFromFloat(args[0].asNumber()) };
@@ -7291,7 +7286,7 @@ pub const VM = struct {
     }
 
     fn nativeDateNow(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
-        return JsValue.initNumber(@floatFromInt(std.time.milliTimestamp()));
+        return JsValue.initNumber(@floatFromInt(kio.nowMs()));
     }
 
     fn nativeDateParse(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -7431,7 +7426,7 @@ pub const VM = struct {
         // Extract day before month name
         var day: u8 = 0;
         if (month_pos >= 2) {
-            const before = std.mem.trimRight(u8, std.mem.trimLeft(u8, s[0..month_pos], " ,"), " ,");
+            const before = std.mem.trimEnd(u8, std.mem.trimStart(u8, s[0..month_pos], " ,"), " ,");
             // Try last number token
             var it = std.mem.splitBackwardsAny(u8, before, " ,");
             if (it.next()) |tok| {

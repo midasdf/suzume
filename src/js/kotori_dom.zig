@@ -1042,7 +1042,7 @@ fn prevSibling(vm: *VM, node: *lxb.lxb_dom_node_t, elements_only: bool) JsValue 
 
 fn getChildrenArray(vm: *VM, node: *lxb.lxb_dom_node_t, elements_only: bool) ?JsValue {
     const arr = vm.createObj(.{ .obj_type = .array }) catch return null;
-    arr.data = .{ .array = .{} };
+    arr.data = .{ .array = .empty };
     arr.prototype = vm.array_proto;
     var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
     while (ch) |c| {

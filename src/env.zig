@@ -66,6 +66,19 @@ pub fn nowMs() i64 {
     return std.Io.Clock.real.now(ioOrPanic()).toMilliseconds();
 }
 
+/// Sleep for `ns` nanoseconds on the monotonic clock.
+/// Equivalent to the 0.15 `std.Thread.sleep(ns)`.
+pub fn sleepNs(ns: u64) void {
+    const duration: std.Io.Duration = .fromNanoseconds(@intCast(ns));
+    std.Io.sleep(ioOrPanic(), duration, .awake) catch {};
+}
+
+/// Write `bytes` to the process stderr, ignoring failures.
+/// Equivalent to the 0.15 `std.fs.File.stderr().write(bytes) catch 0` idiom.
+pub fn stderrWrite(bytes: []const u8) void {
+    std.Io.File.stderr().writeStreamingAll(ioOrPanic(), bytes) catch {};
+}
+
 /// Read `file` to EOF, allocating up to `max_size` bytes with `allocator`.
 /// Equivalent to the 0.15 `file.readToEndAlloc(allocator, max_size)`.
 pub fn readToEndAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_size: usize) ![]u8 {

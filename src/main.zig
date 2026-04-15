@@ -48,6 +48,7 @@ const JsRuntime = @import("js/runtime.zig").JsRuntime;
 const quickjs = @import("bindings/quickjs.zig");
 const web_api = @import("js/web_api.zig");
 const dom_api = @import("js/dom_api.zig");
+const kotori = @import("kotori");
 const kotori_dom = @import("kotori_dom");
 const kotori_runtime = @import("kotori_runtime");
 const events = @import("js/events.zig");
@@ -916,6 +917,7 @@ pub fn main(init: std.process.Init) !void {
     // call sites can still perform global-style lookups via src/env.zig.
     env.map = init.environ_map;
     env.io = init.io;
+    kotori.io.io = init.io;
 
     // Use GeneralPurposeAllocator in debug mode for double-free / use-after-free detection.
     // In release mode, use c_allocator for performance.
