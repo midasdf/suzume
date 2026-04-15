@@ -910,7 +910,7 @@ fn extractTitle(doc: *Document) ?[]const u8 {
     return null;
 }
 
-pub fn main() !void {
+pub fn main(init: std.process.Init.Minimal) !void {
     // Use GeneralPurposeAllocator in debug mode for double-free / use-after-free detection.
     // In release mode, use c_allocator for performance.
     var gpa: std.heap.DebugAllocator(.{
@@ -922,8 +922,9 @@ pub fn main() !void {
     };
     const allocator = if (@import("builtin").mode == .Debug) gpa.allocator() else std.heap.c_allocator;
 
-    // Parse arguments
-    var args = std.process.args();
+    // Parse arguments — Zig 0.16 provides Args via the main parameter rather than
+    // a global std.process.args() helper.
+    var args = init.args.iterate();
     _ = args.skip();
     var initial_url: ?[]const u8 = null;
     var run_test_dom = false;
