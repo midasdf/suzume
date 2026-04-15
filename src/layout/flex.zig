@@ -4,6 +4,7 @@ const BoxType = @import("box.zig").BoxType;
 const block = @import("block.zig");
 const FontCache = @import("../paint/painter.zig").FontCache;
 const AlignItems = @import("../css/computed.zig").ComputedStyle.AlignItems;
+const cascade_mod = @import("../css/cascade.zig");
 
 /// Resolve the effective cross-axis alignment for a flex child.
 /// Uses align-self if explicitly set, otherwise falls back to container's align-items.
@@ -61,9 +62,12 @@ fn resolveFlexBasis(
             break :blk @min(max_c, @max(min_c, avail));
         },
         .none => null,
-        // CSS Values L4 §10.6: calc() with % cannot be resolved until layout;
-        // treat as auto (fall back to main-size property) per Flexbox L1 §7.3.3.
-        .calc => null,
+        // CSS Values L4 §10.6: calc() with % resolves at used-value time against
+        // container main size (Flexbox L1 §7.3.3). Indefinite container → auto.
+        .calc => |expr| if (container_main) |cm|
+            cascade_mod.resolveCalcPct(expr, cm, child.style.font_size_px)
+        else
+            null,
     };
 }
 

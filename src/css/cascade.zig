@@ -2498,6 +2498,60 @@ fn parseCalcSimple(s: []const u8, font_size: f32, vw: f32, vh: f32, depth: u32) 
     return result;
 }
 
+/// Resolve a calc() expression string containing `%` at layout/used-value time.
+/// Substitutes each `N%` token with its px-equivalent (`N*container/100`) then
+/// evaluates via parseCalcSimple. Returns null if the buffer would overflow or
+/// the expression fails to parse.
+///
+/// Per CSS Values L4 §10.6, percentages inside calc() resolve against the
+/// containing block dimension at used-value time (width % → containing width,
+/// flex-basis % → container main size, height % → containing height).
+pub fn resolveCalcPct(expr: []const u8, container: f32, font_size: f32) ?f32 {
+    // Input may be either a full "calc(...)" string or the inner expression.
+    // Accept both, emit "calc(<substituted>)" so parseCalcSimple can consume.
+    var inner_src = expr;
+    if (startsWithIgnoreCase(expr, "calc(") and expr.len > 0 and expr[expr.len - 1] == ')') {
+        inner_src = expr[5 .. expr.len - 1];
+    }
+
+    var buf: [256]u8 = undefined;
+    var out: usize = 0;
+    // Prefix "calc("
+    const prefix = "calc(";
+    if (prefix.len > buf.len) return null;
+    @memcpy(buf[0..prefix.len], prefix);
+    out = prefix.len;
+
+    var i: usize = 0;
+    while (i < inner_src.len) {
+        const c = inner_src[i];
+        // Scan for numeric literal followed by '%'
+        const is_digit_start = (c >= '0' and c <= '9') or c == '.';
+        if (is_digit_start) {
+            var j = i;
+            while (j < inner_src.len and ((inner_src[j] >= '0' and inner_src[j] <= '9') or inner_src[j] == '.')) : (j += 1) {}
+            if (j < inner_src.len and inner_src[j] == '%') {
+                const num_str = inner_src[i..j];
+                const pct = std.fmt.parseFloat(f32, num_str) catch return null;
+                const px_val = pct * container / 100.0;
+                // Emit "VALpx" — direct substitution, no parens (calc parser handles precedence).
+                const written = std.fmt.bufPrint(buf[out..], "{d}px", .{px_val}) catch return null;
+                out += written.len;
+                i = j + 1; // skip the '%'
+                continue;
+            }
+        }
+        if (out >= buf.len) return null;
+        buf[out] = c;
+        out += 1;
+        i += 1;
+    }
+    if (out >= buf.len) return null;
+    buf[out] = ')';
+    out += 1;
+    return parseCalcSimple(buf[0..out], font_size, 0, 0, 0);
+}
+
 /// Parse a calc expression with correct operator precedence.
 /// + and - are lowest priority (split last), * and / are higher.
 /// depth guards against stack overflow from deeply nested calc(calc(calc(...))) inputs.
@@ -3888,4 +3942,30 @@ test "parseDimension calc(100px + 20px) → Dimension.px" {
     const dim = parseDimension("calc(100px + 20px)", 16.0, 800.0, 600.0);
     try std.testing.expect(dim == .px);
     try std.testing.expectApproxEqAbs(@as(f32, 120.0), dim.px, 0.5);
+}
+
+// CSS Values L4 §10.6: percentages inside calc() resolve against the containing
+// block dimension at used-value time.
+test "resolveCalcPct calc(100% - 20px) against container=200 → 180" {
+    const v = resolveCalcPct("calc(100% - 20px)", 200.0, 16.0) orelse
+        return error.TestExpectedValue;
+    try std.testing.expectApproxEqAbs(@as(f32, 180.0), v, 0.01);
+}
+
+test "resolveCalcPct calc(50% + 10px) against container=100 → 60" {
+    const v = resolveCalcPct("calc(50% + 10px)", 100.0, 16.0) orelse
+        return error.TestExpectedValue;
+    try std.testing.expectApproxEqAbs(@as(f32, 60.0), v, 0.01);
+}
+
+test "resolveCalcPct calc(2 * 50%) against container=100 → 100" {
+    const v = resolveCalcPct("calc(2 * 50%)", 100.0, 16.0) orelse
+        return error.TestExpectedValue;
+    try std.testing.expectApproxEqAbs(@as(f32, 100.0), v, 0.01);
+}
+
+test "resolveCalcPct accepts inner expression without calc() wrapper" {
+    const v = resolveCalcPct("calc(25% + 5px)", 400.0, 16.0) orelse
+        return error.TestExpectedValue;
+    try std.testing.expectApproxEqAbs(@as(f32, 105.0), v, 0.01);
 }

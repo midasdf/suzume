@@ -8,6 +8,7 @@ const flex = @import("flex.zig");
 const grid = @import("grid.zig");
 const table = @import("table.zig");
 const layout_utils = @import("utils.zig");
+const cascade_mod = @import("../css/cascade.zig");
 
 // Re-export from shared layout utilities
 const isCjkCodepoint = layout_utils.isCjkCodepoint;
@@ -320,6 +321,17 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
                     resolved;
             }
         },
+        .calc => |expr| {
+            // CSS Values L4 §10.6: calc() with % resolves at used-value time.
+            if (viewport_height > 0) {
+                if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |resolved| {
+                    box.content.height = if (box.style.box_sizing == .border_box)
+                        @max(resolved - pad_v_pre - bdr_v_pre, 0)
+                    else
+                        resolved;
+                }
+            }
+        },
         else => {},
     }
 
@@ -383,6 +395,8 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
             const avail = @max(containing_width - margin_h - pad_h - bdr_h, 0);
             break :blk @min(stf, avail);
         },
+        // CSS Values L4 §10.6: mixed calc(% + px) resolved against containing width.
+        .calc => |expr| cascade_mod.resolveCalcPct(expr, containing_width, box.style.font_size_px),
         else => null,
     };
 
@@ -438,6 +452,11 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
             const mw = pct * containing_width / 100.0;
             if (box.content.width < mw) box.content.width = mw;
         },
+        .calc => |expr| {
+            if (cascade_mod.resolveCalcPct(expr, containing_width, box.style.font_size_px)) |mw| {
+                if (box.content.width < mw) box.content.width = mw;
+            }
+        },
         else => {},
     }
     switch (box.style.max_width) {
@@ -447,6 +466,11 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         .percent => |pct| {
             const mw = pct * containing_width / 100.0;
             if (box.content.width > mw) box.content.width = mw;
+        },
+        .calc => |expr| {
+            if (cascade_mod.resolveCalcPct(expr, containing_width, box.style.font_size_px)) |mw| {
+                if (box.content.width > mw) box.content.width = mw;
+            }
         },
         else => {},
     }
@@ -504,6 +528,16 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
                     resolved2;
             }
         },
+        .calc => |expr| {
+            if (viewport_height > 0) {
+                if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |resolved2| {
+                    box.content.height = if (box.style.box_sizing == .border_box)
+                        @max(resolved2 - pad_v2 - bdr_v2, 0)
+                    else
+                        resolved2;
+                }
+            }
+        },
         else => {}, // auto — determined by content
     }
 
@@ -559,6 +593,19 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
                 }
             }
         },
+        .calc => |expr| {
+            if (viewport_height > 0) {
+                if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |resolved3| {
+                    box.content.height = if (box.style.box_sizing == .border_box)
+                        @max(resolved3 - pad_v3 - bdr_v3, 0)
+                    else
+                        resolved3;
+                    if (box.style.aspect_ratio > 0 and explicit_width == null) {
+                        box.content.width = box.content.height * box.style.aspect_ratio;
+                    }
+                }
+            }
+        },
         else => {},
     }
 
@@ -573,6 +620,13 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
                 if (box.content.height < mh) box.content.height = mh;
             }
         },
+        .calc => |expr| {
+            if (viewport_height > 0) {
+                if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |mh| {
+                    if (box.content.height < mh) box.content.height = mh;
+                }
+            }
+        },
         else => {},
     }
     switch (box.style.max_height) {
@@ -583,6 +637,13 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
             if (viewport_height > 0) {
                 const mh = pct * viewport_height / 100.0;
                 if (box.content.height > mh) box.content.height = mh;
+            }
+        },
+        .calc => |expr| {
+            if (viewport_height > 0) {
+                if (cascade_mod.resolveCalcPct(expr, viewport_height, box.style.font_size_px)) |mh| {
+                    if (box.content.height > mh) box.content.height = mh;
+                }
             }
         },
         else => {},
