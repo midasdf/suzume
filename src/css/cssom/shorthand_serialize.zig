@@ -71,36 +71,27 @@ pub fn serializeBoxShorthand(
 }
 
 /// Serialize "flex" from flex-grow, flex-shrink, flex-basis.
+/// Per CSSOM §6.7.2 + CSS Flexbox L1 §7.1.1: canonical three-part form.
 pub fn serializeFlex(ctx: LookupCtx, buf: []u8) ?[]const u8 {
     const grow = std.mem.trim(u8, lhGet(ctx, "flex-grow") orelse return null, " \t");
     const shrink = std.mem.trim(u8, lhGet(ctx, "flex-shrink") orelse return null, " \t");
     const basis = std.mem.trim(u8, lhGet(ctx, "flex-basis") orelse return null, " \t");
     if (grow.len == 0 or shrink.len == 0 or basis.len == 0) return null;
-    if (std.mem.eql(u8, grow, "0") and std.mem.eql(u8, shrink, "0") and std.ascii.eqlIgnoreCase(basis, "auto")) {
-        return std.fmt.bufPrint(buf, "none", .{}) catch null;
-    }
-    if (std.mem.eql(u8, grow, "1") and std.mem.eql(u8, shrink, "1") and std.ascii.eqlIgnoreCase(basis, "auto")) {
-        return std.fmt.bufPrint(buf, "auto", .{}) catch null;
-    }
     return std.fmt.bufPrint(buf, "{s} {s} {s}", .{ grow, shrink, basis }) catch null;
 }
 
 /// Serialize "flex-flow" from flex-direction and flex-wrap.
+/// Per CSS Flexbox L1 §7.2: omit components that match their initial value,
+/// except when both are initial — then serialize just the direction.
 pub fn serializeFlexFlow(ctx: LookupCtx, buf: []u8) ?[]const u8 {
     const dir = std.mem.trim(u8, lhGet(ctx, "flex-direction") orelse return null, " \t");
     const wrap = std.mem.trim(u8, lhGet(ctx, "flex-wrap") orelse return null, " \t");
     if (dir.len == 0 or wrap.len == 0) return null;
-    const dir_default = std.ascii.eqlIgnoreCase(dir, "row");
     const wrap_default = std.ascii.eqlIgnoreCase(wrap, "nowrap");
-    if (dir_default and wrap_default) {
-        return std.fmt.bufPrint(buf, "row nowrap", .{}) catch null;
-    } else if (wrap_default) {
+    if (wrap_default) {
         return std.fmt.bufPrint(buf, "{s}", .{dir}) catch null;
-    } else if (dir_default) {
-        return std.fmt.bufPrint(buf, "{s}", .{wrap}) catch null;
-    } else {
-        return std.fmt.bufPrint(buf, "{s} {s}", .{ dir, wrap }) catch null;
     }
+    return std.fmt.bufPrint(buf, "{s} {s}", .{ dir, wrap }) catch null;
 }
 
 /// Dispatch: given a shorthand name and a LookupCtx, return the canonical string.
@@ -198,7 +189,7 @@ test "serializeTrbl — missing returns null" {
     try std.testing.expect(r == null);
 }
 
-test "serializeFlex — none" {
+test "serializeFlex — none (0 0 auto canonical)" {
     const arr = [_]Entry{
         .{ .name = "flex-grow", .value = "0" },
         .{ .name = "flex-shrink", .value = "0" },
@@ -207,10 +198,10 @@ test "serializeFlex — none" {
     const slice: []const Entry = &arr;
     var buf: [64]u8 = undefined;
     const r = serializeFlex(makeCtx(&slice), &buf);
-    try std.testing.expectEqualStrings("none", r.?);
+    try std.testing.expectEqualStrings("0 0 auto", r.?);
 }
 
-test "serializeFlex — auto" {
+test "serializeFlex — auto (1 1 auto canonical)" {
     const arr = [_]Entry{
         .{ .name = "flex-grow", .value = "1" },
         .{ .name = "flex-shrink", .value = "1" },
@@ -219,7 +210,7 @@ test "serializeFlex — auto" {
     const slice: []const Entry = &arr;
     var buf: [64]u8 = undefined;
     const r = serializeFlex(makeCtx(&slice), &buf);
-    try std.testing.expectEqualStrings("auto", r.?);
+    try std.testing.expectEqualStrings("1 1 auto", r.?);
 }
 
 test "serializeFlex — numeric" {
@@ -256,4 +247,37 @@ test "serializeShorthand flex-flow direction only" {
     var buf: [64]u8 = undefined;
     const r = serializeShorthand("flex-flow", makeCtx(&slice), &buf);
     try std.testing.expectEqualStrings("column", r.?);
+}
+
+test "serializeFlexFlow — row nowrap collapses to row" {
+    const arr = [_]Entry{
+        .{ .name = "flex-direction", .value = "row" },
+        .{ .name = "flex-wrap", .value = "nowrap" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeFlexFlow(makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("row", r.?);
+}
+
+test "serializeFlexFlow — column-reverse wrap" {
+    const arr = [_]Entry{
+        .{ .name = "flex-direction", .value = "column-reverse" },
+        .{ .name = "flex-wrap", .value = "wrap" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeFlexFlow(makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("column-reverse wrap", r.?);
+}
+
+test "serializeFlexFlow — row wrap (wrap non-initial)" {
+    const arr = [_]Entry{
+        .{ .name = "flex-direction", .value = "row" },
+        .{ .name = "flex-wrap", .value = "wrap" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeFlexFlow(makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("row wrap", r.?);
 }

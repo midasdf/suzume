@@ -3558,6 +3558,9 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         // overflow shorthand: 1-2 values from {visible, hidden, scroll, auto, clip}
         return isValidOverflowShorthand(val);
     }
+    if (eqlIgnoreCase(prop, "flex")) {
+        return isValidFlexValue(val);
+    }
     // CSS Transforms Level 2: individual transform properties
     if (eqlIgnoreCase(prop, "rotate")) {
         // none, angle, or math function returning angle
@@ -3582,7 +3585,7 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
     const known_shorthands = [_][]const u8{
         "border",                      "border-top",                "border-right",               "border-bottom",              "border-left",
         "border-radius",               "border-color",              "border-width",               "border-style",               "background",
-        "font",                        "flex",                      "flex-flow",                  "transition",                 "animation",
+        "font",                        "flex-flow",                 "transition",                 "animation",
         "text-decoration",             "list-style",                "outline",                    "grid",                       "grid-template",
         "grid-template-columns",       "grid-template-rows",        "grid-area",                  "grid-column",                "grid-row",
         "gap",                         "place-content",             "place-items",                "place-self",                 "columns",
@@ -5263,6 +5266,48 @@ pub fn isNonNegNumber(val: []const u8) bool {
     if (val[val.len - 1] == '.') return false;
     const n = std.fmt.parseFloat(f32, val) catch return false;
     return n >= 0;
+}
+
+/// CSS Flexbox L1 §7.1: `flex: none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`.
+/// Accepts up to two non-negative numbers (grow, optional shrink) and/or one flex-basis
+/// (length/percentage/auto/content/min-content/max-content/fit-content). Rejects three
+/// numbers, multiple length/% components, or any extra tokens after `none`.
+pub fn isValidFlexValue(val: []const u8) bool {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed.len == 0) return false;
+    if (eqlIgnoreCase(trimmed, "none")) return true;
+    if (eqlIgnoreCase(trimmed, "auto") or eqlIgnoreCase(trimmed, "initial") or
+        eqlIgnoreCase(trimmed, "inherit") or eqlIgnoreCase(trimmed, "unset") or
+        eqlIgnoreCase(trimmed, "revert") or eqlIgnoreCase(trimmed, "revert-layer"))
+        return true;
+
+    // Split into up to 3 whitespace-separated tokens.
+    var tokens: [4][]const u8 = undefined;
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, trimmed, " \t\r\n");
+    while (it.next()) |tok| {
+        if (n >= 4) return false;
+        tokens[n] = tok;
+        n += 1;
+    }
+    if (n == 0 or n > 3) return false;
+
+    var num_count: usize = 0;
+    var basis_count: usize = 0;
+    for (tokens[0..n]) |tok| {
+        if (isNonNegNumber(tok)) {
+            num_count += 1;
+        } else if (isValidFlexBasis(tok)) {
+            basis_count += 1;
+        } else {
+            return false;
+        }
+    }
+    // Grammar: at most two numbers (grow, shrink) and at most one basis.
+    if (num_count > 2) return false;
+    if (basis_count > 1) return false;
+    // At least one component must be present (already n >= 1).
+    return true;
 }
 
 pub fn isValidFlexBasis(val: []const u8) bool {
