@@ -33,7 +33,10 @@ pub const ResetEvent = struct {
     /// Returns `error.Timeout` if the timeout expires first.
     pub fn timedWait(self: *ResetEvent, timeout_ns: u64) error{Timeout}!void {
         const timeout: std.Io.Timeout = .{
-            .duration = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
+            .duration = .{
+                .raw = std.Io.Duration.fromNanoseconds(@intCast(timeout_ns)),
+                .clock = .awake,
+            },
         };
         self.inner.waitTimeout(env.ioOrPanic(), timeout) catch |err| switch (err) {
             error.Timeout => return error.Timeout,

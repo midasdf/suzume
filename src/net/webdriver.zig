@@ -1,6 +1,7 @@
 const std = @import("std");
-const net = std.net;
+const net = std.Io.net;
 const http = std.http;
+const env = @import("../env.zig");
 const sync = @import("../sync.zig");
 
 // ── WebDriver Command Queue ─────────────────────────────────────────
@@ -125,22 +126,22 @@ pub const WebDriverServer = struct {
     }
 
     fn serverLoop(self: *WebDriverServer) void {
-        const address = net.Address.parseIp4("127.0.0.1", self.port) catch return;
-        var server = address.listen(.{ .reuse_address = true }) catch return;
-        defer server.deinit();
+        const address = net.IpAddress.parseIp4("127.0.0.1", self.port) catch return;
+        var server = address.listen(env.ioOrPanic(), .{ .reuse_address = true }) catch return;
+        defer server.deinit(env.ioOrPanic());
 
         std.debug.print("[WebDriver] Listening on 127.0.0.1:{d}\n", .{self.port});
 
         while (true) {
-            const conn = server.accept() catch continue;
+            const conn = server.accept(env.ioOrPanic()) catch continue;
             self.handleConnection(conn) catch |e| {
                 std.debug.print("[WebDriver] Connection error: {}\n", .{e});
             };
         }
     }
 
-    fn handleConnection(self: *WebDriverServer, conn: net.Server.Connection) !void {
-        defer conn.stream.close();
+    fn handleConnection(self: *WebDriverServer, conn: net.Stream) !void {
+        defer conn.close(env.ioOrPanic());
 
         var recv_buf: [65536]u8 = undefined;
 
@@ -150,7 +151,7 @@ pub const WebDriverServer = struct {
             var total_read: usize = 0;
             var header_end: ?usize = null;
             while (total_read < recv_buf.len) {
-                const n = conn.stream.read(recv_buf[total_read..]) catch return;
+                const n = env.netRead(conn, recv_buf[total_read..]) catch return;
                 if (n == 0) return; // connection closed
                 total_read += n;
                 // Search for \r\n\r\n
@@ -192,7 +193,7 @@ pub const WebDriverServer = struct {
 
             // Read remaining body if needed
             while (total_read - hdr_end < content_length and total_read < recv_buf.len) {
-                const n = conn.stream.read(recv_buf[total_read..]) catch break;
+                const n = env.netRead(conn, recv_buf[total_read..]) catch break;
                 if (n == 0) break;
                 total_read += n;
             }
@@ -215,9 +216,9 @@ pub const WebDriverServer = struct {
                 .{ resp.status, status_text, resp.body.len },
             ) catch return;
 
-            _ = conn.stream.write(hdr) catch return;
+            env.netWrite(conn, hdr) catch return;
             if (resp.body.len > 0) {
-                _ = conn.stream.write(resp.body) catch return;
+                env.netWrite(conn, resp.body) catch return;
             }
         }
     }

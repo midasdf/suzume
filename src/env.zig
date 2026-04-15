@@ -79,6 +79,30 @@ pub fn stderrWrite(bytes: []const u8) void {
     std.Io.File.stderr().writeStreamingAll(ioOrPanic(), bytes) catch {};
 }
 
+// ─── Net Stream helpers ──────────────────────────────────────────────
+//
+// 0.16's std.Io.net.Stream exposes only reader(io, buf)/writer(io, buf);
+// the legacy Stream.read/Stream.write helpers are gone. Wrap them so
+// the webdriver TCP handler can stay close to its 0.15 call shape.
+
+/// Read up to `dest.len` bytes from `stream` into `dest`. Returns the
+/// number of bytes read (0 == EOF / peer close).
+/// Equivalent to the 0.15 `stream.read(dest)`.
+pub fn netRead(stream: std.Io.net.Stream, dest: []u8) !usize {
+    var buf: [4096]u8 = undefined;
+    var r = stream.reader(ioOrPanic(), &buf);
+    return r.interface.readSliceShort(dest);
+}
+
+/// Write all `bytes` to `stream`, flushing.
+/// Equivalent to the 0.15 `stream.write(bytes)` (but guaranteed full-write).
+pub fn netWrite(stream: std.Io.net.Stream, bytes: []const u8) !void {
+    var buf: [4096]u8 = undefined;
+    var w = stream.writer(ioOrPanic(), &buf);
+    try w.interface.writeAll(bytes);
+    try w.interface.flush();
+}
+
 /// Read `file` to EOF, allocating up to `max_size` bytes with `allocator`.
 /// Equivalent to the 0.15 `file.readToEndAlloc(allocator, max_size)`.
 pub fn readToEndAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
