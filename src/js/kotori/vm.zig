@@ -3595,9 +3595,12 @@ pub const VM = struct {
         var pd = &promise.data.promise_data;
         if (pd.state != .pending) return; // already settled
 
-        // Resolution with a thenable (another promise)
+        // Resolution with a thenable (ES2023 §25.4.1.3.2 step 8).
+        // If value is an object and has a callable .then method, treat it as a
+        // thenable — not just native promise objects, but any user-defined thenable.
         if (value.isObject()) {
             const val_obj = value.asJsObject();
+            // Fast-path: native promise object
             if (val_obj.obj_type == .promise) {
                 const inner_pd = &val_obj.data.promise_data;
                 switch (inner_pd.state) {
@@ -3612,6 +3615,38 @@ pub const VM = struct {
                         });
                         return;
                     },
+                }
+            }
+            // Slow-path: non-promise thenable — any object with a callable .then.
+            // ES2023 §25.4.1.3.2 step 8: "Let then be ? Get(resolution, 'then')."
+            // step 9: "If IsCallable(then) is true, call then with resolve/reject callbacks."
+            const then_id = try self.pool.intern("then");
+            if (val_obj.getProperty(then_id)) |then_val| {
+                if (then_val.isObject()) {
+                    const then_obj = then_val.asJsObject();
+                    // ES2023 §7.2.3 IsCallable: obj_type is .function or .native_function.
+                    const is_callable = then_obj.obj_type == .native_function or
+                        then_obj.obj_type == .function;
+                    if (is_callable) {
+                        // Reuse the existing Promise constructor resolve/reject callback
+                        // infrastructure: createPromiseSetter stores the target promise
+                        // and nativeResolveCb/nativeRejectCb retrieve it via __target.
+                        const resolve_fn = try self.createPromiseSetter(promise, false);
+                        const reject_fn = try self.createPromiseSetter(promise, true);
+                        // Call thenable.then(resolve, reject) — §25.4.1.3.2 step 9.
+                        _ = self.callJsFunction(then_val, value, &.{
+                            JsValue.initObject(resolve_fn),
+                            JsValue.initObject(reject_fn),
+                        }) catch |err| {
+                            // §25.4.1.3.2 step 10: If then threw, reject promise with the error.
+                            // Only catch JS-level errors; propagate OOM and other Zig errors.
+                            if (err == error.TypeError or err == error.RangeError) {
+                                return self.rejectPromise(promise, JsValue.undefined_val);
+                            }
+                            return err;
+                        };
+                        return;
+                    }
                 }
             }
         }
@@ -4993,16 +5028,21 @@ pub const VM = struct {
     }
 
     // ── Object.getOwnPropertyNames ────────────────────────────────────
+    // ES2023 §20.1.2.11 — all own string-keyed property names, including
+    // non-enumerable ones, excluding Symbol-keyed properties.
     fn nativeObjectGetOwnPropertyNames(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
-        // Fast-path keys
+        // Fast-path keys (all-default attrs, enumerable properties not yet promoted)
         for (obj.properties.keys()) |key_id| {
             try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
         }
-        // Slow-path keys (includes non-enumerable)
+        // Slow-path descriptor keys (non-enumerable or explicitly defined props).
+        // When a property is promoted from fast-path to descriptors (e.g. via
+        // Object.freeze/seal), it is removed from obj.properties and placed here,
+        // so no duplicate-key check is needed between the two maps.
         if (obj.descriptors) |*d| {
             for (d.keys()) |key_id| {
                 try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
@@ -7861,10 +7901,12 @@ pub const VM = struct {
     fn nativeNumberToFixed(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const n = this.toNumber();
+        // ES2023 §21.1.3.3 step 1: ToIntegerOrInfinity(fractionDigits), then
+        // step 2: If f < 0 or f > 100, throw a RangeError.
         const digits: usize = if (args.len > 0) blk: {
             const d = args[0].toNumber();
-            if (std.math.isNan(d) or d < 0) break :blk 0;
-            if (d > 100) break :blk 100;
+            if (std.math.isNan(d)) break :blk 0;
+            if (d < 0 or d > 100) return error.RangeError;
             break :blk @intFromFloat(d);
         } else 0;
         var buf: [320]u8 = undefined;
@@ -7945,15 +7987,16 @@ pub const VM = struct {
         const n = this.toNumber();
         if (std.math.isNan(n)) return JsValue.initString(try vm.pool.intern("NaN"));
         if (std.math.isInf(n)) return JsValue.initString(try vm.pool.intern(if (n > 0) "Infinity" else "-Infinity"));
-        if (args.len == 0) {
+        if (args.len == 0 or args[0].isUndefined()) {
             var buf: [64]u8 = undefined;
             const s = formatValue(vm.pool, this, &buf);
             return JsValue.initString(try vm.pool.intern(s));
         }
+        // ES2023 §21.1.3.5 step 3: If p < 1 or p > 100, throw a RangeError.
         const prec: usize = blk: {
             const p = args[0].toNumber();
-            if (std.math.isNan(p) or p < 1) break :blk 1;
-            if (p > 100) break :blk 100;
+            if (std.math.isNan(p)) break :blk 1;
+            if (p < 1 or p > 100) return error.RangeError;
             break :blk @intFromFloat(p);
         };
         // Simple implementation using exponential notation conversion
@@ -7968,7 +8011,11 @@ pub const VM = struct {
         const n = this.toNumber();
         if (std.math.isNan(n)) return JsValue.initString(try vm.pool.intern("NaN"));
         if (std.math.isInf(n)) return JsValue.initString(try vm.pool.intern(if (n > 0) "Infinity" else "-Infinity"));
-        _ = args;
+        // ES2023 §21.1.3.4 step 4: If f < 0 or f > 100, throw a RangeError.
+        if (args.len > 0 and !args[0].isUndefined()) {
+            const f = args[0].toNumber();
+            if (!std.math.isNan(f) and (f < 0 or f > 100)) return error.RangeError;
+        }
         var buf: [128]u8 = undefined;
         const s = std.fmt.bufPrint(&buf, "{e}", .{n}) catch return JsValue.undefined_val;
         return JsValue.initString(try vm.pool.intern(s));

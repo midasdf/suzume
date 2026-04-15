@@ -5437,3 +5437,87 @@ test "eval: class accessor configurable is true" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Phase C Wave 2 — ECMAScript 2023 compliance fixes ────────────────────────
+
+// Item 13: Number.prototype.toFixed RangeError (ES2023 §21.1.3.3 step 2)
+test "Number.toFixed RangeError negative digits" {
+    // fractionDigits < 0 must throw RangeError, not silently clamp to 0
+    try std.testing.expectError(error.RangeError, evalExpr(
+        \\(1.5).toFixed(-1)
+    ));
+}
+
+test "Number.toFixed RangeError digits > 100" {
+    // fractionDigits > 100 must throw RangeError
+    try std.testing.expectError(error.RangeError, evalExpr(
+        \\(1.5).toFixed(101)
+    ));
+}
+
+test "Number.toFixed valid range no error" {
+    // fractionDigits in [0, 100] must not throw
+    const result = try evalExpr(
+        \\(1.5).toFixed(2)
+    );
+    try std.testing.expect(result.isString());
+}
+
+// Item 13: Number.prototype.toPrecision RangeError (ES2023 §21.1.3.5 step 3)
+test "Number.toPrecision RangeError precision < 1" {
+    // precision < 1 must throw RangeError
+    try std.testing.expectError(error.RangeError, evalExpr(
+        \\(1.5).toPrecision(0)
+    ));
+}
+
+test "Number.toPrecision RangeError precision > 100" {
+    try std.testing.expectError(error.RangeError, evalExpr(
+        \\(1.5).toPrecision(101)
+    ));
+}
+
+// Item 13: Number.prototype.toExponential RangeError (ES2023 §21.1.3.4 step 4)
+test "Number.toExponential RangeError digits < 0" {
+    try std.testing.expectError(error.RangeError, evalExpr(
+        \\(1.5).toExponential(-1)
+    ));
+}
+
+test "Number.toExponential RangeError digits > 100" {
+    try std.testing.expectError(error.RangeError, evalExpr(
+        \\(1.5).toExponential(101)
+    ));
+}
+
+test "Number.toExponential undefined arg no error" {
+    // undefined fractionDigits is allowed (uses default)
+    const result = try evalExpr(
+        \\(1.5).toExponential()
+    );
+    try std.testing.expect(result.isString());
+}
+
+// Item 11: Promise resolve thenable detection (ES2023 §25.4.1.3.2 step 8-9)
+test "Promise thenable non-promise object with then" {
+    // A plain object with a .then method should be treated as a thenable.
+    const result = try evalWithMicrotasks(
+        \\var out = 0;
+        \\var thenable = { then: function(resolve) { resolve(42); } };
+        \\Promise.resolve(thenable).then(function(v) { out = v; });
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+// Item 8 check: Object.getOwnPropertyNames no duplicate keys after freeze
+test "Object.getOwnPropertyNames no duplicates after freeze" {
+    // After freeze, fast-path keys are promoted to descriptors map; both maps
+    // should not yield duplicate entries in getOwnPropertyNames.
+    const result = try evalExpr(
+        \\var o = {a: 1, b: 2};
+        \\Object.freeze(o);
+        \\var names = Object.getOwnPropertyNames(o);
+        \\names.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
