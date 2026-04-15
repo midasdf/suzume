@@ -2587,13 +2587,10 @@ pub const VM = struct {
                     kio.stdoutWrite(formatValue(vm.pool, arg, &buf));
                 }
                 kio.stdoutWrite("\n");
-                if (std.mem.startsWith(u8, first, "ALERT: RESULT:")) {
+                // Only the SUMMARY line marks end-of-test; WPT_FAIL lines come
+                // first and exiting on them would truncate output.
+                if (std.mem.startsWith(u8, first, "ALERT: RESULT: WPT_SUMMARY:")) {
                     kio.wpt_result_sent = true;
-                    // Force-exit immediately: the main loop's per-iteration
-                    // check is reliable, but Zig's DebugAllocator shutdown can
-                    // take many seconds dumping leak reports, and WPT runners
-                    // need sub-second turnaround per test. Process exit skips
-                    // cleanup (safe — OS reclaims pages).
                     std.process.exit(0);
                 }
                 return;

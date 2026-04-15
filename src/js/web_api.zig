@@ -523,12 +523,10 @@ fn consoleWrite(
             stdout_file.writeStreamingAll(env.ioOrPanic(), "\n") catch |e| {
                 std.debug.print("[web_api] WPT stdout newline write failed: {s}\n", .{@errorName(e)});
             };
-            if (std.mem.startsWith(u8, payload, "ALERT: RESULT: ")) {
+            // Only the SUMMARY line marks end-of-test; WPT_FAIL lines come first
+            // and exiting on them would truncate output before SUMMARY is emitted.
+            if (std.mem.startsWith(u8, payload, "ALERT: RESULT: WPT_SUMMARY:")) {
                 wpt_result_sent = true;
-                // Force-exit immediately: the main loop's per-iteration check
-                // is reliable, but debug-mode shutdown can be slow enough that
-                // WPT runners misinterpret it as a hang. Process exit skips
-                // cleanup (safe — OS reclaims pages).
                 std.process.exit(0);
             }
             return quickjs.JS_UNDEFINED();
