@@ -171,6 +171,29 @@ const sr = struct {
             a = @ptrCast(root.host);
         }
     }
+
+    /// Clear all shadow-DOM global state. Must be called on VM teardown to
+    /// avoid stale pointer→scope mappings leaking into the next document,
+    /// which can cause freed/reused lxb node pointers to appear as shadow
+    /// hosts or fragments (DOM Living Standard §4.8 requires tree-scope
+    /// state to be tied to the Document).
+    pub fn reset() void {
+        if (g_shadow_roots) |*map| {
+            var it = map.valueIterator();
+            while (it.next()) |r_ptr| g_allocator.destroy(r_ptr.*);
+            map.deinit();
+            g_shadow_roots = null;
+        }
+        if (g_node_scope) |*map| {
+            map.deinit();
+            g_node_scope = null;
+        }
+        if (g_host_to_shadow) |*map| {
+            map.deinit();
+            g_host_to_shadow = null;
+        }
+        g_next_id = 1;
+    }
 };
 
 // ── Lexbor extern functions ─────────────────────────────────────────
@@ -262,6 +285,10 @@ pub fn deinit() void {
         m.deinit();
         g_scroll_map = null;
     }
+    // Shadow DOM tree-scope state is per-Document (DOM §4.8); clear it so
+    // freed lxb node pointers reused by the next document don't inherit
+    // stale scope ids or impersonate old shadow roots.
+    sr.reset();
     g_document = null;
     dom_dirty = false;
 }
@@ -817,7 +844,11 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     // Stash raw path as a JS array on the event as __rawPath (wrappers)
     // and __rawPathIds as matching numeric pointers.
     const raw_arr = try vm.createObj(.{ .obj_type = .array });
+    raw_arr.data = .{ .array = .empty };
+    raw_arr.prototype = vm.array_proto;
     const raw_ids = try vm.createObj(.{ .obj_type = .array });
+    raw_ids.data = .{ .array = .empty };
+    raw_ids.prototype = vm.array_proto;
     var pi: usize = 0;
     while (pi < path_len) : (pi += 1) {
         const w = wrapNode(vm, path_buf[pi]) orelse continue;
@@ -873,6 +904,8 @@ fn nativeEventComposedPath(ctx: *anyopaque, this: JsValue, _: []const JsValue) a
     const ct_root = sr.treeRoot(ct_node);
 
     const out = try vm.createObj(.{ .obj_type = .array });
+    out.data = .{ .array = .empty };
+    out.prototype = vm.array_proto;
     var i: usize = 0;
     while (i < raw_id_arr.data.array.items.len) : (i += 1) {
         const id_val = raw_id_arr.data.array.items[i];
