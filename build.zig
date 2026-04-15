@@ -78,17 +78,17 @@ fn findWoffSharedObject(b: *std.Build, dirs: []const []const u8, stem: []const u
     var buf: [512]u8 = undefined;
     for (dirs) |dir| {
         const unversioned = std.fmt.bufPrint(&buf, "{s}/{s}.so", .{ dir, stem }) catch continue;
-        std.fs.accessAbsolute(unversioned, .{}) catch continue;
+        std.Io.Dir.accessAbsolute(b.graph.io, unversioned, .{}) catch continue;
         return .{ .cwd_relative = b.dupe(unversioned) };
     }
     var best_name_len: usize = 0;
     var best_path: ?[]const u8 = null;
     defer if (best_path) |p| b.allocator.free(p);
     for (dirs) |dir| {
-        var d = std.fs.openDirAbsolute(dir, .{ .iterate = true }) catch continue;
-        defer d.close();
+        var d = std.Io.Dir.openDirAbsolute(b.graph.io, dir, .{ .iterate = true }) catch continue;
+        defer d.close(b.graph.io);
         var it = d.iterate();
-        while (it.next() catch break) |ent| {
+        while (it.next(b.graph.io) catch break) |ent| {
             if (ent.kind != .file) continue;
             if (!std.mem.startsWith(u8, ent.name, stem)) continue;
             const after = ent.name[stem.len..];
