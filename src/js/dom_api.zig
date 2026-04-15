@@ -1625,13 +1625,18 @@ fn styleSetProperty(
     const val_s = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val_s.ptr);
 
-    // Parse optional priority argument (arg[2]): "important" → important=true
+    // Parse optional priority argument (arg[2]).
+    // CSSOM §6.7.3 step 4: if priority is non-empty and not ASCII case-insensitive
+    // "important", return without doing anything.
     var is_important = false;
     if (argc >= 3) {
         const prio_s = jsStringToSlice(c, args[2]);
         if (prio_s) |ps| {
             defer qjs.JS_FreeCString(c, ps.ptr);
-            is_important = dom_style.eqlIgnoreCase(ps.ptr[0..ps.len], "important");
+            const prio = ps.ptr[0..ps.len];
+            if (prio.len > 0 and !dom_style.eqlIgnoreCase(prio, "important"))
+                return quickjs.JS_UNDEFINED();
+            is_important = prio.len > 0; // non-empty and == "important"
         }
     }
 
@@ -5985,6 +5990,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  };
             \\  CSSStyleDeclaration.prototype.setProperty=function(n,v,p){
             \\    n=n.toLowerCase();v=String(v).trim();
+            \\    // CSSOM §6.7.3 step 4: non-empty priority that is not "important" → return
+            \\    if(typeof p==='string'&&p!==''&&p.toLowerCase()!=='important')return;
             \\    var imp=typeof p==='string'&&p.toLowerCase()==='important';
             \\    for(var i=0;i<this._entries.length;i++){if(this._entries[i].name===n){if(v===''){this._entries.splice(i,1);}else{this._entries[i].value=v;this._entries[i].important=imp;}this._commit();return;}}
             \\    if(v!=='')this._entries.push({name:n,value:v,important:imp});

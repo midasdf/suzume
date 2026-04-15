@@ -1,8 +1,15 @@
-=== WPT Baseline 2026-04-02 05:18 ===
+=== WPT Baseline 2026-04-03 02:54 ===
 
   WPT Results: dom/nodes
 ===========================================
-  Test files: 227 (pass=55 fail=131 err=41)
-  Subtests: 5565/7809 pass
-  Pass rate: 71.3%
+  Test files: 227 (pass=57 fail=161 err=9)
+  Subtests: 5607/7928 pass
+  Pass rate: 70.7%
+===========================================
+
+  WPT Results: dom/events
+===========================================
+  Test files: 149 (pass=102 fail=40 err=7)
+  Subtests: 300/425 pass
+  Pass rate: 70.6%
 ===========================================

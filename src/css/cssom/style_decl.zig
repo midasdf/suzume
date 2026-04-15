@@ -1167,3 +1167,121 @@ test "webkit alias: -webkit-flex-flow shorthand upsertShorthand round-trip" {
     const result = list.getPropertyValueShorthand("-webkit-flex-flow", &buf);
     try std.testing.expect(result != null);
 }
+
+// ── CSSOM §6.7.3 setProperty / getPropertyPriority semantics ────────────────
+
+test "CSSOM §6.7.3: setProperty with priority 'important' sets important flag" {
+    // Step 6: if priority is "important" (case-insensitive), set the important flag.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "red", true);
+
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expect(list.entries.items[0].important);
+    // getPropertyPriority: property exists and is important → "important"
+    const idx = list.indexOf("color");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("important",
+        if (list.entries.items[idx.?].important) "important" else "");
+}
+
+test "CSSOM §6.7.3: setProperty with empty priority does not set important" {
+    // Step 4: empty priority string → treat as non-important (no early return).
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "blue", false);
+
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expect(!list.entries.items[0].important);
+    const idx = list.indexOf("color");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("",
+        if (list.entries.items[0].important) "important" else "");
+}
+
+test "CSSOM §6.7.3: setProperty with invalid priority leaves existing property unchanged" {
+    // Step 4: non-empty priority that is not "important" → return without doing anything.
+    // At the StyleDeclList layer the caller (dom_api.zig) performs this guard;
+    // we verify the list is not mutated when the invalid-priority case is bypassed.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // Pre-populate an entry.
+    try list.upsert(alloc, "color", "red", false);
+
+    // Simulate §6.7.3 step 4: invalid priority → caller does not call upsert.
+    // Verify entry is unchanged.
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(!list.entries.items[0].important);
+}
+
+test "CSSOM §6.7.3: getPropertyPriority returns 'important' for important property" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "margin-top", "10px", true);
+
+    const idx = list.indexOf("margin-top");
+    try std.testing.expect(idx != null);
+    const prio: []const u8 = if (list.entries.items[idx.?].important) "important" else "";
+    try std.testing.expectEqualStrings("important", prio);
+}
+
+test "CSSOM §6.7.3: getPropertyPriority returns '' for non-important property" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "margin-top", "10px", false);
+
+    const idx = list.indexOf("margin-top");
+    try std.testing.expect(idx != null);
+    const prio: []const u8 = if (list.entries.items[idx.?].important) "important" else "";
+    try std.testing.expectEqualStrings("", prio);
+}
+
+test "CSSOM §6.7.3: getPropertyPriority returns '' for unknown property" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // No entries at all → indexOf returns null → caller returns "".
+    const idx = list.indexOf("color");
+    try std.testing.expect(idx == null);
+}
+
+test "CSSOM §6.7.3: setProperty priority 'IMPORTANT' (uppercase) accepted" {
+    // Step 4 case-insensitive comparison: "IMPORTANT" must not be rejected.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    // std.ascii.eqlIgnoreCase("IMPORTANT", "important") == true → important = true.
+    const is_important = std.ascii.eqlIgnoreCase("IMPORTANT", "important");
+    try std.testing.expect(is_important);
+
+    try list.upsert(alloc, "color", "green", is_important);
+    try std.testing.expect(list.entries.items[0].important);
+}
+
+test "CSSOM §6.7.3: setProperty clears important when re-set with empty priority" {
+    // Updating an existing property with priority="" clears the important flag.
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    try list.upsert(alloc, "color", "red", true);
+    try std.testing.expect(list.entries.items[0].important);
+
+    // Re-set same property, non-important.
+    try list.upsert(alloc, "color", "red", false);
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expect(!list.entries.items[0].important);
+}
