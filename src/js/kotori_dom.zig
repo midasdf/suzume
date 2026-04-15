@@ -368,6 +368,17 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(win_obj, "addEventListener", &nativeAddEventListener);
     try vm.registerNativeMethod(win_obj, "removeEventListener", &nativeWindowRemoveEventListener);
     try vm.registerNativeMethod(win_obj, "dispatchEvent", &nativeDispatchEvent);
+    // CSSOM §6.5: Window.getComputedStyle(element) → CSSStyleDeclaration.
+    // MVP: returns a dom_style-backed object whose getPropertyValue() reads
+    // the element's inline style attribute. Covers the majority of WPT
+    // getComputedStyle tests that assert `style="X:Y"` round-trips.
+    try vm.registerNativeMethod(win_obj, "getComputedStyle", &nativeGetComputedStyle);
+    // Also expose getComputedStyle as a bare global so that
+    // `getComputedStyle(el)` (without `window.`) works the same way.
+    const gcs_fn = try vm.createObj(.{ .obj_type = .native_function });
+    gcs_fn.data = .{ .native_fn = &nativeGetComputedStyle };
+    const gcs_id = try vm.pool.intern("getComputedStyle");
+    try vm.globals.put(vm.allocator, gcs_id, JsValue.initObject(gcs_fn));
     const window_id = try vm.pool.intern("window");
     try vm.globals.put(vm.allocator, window_id, JsValue.initObject(win_obj));
     const self_id = try vm.pool.intern("self");
@@ -545,6 +556,13 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
 fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
 
+    // Let own properties (methods registered via registerNativeMethod, e.g.
+    // getPropertyValue on the computed-style object) resolve before the
+    // inline-style fallback. Without this, the style getter would shadow
+    // registered methods since it returns "" for anything it doesn't match.
+    const name_id = vm.pool.intern(name) catch return null;
+    if (obj.getProperty(name_id)) |own| return own;
+
     if (eql(name, "cssText"))
         return getAttr(vm, @ptrCast(elem), "style");
 
@@ -667,6 +685,74 @@ fn nativeCreateElement(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyer
     const doc = g_document orelse return JsValue.null_val;
     const elem = dom_b.lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return JsValue.null_val;
     return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
+}
+
+/// CSSOM §6.5 — Window.getComputedStyle(element[, pseudoElt]).
+///
+/// MVP: returns a CSSStyleDeclaration-like object backed by the element's
+/// inline `style` attribute. `getPropertyValue(name)` reads via the same
+/// kebab-case lookup that `element.style.X` uses. Unknown properties
+/// return the empty string per CSSOM §2.2 "serialize a CSS value".
+///
+/// Does not (yet) reflect the cascade, user-agent defaults, or computed
+/// layout values — callers that need those should use QuickJS
+/// (`SUZUME_JS=quickjs`) or we will extend this later.
+fn nativeGetComputedStyle(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.null_val;
+    const node = getArgNode(args[0]) orelse return JsValue.null_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    const obj = try vm.createObj(.{ .obj_type = .dom_style });
+    obj.data = .{ .dom_style = @ptrCast(elem) };
+    // Register getPropertyValue as an own property so that domStyleGetProp's
+    // own-property check above resolves it before the CSS-name fallback.
+    try vm.registerNativeMethod(obj, "getPropertyValue", &nativeCSSGetPropertyValue);
+    try vm.registerNativeMethod(obj, "getPropertyPriority", &nativeCSSGetPropertyPriority);
+    // __element internal back-reference (matches QuickJS path for debugging).
+    const elem_sid = try vm.pool.intern("__element");
+    obj.setProperty(vm.allocator, elem_sid, args[0]) catch {};
+    return JsValue.initObject(obj);
+}
+
+/// CSSStyleDeclaration.getPropertyValue(propertyName) for the computed-style
+/// object. MVP: looks up the (already kebab-case) property name in the
+/// element's inline style attribute, returning the trimmed value or "".
+fn nativeCSSGetPropertyValue(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString() or !this.isObject()) {
+        return JsValue.initString(try vm.pool.intern(""));
+    }
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const prop_in = vm.pool.get(args[0].asStringId()) orelse "";
+
+    // Normalize to lowercase kebab-case. getPropertyValue takes the CSS
+    // property name (already kebab per CSSOM), but accept camelCase too for
+    // leniency (some callers pass "backgroundColor").
+    var buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &buf);
+
+    var attr_len: usize = 0;
+    const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    if (findCssPropValue(style_str, css_prop)) |val| {
+        return JsValue.initString(try vm.pool.intern(val));
+    }
+    return JsValue.initString(try vm.pool.intern(""));
+}
+
+/// CSSStyleDeclaration.getPropertyPriority — returns "important" if the
+/// property is marked !important in the inline style, else "". MVP does not
+/// parse !important (inline parser above strips everything at ';'), so
+/// always returns "". This avoids `undefined` when scripts call it.
+fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    return JsValue.initString(try vm.pool.intern(""));
 }
 
 fn nativeCreateTextNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
