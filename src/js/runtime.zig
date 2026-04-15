@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const web_api = @import("web_api.zig");
@@ -327,7 +328,7 @@ const max_script_execution_ms: i64 = 10000; // 10 seconds (normal mode)
 const max_script_execution_ms_wpt: i64 = 25000; // 25 seconds (WPT mode)
 
 fn currentTimeMs() i64 {
-    const ts = std.time.milliTimestamp();
+    const ts = env.nowMs();
     return ts;
 }
 

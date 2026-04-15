@@ -53,6 +53,19 @@ pub fn readAll(file: std.Io.File, dest: []u8) !usize {
     return r.interface.readSliceShort(dest);
 }
 
+// ─── Clock helpers ───────────────────────────────────────────────────
+//
+// 0.16 removed std.time.milliTimestamp and std.posix.clock_gettime.
+// The new API routes wall-clock reads through std.Io.Clock, requiring
+// an Io handle. Wrap the Clock.now(io).toMilliseconds() dance so call
+// sites stay single-expression.
+
+/// Current wall-clock time in milliseconds since the Unix epoch.
+/// Equivalent to the 0.15 `std.time.milliTimestamp()`.
+pub fn nowMs() i64 {
+    return std.Io.Clock.real.now(ioOrPanic()).toMilliseconds();
+}
+
 /// Read `file` to EOF, allocating up to `max_size` bytes with `allocator`.
 /// Equivalent to the 0.15 `file.readToEndAlloc(allocator, max_size)`.
 pub fn readToEndAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_size: usize) ![]u8 {

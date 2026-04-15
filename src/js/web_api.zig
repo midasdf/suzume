@@ -425,8 +425,7 @@ pub fn setGlobalCtx(ctx: ?*qjs.JSContext) void {
 }
 
 fn currentTimeMs() i64 {
-    const ts = std.posix.clock_gettime(.REALTIME) catch return 0;
-    return @divTrunc(ts.sec * 1000 + @divTrunc(ts.nsec, 1_000_000), 1);
+    return env.nowMs();
 }
 
 // ── Console API ─────────────────────────────────────────────────────

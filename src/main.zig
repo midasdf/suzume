@@ -517,7 +517,7 @@ fn saveTransitionSnapshot(pg: *PageState, _: *anim_mod.AnimationState, hover_nod
 fn startHoverTransitions(pg: *PageState, anim_state: *anim_mod.AnimationState) void {
     const styles = &(pg.styles orelse return);
 
-    const now_ms: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp()));
+    const now_ms: f64 = @as(f64, @floatFromInt(env.nowMs()));
 
     var it = transition_snapshots.iterator();
     while (it.next()) |entry| {
@@ -1301,7 +1301,7 @@ pub fn main(init: std.process.Init) !void {
             if (anim_pg) |pg| {
                 if (pg.anim_state) |*as| {
                     if (pg.root_box != null and pg.styles != null and as.hasActiveAnimations()) {
-                        const now_ms: f64 = @as(f64, @floatFromInt(std.time.milliTimestamp()));
+                        const now_ms: f64 = @as(f64, @floatFromInt(env.nowMs()));
                         applyAnimationsToBoxTree(pg.root_box.?, as, &pg.styles.?.keyframes, now_ms);
                     }
                     // Dispatch pending transition/animation events to JS
@@ -1471,7 +1471,7 @@ pub fn main(init: std.process.Init) !void {
                     // Tick timers for all active iframe contexts
                     dom_api.iframe.tickAllIframeTimers();
                     if (dom_api.dom_dirty) {
-                        const now_ms = std.time.milliTimestamp();
+                        const now_ms = env.nowMs();
                         if (now_ms - last_restyle_time >= min_restyle_interval_ms) {
                             dom_api.dom_dirty = false;
                             restylePage(pg, allocator, &fonts, surface.width, surface.height);
@@ -1590,11 +1590,11 @@ pub fn main(init: std.process.Init) !void {
                 // Load up to 10 images per tick, but cap total time at 3 seconds
                 // to keep the event loop responsive
                 var batch: usize = 0;
-                const tick_start = std.time.milliTimestamp();
+                const tick_start = env.nowMs();
                 const max_tick_ms: i64 = 3000; // max 3 seconds per tick for image loading
                 while (pg.pending_images_idx < pg.pending_images.items.len and pg.pending_images_loaded < 300 and batch < 10) : (batch += 1) {
                     // Check per-tick time budget
-                    if (batch > 0 and std.time.milliTimestamp() - tick_start > max_tick_ms) break;
+                    if (batch > 0 and env.nowMs() - tick_start > max_tick_ms) break;
                     const entry = pg.pending_images.items[pg.pending_images_idx];
                     pg.pending_images_idx += 1;
 
