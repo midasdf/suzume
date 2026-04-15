@@ -870,6 +870,9 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
     const flex_indices = flex_indices_buf[0..flex_count];
 
     // Compute outer heights (main-axis sizes) for each flex child.
+    // CSS Sizing L3 §5.2 box-sizing + CSS Flexbox L1 §9.2: with
+    // `box-sizing: border-box`, an explicit flex-basis / height already
+    // includes padding + border, so only margin counts as extra on top.
     var outer_heights_buf: [256]f32 = undefined;
     for (flex_indices, 0..) |ci, fi| {
         const child = children[ci];
@@ -879,11 +882,14 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
             .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
             else => null,
         };
-        const child_main = basis orelse (explicit_child_h orelse child.content.height);
-        const child_outer = child.margin.top + child.margin.bottom +
-            child.padding.top + child.padding.bottom +
+        const child_pad_bdr = child.padding.top + child.padding.bottom +
             child.border.top + child.border.bottom;
-        outer_heights_buf[fi] = child_main + child_outer;
+        const is_border_box = child.style.box_sizing == .border_box and
+            (basis != null or explicit_child_h != null);
+        const child_main = basis orelse (explicit_child_h orelse child.content.height);
+        const outer_extra = child.margin.top + child.margin.bottom +
+            if (is_border_box) @as(f32, 0) else child_pad_bdr;
+        outer_heights_buf[fi] = child_main + outer_extra;
     }
 
     // Split items into wrap lines (columns). §9.3: Each column is a flex line.
@@ -951,6 +957,8 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
         const line_free = line_available - line_base_size;
 
         // Compute final heights for this line with flex-grow/shrink.
+        // For border-box, `child_main` represents the outer (border-box) size;
+        // final content height = outer − (padding + border).
         for (l_start..l_end) |fi| {
             const child = children[flex_indices[fi]];
             const basis: ?f32 = resolveFlexBasis(child, explicit_h, fonts, false);
@@ -959,6 +967,10 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
                 .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
                 else => null,
             };
+            const is_border_box = child.style.box_sizing == .border_box and
+                (basis != null or explicit_child_h != null);
+            const child_pad_bdr = child.padding.top + child.padding.bottom +
+                child.border.top + child.border.bottom;
             var child_main = basis orelse (explicit_child_h orelse child.content.height);
 
             if (line_free > 0 and line_grow > 0) {
@@ -975,7 +987,11 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
             };
             child_main = @max(child_main, min_h);
             child_main = @max(child_main, 0);
-            final_heights_buf[fi] = child_main;
+            // Store the *content* height (strip pad+border for border-box).
+            final_heights_buf[fi] = if (is_border_box)
+                @max(child_main - child_pad_bdr, 0)
+            else
+                child_main;
         }
 
         // Re-layout children in this line with final heights and measure cross
@@ -1248,18 +1264,24 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
 
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
-        // flex-basis on column = height hint
+        // flex-basis on column = height hint.
+        // CSS Sizing L3 §5.2 box-sizing + CSS Flexbox L1 §9.2: with
+        // `box-sizing: border-box`, an explicit flex-basis / height already
+        // includes padding + border.
         const basis: ?f32 = resolveFlexBasis(child, explicit_h, fonts, false);
         const explicit_child_h: ?f32 = switch (child.style.height) {
             .px => |h| h,
             .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
             else => null,
         };
-        const child_outer = child.margin.top + child.margin.bottom +
-            child.padding.top + child.padding.bottom +
+        const child_pad_bdr = child.padding.top + child.padding.bottom +
             child.border.top + child.border.bottom;
+        const is_border_box = child.style.box_sizing == .border_box and
+            (basis != null or explicit_child_h != null);
+        const child_outer_extra = child.margin.top + child.margin.bottom +
+            if (is_border_box) @as(f32, 0) else child_pad_bdr;
         const child_main = basis orelse (explicit_child_h orelse child.content.height);
-        total_base_size += child_main + child_outer;
+        total_base_size += child_main + child_outer_extra;
         total_grow += child.style.flex_grow;
         total_shrink += child.style.flex_shrink;
     }
@@ -1286,12 +1308,23 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
             .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
             else => null,
         };
+        const is_border_box_c = child.style.box_sizing == .border_box and
+            (basis != null or explicit_child_h != null);
+        const child_pad_bdr_c = child.padding.top + child.padding.bottom +
+            child.border.top + child.border.bottom;
         var child_main = basis orelse (explicit_child_h orelse child.content.height);
 
         if (free_space > 0 and total_grow > 0) {
             child_main += free_space * child.style.flex_grow / total_grow;
         } else if (free_space < 0 and total_shrink > 0) {
             child_main += free_space * child.style.flex_shrink / total_shrink;
+        }
+
+        // border-box: `child_main` is the outer (border-box) size — convert to
+        // content size before storing (subsequent code treats stored value as
+        // content height).
+        if (is_border_box_c) {
+            child_main = @max(child_main - child_pad_bdr_c, 0);
         }
 
         // Apply min-height constraint
@@ -1946,4 +1979,243 @@ test "flex-wrap column: align-items flex-start keeps item width" {
     // Both at x=0.
     try testing.expectApproxEqAbs(@as(f32, 0), out[0][0], 0.5);
     try testing.expectApproxEqAbs(@as(f32, 0), out[1][0], 0.5);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// box-sizing: border-box on flex items
+//
+// Spec:
+// - CSS Box Model §3 — specified width/height with `border-box` INCLUDES
+//   padding + border; content size = specified − (padding + border).
+// - CSS Sizing L3 §5.2 — box-sizing property.
+// - CSS Flexbox L1 §9.2 — used flex-basis derives from box-sizing-aware size.
+// ═══════════════════════════════════════════════════════════════════════════
+
+test "box-sizing: border-box row — flex-basis includes padding" {
+    // Row, container 600px. Child: flex-basis:200px, padding:10 L+R,
+    // box-sizing:border-box. Expected content.width = 200 − 20 = 180,
+    // outer (border-box) main size = 200.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 200 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    a.style.box_sizing = .border_box;
+    a.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    defer a.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 180), widths[0], 0.5);
+}
+
+test "box-sizing: border-box row — width includes border" {
+    // Row. Child: width:150px, border:5 each side, box-sizing:border-box.
+    // Expected content.width = 150 − 10 = 140.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .auto;
+    a.style.width = .{ .px = 150 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    a.style.box_sizing = .border_box;
+    a.border = .{ .left = 5, .right = 5, .top = 0, .bottom = 0 };
+    defer a.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 140), widths[0], 0.5);
+}
+
+test "box-sizing: border-box column — height includes padding" {
+    // Column, container 200×400. Child: height:100, padding:15 top+bottom,
+    // box-sizing:border-box. Expected content.height = 100 − 30 = 70.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = Box{};
+    root.box_type = .block;
+    root.style.display = .flex;
+    root.style.flex_direction = .column;
+    root.style.width = .{ .px = 200 };
+    root.style.height = .{ .px = 400 };
+    root.style.align_items = .flex_start;
+    root.content = .{ .x = 0, .y = 0, .width = 200, .height = 0 };
+    defer root.children.deinit(alloc);
+
+    var a = Box{};
+    a.box_type = .block;
+    a.style.display = .block;
+    a.style.width = .{ .px = 100 };
+    a.style.height = .{ .px = 100 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    a.style.box_sizing = .border_box;
+    a.padding = .{ .top = 15, .bottom = 15, .left = 0, .right = 0 };
+    defer a.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+
+    layoutFlex(&root, 200, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 70), a.content.height, 0.5);
+}
+
+test "box-sizing: mixed content-box / border-box siblings in row" {
+    // Two siblings, no grow/shrink:
+    //   A: flex-basis:100, border-box, padding 10 L+R → content = 80
+    //   B: flex-basis:100, content-box (default), padding 10 L+R → content = 100
+    // Outer sizes: A=100, B=120. A.x=0, B.x=100.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 100 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    a.style.box_sizing = .border_box;
+    a.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 100 };
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    b.style.box_sizing = .content_box;
+    b.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    defer b.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    layoutFlex(&root, 600, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 80), a.content.width, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 100), b.content.width, 0.5);
+    // A occupies 0..100 (outer). B starts at 100 + pad-left (10) = 110.
+    try testing.expectApproxEqAbs(@as(f32, 10), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 110), b.content.x, 0.5);
+}
+
+test "box-sizing: border-box with flex-basis length and wrap" {
+    // Wrap row. Container 300. Three items each flex-basis:120 border-box,
+    // padding 10 L+R. Each outer width = 120. Two fit per line
+    // (120+120=240≤300; 240+120=360>300 → wrap). content width each = 100.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.flex_wrap = .wrap;
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 120 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    a.style.box_sizing = .border_box;
+    a.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 120 };
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    b.style.box_sizing = .border_box;
+    b.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    defer b.children.deinit(alloc);
+    var c = tfMakeChild(0);
+    c.style.flex_basis = .{ .px = 120 };
+    c.style.flex_grow = 0;
+    c.style.flex_shrink = 0;
+    c.style.box_sizing = .border_box;
+    c.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    defer c.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    // Each item content width = 120 − 20 = 100.
+    try testing.expectApproxEqAbs(@as(f32, 100), a.content.width, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 100), b.content.width, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 100), c.content.width, 0.5);
+}
+
+test "box-sizing: border-box column wrap — heights include padding" {
+    // Column wrap: container 200×100. Items each height:40 border-box,
+    // padding 5 top+bottom → outer main = 40, content.height = 30.
+    // Two items per column.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = Box{};
+    root.box_type = .block;
+    root.style.display = .flex;
+    root.style.flex_direction = .column;
+    root.style.flex_wrap = .wrap;
+    root.style.width = .{ .px = 200 };
+    root.style.height = .{ .px = 100 };
+    root.style.align_items = .flex_start;
+    root.content = .{ .x = 0, .y = 0, .width = 200, .height = 0 };
+    defer root.children.deinit(alloc);
+
+    var a = Box{};
+    a.box_type = .block;
+    a.style.display = .block;
+    a.style.width = .{ .px = 50 };
+    a.style.height = .{ .px = 40 };
+    a.style.box_sizing = .border_box;
+    a.padding = .{ .top = 5, .bottom = 5, .left = 0, .right = 0 };
+    defer a.children.deinit(alloc);
+    var b = Box{};
+    b.box_type = .block;
+    b.style.display = .block;
+    b.style.width = .{ .px = 50 };
+    b.style.height = .{ .px = 40 };
+    b.style.box_sizing = .border_box;
+    b.padding = .{ .top = 5, .bottom = 5, .left = 0, .right = 0 };
+    defer b.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    layoutFlex(&root, 200, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 30), a.content.height, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 30), b.content.height, 0.5);
+}
+
+test "box-sizing: border-box row with border and padding combined" {
+    // Row, container 600. Child: width:200 border-box, padding:10 L+R,
+    // border:5 L+R. content.width = 200 − 20 − 10 = 170.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .auto;
+    a.style.width = .{ .px = 200 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    a.style.box_sizing = .border_box;
+    a.padding = .{ .left = 10, .right = 10, .top = 0, .bottom = 0 };
+    a.border = .{ .left = 5, .right = 5, .top = 0, .bottom = 0 };
+    defer a.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 170), widths[0], 0.5);
 }

@@ -299,13 +299,25 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
 
     // Pre-resolve definite height for flex/grid containers so they can distribute space.
     // Must happen BEFORE delegation to flex/grid layout.
+    // CSS Box Model §3 / CSS Sizing L3 §5.2: with box-sizing:border-box the
+    // specified height includes padding+border, so subtract them to get
+    // content height.
+    const pad_v_pre = box.padding.top + box.padding.bottom;
+    const bdr_v_pre = box.border.top + box.border.bottom;
     switch (box.style.height) {
         .px => |h| {
-            box.content.height = h;
+            box.content.height = if (box.style.box_sizing == .border_box)
+                @max(h - pad_v_pre - bdr_v_pre, 0)
+            else
+                h;
         },
         .percent => |pct| {
             if (viewport_height > 0) {
-                box.content.height = pct * viewport_height / 100.0;
+                const resolved = pct * viewport_height / 100.0;
+                box.content.height = if (box.style.box_sizing == .border_box)
+                    @max(resolved - pad_v_pre - bdr_v_pre, 0)
+                else
+                    resolved;
             }
         },
         else => {},
@@ -473,13 +485,23 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
     // Pre-resolve definite height BEFORE laying out children, so children can
     // resolve their percentage heights against this box's height.
     // (Auto height remains 0 and is computed from content after children layout.)
+    // box-sizing:border-box: specified height includes padding+border.
+    const pad_v2 = box.padding.top + box.padding.bottom;
+    const bdr_v2 = box.border.top + box.border.bottom;
     switch (box.style.height) {
         .px => |h| {
-            box.content.height = h;
+            box.content.height = if (box.style.box_sizing == .border_box)
+                @max(h - pad_v2 - bdr_v2, 0)
+            else
+                h;
         },
         .percent => |pct| {
             if (viewport_height > 0) {
-                box.content.height = pct * viewport_height / 100.0;
+                const resolved2 = pct * viewport_height / 100.0;
+                box.content.height = if (box.style.box_sizing == .border_box)
+                    @max(resolved2 - pad_v2 - bdr_v2, 0)
+                else
+                    resolved2;
             }
         },
         else => {}, // auto — determined by content
@@ -507,20 +529,30 @@ pub fn layoutBlockVp(box: *Box, containing_width: f32, cursor_y: f32, fonts: *Fo
         }
     }
 
-    // Apply explicit height if set, and vertically center inline content
+    // Apply explicit height if set, and vertically center inline content.
+    // box-sizing:border-box: specified height includes padding+border.
     const content_height_before = box.content.height;
+    const pad_v3 = box.padding.top + box.padding.bottom;
+    const bdr_v3 = box.border.top + box.border.bottom;
     switch (box.style.height) {
         .px => |h| {
-            box.content.height = h;
+            box.content.height = if (box.style.box_sizing == .border_box)
+                @max(h - pad_v3 - bdr_v3, 0)
+            else
+                h;
             // If aspect-ratio set and width is auto, derive width from height
             if (box.style.aspect_ratio > 0 and explicit_width == null) {
-                box.content.width = h * box.style.aspect_ratio;
+                box.content.width = box.content.height * box.style.aspect_ratio;
             }
         },
         .percent => |pct| {
             // Resolve percent height against viewport height as fallback
             if (viewport_height > 0) {
-                box.content.height = pct * viewport_height / 100.0;
+                const resolved3 = pct * viewport_height / 100.0;
+                box.content.height = if (box.style.box_sizing == .border_box)
+                    @max(resolved3 - pad_v3 - bdr_v3, 0)
+                else
+                    resolved3;
                 // If aspect-ratio set and width is auto, derive width from height
                 if (box.style.aspect_ratio > 0 and explicit_width == null) {
                     box.content.width = box.content.height * box.style.aspect_ratio;
