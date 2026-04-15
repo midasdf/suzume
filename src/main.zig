@@ -82,6 +82,32 @@ fn syncRestyle() void {
     }
 }
 
+/// Bridge: kotori.getComputedStyle → flush pending restyle/layout.
+/// Matches `windowGetComputedStyle`'s call to `dom_api.flushStylesIfDirty`.
+fn kotoriFlushStylesIfDirty() void {
+    dom_api.flushStylesIfDirty();
+}
+
+/// Bridge: kotori.getComputedStyle → resolve the CSSOM §6.5 resolved value
+/// for `prop` on `node`. Serializes into `buf` and returns the slice, or
+/// `null` if the property is not supported by the shared serializer (caller
+/// falls back to inline-style attribute lookup).
+fn kotoriResolveComputedValue(
+    node_opaque: *anyopaque,
+    prop: []const u8,
+    buf: []u8,
+) ?[]const u8 {
+    const computed_slice = @import("css/cssom/computed_slice.zig");
+    const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_opaque));
+    const styles_map = dom_api.g_styles orelse return null;
+    const computed = styles_map.get(@intFromPtr(node)) orelse return null;
+    const box_opt = if (dom_api.g_root_box) |root|
+        dom_api.findBoxForNode(root, node)
+    else
+        null;
+    return computed_slice.computedStyleToSlice(&computed, prop, box_opt, buf);
+}
+
 /// After `tab_mgr` switches the active tab, restore scroll/URL bar and lazy-load an empty page if needed.
 fn applyActiveTabToUi(
     allocator: std.mem.Allocator,
@@ -859,6 +885,12 @@ fn navigateTo(
     g_restyle_width = layout_width;
     g_restyle_height = layout_height;
     dom_api.restyle_fn = &syncRestyle;
+
+    // Bridge kotori.getComputedStyle to the same cascade result the QuickJS
+    // path uses (CSSOM §6.5 resolved value algorithm). Harmless to re-set
+    // each navigation — both values are global.
+    kotori_dom.setFlushCallback(&kotoriFlushStylesIfDirty);
+    kotori_dom.setResolveCallback(&kotoriResolveComputedValue);
 
     // Defer JavaScript execution until after first paint for faster initial render.
     page.pending_js_init = true;

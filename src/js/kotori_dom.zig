@@ -27,6 +27,32 @@ const lxb = @cImport({
     @cInclude("lexbor/dom/interfaces/node.h");
 });
 
+// ── Cascade / computed-style resolution ────────────────────────────
+// kotori_dom is its own build module, so it cannot import cascade.zig /
+// layout/box.zig directly (those files already belong to the root
+// module). Instead, main registers a `resolve_fn` callback that performs
+// the actual cascade lookup + CSSOM §6.5/§6.7 serialization using the
+// shared helpers, returning the serialized resolved value as a slice.
+pub var flush_fn: ?*const fn () void = null;
+/// Resolver callback signature. `node` is an opaque `lxb_dom_node_t*` — the
+/// main module's lexbor cImport is a distinct type from kotori_dom's, so we
+/// use `*anyopaque` across the boundary and let main cast back.
+pub const ResolveFn = *const fn (node: *anyopaque, prop: []const u8, buf: []u8) ?[]const u8;
+pub var resolve_fn: ?ResolveFn = null;
+
+/// Register a callback invoked by getComputedStyle to flush pending
+/// restyle/layout before reading resolved values.
+pub fn setFlushCallback(cb: ?*const fn () void) void {
+    flush_fn = cb;
+}
+
+/// Register the cascade-resolve bridge. Called from main after the first
+/// cascade so kotori.getComputedStyle returns the same resolved values as
+/// the QuickJS path (CSSOM §6.5 resolved value algorithm).
+pub fn setResolveCallback(cb: ?ResolveFn) void {
+    resolve_fn = cb;
+}
+
 // ── Shadow DOM Phase 1 — inline scope (no cross-module import needed) ──
 // These mirror src/js/shadow_root.zig but use the lxb types already
 // available via the @cImport block below. Global state is shared within
@@ -702,6 +728,8 @@ fn nativeGetComputedStyle(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     if (args.len == 0) return JsValue.null_val;
     const node = getArgNode(args[0]) orelse return JsValue.null_val;
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
+    // CSSOM §6.5: resolved values require a fresh cascade if DOM was mutated.
+    if (flush_fn) |f| f();
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
     const obj = try vm.createObj(.{ .obj_type = .dom_style });
@@ -732,9 +760,23 @@ fn nativeCSSGetPropertyValue(ctx: *anyopaque, this: JsValue, args: []const JsVal
     // Normalize to lowercase kebab-case. getPropertyValue takes the CSS
     // property name (already kebab per CSSOM), but accept camelCase too for
     // leniency (some callers pass "backgroundColor").
-    var buf: [128]u8 = undefined;
-    const css_prop = camelToKebab(prop_in, &buf);
+    var name_buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &name_buf);
 
+    // CSSOM §6.5 (resolved value) / §6.7 (getPropertyValue): query the
+    // cascade-resolved ComputedStyle (which already folds in inline style at
+    // highest specificity), preferring layout box used values where
+    // available. Falls back to raw inline-style lookup only when no cascade
+    // entry exists (e.g. disconnected element, tests without layout).
+    if (resolve_fn) |rf| {
+        var val_buf: [160]u8 = undefined;
+        if (rf(@ptrCast(elem), css_prop, &val_buf)) |slice| {
+            return JsValue.initString(try vm.pool.intern(slice));
+        }
+    }
+
+    // Fall back to inline style attribute (covers unmapped properties and
+    // the pre-cascade state used by simple unit tests).
     var attr_len: usize = 0;
     const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
         p[0..attr_len]
