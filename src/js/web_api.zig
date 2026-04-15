@@ -2515,7 +2515,104 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  if(!document.getElementsByTagName)document.getElementsByTagName=function(n){return document.querySelectorAll(n);};
         \\  if(!document.getElementsByName)document.getElementsByName=function(n){return document.querySelectorAll('[name=\"'+n+'\"]');};
         \\}
-        \\if(typeof getSelection==='undefined'){globalThis.getSelection=function(){return{toString:function(){return'';},rangeCount:0,getRangeAt:function(){return null;},removeAllRanges:function(){},addRange:function(){},isCollapsed:true,type:'None'};};}
+        \\// [[spec]] Selection API §2 — singleton Selection object per document
+        \\(function(){
+        \\  if(typeof getSelection!=='undefined'&&typeof globalThis.__selection!=='undefined')return;
+        \\  /* Selection API §2.1: Selection interface */
+        \\  var SP={};
+        \\  SP[Symbol.toStringTag]='Selection';
+        \\  /* Internal state: _ranges array (spec allows multiple but browsers expose one) */
+        \\  /* §2.2 anchorNode / anchorOffset — start of first range, or null */
+        \\  Object.defineProperty(SP,'anchorNode',{get:function(){return this._ranges.length?this._ranges[0].startContainer:null;},configurable:true,enumerable:true});
+        \\  Object.defineProperty(SP,'anchorOffset',{get:function(){return this._ranges.length?this._ranges[0].startOffset:0;},configurable:true,enumerable:true});
+        \\  /* §2.2 focusNode / focusOffset — end of first range, or null */
+        \\  Object.defineProperty(SP,'focusNode',{get:function(){return this._ranges.length?this._ranges[0].endContainer:null;},configurable:true,enumerable:true});
+        \\  Object.defineProperty(SP,'focusOffset',{get:function(){return this._ranges.length?this._ranges[0].endOffset:0;},configurable:true,enumerable:true});
+        \\  /* §2.2 isCollapsed — true when no range or range is collapsed */
+        \\  Object.defineProperty(SP,'isCollapsed',{get:function(){return!this._ranges.length||this._ranges[0].collapsed;},configurable:true,enumerable:true});
+        \\  /* §2.2 rangeCount */
+        \\  Object.defineProperty(SP,'rangeCount',{get:function(){return this._ranges.length;},configurable:true,enumerable:true});
+        \\  /* §2.2 type — "None"|"Caret"|"Range" */
+        \\  Object.defineProperty(SP,'type',{get:function(){if(!this._ranges.length)return'None';return this._ranges[0].collapsed?'Caret':'Range';},configurable:true,enumerable:true});
+        \\  /* §2.3 getRangeAt(index) — throws IndexSizeError if out of bounds */
+        \\  SP.getRangeAt=function(i){if(i<0||i>=this._ranges.length)throw new DOMException('','IndexSizeError');return this._ranges[i];};
+        \\  /* §2.3 addRange(range) — §2.3 step 3: replace existing range (browsers allow only one) */
+        \\  SP.addRange=function(r){if(!r||typeof r!=='object')return;this._ranges=[r];};
+        \\  /* §2.3 removeRange(range) — §2.3: remove given range from selection */
+        \\  SP.removeRange=function(r){this._ranges=this._ranges.filter(function(x){return x!==r;});};
+        \\  /* §2.3 removeAllRanges() / empty() — clear selection */
+        \\  SP.removeAllRanges=function(){this._ranges=[];};
+        \\  SP.empty=SP.removeAllRanges;
+        \\  /* §2.3 collapse(node, offset) / setPosition — collapse to point */
+        \\  SP.collapse=function(node,offset){
+        \\    if(node===null){this.removeAllRanges();return;}
+        \\    var r=typeof __createRange==='function'?__createRange():null;
+        \\    if(!r)return;
+        \\    r.setStart(node,offset||0);r.collapse(true);
+        \\    this._ranges=[r];
+        \\  };
+        \\  SP.setPosition=SP.collapse;
+        \\  /* §2.3 collapseToStart() — collapse to anchor */
+        \\  SP.collapseToStart=function(){
+        \\    if(!this._ranges.length)throw new DOMException('','InvalidStateError');
+        \\    this._ranges[0].collapse(true);
+        \\  };
+        \\  /* §2.3 collapseToEnd() — collapse to focus */
+        \\  SP.collapseToEnd=function(){
+        \\    if(!this._ranges.length)throw new DOMException('','InvalidStateError');
+        \\    this._ranges[0].collapse(false);
+        \\  };
+        \\  /* §2.3 extend(node, offset) — move focus point */
+        \\  SP.extend=function(node,offset){
+        \\    if(!this._ranges.length)throw new DOMException('','InvalidStateError');
+        \\    this._ranges[0].setEnd(node,offset||0);
+        \\  };
+        \\  /* §2.3 setBaseAndExtent(anchorNode,anchorOffset,focusNode,focusOffset) */
+        \\  SP.setBaseAndExtent=function(an,ao,fn,fo){
+        \\    if(!an||!fn)return;
+        \\    var r=typeof __createRange==='function'?__createRange():null;
+        \\    if(!r)return;
+        \\    r.setStart(an,ao||0);r.setEnd(fn,fo||0);
+        \\    this._ranges=[r];
+        \\  };
+        \\  /* §2.3 selectAllChildren(node) — select all children of node */
+        \\  SP.selectAllChildren=function(node){
+        \\    var r=typeof __createRange==='function'?__createRange():null;
+        \\    if(!r)return;
+        \\    r.selectNodeContents(node);
+        \\    this._ranges=[r];
+        \\  };
+        \\  /* §2.3 deleteFromDocument() — delete selected content from document */
+        \\  SP.deleteFromDocument=function(){
+        \\    if(!this._ranges.length)return;
+        \\    this._ranges[0].deleteContents();
+        \\  };
+        \\  /* §2.3 containsNode(node, allowPartial) — whether node is within selection */
+        \\  SP.containsNode=function(node,allowPartial){
+        \\    if(!this._ranges.length)return false;
+        \\    var r=this._ranges[0];
+        \\    return allowPartial?r.intersectsNode(node):r.isPointInRange(node,0);
+        \\  };
+        \\  /* §2.2 toString() — concatenate text of all ranges */
+        \\  SP.toString=function(){return this._ranges.map(function(r){return r.toString();}).join('');};
+        \\  /* §2.1: instantiate singleton */
+        \\  var sel=Object.create(SP);
+        \\  sel._ranges=[];
+        \\  globalThis.__selection=sel;
+        \\  /* §2.1: window.getSelection() returns the selection */
+        \\  globalThis.getSelection=function(){return globalThis.__selection;};
+        \\  /* §2.1: document.getSelection() alias */
+        \\  if(typeof document!=='undefined'&&!document.getSelection){
+        \\    document.getSelection=globalThis.getSelection;
+        \\  }
+        \\  /* Register Selection constructor */
+        \\  if(typeof Selection==='undefined'||!Selection.prototype.getRangeAt){
+        \\    var SelCtor=function Selection(){throw new TypeError("Illegal constructor");};
+        \\    SelCtor.prototype=SP;
+        \\    SelCtor.prototype.constructor=SelCtor;
+        \\    globalThis.Selection=SelCtor;
+        \\  }
+        \\})();
         \\if(typeof queueMicrotask==='undefined'){globalThis.queueMicrotask=function(cb){Promise.resolve().then(cb);};}
         \\if(typeof structuredClone==='undefined'){globalThis.structuredClone=function(o){return JSON.parse(JSON.stringify(o));};}
         \\if(typeof Atomics!=='undefined'&&!Atomics.waitAsync){

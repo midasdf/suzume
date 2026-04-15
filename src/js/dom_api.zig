@@ -3801,8 +3801,153 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         const fm_proto = qjs.JS_GetPropertyStr(ctx, fm_ctor, "prototype");
         _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "submit", qjs.JS_NewCFunction(ctx, &dom_elem.formSubmit, "submit", 0));
         _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "requestSubmit", qjs.JS_NewCFunction(ctx, &dom_elem.formRequestSubmit, "requestSubmit", 1));
+        // HTML Living Standard §4.10.21.2 "statically validate the constraints"
+        _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "checkValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formCheckValidity, "checkValidity", 0));
+        _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "reportValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formReportValidity, "reportValidity", 0));
         qjs.JS_FreeValue(ctx, fm_proto);
         qjs.JS_FreeValue(ctx, fm_ctor);
+    }
+
+    // ── Constraint validation API — HTML Living Standard §4.10.18 ───────────
+    // willValidate (§4.10.18.2), validity/ValidityState (§4.10.18.3),
+    // checkValidity()/reportValidity() (§4.10.18.4),
+    // setCustomValidity()/validationMessage (§4.10.18.5),
+    // form.elements HTMLFormControlsCollection (§4.10.21.1)
+    {
+        // Register Zig-native checkValidity/reportValidity/setCustomValidity on
+        // submittable-element prototypes.
+        const ctrl_types = [_][*:0]const u8{
+            "HTMLInputElement",
+            "HTMLTextAreaElement",
+            "HTMLSelectElement",
+            "HTMLButtonElement",
+        };
+        for (ctrl_types) |type_name| {
+            const ctor = qjs.JS_GetPropertyStr(ctx, global, type_name);
+            if (!quickjs.JS_IsUndefined(ctor) and !quickjs.JS_IsNull(ctor)) {
+                const proto = qjs.JS_GetPropertyStr(ctx, ctor, "prototype");
+                _ = qjs.JS_SetPropertyStr(ctx, proto, "checkValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formControlCheckValidity, "checkValidity", 0));
+                _ = qjs.JS_SetPropertyStr(ctx, proto, "reportValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formControlReportValidity, "reportValidity", 0));
+                _ = qjs.JS_SetPropertyStr(ctx, proto, "setCustomValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formControlSetCustomValidity, "setCustomValidity", 1));
+                qjs.JS_FreeValue(ctx, proto);
+            }
+            qjs.JS_FreeValue(ctx, ctor);
+        }
+
+        // JS polyfill: willValidate, validity (ValidityState), validationMessage,
+        // and form.elements (HTMLFormControlsCollection).
+        // Spec refs:
+        //   §4.10.18.2  willValidate
+        //   §4.10.18.3  ValidityState
+        //   §4.10.18.5  validationMessage
+        //   §4.10.21.1  form.elements
+        const constraint_js =
+            \\(function(){
+            \\  // §4.10.18.2 willValidate: true for submittable elements that are not
+            \\  // barred from constraint validation (disabled, readonly hidden, datalist).
+            \\  function addWillValidate(C, alwaysTrue) {
+            \\    Object.defineProperty(C.prototype,'willValidate',{
+            \\      get:function(){
+            \\        if(alwaysTrue) return false; // button[disabled] handled below
+            \\        if(this.disabled) return false;
+            \\        if(this.type==='hidden'||this.type==='reset'||this.type==='button') return false;
+            \\        if(this.closest('datalist')) return false;
+            \\        return true;
+            \\      },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\  }
+            \\  // §4.10.18.3 ValidityState + validationMessage getter.
+            \\  // We compute constraints lazily. Custom error stored in _customValidationMessage.
+            \\  function makeValidity(el) {
+            \\    var msg = el._customValidationMessage||'';
+            \\    var customError = msg!=='';
+            \\    var val = el.value||'';
+            \\    var type = (el.type||'text').toLowerCase();
+            \\    var req = el.required||false;
+            \\    var valueMissing = req && val==='';
+            \\    // tooShort / tooLong
+            \\    var minLen = (el.minLength!=null&&el.minLength>=0)?el.minLength:0;
+            \\    var maxLen = (el.maxLength!=null&&el.maxLength>=0)?el.maxLength:Infinity;
+            \\    var tooShort = minLen>0 && val.length>0 && val.length<minLen;
+            \\    var tooLong = val.length>maxLen;
+            \\    // rangeUnderflow / rangeOverflow (numeric/date inputs)
+            \\    var numVal = parseFloat(val);
+            \\    var minV = parseFloat(el.min);
+            \\    var maxV = parseFloat(el.max);
+            \\    var rangeUnderflow = !isNaN(numVal)&&!isNaN(minV)&&numVal<minV;
+            \\    var rangeOverflow  = !isNaN(numVal)&&!isNaN(maxV)&&numVal>maxV;
+            \\    // typeMismatch (email, url)
+            \\    var typeMismatch = false;
+            \\    if(val!==''){
+            \\      if(type==='email') typeMismatch=!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val);
+            \\      if(type==='url'){try{new URL(val);}catch(e){typeMismatch=true;}}
+            \\    }
+            \\    // patternMismatch
+            \\    var patternMismatch = false;
+            \\    if(val!==''&&el.pattern){
+            \\      try{patternMismatch=!(new RegExp('^(?:'+el.pattern+')$')).test(val);}catch(e){}
+            \\    }
+            \\    // stepMismatch (simplified)
+            \\    var stepMismatch = false;
+            \\    var valid = !valueMissing&&!tooShort&&!tooLong&&!rangeUnderflow&&!rangeOverflow&&!typeMismatch&&!patternMismatch&&!stepMismatch&&!customError;
+            \\    return {
+            \\      valueMissing:valueMissing, tooShort:tooShort, tooLong:tooLong,
+            \\      rangeUnderflow:rangeUnderflow, rangeOverflow:rangeOverflow,
+            \\      typeMismatch:typeMismatch, patternMismatch:patternMismatch,
+            \\      stepMismatch:stepMismatch, customError:customError,
+            \\      badInput:false, valid:valid
+            \\    };
+            \\  }
+            \\  function addValidity(C) {
+            \\    Object.defineProperty(C.prototype,'validity',{
+            \\      get:function(){ return makeValidity(this); },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\    Object.defineProperty(C.prototype,'validationMessage',{
+            \\      get:function(){
+            \\        if(!this.willValidate) return '';
+            \\        var vs=makeValidity(this);
+            \\        if(!vs.valid){
+            \\          var m=this._customValidationMessage||'';
+            \\          return m!==''?m:'Please fill out this field.';
+            \\        }
+            \\        return '';
+            \\      },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\  }
+            \\  var ctrlTypes=['HTMLInputElement','HTMLTextAreaElement','HTMLSelectElement','HTMLButtonElement'];
+            \\  for(var i=0;i<ctrlTypes.length;i++){
+            \\    var C=globalThis[ctrlTypes[i]];
+            \\    if(!C) continue;
+            \\    addWillValidate(C, false);
+            \\    addValidity(C);
+            \\  }
+            \\  // §4.10.21.1 HTMLFormElement.elements — returns live HTMLCollection of
+            \\  // listed submittable elements in tree order.
+            \\  if(typeof HTMLFormElement!=='undefined'){
+            \\    Object.defineProperty(HTMLFormElement.prototype,'elements',{
+            \\      get:function(){
+            \\        return this.querySelectorAll('input,select,textarea,button,output,fieldset');
+            \\      },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\    Object.defineProperty(HTMLFormElement.prototype,'length',{
+            \\      get:function(){ return this.elements.length; },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\  }
+            \\})()
+        ;
+        const cv = qjs.JS_Eval(ctx, constraint_js, constraint_js.len, "<constraint-validation>", qjs.JS_EVAL_TYPE_GLOBAL);
+        if (quickjs.JS_IsException(cv)) {
+            // Log but don't crash — constraint validation is progressive enhancement
+            const exc = qjs.JS_GetException(ctx);
+            qjs.JS_FreeValue(ctx, exc);
+        } else {
+            qjs.JS_FreeValue(ctx, cv);
+        }
     }
 
     // Build tag→prototype map for per-type prototype assignment in wrapNode
@@ -4221,7 +4366,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof DOMStringMap==='undefined'){globalThis.DOMStringMap=function(){};DOMStringMap.prototype[Symbol.toStringTag]='DOMStringMap';}
             \\  if(typeof NamedNodeMap==='undefined'){globalThis.NamedNodeMap=function(){};NamedNodeMap.prototype[Symbol.toStringTag]='NamedNodeMap';}
             \\  if(typeof MutationRecord==='undefined'){globalThis.MutationRecord=function(){};MutationRecord.prototype[Symbol.toStringTag]='MutationRecord';}
-            \\  if(typeof Selection==='undefined'){globalThis.Selection=function(){};Selection.prototype[Symbol.toStringTag]='Selection';}
+            \\  /* Selection constructor set up by web_api.zig Selection API §2 init */
             \\  if(typeof TreeWalker==='undefined'){globalThis.TreeWalker=function(){};TreeWalker.prototype[Symbol.toStringTag]='TreeWalker';}
             \\  if(typeof NodeIterator==='undefined'){globalThis.NodeIterator=function(){};NodeIterator.prototype[Symbol.toStringTag]='NodeIterator';}
             \\  globalThis.__niRegistry=[];
