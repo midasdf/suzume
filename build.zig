@@ -719,4 +719,26 @@ pub fn build(b: *std.Build) void {
     const test_hittest_step = b.step("test-hittest", "Run layout hit-test tests");
     test_hittest_step.dependOn(&run_hittest_tests.step);
     test_step.dependOn(&run_hittest_tests.step);
+
+    // ── Flex-basis unit tests (CSS Flexbox L1 §9.2, Sizing L3 §5, L4 §6) ──
+    // flex.zig transitively pulls in paint/painter.zig → freetype, harfbuzz,
+    // and block.zig → dom/node.zig → lexbor, so we need the same C deps as
+    // the main executable.
+    const flex_basis_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_flex_basis.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    flex_basis_mod.link_libc = true;
+    flex_basis_mod.addIncludePath(lexbor_dep.path("lib"));
+    flex_basis_mod.addIncludePath(freetype_dep.path("include"));
+    flex_basis_mod.addIncludePath(harfbuzz_dep.path("src"));
+    const flex_basis_tests = b.addTest(.{ .root_module = flex_basis_mod });
+    flex_basis_tests.root_module.linkLibrary(lexbor_lib);
+    flex_basis_tests.root_module.linkLibrary(freetype_lib);
+    flex_basis_tests.root_module.linkLibrary(harfbuzz_lib);
+    const run_flex_basis_tests = b.addRunArtifact(flex_basis_tests);
+    const test_flex_basis_step = b.step("test-flex-basis", "Run flex-basis unit tests");
+    test_flex_basis_step.dependOn(&run_flex_basis_tests.step);
+    test_step.dependOn(&run_flex_basis_tests.step);
 }

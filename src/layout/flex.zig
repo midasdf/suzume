@@ -11,6 +11,59 @@ fn resolveAlignment(child: *const Box, container_align: AlignItems) AlignItems {
     return if (child.style.align_self != .auto) child.style.align_self else container_align;
 }
 
+/// Resolve a flex item's used flex basis ("A" in CSS Flexbox L1 §9.2).
+///
+/// Returns a concrete main-axis size in px for the definite + intrinsic-keyword
+/// cases, and `null` when the basis is `auto` (caller then falls back to the
+/// width/height property and finally the item's content contribution).
+///
+/// Spec references:
+/// - CSS Flexbox L1 §7.3.3 / §9.2 — flex-basis property and used flex basis.
+/// - CSS Sizing L3 §5 — `min-content` / `max-content` / `fit-content(...)`.
+/// - CSS Sizing L4 §6 — `flex-basis: content` is max-content of the item's
+///   content contribution, ignoring the main-size property.
+///
+/// Pre-conditions: children have been pre-laid-out so `child.content.{width,height}`
+/// already reflects a max-content-ish contribution along the main axis.
+fn resolveFlexBasis(
+    child: *Box,
+    container_main: ?f32,
+    fonts: *FontCache,
+    is_row: bool,
+) ?f32 {
+    return switch (child.style.flex_basis) {
+        .auto => null, // Caller: fall back to main-size property, then content.
+        .px => |v| v,
+        // Percent flex-basis resolves against the container's main size; when
+        // indefinite it "behaves as auto" (CSS Flexbox L1 §7.3.3).
+        .percent => |pct| if (container_main) |cm| pct * cm / 100.0 else null,
+        // `content` and `max-content` are equivalent for our single-pass
+        // layout: the pre-measured content width/height is the max-content
+        // contribution along the main axis.
+        .content, .max_content => if (is_row) child.content.width else child.content.height,
+        .min_content => if (is_row)
+            block.computeMinContentWidthPublic(child, fonts)
+        else
+            // Column-axis min-content height is not meaningfully different
+            // from the measured height in our model (no fragmentation).
+            child.content.height,
+        // `fit-content` with no argument: clamp max-content by available space
+        // (= container main size). Equivalent to min(max-content, max(min-content, available)).
+        .fit_content => blk: {
+            const max_c: f32 = if (is_row) child.content.width else child.content.height;
+            const min_c: f32 = if (is_row)
+                block.computeMinContentWidthPublic(child, fonts)
+            else
+                child.content.height;
+            // No argument form: clamp max-content by available main size.
+            // If container main size is indefinite, fall back to max-content.
+            const avail: f32 = container_main orelse max_c;
+            break :blk @min(max_c, @max(min_c, avail));
+        },
+        .none => null,
+    };
+}
+
 /// Lay out a flex container and its children.
 /// The flex container box should have display: flex.
 const dom_api = @import("../js/dom_api.zig");
@@ -74,16 +127,21 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         }
     }
 
-    // Phase 1: Measure children to get their base main sizes
-    // First, lay them out as blocks to get intrinsic sizes
+    // Phase 1: Measure children to get their base main sizes.
+    // Intrinsic-keyword flex-basis values (content, max-content, min-content,
+    // fit-content) need the child's content width to be populated *before*
+    // basis resolution — so for those we lay out at container_width first and
+    // let `resolveFlexBasis` read `child.content.width` on a later pass.
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
-        // Get flex-basis or intrinsic width
-        const basis = switch (child.style.flex_basis) {
-            .px => |b| b,
-            .percent => |pct| pct * container_width / 100.0,
-            else => null,
+        const basis_is_intrinsic = switch (child.style.flex_basis) {
+            .content, .max_content, .min_content, .fit_content => true,
+            else => false,
         };
+        const basis = if (basis_is_intrinsic)
+            null
+        else
+            resolveFlexBasis(child, container_width, fonts, true);
         const explicit_child_w = switch (child.style.width) {
             .px => |w| w,
             .percent => |pct| pct * container_width / 100.0,
@@ -98,6 +156,16 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         } else {
             // Layout with full container width to measure content
             block.layoutBlock(child, container_width, box.content.y, fonts);
+        }
+        // For intrinsic basis on a child with an explicit width property, the
+        // width was used for pre-layout above but ignored by the spec — shrink
+        // to the content's actual extent so later basis resolution reads the
+        // true max-content contribution.
+        if (basis_is_intrinsic) {
+            const fit_w = block.computeShrinkToFitWidthPublic(child);
+            if (fit_w > 0 and fit_w < child.content.width) {
+                child.content.width = fit_w;
+            }
         }
     }
 
@@ -151,11 +219,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
 
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
-        const basis = switch (child.style.flex_basis) {
-            .px => |b| b,
-            .percent => |pct| pct * container_width / 100.0,
-            else => null,
-        };
+        const basis = resolveFlexBasis(child, container_width, fonts, true);
         const explicit_child_w = switch (child.style.width) {
             .px => |w| w,
             .percent => |pct| pct * container_width / 100.0,
@@ -183,11 +247,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
         if (final_widths_len >= 256) break;
-        const basis = switch (child.style.flex_basis) {
-            .px => |b| b,
-            .percent => |pct| pct * container_width / 100.0,
-            else => null,
-        };
+        const basis = resolveFlexBasis(child, container_width, fonts, true);
         const explicit_child_w = switch (child.style.width) {
             .px => |w| w,
             .percent => |pct| pct * container_width / 100.0,
@@ -444,11 +504,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
     var outer_widths_buf: [256]f32 = undefined;
     for (flex_indices, 0..) |ci, fi| {
         const child = children[ci];
-        const basis = switch (child.style.flex_basis) {
-            .px => |b| b,
-            .percent => |pct| pct * container_width / 100.0,
-            else => null,
-        };
+        const basis = resolveFlexBasis(child, container_width, fonts, true);
         const explicit_child_w = switch (child.style.width) {
             .px => |w| w,
             .percent => |pct| pct * container_width / 100.0,
@@ -528,11 +584,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         // Compute final widths for this line
         for (l_start..l_end) |fi| {
             const child = children[flex_indices[fi]];
-            const basis = switch (child.style.flex_basis) {
-                .px => |b| b,
-                .percent => |pct| pct * container_width / 100.0,
-                else => null,
-            };
+            const basis = resolveFlexBasis(child, container_width, fonts, true);
             const explicit_child_w = switch (child.style.width) {
                 .px => |w| w,
                 .percent => |pct| pct * container_width / 100.0,
@@ -827,11 +879,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     for (children) |child| {
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
         // flex-basis on column = height hint
-        const basis: ?f32 = switch (child.style.flex_basis) {
-            .px => |b| b,
-            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
-            else => null,
-        };
+        const basis: ?f32 = resolveFlexBasis(child, explicit_h, fonts, false);
         const explicit_child_h: ?f32 = switch (child.style.height) {
             .px => |h| h,
             .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
@@ -862,11 +910,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
         if (child.style.position == .absolute or child.style.position == .fixed) continue;
         if (final_heights_len >= 256) break;
 
-        const basis: ?f32 = switch (child.style.flex_basis) {
-            .px => |b| b,
-            .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
-            else => null,
-        };
+        const basis: ?f32 = resolveFlexBasis(child, explicit_h, fonts, false);
         const explicit_child_h: ?f32 = switch (child.style.height) {
             .px => |h| h,
             .percent => |pct| if (explicit_h) |eh| pct * eh / 100.0 else null,
@@ -1018,4 +1062,251 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     }
 
     box.content.height = @max(container_main, cursor_y);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// flex-basis intrinsic keyword tests (CSS Flexbox L1 §9.2, Sizing L3 §5, L4 §6)
+//
+// Invoked from src/test_flex_basis.zig (dedicated test step `test-flex-basis`)
+// via `_ = @import("layout/flex.zig")`.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const testing = std.testing;
+
+fn tfMakeContainer(width: f32) Box {
+    var b = Box{};
+    b.box_type = .block;
+    b.style.display = .flex;
+    b.style.width = .{ .px = width };
+    b.content = .{ .x = 0, .y = 0, .width = width, .height = 0 };
+    return b;
+}
+
+fn tfMakeChild(_: f32) Box {
+    var b = Box{};
+    b.box_type = .block;
+    b.style.display = .block;
+    b.style.width = .auto;
+    return b;
+}
+
+/// Create a grandchild block with an explicit px width. Attaching one to a
+/// flex child gives that child a non-zero max-content contribution equal to
+/// `px_width` (via shrink-to-fit over the grandchild's right edge).
+fn tfMakeContent(px_width: f32) Box {
+    var b = Box{};
+    b.box_type = .block;
+    b.style.display = .block;
+    b.style.width = .{ .px = px_width };
+    return b;
+}
+
+fn tfAttach(alloc: std.mem.Allocator, parent: *Box, child: *Box) !void {
+    child.parent = parent;
+    try parent.children.append(alloc, child);
+}
+
+fn tfRun(container: *Box, fonts: *FontCache, out: []f32) void {
+    layoutFlex(container, container.content.width, 0, fonts);
+    for (container.children.items, 0..) |c, i| {
+        if (i >= out.len) break;
+        out[i] = c.content.width;
+    }
+}
+
+fn tfFonts(alloc: std.mem.Allocator) FontCache {
+    // Font is never touched for childless block children in our tests.
+    return FontCache.init(alloc, "/dev/null");
+}
+
+test "flex-basis: px — uses explicit value" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(50);
+    a.style.flex_basis = .{ .px = 150 };
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(50);
+    b.style.flex_basis = .{ .px = 250 };
+    defer b.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    var widths: [2]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 150), widths[0], 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 250), widths[1], 0.5);
+}
+
+test "flex-basis: percent — resolves against container main size" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(400);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(10);
+    a.style.flex_basis = .{ .percent = 25 };
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(10);
+    b.style.flex_basis = .{ .percent = 50 };
+    defer b.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    var widths: [2]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 100), widths[0], 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 200), widths[1], 0.5);
+}
+
+test "flex-basis: auto — falls back to width property" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(10);
+    a.style.flex_basis = .auto;
+    a.style.width = .{ .px = 120 };
+    defer a.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 120), widths[0], 0.5);
+}
+
+test "flex-basis: max-content — ignores width, uses measured content" {
+    // CSS Sizing L4 §6: `content`/`max-content` ignores the main-size property.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .max_content;
+    a.style.width = .{ .px = 300 }; // would win only if basis fell back to width
+    defer a.children.deinit(alloc);
+    var a_inner = tfMakeContent(80); // defines max-content contribution = 80
+    defer a_inner.children.deinit(alloc);
+    try tfAttach(alloc, &a, &a_inner);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 80), widths[0], 0.5);
+}
+
+test "flex-basis: content — max-content contribution" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .content;
+    defer a.children.deinit(alloc);
+    var a_inner = tfMakeContent(70);
+    defer a_inner.children.deinit(alloc);
+    try tfAttach(alloc, &a, &a_inner);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .content;
+    defer b.children.deinit(alloc);
+    var b_inner = tfMakeContent(130);
+    defer b_inner.children.deinit(alloc);
+    try tfAttach(alloc, &b, &b_inner);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    var widths: [2]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 70), widths[0], 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 130), widths[1], 0.5);
+}
+
+test "flex-basis: min-content — narrowest (no words → 0)" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(200);
+    a.style.flex_basis = .min_content;
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    // No text children → min-content = 0.
+    try testing.expectApproxEqAbs(@as(f32, 0), widths[0], 0.5);
+}
+
+test "flex-basis: fit-content — clamped max-content" {
+    // fit-content ≈ min(max-content, max(min-content, available)).
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(600);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .fit_content;
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var a_inner = tfMakeContent(90);
+    defer a_inner.children.deinit(alloc);
+    try tfAttach(alloc, &a, &a_inner);
+    try tfAttach(alloc, &root, &a);
+
+    var widths: [1]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    // max-content (90) < available (600) → 90.
+    try testing.expectApproxEqAbs(@as(f32, 90), widths[0], 0.5);
+}
+
+test "flex-basis: mixed keywords in one row honour each item" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(800);
+    defer root.children.deinit(alloc);
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 100 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .max_content;
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    var b_inner = tfMakeContent(60);
+    defer b_inner.children.deinit(alloc);
+    try tfAttach(alloc, &b, &b_inner);
+    var c = tfMakeChild(0);
+    c.style.flex_basis = .{ .percent = 25 };
+    c.style.flex_grow = 0;
+    c.style.flex_shrink = 0;
+    defer c.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+
+    var widths: [3]f32 = undefined;
+    tfRun(&root, &fonts, &widths);
+    try testing.expectApproxEqAbs(@as(f32, 100), widths[0], 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 60), widths[1], 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 200), widths[2], 0.5);
 }

@@ -967,6 +967,16 @@ pub fn computeShrinkToFitWidthPublic(box: *Box) f32 {
     return computeShrinkToFitWidth(box);
 }
 
+/// CSS Sizing L3 §5: min-content inline size. Public wrapper for flex layout.
+pub fn computeMinContentWidthPublic(box: *Box, fonts: *FontCache) f32 {
+    return computeMinContentWidth(box, fonts);
+}
+
+/// CSS Sizing L3 §5: max-content inline size. Public wrapper for flex layout.
+pub fn computeMaxContentWidthPublic(box: *Box, fonts: *FontCache) f32 {
+    return computeMaxContentWidth(box, fonts);
+}
+
 /// CSS Sizing L3: min-content width — the narrowest the box can be without overflow.
 /// For text, this is the widest word. For block children, the widest child's min-content.
 fn computeMinContentWidth(box: *Box, fonts: *FontCache) f32 {
