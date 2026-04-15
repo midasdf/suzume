@@ -248,6 +248,19 @@ pub const PropertyId = enum(u16) {
         .{ "pointer-events", .pointer_events },
         .{ "user-select", .user_select },
         .{ "-webkit-user-select", .user_select },
+        // CSS Flexbox L1 Appendix A + Compatibility Standard §7: -webkit- prefix aliases
+        // map to the same enum variant as the unprefixed property; serialization uses
+        // the unprefixed canonical name.
+        .{ "-webkit-align-content", .align_content },
+        .{ "-webkit-align-items", .align_items },
+        .{ "-webkit-align-self", .align_self },
+        .{ "-webkit-flex-basis", .flex_basis },
+        .{ "-webkit-flex-direction", .flex_direction },
+        .{ "-webkit-flex-grow", .flex_grow },
+        .{ "-webkit-flex-shrink", .flex_shrink },
+        .{ "-webkit-flex-wrap", .flex_wrap },
+        .{ "-webkit-justify-content", .justify_content },
+        .{ "-webkit-order", .order },
         .{ "touch-action", .touch_action },
         .{ "will-change", .will_change },
         .{ "contain", .contain },

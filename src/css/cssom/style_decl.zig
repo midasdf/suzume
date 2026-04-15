@@ -14,6 +14,37 @@
 const std = @import("std");
 const shorthand_serialize = @import("shorthand_serialize.zig");
 
+// ── Vendor-prefix alias resolution ────────────────────────────────────
+//
+// CSS Flexbox L1 Appendix A + Compatibility Standard §7:
+// -webkit-<name> aliases map to the unprefixed property at parse time.
+// The stored/serialized name is always the unprefixed canonical form.
+
+/// Return the canonical (unprefixed) property name for -webkit- flexbox
+/// aliases, or the input name unchanged if not an alias.
+/// Input must outlive the return value (returns a slice of either the
+/// input or a string literal).
+pub fn resolveWebkitAlias(name: []const u8) []const u8 {
+    const aliases = [_]struct { webkit: []const u8, canonical: []const u8 }{
+        .{ .webkit = "-webkit-align-content",   .canonical = "align-content" },
+        .{ .webkit = "-webkit-align-items",      .canonical = "align-items" },
+        .{ .webkit = "-webkit-align-self",       .canonical = "align-self" },
+        .{ .webkit = "-webkit-flex",             .canonical = "flex" },
+        .{ .webkit = "-webkit-flex-basis",       .canonical = "flex-basis" },
+        .{ .webkit = "-webkit-flex-direction",   .canonical = "flex-direction" },
+        .{ .webkit = "-webkit-flex-flow",        .canonical = "flex-flow" },
+        .{ .webkit = "-webkit-flex-grow",        .canonical = "flex-grow" },
+        .{ .webkit = "-webkit-flex-shrink",      .canonical = "flex-shrink" },
+        .{ .webkit = "-webkit-flex-wrap",        .canonical = "flex-wrap" },
+        .{ .webkit = "-webkit-justify-content",  .canonical = "justify-content" },
+        .{ .webkit = "-webkit-order",            .canonical = "order" },
+    };
+    for (aliases) |a| {
+        if (std.ascii.eqlIgnoreCase(name, a.webkit)) return a.canonical;
+    }
+    return name;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────
 
 pub const StyleDecl = struct {
@@ -51,15 +82,19 @@ pub const StyleDeclList = struct {
     }
 
     /// Return the index of the first entry with the given name, or null.
+    /// -webkit- flex/alignment aliases are resolved to their canonical name first.
     pub fn indexOf(self: *const StyleDeclList, name: []const u8) ?usize {
+        const canonical = resolveWebkitAlias(name);
         for (self.entries.items, 0..) |e, i| {
-            if (std.ascii.eqlIgnoreCase(e.name, name)) return i;
+            if (std.ascii.eqlIgnoreCase(e.name, canonical)) return i;
         }
         return null;
     }
 
     /// Upsert: remove any prior entry with the same name, append new one.
     /// name and value are copied into the arena.
+    /// -webkit- flex/alignment aliases are resolved to their canonical unprefixed
+    /// name before storage (Compatibility Standard §7).
     pub fn upsert(
         self: *StyleDeclList,
         allocator: std.mem.Allocator,
@@ -67,11 +102,12 @@ pub const StyleDeclList = struct {
         value: []const u8,
         important: bool,
     ) !void {
+        const canonical_name = resolveWebkitAlias(name);
         // Remove existing entry with this name (last-wins / replace semantics)
-        if (self.indexOf(name)) |idx| {
+        if (self.indexOf(canonical_name)) |idx| {
             _ = self.entries.orderedRemove(idx);
         }
-        const owned_name = try self.arena.allocator().dupe(u8, name);
+        const owned_name = try self.arena.allocator().dupe(u8, canonical_name);
         const owned_val = try self.arena.allocator().dupe(u8, value);
         try self.entries.append(allocator, .{
             .name = owned_name,
@@ -109,12 +145,13 @@ pub const StyleDeclList = struct {
         important: bool,
     ) !void {
         std.debug.assert(longhand_names.len == longhand_values.len);
+        const canonical_sh = resolveWebkitAlias(shorthand_name);
         // First remove any existing longhands tagged for this shorthand, plus the
         // shorthand entry itself if it was stored directly (should not happen normally).
-        self.removeShorthand(shorthand_name);
+        self.removeShorthand(canonical_sh);
         // Insert each longhand with the shorthand tag.
         const arena = self.arena.allocator();
-        const owned_sh = try arena.dupe(u8, shorthand_name);
+        const owned_sh = try arena.dupe(u8, canonical_sh);
         for (longhand_names, longhand_values) |lh_name, lh_val| {
             // Also remove any pre-existing plain longhand with this name.
             if (self.indexOf(lh_name)) |idx| {
@@ -154,11 +191,13 @@ pub const StyleDeclList = struct {
 
     /// Return the canonical serialization of a shorthand from its component longhands.
     /// Returns null if the shorthand is not supported or any component is missing.
+    /// -webkit- flex/alignment aliases are resolved to their canonical name first.
     pub fn getPropertyValueShorthand(
         self: *const StyleDeclList,
         shorthand_name: []const u8,
         buf: []u8,
     ) ?[]const u8 {
+        const canonical_sh = resolveWebkitAlias(shorthand_name);
         const Impl = struct {
             fn get(ptr: *const anyopaque, name: []const u8) ?[]const u8 {
                 const list: *const StyleDeclList = @ptrCast(@alignCast(ptr));
@@ -169,18 +208,20 @@ pub const StyleDeclList = struct {
             }
         };
         const ctx = shorthand_serialize.LookupCtx{ .ptr = @ptrCast(self), .get = Impl.get };
-        return shorthand_serialize.serializeShorthand(shorthand_name, ctx, buf);
+        return shorthand_serialize.serializeShorthand(canonical_sh, ctx, buf);
     }
 
     /// Return "important" if ALL component longhands for the given shorthand are important,
     /// "" if any is non-important, and null if none found.
+    /// -webkit- flex/alignment aliases are resolved to their canonical name first.
     pub fn getPropertyPriorityShorthand(
         self: *const StyleDeclList,
         shorthand_name: []const u8,
     ) ?[]const u8 {
+        const canonical_sh = resolveWebkitAlias(shorthand_name);
         var found_any = false;
         for (self.entries.items) |e| {
-            const is_lh = if (e.shorthand_for) |sf| std.ascii.eqlIgnoreCase(sf, shorthand_name) else false;
+            const is_lh = if (e.shorthand_for) |sf| std.ascii.eqlIgnoreCase(sf, canonical_sh) else false;
             if (!is_lh) continue;
             found_any = true;
             if (!e.important) return "";
@@ -987,4 +1028,142 @@ test "Phase4 rule.style getPropertyValue and getPropertyPriority" {
     const margin_idx = list.indexOf("margin");
     try std.testing.expect(margin_idx != null);
     try std.testing.expect(!list.entries.items[margin_idx.?].important);
+}
+
+// ── -webkit- flex/alignment alias round-trip tests ────────────────────
+// CSS Flexbox L1 Appendix A + Compatibility Standard §7:
+// setProperty("-webkit-<name>", v) stores under the unprefixed canonical name;
+// getPropertyValue("-webkit-<name>") and getPropertyValue("<name>") both return v.
+
+test "webkit alias: -webkit-align-content round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-align-content", "center", false);
+    // stored under canonical name
+    const idx = list.indexOf("align-content");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("align-content", list.entries.items[idx.?].name);
+    try std.testing.expectEqualStrings("center", list.entries.items[idx.?].value);
+    // lookup by webkit name also works
+    try std.testing.expect(list.indexOf("-webkit-align-content") != null);
+}
+
+test "webkit alias: -webkit-align-items round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-align-items", "flex-start", false);
+    const idx = list.indexOf("align-items");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("flex-start", list.entries.items[idx.?].value);
+}
+
+test "webkit alias: -webkit-align-self round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-align-self", "stretch", false);
+    try std.testing.expect(list.indexOf("align-self") != null);
+}
+
+test "webkit alias: -webkit-flex-direction round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-flex-direction", "column", false);
+    try std.testing.expect(list.indexOf("flex-direction") != null);
+}
+
+test "webkit alias: -webkit-flex-grow round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-flex-grow", "2", false);
+    const idx = list.indexOf("flex-grow");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("2", list.entries.items[idx.?].value);
+}
+
+test "webkit alias: -webkit-flex-shrink round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-flex-shrink", "0", false);
+    try std.testing.expect(list.indexOf("flex-shrink") != null);
+}
+
+test "webkit alias: -webkit-flex-basis round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-flex-basis", "100px", false);
+    try std.testing.expect(list.indexOf("flex-basis") != null);
+}
+
+test "webkit alias: -webkit-flex-wrap round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-flex-wrap", "wrap", false);
+    try std.testing.expect(list.indexOf("flex-wrap") != null);
+}
+
+test "webkit alias: -webkit-justify-content round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-justify-content", "space-between", false);
+    const idx = list.indexOf("justify-content");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("space-between", list.entries.items[idx.?].value);
+}
+
+test "webkit alias: -webkit-order round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try list.upsert(alloc, "-webkit-order", "3", false);
+    const idx = list.indexOf("order");
+    try std.testing.expect(idx != null);
+    try std.testing.expectEqualStrings("3", list.entries.items[idx.?].value);
+}
+
+test "webkit alias: -webkit-flex shorthand upsertShorthand round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    const names = [_][]const u8{ "flex-grow", "flex-shrink", "flex-basis" };
+    const vals  = [_][]const u8{ "1", "1", "0%" };
+    try list.upsertShorthand(alloc, "-webkit-flex", &names, &vals, false);
+    // longhands stored under canonical shorthand_for = "flex"
+    var found: usize = 0;
+    for (list.entries.items) |e| {
+        if (e.shorthand_for) |sf| {
+            if (std.ascii.eqlIgnoreCase(sf, "flex")) found += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 3), found);
+    var buf: [128]u8 = undefined;
+    const result = list.getPropertyValueShorthand("-webkit-flex", &buf);
+    try std.testing.expect(result != null);
+}
+
+test "webkit alias: -webkit-flex-flow shorthand upsertShorthand round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    const names = [_][]const u8{ "flex-direction", "flex-wrap" };
+    const vals  = [_][]const u8{ "column", "wrap" };
+    try list.upsertShorthand(alloc, "-webkit-flex-flow", &names, &vals, false);
+    var found: usize = 0;
+    for (list.entries.items) |e| {
+        if (e.shorthand_for) |sf| {
+            if (std.ascii.eqlIgnoreCase(sf, "flex-flow")) found += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 2), found);
+    var buf: [128]u8 = undefined;
+    const result = list.getPropertyValueShorthand("-webkit-flex-flow", &buf);
+    try std.testing.expect(result != null);
 }
