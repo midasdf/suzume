@@ -596,3 +596,88 @@ test "closed-tree-filtering: listener inside closed shadow sees inner; host list
     // host should NOT see the closed-tree inner node, but inner's own listener should.
     try std.testing.expectEqualStrings("01", val);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Element.scroll / scrollTo / scrollBy (CSSOM View §6.5)
+// ══════════════════════════════════════════════════════════════════════
+
+test "scrollTo(x, y) sets scrollLeft and scrollTop" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scrollTo(40, 80);
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("40,80", val);
+}
+
+test "scrollTo({top, left}) sets position via options dict" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scrollTo({ top: 100, left: 25 });
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("25,100", val);
+}
+
+test "scrollBy accumulates delta on top of current position" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scrollTo(10, 20);
+        \\el.scrollBy(5, 15);
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("15,35", val);
+}
+
+test "scroll() is an alias for scrollTo()" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scroll(7, 3);
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("7,3", val);
+}
+
+test "scrollBy clamps to zero (no negative scroll)" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scrollTo(10, 10);
+        \\el.scrollBy(-50, -50);
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("0,0", val);
+}
+
+test "scrollTop setter directly sets scroll position" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"s\"></div></body></html>",
+        \\var el = document.getElementById("s");
+        \\el.scrollTop = 55;
+        \\el.scrollLeft = 33;
+        \\"" + el.scrollLeft + "," + el.scrollTop;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("33,55", val);
+}

@@ -3674,14 +3674,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     }
     {
         const scrollTopAtom = qjs.JS_NewAtom(ctx, "scrollTop");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetScrollTop, "get scrollTop", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollTopAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetScrollTop, "get scrollTop", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetScrollTop, "set scrollTop", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, scrollTopAtom);
     }
     {
         const scrollLeftAtom = qjs.JS_NewAtom(ctx, "scrollLeft");
-        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetScrollLeft, "get scrollLeft", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, scrollLeftAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetScrollLeft, "get scrollLeft", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetScrollLeft, "set scrollLeft", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, scrollLeftAtom);
     }
+    // Element.scroll / scrollTo / scrollBy (CSSOM View §6.5)
+    _ = qjs.JS_SetPropertyStr(ctx, html_element_proto, "scroll", qjs.JS_NewCFunction(ctx, &dom_elem.elementScroll, "scroll", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, html_element_proto, "scrollTo", qjs.JS_NewCFunction(ctx, &dom_elem.elementScrollTo, "scrollTo", 2));
+    _ = qjs.JS_SetPropertyStr(ctx, html_element_proto, "scrollBy", qjs.JS_NewCFunction(ctx, &dom_elem.elementScrollBy, "scrollBy", 2));
     {
         const hiddenAtom = qjs.JS_NewAtom(ctx, "hidden");
         _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, hiddenAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetHidden, "get hidden", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetHidden, "set hidden", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);

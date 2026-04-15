@@ -239,13 +239,29 @@ pub fn getListeners() []const EventListener {
     return g_listeners.items;
 }
 
+// ── Per-element scroll state (CSSOM View §6.5) ──────────────────────
+// Keyed on the lxb_dom_element_t pointer as usize.
+const ElemScrollPos = struct { top: f64, left: f64 };
+var g_scroll_map: ?std.AutoHashMap(usize, ElemScrollPos) = null;
+
+fn ensureScrollMap() *std.AutoHashMap(usize, ElemScrollPos) {
+    if (g_scroll_map == null) {
+        g_scroll_map = std.AutoHashMap(usize, ElemScrollPos).init(std.heap.page_allocator);
+    }
+    return &g_scroll_map.?;
+}
+
 /// Clean up module-level state. Call when the VM is torn down.
 pub fn deinit() void {
     for (g_listeners.items) |entry| {
         g_alloc.free(entry.event_type);
     }
     g_listeners.deinit(g_alloc);
-    g_listeners = .{};
+    g_listeners = .empty;
+    if (g_scroll_map) |*m| {
+        m.deinit();
+        g_scroll_map = null;
+    }
     g_document = null;
     dom_dirty = false;
 }
@@ -272,6 +288,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     try vm.registerNativeMethod(ep, "getRootNode", &nativeGetRootNode);
     try vm.registerNativeMethod(ep, "dispatchEvent", &nativeDispatchEvent);
+    // CSSOM View §6.5: scroll / scrollTo / scrollBy
+    try vm.registerNativeMethod(ep, "scroll", &nativeScroll);
+    try vm.registerNativeMethod(ep, "scrollTo", &nativeScrollTo);
+    try vm.registerNativeMethod(ep, "scrollBy", &nativeScrollBy);
 
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
@@ -383,6 +403,16 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return createStyleObj(vm, @ptrCast(node));
     }
 
+    // CSSOM View §6.5: scrollTop / scrollLeft
+    if (eql(name, "scrollTop")) {
+        const pos = ensureScrollMap().get(@intFromPtr(node)) orelse return JsValue.initNumber(0);
+        return JsValue.initNumber(pos.top);
+    }
+    if (eql(name, "scrollLeft")) {
+        const pos = ensureScrollMap().get(@intFromPtr(node)) orelse return JsValue.initNumber(0);
+        return JsValue.initNumber(pos.left);
+    }
+
     // document-specific: body, head, documentElement
     if (eql(name, "body")) return findByTag(vm, node, "body");
     if (eql(name, "head")) return findByTag(vm, node, "head");
@@ -429,6 +459,21 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
     if (eql(name, "className")) {
         setAttrFromVal(vm, node, "class", val);
         setDomDirty();
+        return true;
+    }
+    // CSSOM View §6.5: scrollTop / scrollLeft setters (clamp to ≥ 0)
+    if (eql(name, "scrollTop")) {
+        const v = @max(0.0, val.toNumber());
+        const key = @intFromPtr(node);
+        const cur = ensureScrollMap().get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
+        ensureScrollMap().put(key, .{ .top = v, .left = cur.left }) catch {};
+        return true;
+    }
+    if (eql(name, "scrollLeft")) {
+        const v = @max(0.0, val.toNumber());
+        const key = @intFromPtr(node);
+        const cur = ensureScrollMap().get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
+        ensureScrollMap().put(key, .{ .top = cur.top, .left = v }) catch {};
         return true;
     }
     return false; // fall through to normal set
@@ -896,6 +941,64 @@ fn nativeGetRootNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     }
 
     return wrapNode(vm, root) orelse JsValue.undefined_val;
+}
+
+// ── Element.scroll / scrollTo / scrollBy (CSSOM View §6.5) ──────────
+//
+// Inline style overflow is not tracked by the kotori VM; these methods
+// accept any element and store scroll position unconditionally. A real
+// implementation would skip non-scrollable elements once layout provides
+// overflow information.
+
+/// Parse (x, y) or ({top?, left?}) args into {top, left} floats.
+/// CSSOM View §6.5: scroll()/scrollTo() accept either two numbers or a
+/// ScrollToOptions dictionary {top?, left?, behavior?}.
+fn parseScrollArgs(vm: *VM, args: []const JsValue) struct { top: f64, left: f64 } {
+    if (args.len >= 2) {
+        return .{ .top = args[1].toNumber(), .left = args[0].toNumber() };
+    }
+    if (args.len == 1 and args[0].isObject()) {
+        const opts = args[0].asJsObject();
+        var top: f64 = 0;
+        var left: f64 = 0;
+        if (vm.pool.intern("top") catch null) |top_sid| {
+            if (opts.getProperty(top_sid)) |tv| top = tv.toNumber();
+        }
+        if (vm.pool.intern("left") catch null) |left_sid| {
+            if (opts.getProperty(left_sid)) |lv| left = lv.toNumber();
+        }
+        return .{ .top = top, .left = left };
+    }
+    return .{ .top = 0, .left = 0 };
+}
+
+fn nativeScrollTo(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    const parsed = parseScrollArgs(vm, args);
+    const key = @intFromPtr(node);
+    ensureScrollMap().put(key, .{
+        .top = @max(0.0, parsed.top),
+        .left = @max(0.0, parsed.left),
+    }) catch {};
+    return JsValue.undefined_val;
+}
+
+fn nativeScroll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    return nativeScrollTo(ctx, this, args);
+}
+
+fn nativeScrollBy(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    const delta = parseScrollArgs(vm, args);
+    const key = @intFromPtr(node);
+    const cur = ensureScrollMap().get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
+    ensureScrollMap().put(key, .{
+        .top = @max(0.0, cur.top + delta.top),
+        .left = @max(0.0, cur.left + delta.left),
+    }) catch {};
+    return JsValue.undefined_val;
 }
 
 /// Wrap a ShadowRoot as a kotori JsObject (dom_node backed by the fragment).

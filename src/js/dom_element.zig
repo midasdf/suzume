@@ -2142,26 +2142,200 @@ pub fn elementSetDisabled(
     return quickjs.JS_UNDEFINED();
 }
 
+// ── Per-element scroll state (CSSOM View §6.5) ──────────────────────
+//
+// Keyed on the lxb_dom_element_t pointer (as usize).  Entries are
+// created on first write; missing entry → position is (0, 0).
+
+const ElemScrollPos = struct { top: f32, left: f32 };
+
+/// Global map: element ptr → scroll position.  Allocated lazily with
+/// the page allocator; lives for the lifetime of the process.
+var g_elem_scroll: ?std.AutoHashMap(usize, ElemScrollPos) = null;
+
+fn ensureScrollMap() *std.AutoHashMap(usize, ElemScrollPos) {
+    if (g_elem_scroll == null) {
+        g_elem_scroll = std.AutoHashMap(usize, ElemScrollPos).init(std.heap.page_allocator);
+    }
+    return &g_elem_scroll.?;
+}
+
+/// Returns true if the element has a scrollable overflow on either axis.
+/// Per CSSOM View §6.5: scroll(), scrollTo(), scrollBy() are no-ops on
+/// non-scrollable elements (overflow != scroll|auto on x or y).
+fn isScrollableElement(c: *qjs.JSContext, elem: *lxb.lxb_dom_element_t) bool {
+    const styles = api.getStylesForCtx(c) orelse return false;
+    const cs = styles.get(@intFromPtr(elem)) orelse return false;
+    const scrollable_x = cs.overflow_x == .scroll or cs.overflow_x == .auto_;
+    const scrollable_y = cs.overflow_y == .scroll or cs.overflow_y == .auto_;
+    return scrollable_x or scrollable_y;
+}
+
+/// Parse (x, y) or ({top, left, behavior}) from JS args into (left, top).
+/// Returns null if args are empty/invalid.
+fn parseScrollArgs(
+    c: *qjs.JSContext,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) ?struct { left: f32, top: f32 } {
+    if (argc < 1) return null;
+    const args = argv orelse return null;
+    if (argc >= 2) {
+        var x: f64 = 0;
+        var y: f64 = 0;
+        _ = qjs.JS_ToFloat64(c, &x, args[0]);
+        _ = qjs.JS_ToFloat64(c, &y, args[1]);
+        return .{ .left = @floatCast(x), .top = @floatCast(y) };
+    }
+    // Single options object: { top?, left?, behavior? }
+    const opts = args[0];
+    var left: f64 = 0;
+    var top: f64 = 0;
+    var has_left = false;
+    var has_top = false;
+    const top_val = qjs.JS_GetPropertyStr(c, opts, "top");
+    const left_val = qjs.JS_GetPropertyStr(c, opts, "left");
+    defer qjs.JS_FreeValue(c, top_val);
+    defer qjs.JS_FreeValue(c, left_val);
+    if (!quickjs.JS_IsUndefined(top_val)) {
+        _ = qjs.JS_ToFloat64(c, &top, top_val);
+        has_top = true;
+    }
+    if (!quickjs.JS_IsUndefined(left_val)) {
+        _ = qjs.JS_ToFloat64(c, &left, left_val);
+        has_left = true;
+    }
+    if (!has_top and !has_left) return null;
+    return .{ .left = @floatCast(left), .top = @floatCast(top) };
+}
+
 // ── Scroll getters ──────────────────────────────────────────────────
 
 pub fn elementGetScrollTop(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, @intFromFloat(api.scroll_y));
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewInt32(c, 0);
+    const map = ensureScrollMap();
+    const pos = map.get(@intFromPtr(elem)) orelse return qjs.JS_NewInt32(c, 0);
+    return qjs.JS_NewInt32(c, @intFromFloat(pos.top));
 }
 
 pub fn elementGetScrollLeft(
     ctx: ?*qjs.JSContext,
-    _: qjs.JSValue,
+    this_val: qjs.JSValue,
     _: c_int,
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    return qjs.JS_NewInt32(c, @intFromFloat(api.scroll_x));
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewInt32(c, 0);
+    const map = ensureScrollMap();
+    const pos = map.get(@intFromPtr(elem)) orelse return qjs.JS_NewInt32(c, 0);
+    return qjs.JS_NewInt32(c, @intFromFloat(pos.left));
+}
+
+// ── Scroll setters ──────────────────────────────────────────────────
+
+pub fn elementSetScrollTop(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    if (!isScrollableElement(c, elem)) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    var y: f64 = 0;
+    _ = qjs.JS_ToFloat64(c, &y, args[0]);
+    const new_top: f32 = @floatCast(@max(0.0, y));
+    const map = ensureScrollMap();
+    const key = @intFromPtr(elem);
+    const existing = map.get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
+    map.put(key, .{ .top = new_top, .left = existing.left }) catch {};
+    return quickjs.JS_UNDEFINED();
+}
+
+pub fn elementSetScrollLeft(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    if (!isScrollableElement(c, elem)) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    var x: f64 = 0;
+    _ = qjs.JS_ToFloat64(c, &x, args[0]);
+    const new_left: f32 = @floatCast(@max(0.0, x));
+    const map = ensureScrollMap();
+    const key = @intFromPtr(elem);
+    const existing = map.get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
+    map.put(key, .{ .top = existing.top, .left = new_left }) catch {};
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── Element.scroll / scrollTo / scrollBy (CSSOM View §6.5) ──────────
+
+/// Shared implementation for scroll() / scrollTo():
+/// Sets absolute scroll position. No-op for non-scrollable elements.
+/// Clamps to [0, +∞) (lower bound per spec; upper bound would need
+/// scrollWidth/scrollHeight, which currently mirrors clientWidth/Height).
+fn elementScrollToImpl(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    if (!isScrollableElement(c, elem)) return quickjs.JS_UNDEFINED();
+    const parsed = parseScrollArgs(c, argc, argv) orelse return quickjs.JS_UNDEFINED();
+    const new_left: f32 = @max(0.0, parsed.left);
+    const new_top: f32 = @max(0.0, parsed.top);
+    ensureScrollMap().put(@intFromPtr(elem), .{ .top = new_top, .left = new_left }) catch {};
+    return quickjs.JS_UNDEFINED();
+}
+
+pub fn elementScroll(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return elementScrollToImpl(ctx, this_val, argc, argv);
+}
+
+pub fn elementScrollTo(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return elementScrollToImpl(ctx, this_val, argc, argv);
+}
+
+pub fn elementScrollBy(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    if (!isScrollableElement(c, elem)) return quickjs.JS_UNDEFINED();
+    const delta = parseScrollArgs(c, argc, argv) orelse return quickjs.JS_UNDEFINED();
+    const key = @intFromPtr(elem);
+    const map = ensureScrollMap();
+    const cur = map.get(key) orelse ElemScrollPos{ .top = 0, .left = 0 };
+    const new_left: f32 = @max(0.0, cur.left + delta.left);
+    const new_top: f32 = @max(0.0, cur.top + delta.top);
+    map.put(key, .{ .top = new_top, .left = new_left }) catch {};
+    return quickjs.JS_UNDEFINED();
 }
 
 pub fn elementScrollIntoView(
