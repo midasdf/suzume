@@ -648,7 +648,6 @@ fn kotoriDispatchBodyOnload(root: *lxb.lxb_dom_node_t, krt: *KotoriRuntime) void
                     elem, "onload", 6, &attr_len);
                 if (attr_ptr != null and attr_len > 0) {
                     const code = attr_ptr[0..attr_len];
-                    std.debug.print("[kotori] body.onload: {s}\n", .{code});
                     const result = krt.eval(code);
                     if (!result.isOk()) {
                         if (result == .err) {
