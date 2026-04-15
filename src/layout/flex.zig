@@ -1419,13 +1419,24 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts
         final_heights_len += 1;
     }
 
-    // Phase 3.5: Re-layout children with adjusted heights if flex changed them
-    if (has_flex) {
+    // Phase 3.5: Re-layout children with adjusted heights if flex changed them.
+    // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3: once we know each item's
+    // definite main-axis size (height in column), re-layout its block children
+    // with that height as the containing height so that `height: <pct>` inside
+    // flex items resolves correctly (e.g. `height: 100%` on an img child).
+    {
         var flex_idx: usize = 0;
         for (children) |child| {
             if (child.style.position == .absolute or child.style.position == .fixed) continue;
             if (flex_idx < final_heights_len) {
-                child.content.height = final_heights_buf[flex_idx];
+                const new_h = final_heights_buf[flex_idx];
+                const changed = has_flex and (child.content.height != new_h);
+                child.content.height = new_h;
+                // Re-layout block children when height changed so percent-height
+                // descendants resolve against the new definite height.
+                if (changed and new_h > 0) {
+                    block.relayoutChildrenWithContainingHeight(child, fonts, new_h);
+                }
             }
             flex_idx += 1;
         }
