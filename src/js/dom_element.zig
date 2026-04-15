@@ -2620,9 +2620,9 @@ pub fn formRequestSubmit(
     if (!quickjs.JS_IsNull(submitter_val) and !quickjs.JS_IsUndefined(submitter_val)) {
         // submitter.form must === this form (per spec)
         const submitter_form = qjs.JS_GetPropertyStr(c, submitter_val, "form");
-        const same = qjs.JS_StrictEq(c, submitter_form, this_val);
+        const same = qjs.JS_IsStrictEqual(c, submitter_form, this_val);
         qjs.JS_FreeValue(c, submitter_form);
-        if (same == 0) {
+        if (!same) {
             // Throw TypeError per spec: submitter must be a button in this form.
             return throwDOMException(c, "TypeError", "The specified element is not owned by this form element.");
         }
