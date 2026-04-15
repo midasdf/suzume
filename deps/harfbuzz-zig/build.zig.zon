@@ -1,6 +1,7 @@
 .{
     .name = .harfbuzz,
     .version = "0.0.0",
+    .fingerprint = 0xbd60917cf3984d37,
     .paths = .{
         "include",
         "src",
