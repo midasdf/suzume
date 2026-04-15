@@ -2654,6 +2654,135 @@ pub fn formRequestSubmit(
     return quickjs.JS_UNDEFINED();
 }
 
+// ── Constraint validation API ────────────────────────────────────────
+// HTML Living Standard §4.10.18 "Constraint validation"
+
+/// HTMLInputElement/TextAreaElement/etc. checkValidity() — §4.10.18.4
+/// Returns false and fires a non-bubbling cancelable "invalid" event when
+/// the element suffers from a validity constraint violation. Returns true
+/// otherwise.
+pub fn formControlCheckValidity(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Read the element's internal validity state object (set by the JS polyfill).
+    // The polyfill stores `_customError` and validity flags on the element.
+    // A simpler strategy: evaluate willValidate first; if false always return true.
+    const wv = qjs.JS_GetPropertyStr(c, this_val, "willValidate");
+    const will_validate = qjs.JS_ToBool(c, wv) > 0;
+    qjs.JS_FreeValue(c, wv);
+    if (!will_validate) return qjs.JS_NewBool(c, true);
+
+    // Check validity.valid
+    const validity = qjs.JS_GetPropertyStr(c, this_val, "validity");
+    const valid_prop = qjs.JS_GetPropertyStr(c, validity, "valid");
+    const is_valid = qjs.JS_ToBool(c, valid_prop) > 0;
+    qjs.JS_FreeValue(c, valid_prop);
+    qjs.JS_FreeValue(c, validity);
+
+    if (is_valid) return qjs.JS_NewBool(c, true);
+
+    // Fire "invalid" event — non-bubbling, cancelable (§4.10.18.4 step 3).
+    const js_code =
+        \\(function(el){
+        \\  var ev = new Event('invalid', {bubbles:false, cancelable:true});
+        \\  el.dispatchEvent(ev);
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<checkValidity>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        var args = [_]qjs.JSValue{this_val};
+        const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+        qjs.JS_FreeValue(c, r);
+    }
+    qjs.JS_FreeValue(c, fn_val);
+    return qjs.JS_NewBool(c, false);
+}
+
+/// HTMLInputElement/etc. reportValidity() — §4.10.18.4
+/// Same as checkValidity() but also shows a validation UI message (not yet
+/// implemented; we match the return value contract). Returns true if valid.
+pub fn formControlReportValidity(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    // Per spec reportValidity is identical to checkValidity in terms of return
+    // value and invalid-event firing; the only difference is optional UI which
+    // we omit. Delegate to checkValidity.
+    return formControlCheckValidity(ctx, this_val, argc, argv);
+}
+
+/// HTMLFormElement.checkValidity() — §4.10.21.2 "statically validate the
+/// constraints": fires invalid events on each invalid submittable element,
+/// returns false if any are invalid.
+pub fn formCheckValidity(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Collect submittable elements via querySelectorAll and call checkValidity
+    // on each; if any returns false the form is invalid.
+    const js_code =
+        \\(function(form){
+        \\  var els = form.querySelectorAll('input,select,textarea,button');
+        \\  var allValid = true;
+        \\  for(var i=0;i<els.length;i++){
+        \\    var el=els[i];
+        \\    if(typeof el.checkValidity==='function'){
+        \\      if(!el.checkValidity()) allValid=false;
+        \\    }
+        \\  }
+        \\  return allValid;
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<form-checkValidity>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (quickjs.JS_IsException(fn_val)) return fn_val;
+    var args = [_]qjs.JSValue{this_val};
+    const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+    qjs.JS_FreeValue(c, fn_val);
+    return result;
+}
+
+/// HTMLFormElement.reportValidity() — §4.10.21.2
+/// Same as checkValidity() but additionally shows validation UI.
+pub fn formReportValidity(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    return formCheckValidity(ctx, this_val, argc, argv);
+}
+
+/// input.setCustomValidity(message) — §4.10.18.5
+/// Sets or clears a custom validity message on the element.
+/// Empty string clears (element becomes valid); non-empty sets customError.
+pub fn formControlSetCustomValidity(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const msg_val: qjs.JSValue = if (argc >= 1 and argv != null)
+        argv.?[0]
+    else
+        qjs.JS_NewString(c, "");
+    // Store message on element as _customValidationMessage; the JS polyfill
+    // uses this to reflect validity.customError and validationMessage.
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_customValidationMessage", qjs.JS_DupValue(c, msg_val));
+    // Invalidate the cached validity object so next access recomputes.
+    _ = qjs.JS_DeleteProperty(c, this_val, qjs.JS_NewAtom(c, "_validityCache"), 0);
+    return quickjs.JS_UNDEFINED();
+}
+
 pub fn elementGetBoundingClientRect(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,

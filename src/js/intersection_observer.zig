@@ -193,7 +193,7 @@ fn makeEntryObject(
     _ = qjs.JS_SetPropertyStr(ctx, obj, "target", dom_api.wrapNodePublic(ctx, target));
 
     // isIntersecting / intersectionRatio (§3.2)
-    _ = qjs.JS_SetPropertyStr(ctx, obj, "isIntersecting", qjs.JS_NewBool(ctx, @intFromBool(is_intersecting)));
+    _ = qjs.JS_SetPropertyStr(ctx, obj, "isIntersecting", qjs.JS_NewBool(ctx, is_intersecting));
     _ = qjs.JS_SetPropertyStr(ctx, obj, "intersectionRatio", qjs.JS_NewFloat64(ctx, ratio));
 
     // boundingClientRect (§3.2)

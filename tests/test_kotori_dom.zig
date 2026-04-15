@@ -779,3 +779,185 @@ test "form.requestSubmit() preventDefault cancels submission" {
     // Both requestSubmit() calls fired the event; preventDefault was called each time.
     try std.testing.expectEqualStrings("2", val);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Constraint Validation API — HTML Living Standard §4.10.18
+// ══════════════════════════════════════════════════════════════════════
+
+test "input.willValidate is true for enabled text input (§4.10.18.2)" {
+    // §4.10.18.2: submittable element not barred from constraint validation.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.willValidate ? "true" : "false";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("true", v);
+}
+
+test "input[type=hidden].willValidate is false (§4.10.18.2)" {
+    // §4.10.18.2: hidden inputs are barred from constraint validation.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"hidden\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.willValidate ? "true" : "false";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("false", v);
+}
+
+test "input.validity.valid is true for non-required empty input (§4.10.18.3)" {
+    // §4.10.18.3: ValidityState.valid reflects no constraint violations.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.validity.valid ? "valid" : "invalid";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("valid", v);
+}
+
+test "required input with empty value has valueMissing (§4.10.18.3)" {
+    // §4.10.18.3: valueMissing flag when required + empty value.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.validity.valueMissing ? "valueMissing" : "ok";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("valueMissing", v);
+}
+
+test "input.checkValidity() returns true for valid input (§4.10.18.4)" {
+    // §4.10.18.4: checkValidity returns true when there are no violations.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.checkValidity() ? "valid" : "invalid";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("valid", v);
+}
+
+test "input.checkValidity() returns false and fires invalid event (§4.10.18.4)" {
+    // §4.10.18.4: checkValidity fires non-bubbling 'invalid' event when invalid.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\var fired = false;
+        \\i.addEventListener("invalid", function(){ fired = true; });
+        \\var result = i.checkValidity();
+        \\result + "," + fired;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("false,true", v);
+}
+
+test "input.setCustomValidity sets customError (§4.10.18.5)" {
+    // §4.10.18.5: setCustomValidity with non-empty string sets customError flag.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\" value=\"ok\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.setCustomValidity("bad value");
+        \\i.validity.customError ? "customError" : "none";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("customError", v);
+}
+
+test "input.setCustomValidity('') clears customError (§4.10.18.5)" {
+    // §4.10.18.5: empty string clears the custom validity message.
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\" value=\"ok\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.setCustomValidity("bad");
+        \\i.setCustomValidity("");
+        \\i.validity.customError ? "customError" : "cleared";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("cleared", v);
+}
+
+test "input.reportValidity() returns true for valid input (§4.10.18.4)" {
+    var ctx = try TestCtx.init(
+        "<html><body><form><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
+        \\var i = document.getElementById("i");
+        \\i.reportValidity() ? "valid" : "invalid";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("valid", v);
+}
+
+test "form.checkValidity() returns false when input is invalid (§4.10.21.2)" {
+    // §4.10.21.2: statically validate the constraints — form returns false if
+    // any submittable element is invalid.
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"><input id=\"i\" type=\"text\" required value=\"\"></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\f.checkValidity() ? "valid" : "invalid";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("invalid", v);
+}
+
+test "form.checkValidity() returns true when all inputs are valid (§4.10.21.2)" {
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"><input id=\"i\" type=\"text\" value=\"hello\"></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\f.checkValidity() ? "valid" : "invalid";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("valid", v);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// HTMLFormElement.elements / length — HTML Living Standard §4.10.21.1
+// ══════════════════════════════════════════════════════════════════════
+
+test "form.elements returns collection of submittable elements (§4.10.21.1)" {
+    // §4.10.21.1: elements is an HTMLFormControlsCollection of listed elements.
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"><input type=\"text\"><select><option>a</option></select><textarea></textarea><button type=\"button\"></button></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\f.elements.length + "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("4", v);
+}
+
+test "form.length reflects element count (§4.10.21.1)" {
+    // §4.10.21.1: form.length is the number of listed elements.
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"><input type=\"text\"><input type=\"text\"></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\f.length + "";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("2", v);
+}
