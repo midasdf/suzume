@@ -427,3 +427,51 @@ test "parseValue: fallback to raw" {
         else => return error.TestUnexpectedResult,
     }
 }
+
+// ── CSS-wide keyword resolution for flex-* properties ──────────────
+//
+// Per CSS Values L4 §6.2 and CSSOM §6.5 (resolved value algorithm),
+// the `initial` keyword must resolve to the property's initial value,
+// and getComputedStyle must return that resolved value — never "".
+// CSS Flexbox L1 §7 specifies the initial values verified below.
+
+test "parseValue: flex-direction: initial → CSS-wide keyword" {
+    const v = properties.parseValue(.flex_direction, "initial");
+    switch (v) {
+        .keyword => |kw| try std.testing.expectEqual(values.Keyword.initial, kw),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "parseValue: flex-wrap: initial → CSS-wide keyword" {
+    const v = properties.parseValue(.flex_wrap, "initial");
+    switch (v) {
+        .keyword => |kw| try std.testing.expectEqual(values.Keyword.initial, kw),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "parseValue: justify-content: unset → CSS-wide keyword" {
+    const v = properties.parseValue(.justify_content, "unset");
+    switch (v) {
+        .keyword => |kw| try std.testing.expectEqual(values.Keyword.unset, kw),
+        else => return error.TestUnexpectedResult,
+    }
+}
+
+test "ComputedStyle defaults match Flexbox L1 §7 initial values" {
+    const ComputedStyle = css.computed.ComputedStyle;
+    const style = ComputedStyle{};
+    // CSS Flexbox L1 §7.1: flex-direction initial = row
+    try std.testing.expectEqual(ComputedStyle.FlexDirection.row, style.flex_direction);
+    // CSS Flexbox L1 §7.2: flex-wrap initial = nowrap
+    try std.testing.expectEqual(ComputedStyle.FlexWrap.nowrap, style.flex_wrap);
+    // CSS Flexbox L1 §7.3 / §7.3.1: flex-grow initial = 0, flex-shrink initial = 1
+    try std.testing.expectEqual(@as(f32, 0), style.flex_grow);
+    try std.testing.expectEqual(@as(f32, 1), style.flex_shrink);
+    // CSS Flexbox L1 §7.3.3: flex-basis initial = auto
+    switch (style.flex_basis) {
+        .auto => {},
+        else => return error.TestUnexpectedResult,
+    }
+}

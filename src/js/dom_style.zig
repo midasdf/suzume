@@ -263,8 +263,13 @@ pub fn computedStyleGetPropertyValue(
                     }
                 }
                 const trimmed = std.mem.trim(u8, val, " \t\r\n");
-                // Resolve CSS-wide keywords to computed values
+                // Resolve CSS-wide keywords to computed values per CSS Values L4 §6.2
+                // and CSSOM §6.5 (resolved value algorithm). Prefer the cascade result
+                // when available — cascade.zig substitutes `initial` with struct defaults
+                // during applyDeclaration, so computedStyleToStringWithBox returns the
+                // correct resolved value for every property (including flex-*).
                 if (eqlIgnoreCase(trimmed, "initial")) {
+                    if (resolveFromCascade(c, elem_val, prop)) |v| return v;
                     return cssInitialValue(c, prop);
                 } else if (eqlIgnoreCase(trimmed, "inherit")) {
                     return getInheritedComputedValue(c, elem_val, prop);
@@ -272,6 +277,7 @@ pub fn computedStyleGetPropertyValue(
                     if (isCssInheritedProperty(prop)) {
                         return getInheritedComputedValue(c, elem_val, prop);
                     }
+                    if (resolveFromCascade(c, elem_val, prop)) |v| return v;
                     return cssInitialValue(c, prop);
                 } else if (eqlIgnoreCase(trimmed, "revert")) {
                     // Fall through to cascade (UA value)
@@ -2259,7 +2265,23 @@ pub fn overflowToString(c: *qjs.JSContext, overflow: ComputedStyle.Overflow) qjs
 
 // ── CSS-wide Keyword Resolution (initial/inherit/unset) ─────────────
 
+/// Resolve a property's computed value from the cascade ComputedStyle for the
+/// given element, or null if no cascade entry is available. Used to spec-correctly
+/// resolve the `initial`/`unset`(non-inherited)/`revert` CSS-wide keywords, since
+/// the cascade already substitutes the initial value into struct defaults
+/// (see cascade.zig applyDeclaration for the `initial` keyword).
+/// Per CSS Values L4 §6.2 and CSSOM §6.5 resolved-value algorithm.
+pub fn resolveFromCascade(c: *qjs.JSContext, elem_val: qjs.JSValue, prop: []const u8) ?qjs.JSValue {
+    const node = getNode(c, elem_val) orelse return null;
+    const styles_map = api.getStylesForCtx(c) orelse return null;
+    const style = styles_map.get(@intFromPtr(node)) orelse return null;
+    const box_opt = if (api.getRootBox(c)) |root| api.findBoxForNode(root, node) else null;
+    return computedStyleToStringWithBox(c, &style, prop, box_opt);
+}
+
 /// Return the CSS initial value for a property (computed form).
+/// Fallback used only when cascade ComputedStyle is unavailable; prefer
+/// resolveFromCascade whenever possible to honor spec-correct resolved values.
 pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
     // Margin/padding/border-width initial = 0
     if (eqlIgnoreCase(prop, "margin-top") or eqlIgnoreCase(prop, "margin-right") or
@@ -2584,6 +2606,8 @@ pub fn cssInitialValue(c: *qjs.JSContext, prop: []const u8) qjs.JSValue {
         eqlIgnoreCase(prop, "border-bottom-style") or eqlIgnoreCase(prop, "border-left-style"))
         return qjs.JS_NewStringLen(c, "none", 4);
     if (eqlIgnoreCase(prop, "box-sizing")) return qjs.JS_NewStringLen(c, "content-box", 11);
+    // CSS Flexbox L1 §7.1: flex-direction initial is "row".
+    if (eqlIgnoreCase(prop, "flex-direction")) return qjs.JS_NewStringLen(c, "row", 3);
     if (eqlIgnoreCase(prop, "flex-grow")) return qjs.JS_NewStringLen(c, "0", 1);
     if (eqlIgnoreCase(prop, "flex-shrink")) return qjs.JS_NewStringLen(c, "1", 1);
     if (eqlIgnoreCase(prop, "flex-basis")) return qjs.JS_NewStringLen(c, "auto", 4);
@@ -3181,11 +3205,16 @@ pub fn windowGetComputedStyle(
             if (getStyleProperty(inline_style, css_name)) |inline_val| {
                 const t = std.mem.trim(u8, inline_val, " \t\r\n");
                 if (eqlIgnoreCase(t, "initial")) {
-                    val = cssInitialValue(c, css_name);
+                    // Prefer cascade (per CSS Values L4 §6.2 / CSSOM §6.5).
+                    val = if (style_opt) |st| computedStyleToStringWithBox(c, &st, css_name, box_opt) else cssInitialValue(c, css_name);
                 } else if (eqlIgnoreCase(t, "inherit")) {
                     val = getInheritedComputedValue(c, args[0], css_name);
                 } else if (eqlIgnoreCase(t, "unset")) {
-                    val = if (isCssInheritedProperty(css_name)) getInheritedComputedValue(c, args[0], css_name) else cssInitialValue(c, css_name);
+                    if (isCssInheritedProperty(css_name)) {
+                        val = getInheritedComputedValue(c, args[0], css_name);
+                    } else {
+                        val = if (style_opt) |st| computedStyleToStringWithBox(c, &st, css_name, box_opt) else cssInitialValue(c, css_name);
+                    }
                 } else if (eqlIgnoreCase(t, "revert")) {
                     if (style_opt) |style| {
                         val = computedStyleToStringWithBox(c, &style, css_name, box_opt);
@@ -3225,11 +3254,16 @@ pub fn windowGetComputedStyle(
                 if (getStyleProperty(inline_style, css_name)) |inline_val| {
                     const t2 = std.mem.trim(u8, inline_val, " \t\r\n");
                     if (eqlIgnoreCase(t2, "initial")) {
-                        val2 = cssInitialValue(c, css_name);
+                        // Prefer cascade (per CSS Values L4 §6.2 / CSSOM §6.5).
+                        val2 = if (style_opt) |st| computedStyleToStringWithBox(c, &st, css_name, box_opt) else cssInitialValue(c, css_name);
                     } else if (eqlIgnoreCase(t2, "inherit")) {
                         val2 = getInheritedComputedValue(c, args[0], css_name);
                     } else if (eqlIgnoreCase(t2, "unset")) {
-                        val2 = if (isCssInheritedProperty(css_name)) getInheritedComputedValue(c, args[0], css_name) else cssInitialValue(c, css_name);
+                        if (isCssInheritedProperty(css_name)) {
+                            val2 = getInheritedComputedValue(c, args[0], css_name);
+                        } else {
+                            val2 = if (style_opt) |st| computedStyleToStringWithBox(c, &st, css_name, box_opt) else cssInitialValue(c, css_name);
+                        }
                     } else if (eqlIgnoreCase(t2, "revert")) {
                         if (style_opt) |style| {
                             val2 = computedStyleToStringWithBox(c, &style, css_name, box_opt);
