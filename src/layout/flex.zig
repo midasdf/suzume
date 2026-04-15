@@ -2676,3 +2676,163 @@ test "gap: percent column-gap resolves against container main axis (row)" {
     try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
     try testing.expectApproxEqAbs(@as(f32, 200), b.content.x, 0.5); // 100+100
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Absolutely-positioned flex children (CSS Flexbox L1 §4.1, Position L3 §3.2)
+//
+// Spec: an abspos child of a flex container is taken out of flow; it does not
+// participate in line-sizing, main-axis packing, or cross-axis sizing.
+// Its containing block is the flex container's padding box (Position L3 §3.2).
+// ─────────────────────────────────────────────────────────────────────────────
+
+test "abspos child in row flex does not affect in-flow siblings" {
+    // CSS Flexbox L1 §4.1: abspos children are out of flow and must not
+    // contribute to the main-axis size calculation of their flex line.
+    // Two 100px in-flow items in a 400px container should each get 150px
+    // after flex-grow (free space = 200 split evenly) regardless of an
+    // additional abspos sibling.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(400);
+    defer root.children.deinit(alloc);
+
+    // Two normal flex items with flex-grow = 1
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 100 };
+    a.style.flex_grow = 1;
+    defer a.children.deinit(alloc);
+
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 100 };
+    b.style.flex_grow = 1;
+    defer b.children.deinit(alloc);
+
+    // Abspos sibling — must not affect sizing of a or b
+    var abs = tfMakeChild(0);
+    abs.style.position = .absolute;
+    abs.style.flex_basis = .{ .px = 999 }; // large basis — must be ignored
+    defer abs.children.deinit(alloc);
+
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &abs);
+
+    layoutFlex(&root, 400, 0, &fonts);
+
+    // Each in-flow item should grow to 200px ((400 - 0 gap) / 2)
+    try testing.expectApproxEqAbs(@as(f32, 200), a.content.width, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 200), b.content.width, 0.5);
+}
+
+test "abspos child in row flex does not contribute to container cross size" {
+    // CSS Flexbox L1 §4.1: abspos children are out of flow and must not
+    // affect the cross size (height in row direction) of the flex container.
+    // The container height should be determined only by the tallest in-flow item.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(400);
+    root.style.align_items = .flex_start; // prevent stretch from changing heights
+    defer root.children.deinit(alloc);
+
+    // In-flow item: 30px tall
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 100 };
+    a.style.height = .{ .px = 30 };
+    defer a.children.deinit(alloc);
+
+    // Abspos item: 200px tall — must NOT drive container height
+    var abs = tfMakeChild(0);
+    abs.style.position = .absolute;
+    abs.style.flex_basis = .{ .px = 50 };
+    abs.style.height = .{ .px = 200 };
+    defer abs.children.deinit(alloc);
+
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &abs);
+
+    layoutFlex(&root, 400, 0, &fonts);
+
+    // Container cross size must equal in-flow item height, not the abspos height
+    try testing.expectApproxEqAbs(@as(f32, 30), root.content.height, 0.5);
+}
+
+test "abspos child in column flex does not affect in-flow siblings" {
+    // CSS Flexbox L1 §4.1: abspos children taken out of flow for column
+    // direction too. Two 50px-tall items in a 200px column should each grow
+    // to 100px regardless of an abspos sibling with a large height.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(200);
+    root.style.flex_direction = .column;
+    root.style.height = .{ .px = 200 };
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 50 };
+    a.style.flex_grow = 1;
+    defer a.children.deinit(alloc);
+
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 50 };
+    b.style.flex_grow = 1;
+    defer b.children.deinit(alloc);
+
+    // Abspos: huge height, must not steal free space from a and b
+    var abs = tfMakeChild(0);
+    abs.style.position = .absolute;
+    abs.style.flex_basis = .{ .px = 999 };
+    defer abs.children.deinit(alloc);
+
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &abs);
+
+    layoutFlex(&root, 200, 0, &fonts);
+
+    // Each in-flow item grows to 100px ((200 - 0 gap) / 2)
+    try testing.expectApproxEqAbs(@as(f32, 100), a.content.height, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 100), b.content.height, 0.5);
+}
+
+test "mixed abspos and in-flow children: in-flow items still fill container" {
+    // CSS Flexbox L1 §4.1 + Position L3 §3.2: with one abspos and two in-flow
+    // items, the in-flow items should divide the full container width between
+    // them (abspos contributes nothing to total_base_size).
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    defer root.children.deinit(alloc);
+
+    var abs = tfMakeChild(0);
+    abs.style.position = .absolute;
+    abs.style.flex_basis = .{ .px = 100 };
+    defer abs.children.deinit(alloc);
+
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 60 };
+    a.style.flex_grow = 1;
+    defer a.children.deinit(alloc);
+
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 60 };
+    b.style.flex_grow = 1;
+    defer b.children.deinit(alloc);
+
+    try tfAttach(alloc, &root, &abs);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    layoutFlex(&root, 300, 0, &fonts);
+
+    // Free space = 300 - (60+60) = 180, split equally → each item = 60+90 = 150
+    try testing.expectApproxEqAbs(@as(f32, 150), a.content.width, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 150), b.content.width, 0.5);
+}
