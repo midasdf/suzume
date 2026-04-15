@@ -39,9 +39,9 @@ pub const VM = struct {
     allocator: std.mem.Allocator,
     pool: *StringPool,
     // Heap tracking for cleanup
-    objects: std.ArrayListUnmanaged(*JsObject) = .{},
-    upvalue_cells: std.ArrayListUnmanaged(*UpvalueCell) = .{},
-    closure_entries: std.ArrayListUnmanaged(ClosureEntry) = .{},
+    objects: std.ArrayListUnmanaged(*JsObject) = .empty,
+    upvalue_cells: std.ArrayListUnmanaged(*UpvalueCell) = .empty,
+    closure_entries: std.ArrayListUnmanaged(ClosureEntry) = .empty,
     // Built-in prototypes
     array_proto: ?*JsObject = null,
     string_proto: ?*JsObject = null,
@@ -54,12 +54,12 @@ pub const VM = struct {
     dom_get_prop: ?*const fn (*VM, *JsObject, StringId) ?JsValue = null,
     dom_set_prop: ?*const fn (*VM, *JsObject, StringId, JsValue) bool = null,
     // Timer queue (setTimeout/setInterval)
-    timers: std.ArrayListUnmanaged(TimerEntry) = .{},
+    timers: std.ArrayListUnmanaged(TimerEntry) = .empty,
     next_timer_id: u32 = 1,
 
     // Promise / microtask queue
-    microtasks: std.ArrayListUnmanaged(MicrotaskEntry) = .{},
-    continuations: std.ArrayListUnmanaged(*Continuation) = .{},
+    microtasks: std.ArrayListUnmanaged(MicrotaskEntry) = .empty,
+    continuations: std.ArrayListUnmanaged(*Continuation) = .empty,
     promise_proto: ?*JsObject = null,
     error_proto: ?*JsObject = null,
 
