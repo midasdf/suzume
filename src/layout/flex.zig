@@ -371,12 +371,19 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 if (is_stretch and container_cross > 0) {
                     const child_non_content_s = child.padding.top + child.padding.bottom +
                         child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-                    const stretched_h = @max(container_cross - child_non_content_s, 0);
-                    // Re-layout the item's block children with the definite height as
-                    // the containing height so `height: <pct>` descendants resolve.
-                    // We do NOT call layoutBlockVp on the item itself (that would
-                    // recompute content.height from children, shrinking the item).
-                    // Instead we only re-layout the children with the definite size.
+                    var stretched_h = @max(container_cross - child_non_content_s, 0);
+                    // CSS Flexbox L1 §9.4: clamp by max-height before using as
+                    // containing height (% resolves against container cross size).
+                    const max_h_s: ?f32 = switch (child.style.max_height) {
+                        .px => |mh| mh,
+                        .percent => |pct| pct * container_cross / 100.0,
+                        else => null,
+                    };
+                    if (max_h_s) |mh| {
+                        if (stretched_h > mh) stretched_h = mh;
+                    }
+                    // Re-layout the item's block children with the clamped definite
+                    // height so `height: <pct>` descendants resolve correctly.
                     block.relayoutChildrenWithContainingHeight(child, fonts, stretched_h);
                 }
             }
@@ -480,7 +487,16 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 cross_offset = 0;
                 const child_non_content_a = child.padding.top + child.padding.bottom +
                     child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-                const stretched_height_a = @max(container_cross2 - child_non_content_a, 0);
+                var stretched_height_a = @max(container_cross2 - child_non_content_a, 0);
+                // CSS Flexbox L1 §9.4: clamp by max-height (% resolves against container cross).
+                const max_h_a: ?f32 = switch (child.style.max_height) {
+                    .px => |mh| mh,
+                    .percent => |pct| pct * container_cross2 / 100.0,
+                    else => null,
+                };
+                if (max_h_a) |mh| {
+                    if (stretched_height_a > mh) stretched_height_a = mh;
+                }
                 if (switch (child.style.height) {
                     .auto => true,
                     else => false,
@@ -498,11 +514,22 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
                 cross_offset = (container_cross2 - child_cross) / 2;
             },
             .stretch => {
-                // Stretch child cross size to fill container cross size
+                // Stretch child cross size to fill container cross size.
+                // CSS Flexbox L1 §9.4: clamped by the item's min/max cross-size
+                // (CSS Sizing L3 §5 — max-height resolves against container cross).
                 cross_offset = 0;
                 const child_non_content = child.padding.top + child.padding.bottom +
                     child.border.top + child.border.bottom + child.margin.top + child.margin.bottom;
-                const stretched_height = @max(container_cross2 - child_non_content, 0);
+                var stretched_height = @max(container_cross2 - child_non_content, 0);
+                // Apply max-height clamping (resolving % against container cross).
+                const max_h_limit: ?f32 = switch (child.style.max_height) {
+                    .px => |mh| mh,
+                    .percent => |pct| pct * container_cross2 / 100.0,
+                    else => null,
+                };
+                if (max_h_limit) |mh| {
+                    if (stretched_height > mh) stretched_height = mh;
+                }
                 if (switch (child.style.height) {
                     .auto => true,
                     else => false,

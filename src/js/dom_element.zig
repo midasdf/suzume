@@ -2510,7 +2510,8 @@ pub fn elementGetOffsetWidth(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (getBoxForThis(c, this_val)) |box| {
         const bbox = box.borderBox();
-        return qjs.JS_NewInt32(c, @intFromFloat(bbox.width));
+        // CSSOM View §6.5: offsetWidth is border-box width rounded to nearest integer.
+        return qjs.JS_NewInt32(c, @intFromFloat(@round(bbox.width)));
     }
     return qjs.JS_NewInt32(c, 0);
 }
@@ -2524,7 +2525,10 @@ pub fn elementGetOffsetHeight(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     if (getBoxForThis(c, this_val)) |box| {
         const bbox = box.borderBox();
-        return qjs.JS_NewInt32(c, @intFromFloat(bbox.height));
+        // CSSOM View §6.5: offsetHeight is the border-box height rounded to the
+        // nearest integer (not truncated). Use @round so sub-pixel values like
+        // 12.5 → 13 rather than 12.
+        return qjs.JS_NewInt32(c, @intFromFloat(@round(bbox.height)));
     }
     return qjs.JS_NewInt32(c, 0);
 }
