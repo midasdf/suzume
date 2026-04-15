@@ -1,4 +1,5 @@
 const std = @import("std");
+const sync = @import("../sync.zig");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 
@@ -17,7 +18,7 @@ const Message = struct {
 /// Thread-safe message queue using mutex.
 const MessageQueue = struct {
     items: std.ArrayListUnmanaged(Message) = .empty,
-    mutex: std.Thread.Mutex = .{},
+    mutex: sync.Mutex = .{},
 
     fn push(self: *MessageQueue, data: []const u8) !void {
         const owned = try allocator.alloc(u8, data.len);
