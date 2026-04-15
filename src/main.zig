@@ -913,7 +913,7 @@ fn extractTitle(doc: *Document) ?[]const u8 {
 pub fn main() !void {
     // Use GeneralPurposeAllocator in debug mode for double-free / use-after-free detection.
     // In release mode, use c_allocator for performance.
-    var gpa: std.heap.GeneralPurposeAllocator(.{
+    var gpa: std.heap.DebugAllocator(.{
         .stack_trace_frames = if (@import("builtin").mode == .Debug) 8 else 0,
         .safety = (@import("builtin").mode == .Debug),
     }) = .init;
