@@ -1673,9 +1673,12 @@ fn styleSetProperty(
     else if (dom_style.eqlIgnoreCase(prop, "opacity") and trimmed_val2.len > 1 and trimmed_val2[trimmed_val2.len - 1] == '%') blk: {
         if (std.fmt.parseFloat(f64, trimmed_val2[0 .. trimmed_val2.len - 1])) |pct| {
             const v = pct / 100.0;
-            const s = std.fmt.bufPrint(&calc_buf, "{d}", .{v}) catch break :blk val;
-            break :blk s;
+            break :blk dom_style.formatCssNumber(v, &calc_buf) orelse val;
         } else |_| break :blk val;
+    } else if (dom_style.isCssNumericProperty(prop)) blk: {
+        // CSSOM §6.7.2: CSS <number> serialization must not use scientific notation.
+        // Normalize values like "23.4e5" → "2340000", "1.0" → "1", "0.5" → "0.5".
+        break :blk dom_style.normalizeCssNumber(trimmed_val2, &calc_buf) orelse val;
     } else val;
 
     var style_len: usize = 0;

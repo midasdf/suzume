@@ -1998,6 +1998,18 @@ pub fn isColorProperty(prop: []const u8) bool {
         eqlIgnoreCase(prop, "column-rule-color");
 }
 
+/// Return true for CSS properties whose value is a bare <number> (no unit).
+/// These require CSSOM §6.7.2-compliant serialization: no scientific notation.
+pub fn isCssNumericProperty(prop: []const u8) bool {
+    return eqlIgnoreCase(prop, "flex-grow") or
+        eqlIgnoreCase(prop, "flex-shrink") or
+        eqlIgnoreCase(prop, "opacity") or
+        eqlIgnoreCase(prop, "line-height") or
+        eqlIgnoreCase(prop, "font-weight") or
+        eqlIgnoreCase(prop, "zoom") or
+        eqlIgnoreCase(prop, "order");
+}
+
 /// Check if a CSS value string contains NaN or infinity keywords.
 /// Check if value starts with a CSS math function that should be resolved.
 pub fn isCssMathFunc(s: []const u8) bool {
@@ -5348,4 +5360,98 @@ pub fn isValidLineHeight(val: []const u8) bool {
         return n >= 0;
     } else |_| {}
     return isValidNonNegLength(val);
+}
+
+/// Serialize a CSS <number> per CSSOM §6.7.2 and CSS Values L4 §5.4:
+/// no exponent notation, trailing zeros trimmed, integer form when value is whole.
+/// Returns a slice into `buf`, or null if `val` is not a parseable number or buf too small.
+pub fn normalizeCssNumber(val: []const u8, buf: []u8) ?[]const u8 {
+    const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed.len == 0) return null;
+    // Only normalize if the value actually contains an exponent character ('e' or 'E')
+    // or is otherwise a valid float that needs normalization.
+    const v = std.fmt.parseFloat(f64, trimmed) catch return null;
+    return formatCssNumber(v, buf);
+}
+
+/// Format a CSS <number> value (f64) into buf per CSSOM §6.7.2:
+/// integer form (no decimal point) when the value is a whole number,
+/// otherwise shortest fractional form without exponent notation, trailing zeros trimmed.
+/// Returns the written slice, or null if buf is too small or value is NaN/Inf.
+pub fn formatCssNumber(v: f64, buf: []u8) ?[]const u8 {
+    if (std.math.isNan(v) or std.math.isInf(v)) return null;
+    // Integer form: if value equals its floor and is in safe integer range.
+    const floored = @floor(v);
+    if (v == floored and v >= -9.007199254740992e15 and v <= 9.007199254740992e15) {
+        const as_int: i64 = @intFromFloat(v);
+        return std.fmt.bufPrint(buf, "{d}", .{as_int}) catch null;
+    }
+    // Fractional form: format with 17 decimal digits then trim trailing zeros.
+    // {d:.17} in Zig emits fixed-point decimal notation (no exponent) for
+    // values in the range that CSS numbers cover after CSSOM normalization.
+    var tmp: [64]u8 = undefined;
+    const s17 = std.fmt.bufPrint(&tmp, "{d:.17}", .{v}) catch return null;
+    // If Zig still emits an exponent (very small values), fall back to 20 decimal places.
+    if (std.mem.indexOf(u8, s17, "e") != null or std.mem.indexOf(u8, s17, "E") != null) {
+        var tmp2: [128]u8 = undefined;
+        const s20 = std.fmt.bufPrint(&tmp2, "{d:.20}", .{v}) catch return null;
+        if (std.mem.indexOf(u8, s20, "e") != null or std.mem.indexOf(u8, s20, "E") != null) {
+            return null; // cannot represent without exponent
+        }
+        return trimTrailingZeros(s20, buf);
+    }
+    return trimTrailingZeros(s17, buf);
+}
+
+/// Copy s into buf, trimming trailing zeros after the decimal point.
+/// Keeps at least one digit after the decimal point (e.g. "1.0" → "1.0" is NOT trimmed to "1.",
+/// but the integer-form path handles exact integers so this path only sees non-integers).
+fn trimTrailingZeros(s: []const u8, buf: []u8) ?[]const u8 {
+    const dot_pos = std.mem.indexOf(u8, s, ".") orelse {
+        if (s.len > buf.len) return null;
+        @memcpy(buf[0..s.len], s);
+        return buf[0..s.len];
+    };
+    var end = s.len;
+    // Keep at least one digit after the dot (dot_pos + 2 minimum)
+    while (end > dot_pos + 2 and s[end - 1] == '0') end -= 1;
+    if (end > buf.len) return null;
+    @memcpy(buf[0..end], s[0..end]);
+    return buf[0..end];
+}
+
+test "normalizeCssNumber: 2340000.0" {
+    var buf: [64]u8 = undefined;
+    const r = normalizeCssNumber("2340000.0", &buf);
+    try std.testing.expectEqualStrings("2340000", r.?);
+}
+
+test "normalizeCssNumber: 23.4e5" {
+    var buf: [64]u8 = undefined;
+    const r = normalizeCssNumber("23.4e5", &buf);
+    try std.testing.expectEqualStrings("2340000", r.?);
+}
+
+test "normalizeCssNumber: 0.5" {
+    var buf: [64]u8 = undefined;
+    const r = normalizeCssNumber("0.5", &buf);
+    try std.testing.expectEqualStrings("0.5", r.?);
+}
+
+test "normalizeCssNumber: 1.0" {
+    var buf: [64]u8 = undefined;
+    const r = normalizeCssNumber("1.0", &buf);
+    try std.testing.expectEqualStrings("1", r.?);
+}
+
+test "normalizeCssNumber: -1.25" {
+    var buf: [64]u8 = undefined;
+    const r = normalizeCssNumber("-1.25", &buf);
+    try std.testing.expectEqualStrings("-1.25", r.?);
+}
+
+test "normalizeCssNumber: 1e-6" {
+    var buf: [64]u8 = undefined;
+    const r = normalizeCssNumber("1e-6", &buf);
+    try std.testing.expectEqualStrings("0.000001", r.?);
 }
