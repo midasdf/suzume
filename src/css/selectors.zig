@@ -3,6 +3,38 @@ const util = @import("util.zig");
 const bloom_mod = @import("bloom.zig");
 pub const SelectorBloomFilter = bloom_mod.SelectorBloomFilter;
 
+// ── Shadow host context (CSS Scoping L1 §3.3) ────────────────────────
+// When matching stylesheets inside a shadow tree, the shadow host element
+// is registered here so :host / :host(<compound>) can resolve correctly.
+// Uses an opaque pointer (same ptr stored in ElementAdapter) so selectors.zig
+// stays independent of DOM/lexbor types.
+// Stack-based to handle nested shadow roots.
+var g_shadow_host_stack: [16]?*const anyopaque = .{null} ** 16;
+var g_shadow_host_depth: usize = 0;
+
+/// Push a shadow host context for :host matching.
+/// Call before evaluating a shadow tree's stylesheet, pop after.
+pub fn pushShadowHostContext(host_ptr: *const anyopaque) void {
+    if (g_shadow_host_depth < g_shadow_host_stack.len) {
+        g_shadow_host_stack[g_shadow_host_depth] = host_ptr;
+        g_shadow_host_depth += 1;
+    }
+}
+
+/// Pop the innermost shadow host context.
+pub fn popShadowHostContext() void {
+    if (g_shadow_host_depth > 0) {
+        g_shadow_host_depth -= 1;
+        g_shadow_host_stack[g_shadow_host_depth] = null;
+    }
+}
+
+/// Return the current shadow host opaque pointer, or null if not in a shadow tree stylesheet.
+pub fn currentShadowHostPtr() ?*const anyopaque {
+    if (g_shadow_host_depth > 0) return g_shadow_host_stack[g_shadow_host_depth - 1];
+    return null;
+}
+
 pub const Combinator = enum {
     descendant, // space
     child, // >
@@ -58,6 +90,8 @@ pub const PseudoClass = enum {
     read_only,
     read_write,
     indeterminate,
+    // CSS Scoping L1 §3.3: shadow host pseudo-classes
+    host,
     // Internal-only: used by :has()/:not()/:is()/:where() selectors
     has,
     not,
@@ -126,6 +160,7 @@ pub const PseudoClassSel = struct {
     has_inner: ?[]const u8 = null, // Raw inner selector string for :has()
     is_inner: ?[]const u8 = null, // Raw inner selector string for :is()
     where_inner: ?[]const u8 = null, // Raw inner selector string for :where()
+    host_inner: ?[]const u8 = null, // Raw inner selector string for :host(<compound>)
 };
 
 pub const SimpleSelector = union(enum) {
@@ -496,6 +531,37 @@ const SelectorParser = struct {
                         self.specificity.a += is_max.a;
                         self.specificity.b += is_max.b;
                         self.specificity.c += is_max.c;
+                    }
+                } else if (eqlIgnoreCase(name, "host")) {
+                    // CSS Scoping L1 §3.3: :host and :host(<compound-selector>)
+                    // :host matches the shadow host when evaluated from inside a shadow tree.
+                    // :host(<compound>) additionally requires the host to match the inner selector.
+                    if (self.peek() == '(') {
+                        self.advance(); // skip '('
+                        const host_inner_start = self.pos;
+                        var paren_depth_host: u32 = 1;
+                        while (self.pos < self.source.len and paren_depth_host > 0) {
+                            if (self.source[self.pos] == '(') paren_depth_host += 1;
+                            if (self.source[self.pos] == ')') paren_depth_host -= 1;
+                            if (paren_depth_host > 0) self.pos += 1;
+                        }
+                        const host_inner = self.source[host_inner_start..self.pos];
+                        if (self.pos < self.source.len) self.advance(); // skip ')'
+                        try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                            .pc = .host,
+                            .host_inner = host_inner,
+                        } } });
+                        // :host(<compound>) specificity = specificity of <compound> (CSS Scoping §3.3.2)
+                        const host_max = SelectorParser.maxInnerSpecificity(host_inner, self.allocator);
+                        self.specificity.a += host_max.a;
+                        self.specificity.b += host_max.b + 1; // plus 1 for the :host pseudo itself
+                        self.specificity.c += host_max.c;
+                    } else {
+                        // Bare :host — specificity (0,0,1) per CSS Scoping §3.3.1
+                        try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                            .pc = .host,
+                        } } });
+                        self.specificity.b += 1;
                     }
                 } else {
                     // Unknown pseudo-class: per CSS spec, a selector with an unknown
@@ -909,6 +975,22 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
     if (pcs.where_inner) |inner| {
         return matchIsWhereInner(inner, element);
     }
+    // Handle :host / :host(<compound>) — CSS Scoping L1 §3.3
+    // Matches only when there is an active shadow host context (i.e. this stylesheet
+    // is being evaluated from inside a shadow tree) AND the element is that host.
+    if (pcs.pc == .host) {
+        const host_ptr = currentShadowHostPtr() orelse return false;
+        // The element must be the shadow host.
+        if (element.ptr != host_ptr) return false;
+        // :host(<compound>) — host must additionally match the inner selector.
+        if (pcs.host_inner) |inner| {
+            const trimmed = std.mem.trim(u8, inner, " \t\n\r");
+            if (trimmed.len == 0) return false;
+            return matchIsWhereInner(trimmed, element);
+        }
+        // Bare :host — element is the host, no further condition.
+        return true;
+    }
     const pc = pcs.pc;
     switch (pc) {
         .first_child => return element.previousElementSibling() == null,
@@ -1096,8 +1178,8 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             }
             return true;
         },
-        // :has()/:not()/:is()/:where() are handled above via inner fields
-        .has, .not, .is, .where => return false,
+        // :has()/:not()/:is()/:where()/:host are handled above via inner fields / early return
+        .has, .not, .is, .where, .host => return false,
     }
 }
 

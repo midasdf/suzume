@@ -579,3 +579,92 @@ test "match pseudo root" {
 
     try std.testing.expect(selectors.matches(&sel, el.adapter()));
 }
+
+// ── :host / :host(<compound>) tests (CSS Scoping L1 §3.3) ────────────
+
+test "parse :host bare" {
+    // CSS Scoping L1 §3.3.1: :host parses as pseudo-class with specificity (0,1,0)
+    const sel = selectors.parseSelector(":host", std.testing.allocator) orelse
+        return error.ParseFailed;
+    defer std.testing.allocator.free(sel.components);
+
+    try std.testing.expectEqual(@as(usize, 1), sel.components.len);
+    const pc = sel.components[0].simple.pseudo_class;
+    try std.testing.expectEqual(selectors.PseudoClass.host, pc.pc);
+    try std.testing.expect(pc.host_inner == null);
+    try std.testing.expectEqual(Specificity{ .a = 0, .b = 1, .c = 0 }, sel.specificity);
+}
+
+test "parse :host with compound selector" {
+    // CSS Scoping L1 §3.3.2: :host(.foo) parses with inner selector stored
+    const sel = selectors.parseSelector(":host(.active)", std.testing.allocator) orelse
+        return error.ParseFailed;
+    defer std.testing.allocator.free(sel.components);
+
+    try std.testing.expectEqual(@as(usize, 1), sel.components.len);
+    const pc = sel.components[0].simple.pseudo_class;
+    try std.testing.expectEqual(selectors.PseudoClass.host, pc.pc);
+    try std.testing.expect(pc.host_inner != null);
+    try std.testing.expectEqualStrings(".active", pc.host_inner.?);
+    // Specificity: (0, 1+1, 0) = (0,2,0) — :host + .active
+    try std.testing.expectEqual(Specificity{ .a = 0, .b = 2, .c = 0 }, sel.specificity);
+}
+
+test "match :host matches shadow host element" {
+    // §3.3.1: :host matches the element that IS the current shadow host.
+    const host = MockElement{ .tag = "div" };
+    var sel = selectors.parseSelector(":host", std.testing.allocator) orelse
+        return error.ParseFailed;
+    defer std.testing.allocator.free(sel.components);
+
+    // Without shadow host context: :host must not match anything.
+    try std.testing.expect(!selectors.matches(&sel, host.adapter()));
+
+    // With shadow host context pointing to this element: must match.
+    selectors.pushShadowHostContext(host.adapter().ptr);
+    defer selectors.popShadowHostContext();
+    try std.testing.expect(selectors.matches(&sel, host.adapter()));
+}
+
+test "match :host does not match non-host element" {
+    // §3.3.1: :host only matches the shadow host, not other elements.
+    const host = MockElement{ .tag = "div" };
+    const other = MockElement{ .tag = "span" };
+    var sel = selectors.parseSelector(":host", std.testing.allocator) orelse
+        return error.ParseFailed;
+    defer std.testing.allocator.free(sel.components);
+
+    selectors.pushShadowHostContext(host.adapter().ptr);
+    defer selectors.popShadowHostContext();
+
+    // host itself matches
+    try std.testing.expect(selectors.matches(&sel, host.adapter()));
+    // other element must not match
+    try std.testing.expect(!selectors.matches(&sel, other.adapter()));
+}
+
+test "match :host(compound) matches host with matching compound" {
+    // §3.3.2: :host(.foo) matches host only if host also matches .foo
+    const host = MockElement{ .tag = "div", .class = "foo bar" };
+    var sel = selectors.parseSelector(":host(.foo)", std.testing.allocator) orelse
+        return error.ParseFailed;
+    defer std.testing.allocator.free(sel.components);
+
+    selectors.pushShadowHostContext(host.adapter().ptr);
+    defer selectors.popShadowHostContext();
+
+    try std.testing.expect(selectors.matches(&sel, host.adapter()));
+}
+
+test "match :host(compound) fails when host does not match compound" {
+    // §3.3.2: :host(.active) must not match a host that lacks the class.
+    const host = MockElement{ .tag = "div", .class = "inactive" };
+    var sel = selectors.parseSelector(":host(.active)", std.testing.allocator) orelse
+        return error.ParseFailed;
+    defer std.testing.allocator.free(sel.components);
+
+    selectors.pushShadowHostContext(host.adapter().ptr);
+    defer selectors.popShadowHostContext();
+
+    try std.testing.expect(!selectors.matches(&sel, host.adapter()));
+}
