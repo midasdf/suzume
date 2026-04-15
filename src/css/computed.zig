@@ -484,6 +484,10 @@ pub const ComputedStyle = struct {
         fit_content,
         /// CSS Flexbox §9.2: flex-basis: content — size to max-content of the item
         content,
+        /// CSS Values L4 §10.6: calc() expression that could not be fully resolved at
+        /// computed-value time (e.g. mixed `%` + `px` summands). The slice points into
+        /// the cascade arena and is valid for the lifetime of CascadeResult.
+        calc: []const u8,
     };
 
     pub const ReadingFlow = enum {

@@ -620,6 +620,8 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
             .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
             // CSS Flexbox §9.2: flex-basis: content
             .content => qjs.JS_NewStringLen(c, "content", 7),
+            // CSS Values L4 §10.1: preserved calc() expression
+            .calc => |expr| qjs.JS_NewStringLen(c, expr.ptr, expr.len),
         };
     } else if (std.mem.eql(u8, prop, "flex-flow")) {
         // Shorthand: flex-direction flex-wrap
@@ -657,6 +659,8 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
             .max_content => "max-content",
             .fit_content => "fit-content",
             .content => "content",
+            // CSS Values L4 §10.1: preserved calc() expression
+            .calc => |expr| expr,
         };
         const result = std.fmt.bufPrint(&buf, "{s} {s} {s}", .{ grow_s, shrink_s, basis_s }) catch return qjs.JS_NewStringLen(c, "0 1 auto", 8);
         return qjs.JS_NewStringLen(c, result.ptr, result.len);
@@ -2263,6 +2267,9 @@ pub fn dimensionToString(c: *qjs.JSContext, dim: ComputedStyle.Dimension, buf: *
         .max_content => qjs.JS_NewStringLen(c, "max-content", 11),
         .fit_content => qjs.JS_NewStringLen(c, "fit-content", 11),
         .content => qjs.JS_NewStringLen(c, "content", 7),
+        // CSS Values L4 §10.1: serialize preserved calc() expression as-is.
+        // The expression is already in the normalized form stored at computed-value time.
+        .calc => |expr| qjs.JS_NewStringLen(c, expr.ptr, expr.len),
     };
 }
 

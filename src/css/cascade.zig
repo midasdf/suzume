@@ -3324,7 +3324,7 @@ fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle
         if (std.mem.indexOf(u8, s, "%") != null) {
             // calc() with %: percentages can't be resolved at computed-value time
             // for properties like flex-basis where % depends on layout.
-            // But simplify calc(N%) → N%
+            // CSS Values L4 §10.6 simplification: calc(N%) → N% when no operators.
             {
                 const inner = std.mem.trim(u8, s[5 .. s.len - 1], " \t");
                 const has_op = std.mem.indexOf(u8, inner, "+") != null or
@@ -3337,9 +3337,11 @@ fn parseDimension(s: []const u8, font_size: f32, vw: f32, vh: f32) ComputedStyle
                     } else |_| {}
                 }
             }
-            // Can't represent mixed calc(% + px) in Dimension — fall through to .auto
+            // CSS Values L4 §10.1/§10.6: mixed calc(% + px) is a valid computed value;
+            // preserve the expression rather than collapsing to auto.
+            return .{ .calc = s };
         } else {
-            // Pure calc without %: resolve to px
+            // Pure calc without %: resolve to px (§10.6 fully-numeric simplification).
             if (parseCalcSimple(s, font_size, vw, vh, 0)) |px_val| {
                 return .{ .px = @max(px_val, 0) };
             }
@@ -3862,4 +3864,28 @@ fn stripColorStop(raw: []const u8) []const u8 {
         }
     }
     return raw;
+}
+
+// ── Unit tests ─────────────────────────────────────────────────────────
+
+// CSS Values L4 §10.6: parseDimension with mixed calc(% + px) must produce
+// Dimension.calc rather than collapsing to .auto (which was the pre-fix behaviour).
+test "parseDimension calc(% + px) → Dimension.calc" {
+    const dim = parseDimension("calc(100% - 20px)", 16.0, 800.0, 600.0);
+    try std.testing.expect(dim == .calc);
+    try std.testing.expectEqualStrings("calc(100% - 20px)", dim.calc);
+}
+
+// CSS Values L4 §10.6 simplification: calc(N%) with no operators simplifies to N%.
+test "parseDimension calc(50%) → Dimension.percent" {
+    const dim = parseDimension("calc(50%)", 16.0, 800.0, 600.0);
+    try std.testing.expect(dim == .percent);
+    try std.testing.expectApproxEqAbs(@as(f32, 50.0), dim.percent, 0.001);
+}
+
+// Pure-numeric calc() resolves immediately to px (§10.6 fully-numeric simplification).
+test "parseDimension calc(100px + 20px) → Dimension.px" {
+    const dim = parseDimension("calc(100px + 20px)", 16.0, 800.0, 600.0);
+    try std.testing.expect(dim == .px);
+    try std.testing.expectApproxEqAbs(@as(f32, 120.0), dim.px, 0.5);
 }
