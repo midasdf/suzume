@@ -1,6 +1,7 @@
 const std = @import("std");
 const net = std.net;
 const http = std.http;
+const sync = @import("../sync.zig");
 
 // ── WebDriver Command Queue ─────────────────────────────────────────
 
@@ -40,9 +41,9 @@ pub const Response = struct {
 pub const CommandSlot = struct {
     command: Command = .{ .tag = .noop },
     response: Response = .{},
-    pending: std.Thread.ResetEvent = .{},
-    done: std.Thread.ResetEvent = .{},
-    mutex: std.Thread.Mutex = .{},
+    pending: sync.ResetEvent = .{},
+    done: sync.ResetEvent = .{},
+    mutex: sync.Mutex = .{},
 
     pub fn submitAndWait(self: *CommandSlot, cmd: Command, timeout_ms: u64) Response {
         self.mutex.lock();
