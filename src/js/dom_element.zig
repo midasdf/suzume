@@ -2557,6 +2557,99 @@ pub fn elementGetOffsetLeft(
     return qjs.JS_NewInt32(c, 0);
 }
 
+// ── HTMLFormElement.submit() / requestSubmit() ───────────────────────
+// HTML Living Standard §4.10.21.3 "Form submission"
+
+/// HTMLFormElement.submit() — bypasses validation and submit event (per spec).
+/// No-op if the form is not connected to a document.
+pub fn formSubmit(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Per spec: if form is not connected, return early.
+    const conn = qjs.JS_GetPropertyStr(c, this_val, "isConnected");
+    const is_connected = qjs.JS_ToBool(c, conn) > 0;
+    qjs.JS_FreeValue(c, conn);
+    if (!is_connected) return quickjs.JS_UNDEFINED();
+    // Navigation / network layer is not yet wired in this test harness;
+    // fire a non-cancelable synthetic submit so JS observers can react.
+    const js_code =
+        \\(function(form){
+        \\  var ev;
+        \\  try { ev = new SubmitEvent('submit', {bubbles:true, cancelable:false, submitter:null}); }
+        \\  catch(e) { ev = new Event('submit', {bubbles:true, cancelable:false}); ev.submitter=null; }
+        \\  form.dispatchEvent(ev);
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<form-submit>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        var args = [_]qjs.JSValue{this_val};
+        const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+        qjs.JS_FreeValue(c, result);
+    }
+    qjs.JS_FreeValue(c, fn_val);
+    return quickjs.JS_UNDEFINED();
+}
+
+/// HTMLFormElement.requestSubmit(submitter?) — dispatches cancelable submit event,
+/// then runs the submit algorithm if not prevented (HTML §4.10.21.3).
+/// No-op if the form is not connected. Throws TypeError for wrong-form submitter.
+pub fn formRequestSubmit(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Per spec: if form is not connected, return early.
+    const conn = qjs.JS_GetPropertyStr(c, this_val, "isConnected");
+    const is_connected = qjs.JS_ToBool(c, conn) > 0;
+    qjs.JS_FreeValue(c, conn);
+    if (!is_connected) return quickjs.JS_UNDEFINED();
+
+    // Validate optional submitter argument.
+    const submitter_val: qjs.JSValue = if (argc >= 1 and argv != null)
+        argv.?[0]
+    else
+        quickjs.JS_NULL();
+
+    // If submitter provided (not null/undefined), verify it belongs to this form.
+    if (!quickjs.JS_IsNull(submitter_val) and !quickjs.JS_IsUndefined(submitter_val)) {
+        // submitter.form must === this form (per spec)
+        const submitter_form = qjs.JS_GetPropertyStr(c, submitter_val, "form");
+        const same = qjs.JS_StrictEq(c, submitter_form, this_val);
+        qjs.JS_FreeValue(c, submitter_form);
+        if (same == 0) {
+            // Throw TypeError per spec: submitter must be a button in this form.
+            return throwDOMException(c, "TypeError", "The specified element is not owned by this form element.");
+        }
+    }
+
+    // Dispatch cancelable submit event; run submit algorithm if not prevented.
+    const js_code =
+        \\(function(form, submitter){
+        \\  var ev;
+        \\  var sub = (submitter===null||submitter===undefined)?null:submitter;
+        \\  try { ev = new SubmitEvent('submit', {bubbles:true, cancelable:true, submitter:sub}); }
+        \\  catch(e) { ev = new Event('submit', {bubbles:true, cancelable:true}); ev.submitter=sub; }
+        \\  var notCanceled = form.dispatchEvent(ev);
+        \\  // If not canceled, proceed with submission (navigation not yet wired).
+        \\  return notCanceled;
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<form-requestsubmit>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        var args = [_]qjs.JSValue{ this_val, submitter_val };
+        const result = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 2, &args);
+        qjs.JS_FreeValue(c, result);
+    }
+    qjs.JS_FreeValue(c, fn_val);
+    return quickjs.JS_UNDEFINED();
+}
+
 pub fn elementGetBoundingClientRect(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,

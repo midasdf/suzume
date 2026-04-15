@@ -3792,6 +3792,17 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
     }
 
+    // ── HTMLFormElement.prototype: submit() / requestSubmit() ──────────
+    // HTML Living Standard §4.10.21.3 "Form submission"
+    {
+        const fm_ctor = qjs.JS_GetPropertyStr(ctx, global, "HTMLFormElement");
+        const fm_proto = qjs.JS_GetPropertyStr(ctx, fm_ctor, "prototype");
+        _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "submit", qjs.JS_NewCFunction(ctx, &dom_elem.formSubmit, "submit", 0));
+        _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "requestSubmit", qjs.JS_NewCFunction(ctx, &dom_elem.formRequestSubmit, "requestSubmit", 1));
+        qjs.JS_FreeValue(ctx, fm_proto);
+        qjs.JS_FreeValue(ctx, fm_ctor);
+    }
+
     // Build tag→prototype map for per-type prototype assignment in wrapNode
     {
         const map_js =

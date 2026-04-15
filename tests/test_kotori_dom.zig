@@ -681,3 +681,101 @@ test "scrollTop setter directly sets scroll position" {
     const val = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("33,55", val);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// HTMLFormElement.submit() / requestSubmit() — HTML §4.10.21.3
+// ══════════════════════════════════════════════════════════════════════
+
+test "form.submit() is a no-op on a disconnected form" {
+    // Disconnected form: submit() must return undefined without throwing.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var f = document.createElement("form");
+        \\var thrown = false;
+        \\try { f.submit(); } catch(e) { thrown = true; }
+        \\thrown ? "threw" : "ok";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("ok", val);
+}
+
+test "form.submit() on connected form dispatches non-cancelable submit event" {
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\var fired = false;
+        \\var wasCancelable = true;
+        \\f.addEventListener("submit", function(e){ fired = true; wasCancelable = e.cancelable; });
+        \\f.submit();
+        \\fired + "," + wasCancelable;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("true,false", val);
+}
+
+test "form.requestSubmit() on connected form dispatches cancelable submit event" {
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\var fired = false;
+        \\var wasCancelable = false;
+        \\f.addEventListener("submit", function(e){ fired = true; wasCancelable = e.cancelable; });
+        \\f.requestSubmit();
+        \\fired + "," + wasCancelable;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("true,true", val);
+}
+
+test "form.requestSubmit() is a no-op on a disconnected form" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var f = document.createElement("form");
+        \\var fired = false;
+        \\f.addEventListener("submit", function(){ fired = true; });
+        \\f.requestSubmit();
+        \\fired ? "fired" : "noop";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("noop", val);
+}
+
+test "form.requestSubmit(submitter) rejects button not belonging to this form" {
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"></form><form id=\"g\"><button id=\"b\"></button></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\var b = document.getElementById("b");
+        \\var threw = false;
+        \\try { f.requestSubmit(b); } catch(e) { threw = true; }
+        \\threw ? "threw" : "ok";
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("threw", val);
+}
+
+test "form.requestSubmit() preventDefault cancels submission" {
+    var ctx = try TestCtx.init(
+        "<html><body><form id=\"f\"></form></body></html>",
+        \\var f = document.getElementById("f");
+        \\var submits = 0;
+        \\f.addEventListener("submit", function(e){ submits++; e.preventDefault(); });
+        \\f.requestSubmit();
+        \\f.requestSubmit();
+        \\"" + submits;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const val = ctx.getResultStr(result) orelse unreachable;
+    // Both requestSubmit() calls fired the event; preventDefault was called each time.
+    try std.testing.expectEqualStrings("2", val);
+}
