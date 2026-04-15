@@ -696,6 +696,20 @@ pub fn tickTimers(ctx: *qjs.JSContext) bool {
         events_mod.flushMutationObservers(ctx);
     }
 
+    // §4 IntersectionObserver: run intersection checks every tick
+    // (W3C Intersection Observer §4.1 — notify after layout, per event-loop iteration).
+    {
+        const io_mod = @import("intersection_observer.zig");
+        io_mod.flushIntersectionObservers(ctx);
+    }
+
+    // §4 ResizeObserver: broadcast active observations after each event-loop tick
+    // (post-layout delivery per Resize Observer §4 step 11).
+    if (dom_api_mod.resize_observers_pending) {
+        const resize_obs_mod = @import("resize_observer.zig");
+        resize_obs_mod.flushResizeObservers(ctx);
+    }
+
     return any_active;
 }
 
@@ -1801,6 +1815,14 @@ pub fn registerWebApis(js_rt: anytype) void {
     const events = @import("events.zig");
     _ = qjs.JS_SetPropertyStr(ctx, global, "MutationObserver", qjs.JS_NewCFunction2(ctx, &events.jsMutationObserverConstructor, "MutationObserver", 1, qjs.JS_CFUNC_constructor, 0));
 
+    // -- Native IntersectionObserver (§3.1, W3C Intersection Observer) --
+    const io_mod = @import("intersection_observer.zig");
+    _ = qjs.JS_SetPropertyStr(ctx, global, "IntersectionObserver", qjs.JS_NewCFunction2(ctx, &io_mod.jsIntersectionObserverConstructor, "IntersectionObserver", 1, qjs.JS_CFUNC_constructor, 0));
+
+    // -- Native ResizeObserver §3.1 (replaces stub polyfill) --
+    const resize_obs = @import("resize_observer.zig");
+    _ = qjs.JS_SetPropertyStr(ctx, global, "ResizeObserver", qjs.JS_NewCFunction2(ctx, &resize_obs.jsResizeObserverConstructor, "ResizeObserver", 1, qjs.JS_CFUNC_constructor, 0));
+
     // -- history.pushState URL bar sync --
     _ = qjs.JS_SetPropertyStr(ctx, global, "__suzume_update_url", qjs.JS_NewCFunction(ctx, &jsSuzumeUpdateUrl, "__suzume_update_url", 1));
 
@@ -2143,7 +2165,7 @@ pub fn registerWebApis(js_rt: anytype) void {
         \\  };
         \\  this.takeRecords=function(){return[];};
         \\};}
-        \\if(typeof ResizeObserver==='undefined'){globalThis.ResizeObserver=function(cb){this._cb=cb;this.observe=function(){};this.disconnect=function(){};this.unobserve=function(){};};}
+        \\// ResizeObserver: registered natively in Zig (resize_observer.zig)
         \\globalThis.matchMedia=function(q){
         \\  var w=innerWidth,matches=false,m;
         \\  m=q.match(/\(max-width:\s*(\d+)px\)/);if(m)matches=(w<=parseInt(m[1]));

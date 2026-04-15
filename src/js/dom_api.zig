@@ -68,6 +68,8 @@ pub var g_document: ?*anyopaque = null;
 /// DOM dirty flag — set when JS mutates the DOM tree. Checked by the main loop.
 pub var dom_dirty: bool = false;
 pub var mutation_observers_pending: bool = false;
+/// Set to true when a ResizeObserver has active targets; triggers flush in event loop.
+pub var resize_observers_pending: bool = false;
 
 /// Currently focused element (set from main.zig when input is focused/blurred).
 pub var active_element: ?*lxb.lxb_dom_node_t = null;
