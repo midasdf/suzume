@@ -1,4 +1,5 @@
 const std = @import("std");
+const env = @import("../env.zig");
 const sync = @import("../sync.zig");
 const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
@@ -157,7 +158,7 @@ fn workerThreadMain(handle: *WorkerHandle, script: []const u8) void {
             while (qjs.JS_ExecutePendingJob(rt, &pctx) > 0) {}
         } else {
             // No message — sleep briefly to avoid busy-waiting
-            std.Thread.sleep(5 * std.time.ns_per_ms);
+            env.sleepNs(5 * std.time.ns_per_ms);
         }
     }
 }
