@@ -658,7 +658,7 @@ fn buildFlatRuleIndex(rules: []const FlatRule, arena: std.mem.Allocator) !FlatRu
         .by_id = .{},
         .by_class = .{},
         .by_tag = .{},
-        .universal = .{},
+        .universal = .empty,
     };
 
     for (rules) |rule| {
@@ -673,15 +673,15 @@ fn buildFlatRuleIndex(rules: []const FlatRule, arena: std.mem.Allocator) !FlatRu
                 const key = findKeySelector(parsed.components);
                 switch (key) {
                     .id => |id| {
-                        const list_ptr = try index.by_id.getOrPutValue(arena, id, .{});
+                        const list_ptr = try index.by_id.getOrPutValue(arena, id, .empty);
                         try list_ptr.value_ptr.append(arena, indexed);
                     },
                     .class => |cls| {
-                        const list_ptr = try index.by_class.getOrPutValue(arena, cls, .{});
+                        const list_ptr = try index.by_class.getOrPutValue(arena, cls, .empty);
                         try list_ptr.value_ptr.append(arena, indexed);
                     },
                     .type_sel => |tag| {
-                        const list_ptr = try index.by_tag.getOrPutValue(arena, tag, .{});
+                        const list_ptr = try index.by_tag.getOrPutValue(arena, tag, .empty);
                         try list_ptr.value_ptr.append(arena, indexed);
                     },
                     else => {
