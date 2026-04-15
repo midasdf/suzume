@@ -475,3 +475,55 @@ test "ComputedStyle defaults match Flexbox L1 §7 initial values" {
         else => return error.TestUnexpectedResult,
     }
 }
+
+// ── CSS Box Alignment L3 initial values ────────────────────────────────
+//
+// Per CSS Box Alignment L3 §7.1 (align-content) and §9.1 (justify-content),
+// the initial value is `normal`. §5.1 says "normal" resolves context-dependently;
+// in flex layout, CSS Flexbox L1 §8.1 treats `normal` as `stretch` (align-content)
+// or `flex-start` (justify-content). The COMPUTED value remains `normal`.
+
+test "ComputedStyle: justify-content initial is normal (Box Alignment L3 §9.1)" {
+    const ComputedStyle = css.computed.ComputedStyle;
+    const style = ComputedStyle{};
+    try std.testing.expectEqual(ComputedStyle.JustifyContent.normal, style.justify_content);
+}
+
+test "ComputedStyle: align-content initial is normal (Box Alignment L3 §7.1)" {
+    const ComputedStyle = css.computed.ComputedStyle;
+    const style = ComputedStyle{};
+    try std.testing.expectEqual(ComputedStyle.AlignContent.normal, style.align_content);
+}
+
+test "ComputedStyle: align-items initial is auto/normal (Box Alignment L3 §6.1)" {
+    // Internal sentinel is `.auto`; serializer emits "normal" per spec.
+    const ComputedStyle = css.computed.ComputedStyle;
+    const style = ComputedStyle{};
+    try std.testing.expectEqual(ComputedStyle.AlignItems.auto, style.align_items);
+}
+
+test "ComputedStyle: align-self initial is auto (Box Alignment L3 §6.2)" {
+    const ComputedStyle = css.computed.ComputedStyle;
+    const style = ComputedStyle{};
+    try std.testing.expectEqual(ComputedStyle.AlignItems.auto, style.align_self);
+}
+
+test "ComputedStyle: JustifyContent enum has normal variant distinct from flex_start" {
+    const JC = css.computed.ComputedStyle.JustifyContent;
+    try std.testing.expect(JC.normal != JC.flex_start);
+    try std.testing.expect(@intFromEnum(JC.normal) != @intFromEnum(JC.flex_start));
+}
+
+test "ComputedStyle: AlignContent enum has normal variant distinct from stretch" {
+    const AC = css.computed.ComputedStyle.AlignContent;
+    try std.testing.expect(AC.normal != AC.stretch);
+    try std.testing.expect(@intFromEnum(AC.normal) != @intFromEnum(AC.stretch));
+}
+
+test "ComputedStyle: explicit justify-content value overrides normal default" {
+    const ComputedStyle = css.computed.ComputedStyle;
+    var style = ComputedStyle{};
+    try std.testing.expectEqual(ComputedStyle.JustifyContent.normal, style.justify_content);
+    style.justify_content = .center;
+    try std.testing.expectEqual(ComputedStyle.JustifyContent.center, style.justify_content);
+}

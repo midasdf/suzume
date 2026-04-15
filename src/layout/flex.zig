@@ -329,7 +329,8 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     var per_gap = gap;
 
     switch (style.justify_content) {
-        .flex_start => {
+        // CSS Box Alignment L3 §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
+        .normal, .flex_start => {
             main_offset = 0;
         },
         .flex_end => {
@@ -660,7 +661,8 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
 
     if (free_cross > 0 and line_count > 0) {
         switch (style.align_content) {
-            .stretch => {
+            // CSS Box Alignment L3 §5.1 + Flexbox L1 §8.1: "normal" resolves to "stretch"
+            .normal, .stretch => {
                 // Distribute extra space equally among lines
                 if (line_count > 0) {
                     const extra_per_line = free_cross / @as(f32, @floatFromInt(line_count));
@@ -720,7 +722,8 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         var per_gap = gap;
 
         switch (style.justify_content) {
-            .flex_start => {
+            // §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
+            .normal, .flex_start => {
                 main_offset = 0;
             },
             .flex_end => {
@@ -1010,7 +1013,8 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
 
     if (free_cross > 0 and line_count > 0) {
         switch (style.align_content) {
-            .stretch => {
+            // §5.1 + Flexbox L1 §8.1: "normal" resolves to "stretch"
+            .normal, .stretch => {
                 const extra_per_col = free_cross / @as(f32, @floatFromInt(line_count));
                 for (0..line_count) |li| {
                     line_widths[li] += extra_per_col;
@@ -1071,7 +1075,8 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
         var per_gap = gap;
 
         switch (style.justify_content) {
-            .flex_start => {},
+            // §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
+            .normal, .flex_start => {},
             .flex_end => {
                 main_offset = col_remaining;
             },
@@ -1337,7 +1342,8 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     var per_gap = gap;
 
     switch (style.justify_content) {
-        .flex_start => {},
+        // §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
+        .normal, .flex_start => {},
         .flex_end => {
             cursor_y = justify_space;
         },

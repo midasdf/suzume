@@ -1741,7 +1741,9 @@ fn applyDeclaration(
             if (eqlIgnoreCase(trimmed, "nowrap")) style.flex_wrap = .nowrap else if (eqlIgnoreCase(trimmed, "wrap")) style.flex_wrap = .wrap else if (eqlIgnoreCase(trimmed, "wrap-reverse")) style.flex_wrap = .wrap_reverse;
         },
         .justify_content => {
-            if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
+            if (eqlIgnoreCase(trimmed, "normal"))
+                style.justify_content = .normal
+            else if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
                 style.justify_content = .flex_start
             else if (eqlIgnoreCase(trimmed, "flex-end") or eqlIgnoreCase(trimmed, "end"))
                 style.justify_content = .flex_end
@@ -1755,7 +1757,9 @@ fn applyDeclaration(
                 style.justify_content = .space_evenly;
         },
         .align_content => {
-            if (eqlIgnoreCase(trimmed, "stretch"))
+            if (eqlIgnoreCase(trimmed, "normal"))
+                style.align_content = .normal
+            else if (eqlIgnoreCase(trimmed, "stretch"))
                 style.align_content = .stretch
             else if (eqlIgnoreCase(trimmed, "flex-start") or eqlIgnoreCase(trimmed, "start"))
                 style.align_content = .flex_start

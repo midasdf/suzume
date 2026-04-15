@@ -556,7 +556,9 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "justify-content")) {
+        // CSS Box Alignment L3 §9.1: computed value of "normal" is "normal"
         const s = switch (style.justify_content) {
+            .normal => "normal",
             .flex_start => "flex-start",
             .flex_end => "flex-end",
             .center => "center",
@@ -566,7 +568,9 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
         };
         return qjs.JS_NewStringLen(c, s.ptr, s.len);
     } else if (std.mem.eql(u8, prop, "align-content")) {
+        // CSS Box Alignment L3 §7.1: computed value of "normal" is "normal"
         const s = switch (style.align_content) {
+            .normal => "normal",
             .stretch => "stretch",
             .flex_start => "flex-start",
             .flex_end => "flex-end",

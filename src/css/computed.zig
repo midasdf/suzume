@@ -148,8 +148,12 @@ pub const ComputedStyle = struct {
 
     flex_direction: FlexDirection = .row,
     flex_wrap: FlexWrap = .nowrap,
-    justify_content: JustifyContent = .flex_start,
-    align_content: AlignContent = .stretch,
+    // CSS Box Alignment L3 §9.1: justify-content initial = normal
+    // CSS Box Alignment L3 §7.1: align-content initial = normal
+    // §5.1: "normal" resolves context-dependently (flex: justify→flex-start, align→stretch).
+    // Computed value is "normal"; layout treats it per Flexbox L1 §8.1.
+    justify_content: JustifyContent = .normal,
+    align_content: AlignContent = .normal,
     align_items: AlignItems = .auto, // CSS Box Alignment: initial "normal" (auto = normal internally)
     align_self: AlignItems = .auto,
     flex_grow: f32 = 0,
@@ -393,6 +397,7 @@ pub const ComputedStyle = struct {
     };
 
     pub const JustifyContent = enum {
+        normal, // CSS Box Alignment L3 §9.1: initial; resolves to flex-start in flex (§5.1 + Flexbox L1 §8.1)
         flex_start,
         flex_end,
         center,
@@ -411,6 +416,7 @@ pub const ComputedStyle = struct {
     };
 
     pub const AlignContent = enum {
+        normal, // CSS Box Alignment L3 §7.1: initial; resolves to stretch in flex (§5.1 + Flexbox L1 §8.1)
         stretch,
         flex_start,
         flex_end,
