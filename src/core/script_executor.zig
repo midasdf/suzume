@@ -546,6 +546,7 @@ fn signalJsEnabled(doc: *Document) void {
 const kotori_rt_mod = @import("kotori_runtime");
 const KotoriRuntime = kotori_rt_mod.KotoriRuntime;
 const KotoriVM = kotori_rt_mod.VM;
+const kotori_dom = @import("kotori_dom");
 const HttpClient = @import("../net/http.zig").HttpClient;
 
 /// Bridge function: adapts HttpClient.request() to the kotori VM fetch callback signature.
@@ -592,6 +593,31 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
     const doc_node = doc.documentNode();
     var ext_count: usize = 0;
     kotoriExecScripts(doc_node.lxb_node, &krt, allocator, loader, base_url, &ext_count);
+
+    // HTML spec §4.8.5 + §8.2.9: fire document lifecycle events after scripts.
+    // Mirror the QuickJS path (initPageJs): DOMContentLoaded → timer tick → window load.
+    // testharness.js uses on_event(window,'load',...) (i.e. window.addEventListener)
+    // before calling add_completion_callback — without this the WPT harness never fires.
+
+    // DOMContentLoaded on document (HTML §4.8.5 step 4.7)
+    kotori_dom.dispatchWindowEvent(&krt.vm, "DOMContentLoaded");
+
+    // Flush microtasks + any setTimeout(fn,0) queued by DOMContentLoaded handlers.
+    _ = krt.runMicrotasks();
+    var timer_iters: u32 = 0;
+    while (krt.runPendingTimers() and timer_iters < 5) : (timer_iters += 1) {
+        _ = krt.runMicrotasks();
+    }
+
+    // window 'load' event (HTML §8.2.9 step 7)
+    kotori_dom.dispatchWindowEvent(&krt.vm, "load");
+
+    // Flush timers fired by load handlers (e.g. testharness.js completion callback).
+    _ = krt.runMicrotasks();
+    timer_iters = 0;
+    while (krt.runPendingTimers() and timer_iters < 5) : (timer_iters += 1) {
+        _ = krt.runMicrotasks();
+    }
 
     page_kotori_rt.* = krt;
     std.debug.print("[kotori] Page JS initialized (kotori engine)\n", .{});

@@ -258,8 +258,32 @@ pub const EventListener = struct {
 
 var g_listeners: std.ArrayListUnmanaged(EventListener) = .empty;
 
+/// Sentinel address used as node_ptr for window-level event listeners.
+/// DOM events on elements never match this because it points to a Zig
+/// module-level variable, never into the Lexbor DOM heap.
+var g_window_sentinel: u8 = 0;
+
 pub fn getListeners() []const EventListener {
     return g_listeners.items;
+}
+
+/// Dispatch a window-level event to all registered window listeners.
+/// Called from script_executor.zig after page load to fire DOMContentLoaded
+/// and window 'load' events (HTML §4.8.5 + §8.2.9).
+/// Requires an active VM context (krt.vm must be initialized).
+pub fn dispatchWindowEvent(vm: *VM, event_type: []const u8) void {
+    const sentinel_ptr = @intFromPtr(&g_window_sentinel);
+    // Build a minimal event object with .type set.
+    const ev_obj = vm.createObj(.{}) catch return;
+    const type_sid = vm.pool.intern("type") catch return;
+    const ev_type_sid = vm.pool.intern(event_type) catch return;
+    ev_obj.setProperty(vm.allocator, type_sid, JsValue.initString(ev_type_sid)) catch {};
+    const global = JsValue.initObject(ev_obj); // used as `this` — harmless
+    for (g_listeners.items) |entry| {
+        if (@intFromPtr(entry.node_ptr) != sentinel_ptr) continue;
+        if (!std.mem.eql(u8, entry.event_type, event_type)) continue;
+        _ = vm.callJsFunction(entry.callback, global, &.{JsValue.initObject(ev_obj)}) catch {};
+    }
 }
 
 // ── Per-element scroll state (CSSOM View §6.5) ──────────────────────
@@ -334,6 +358,14 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
 
     // ── window global (proxy to globals) ──
     const win_obj = try vm.createObj(.{ .obj_type = .window_proxy });
+    // HTML §8.1.3.1: Window implements EventTarget — register addEventListener and
+    // dispatchEvent directly on the window_proxy object so that testharness.js's
+    // on_event(window,'load',cb) (= window.addEventListener('load',cb)) works.
+    // These methods use the g_window_sentinel to distinguish window listeners from
+    // DOM node listeners in g_listeners (HTML §8.1.3, DOM §2.9).
+    try vm.registerNativeMethod(win_obj, "addEventListener", &nativeAddEventListener);
+    try vm.registerNativeMethod(win_obj, "removeEventListener", &nativeWindowRemoveEventListener);
+    try vm.registerNativeMethod(win_obj, "dispatchEvent", &nativeDispatchEvent);
     const window_id = try vm.pool.intern("window");
     try vm.globals.put(vm.allocator, window_id, JsValue.initObject(win_obj));
     const self_id = try vm.pool.intern("self");
@@ -693,10 +725,23 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
-    const node = getThisNode(this) orelse return JsValue.undefined_val;
-    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const callback = args[1];
     if (!callback.isObject()) return JsValue.undefined_val;
+
+    // Resolve the target node pointer.
+    // HTML §8.1.3.1: window.addEventListener routes to the Window object.
+    // We use g_window_sentinel as a stable identity for window-level listeners
+    // so they can be matched in dispatchEvent without a DOM node reference.
+    const node_ptr: *anyopaque = blk: {
+        if (this.isObject() and this.asJsObject().obj_type == .window_proxy) {
+            // Window listener — use sentinel instead of a DOM node pointer.
+            break :blk @ptrCast(&g_window_sentinel);
+        }
+        const n = getThisNode(this) orelse return JsValue.undefined_val;
+        break :blk @ptrCast(n);
+    };
+
+    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
 
     // Own the event type string
     const owned = try g_alloc.alloc(u8, event_type.len);
@@ -705,11 +750,36 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     const capture = if (args.len > 2 and args[2].isBool()) args[2].asBool() else false;
 
     try g_listeners.append(g_alloc, .{
-        .node_ptr = @ptrCast(node),
+        .node_ptr = node_ptr,
         .event_type = owned,
         .callback = callback,
         .capture = capture,
     });
+    return JsValue.undefined_val;
+}
+
+/// window.removeEventListener — removes a previously registered window listener.
+/// DOM §2.9: removeEventListener removes the first matching (type, callback, capture) entry.
+fn nativeWindowRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    _ = this;
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
+    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    const callback = args[1];
+    const sentinel_ptr = @intFromPtr(&g_window_sentinel);
+    var i: usize = 0;
+    while (i < g_listeners.items.len) {
+        const entry = g_listeners.items[i];
+        if (@intFromPtr(entry.node_ptr) == sentinel_ptr and
+            std.mem.eql(u8, entry.event_type, event_type) and
+            entry.callback.bits == callback.bits)
+        {
+            g_alloc.free(entry.event_type);
+            _ = g_listeners.orderedRemove(i);
+            return JsValue.undefined_val;
+        }
+        i += 1;
+    }
     return JsValue.undefined_val;
 }
 
@@ -783,8 +853,35 @@ fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
 //   tree root (closed-tree filtering).
 fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    const target = getThisNode(this) orelse return JsValue.initBool(false);
     if (args.len == 0) return JsValue.initBool(false);
+
+    // HTML §8.1.3.1: window.dispatchEvent dispatches to window-level listeners.
+    // The window_proxy object has no DOM node, so handle it separately.
+    if (this.isObject() and this.asJsObject().obj_type == .window_proxy) {
+        // Parse event type from the argument (string or Event object with .type).
+        var type_str: []const u8 = "event";
+        if (args[0].isString()) {
+            type_str = vm.pool.get(args[0].asStringId()) orelse "event";
+        } else if (args[0].isObject()) {
+            const t_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
+            if (args[0].asJsObject().getProperty(t_sid)) |tv| {
+                if (tv.isString()) type_str = vm.pool.get(tv.asStringId()) orelse "event";
+            }
+        }
+        const ev_obj: *JsObject = if (args[0].isObject())
+            args[0].asJsObject()
+        else
+            vm.createObj(.{}) catch return JsValue.initBool(false);
+        const sentinel_ptr = @intFromPtr(&g_window_sentinel);
+        for (g_listeners.items) |entry| {
+            if (@intFromPtr(entry.node_ptr) != sentinel_ptr) continue;
+            if (!std.mem.eql(u8, entry.event_type, type_str)) continue;
+            _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
+        }
+        return JsValue.initBool(true);
+    }
+
+    const target = getThisNode(this) orelse return JsValue.initBool(false);
 
     // Parse event: accept either a string type or an object with { type, composed, bubbles }
     var type_str: []const u8 = "event";
