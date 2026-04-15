@@ -1270,7 +1270,7 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
         const last = expected[expected.len - 1];
         if ((last == 'i' or last == 'I' or last == 's' or last == 'S') and expected[expected.len - 2] == ' ') {
             if (last == 'i' or last == 'I') case_insensitive = true;
-            expected = std.mem.trimRight(u8, expected[0 .. expected.len - 2], " \t");
+            expected = std.mem.trimEnd(u8, expected[0 .. expected.len - 2], " \t");
         }
     }
     // Strip quotes

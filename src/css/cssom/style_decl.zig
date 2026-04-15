@@ -421,12 +421,12 @@ fn skipWsAndComments(s: []const u8, pos: *usize) void {
 /// If raw_val ends with "!important" (case-insensitive, possibly with whitespace),
 /// return the trimmed value without the suffix.  Otherwise return null.
 fn endsWithImportant(raw_val: []const u8) ?[]const u8 {
-    const s = std.mem.trimRight(u8, raw_val, " \t\r\n");
+    const s = std.mem.trimEnd(u8, raw_val, " \t\r\n");
     const suffix = "!important";
     if (s.len < suffix.len) return null;
     const tail = s[s.len - suffix.len ..];
     if (!std.ascii.eqlIgnoreCase(tail, suffix)) return null;
-    const before = std.mem.trimRight(u8, s[0 .. s.len - suffix.len], " \t\r\n");
+    const before = std.mem.trimEnd(u8, s[0 .. s.len - suffix.len], " \t\r\n");
     return before;
 }
 

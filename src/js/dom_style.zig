@@ -4423,7 +4423,7 @@ pub fn canonicalizeCalcValue(val: []const u8, buf: *[512]u8) ?[]const u8 {
                 break;
             pos += 1;
         }
-        const term_str = std.mem.trimRight(u8, inner[term_start..pos], " ");
+        const term_str = std.mem.trimEnd(u8, inner[term_start..pos], " ");
         if (term_str.len == 0) continue;
 
         // Can't canonicalize nested functions (but allow * and / within a term)
