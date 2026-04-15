@@ -503,8 +503,8 @@ pub const Compiler = struct {
                 }
             },
 
-            .break_stmt => |_| try self.compileBreak(),
-            .continue_stmt => |_| try self.compileContinue(),
+            .break_stmt => try self.compileBreak(),
+            .continue_stmt => try self.compileContinue(),
             .switch_stmt => |s| try self.compileSwitch(s.discriminant, s.cases),
             .try_stmt => |t| try self.compileTryCatch(t),
             .throw_stmt => |expr_idx| {
