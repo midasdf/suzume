@@ -203,22 +203,22 @@ pub fn build(b: *std.Build) void {
     });
 
     // Link all static libraries
-    exe.linkLibrary(lexbor_lib);
-    exe.linkLibrary(freetype_lib);
-    exe.linkLibrary(harfbuzz_lib);
+    exe.root_module.linkLibrary(lexbor_lib);
+    exe.root_module.linkLibrary(freetype_lib);
+    exe.root_module.linkLibrary(harfbuzz_lib);
     // exe.linkLibrary(libcss);  // Replaced by native Zig CSS engine
-    exe.linkLibrary(libnsfb);
+    exe.root_module.linkLibrary(libnsfb);
 
     // LibNSFB surface registration shim (constructors don't work
     // with Zig's linker on static archives, so we register manually)
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/nsfb_surface_init.c"),
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
     // Include paths for @cImport access
     // Lexbor headers (from the package)
-    exe.addIncludePath(lexbor_dep.path("lib"));
+    exe.root_module.addIncludePath(lexbor_dep.path("lib"));
 
     // LibCSS / LibParserUtils / LibWapcaplet headers (no longer needed)
     // exe.addIncludePath(b.path("deps/libcss/include"));
@@ -226,25 +226,25 @@ pub fn build(b: *std.Build) void {
     // exe.addIncludePath(b.path("deps/libwapcaplet/include"));
 
     // LibNSFB headers
-    exe.addIncludePath(b.path("deps/libnsfb/include"));
+    exe.root_module.addIncludePath(b.path("deps/libnsfb/include"));
 
     // FreeType headers (from the package)
-    exe.addIncludePath(freetype_dep.path("include"));
+    exe.root_module.addIncludePath(freetype_dep.path("include"));
 
     // HarfBuzz headers (from the package)
-    exe.addIncludePath(harfbuzz_dep.path("src"));
+    exe.root_module.addIncludePath(harfbuzz_dep.path("src"));
 
     // stb headers
-    exe.addIncludePath(b.path("src/stb"));
+    exe.root_module.addIncludePath(b.path("src/stb"));
 
     // stb implementation C file
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/stb/stb_impl.c"),
         .flags = &.{"-fno-sanitize=undefined"},
     });
 
     // XIM (X Input Method) helper for fcitx5/mozc Japanese input
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/xim_helper.c"),
         .flags = &.{"-fno-sanitize=undefined"},
     });
@@ -253,7 +253,7 @@ pub fn build(b: *std.Build) void {
 
     // ── QuickJS-ng ──────────────────────────────────────────────────
     const quickjs_dir = "deps/quickjs-ng";
-    exe.addIncludePath(b.path(quickjs_dir));
+    exe.root_module.addIncludePath(b.path(quickjs_dir));
 
     const quickjs_c_flags: []const []const u8 = &.{
         "-D_GNU_SOURCE",
@@ -276,7 +276,7 @@ pub fn build(b: *std.Build) void {
     };
 
     for (quickjs_sources) |src| {
-        exe.addCSourceFile(.{
+        exe.root_module.addCSourceFile(.{
             .file = b.path(src),
             .flags = quickjs_c_flags,
         });
@@ -284,9 +284,9 @@ pub fn build(b: *std.Build) void {
 
     // ── LunaSVG (SVG rasterizer, C++17) + PlutoVG (2D graphics, C) ──
     const lunasvg_dir = "deps/lunasvg";
-    exe.addIncludePath(b.path(lunasvg_dir ++ "/include"));
-    exe.addIncludePath(b.path(lunasvg_dir ++ "/source"));
-    exe.addIncludePath(b.path(lunasvg_dir ++ "/3rdparty/plutovg"));
+    exe.root_module.addIncludePath(b.path(lunasvg_dir ++ "/include"));
+    exe.root_module.addIncludePath(b.path(lunasvg_dir ++ "/source"));
+    exe.root_module.addIncludePath(b.path(lunasvg_dir ++ "/3rdparty/plutovg"));
 
     const lunasvg_cpp_flags: []const []const u8 = &.{
         "-std=c++17",
@@ -320,7 +320,7 @@ pub fn build(b: *std.Build) void {
     };
 
     for (lunasvg_cpp_sources) |src| {
-        exe.addCSourceFile(.{
+        exe.root_module.addCSourceFile(.{
             .file = b.path(src),
             .flags = lunasvg_cpp_flags,
         });
@@ -340,53 +340,53 @@ pub fn build(b: *std.Build) void {
     };
 
     for (plutovg_c_sources) |src| {
-        exe.addCSourceFile(.{
+        exe.root_module.addCSourceFile(.{
             .file = b.path(src),
             .flags = plutovg_c_flags,
         });
     }
 
     // SVG C++ wrapper (bridges lunasvg C++ API to C for Zig)
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/svg/svg_wrapper.cpp"),
         .flags = lunasvg_cpp_flags,
     });
-    exe.addIncludePath(b.path("src/svg"));
+    exe.root_module.addIncludePath(b.path("src/svg"));
 
     // WOFF2 C++ wrapper (bridges woff2 C++ API to C for Zig)
-    exe.addCSourceFile(.{
+    exe.root_module.addCSourceFile(.{
         .file = b.path("src/font/woff2_wrapper.cpp"),
         .flags = &.{ "-std=c++17", "-fno-exceptions", "-fno-rtti", "-fno-sanitize=undefined" },
     });
-    exe.addIncludePath(b.path("src/font"));
+    exe.root_module.addIncludePath(b.path("src/font"));
 
     // Cross-compile: add repo-local sysroot paths for aarch64-linux (see README / packaging notes).
     const resolved = target.result;
     if (resolved.cpu.arch == .aarch64 and resolved.os.tag == .linux) {
-        exe.addLibraryPath(b.path("sysroot/usr/lib"));
-        exe.addIncludePath(b.path("sysroot/usr/include"));
+        exe.root_module.addLibraryPath(b.path("sysroot/usr/lib"));
+        exe.root_module.addIncludePath(b.path("sysroot/usr/include"));
     }
 
     // System libraries
-    exe.linkSystemLibrary("xcb");
-    exe.linkSystemLibrary("xcb-icccm");
-    exe.linkSystemLibrary("xcb-image");
-    exe.linkSystemLibrary("xcb-keysyms");
-    exe.linkSystemLibrary("xcb-util");
-    exe.linkSystemLibrary("X11");
-    exe.linkSystemLibrary("xcb-shm");
-    exe.linkSystemLibrary("xcb-cursor");
-    exe.linkSystemLibrary("curl");
-    exe.linkSystemLibrary("sqlite3");
-    exe.linkSystemLibrary("webp");
-    exe.linkSystemLibrary("brotlidec");
-    exe.linkSystemLibrary("fontconfig");
+    exe.root_module.linkSystemLibrary("xcb", .{});
+    exe.root_module.linkSystemLibrary("xcb-icccm", .{});
+    exe.root_module.linkSystemLibrary("xcb-image", .{});
+    exe.root_module.linkSystemLibrary("xcb-keysyms", .{});
+    exe.root_module.linkSystemLibrary("xcb-util", .{});
+    exe.root_module.linkSystemLibrary("X11", .{});
+    exe.root_module.linkSystemLibrary("xcb-shm", .{});
+    exe.root_module.linkSystemLibrary("xcb-cursor", .{});
+    exe.root_module.linkSystemLibrary("curl", .{});
+    exe.root_module.linkSystemLibrary("sqlite3", .{});
+    exe.root_module.linkSystemLibrary("webp", .{});
+    exe.root_module.linkSystemLibrary("brotlidec", .{});
+    exe.root_module.linkSystemLibrary("fontconfig", .{});
 
     linkWoff2(exe);
 
     // C++ standard library (needed by HarfBuzz + woff2)
-    exe.linkLibCpp();
-    exe.linkLibC();
+    exe.root_module.link_libcpp = true;
+    exe.root_module.link_libc = true;
 
     b.installArtifact(exe);
 
@@ -421,7 +421,7 @@ pub fn build(b: *std.Build) void {
     const url_resolve_tests = b.addTest(.{
         .root_module = url_resolve_mod,
     });
-    url_resolve_tests.linkLibC();
+    url_resolve_tests.root_module.link_libc = true;
     const run_url_resolve_tests = b.addRunArtifact(url_resolve_tests);
     test_step.dependOn(&run_url_resolve_tests.step);
 
@@ -671,7 +671,7 @@ pub fn build(b: *std.Build) void {
     const kotori_tests = b.addTest(.{
         .root_module = kotori_all_test_mod,
     });
-    kotori_tests.linkLibC();
+    kotori_tests.root_module.link_libc = true;
     const run_kotori_tests = b.addRunArtifact(kotori_tests);
     const test_kotori_step = b.step("test-kotori", "Run kotori JS engine tests");
     test_kotori_step.dependOn(&run_kotori_tests.step);
@@ -697,7 +697,7 @@ pub fn build(b: *std.Build) void {
     const kotori_dom_tests = b.addTest(.{
         .root_module = test_kotori_dom_mod,
     });
-    kotori_dom_tests.linkLibrary(lexbor_lib);
+    kotori_dom_tests.root_module.linkLibrary(lexbor_lib);
 
     const run_kotori_dom_tests = b.addRunArtifact(kotori_dom_tests);
     const test_kotori_dom_step = b.step("test-kotori-dom", "Run kotori DOM binding tests");

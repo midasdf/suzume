@@ -202,436 +202,436 @@ fn parseOptions(options: *Options) bool {
 
 fn compileCore(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES ""
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileCss(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &css_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileDom(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core tag ns"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &tag_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ns_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &dom_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileEncoding(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &encoding_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileHtml(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core dom ns tag css selectors"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &dom_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ns_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &tag_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &css_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &selectors_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &html_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileNs(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ns_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compilePorts(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
-    lib.addCSourceFiles(.{
+    lib.root_module.addIncludePath(b.path("lib"));
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compilePunycode(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core encoding"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &encoding_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &punycode_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileSelectors(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core dom css tag ns"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &dom_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &css_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &tag_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ns_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &selectors_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileTag(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &tag_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileUnicode(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core encoding punycode"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &encoding_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &punycode_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &unicode_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileUrl(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core encoding unicode punycode"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &encoding_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &unicode_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &punycode_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &url_src,
         .flags = &cflags,
     });
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileUtils(b: *Build, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // DEPENDENCIES "core"
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 
 fn compileSingle(b: *Build, with_utils: bool, static_options: LibraryOptions) void {
     const lib = b.addLibrary(static_options);
-    lib.addIncludePath(b.path("lib"));
+    lib.root_module.addIncludePath(b.path("lib"));
     // core
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &core_src,
         .flags = &cflags,
     });
     // css
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &css_src,
         .flags = &cflags,
     });
     // dom
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &dom_src,
         .flags = &cflags,
     });
     // encoding
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &encoding_src,
         .flags = &cflags,
     });
     // html
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &html_src,
         .flags = &cflags,
     });
     // ns
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ns_src,
         .flags = &cflags,
     });
     // ports
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &ports_src,
         .flags = &cflags_ports,
     });
     // punycode
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &punycode_src,
         .flags = &cflags,
     });
     // selectors
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &selectors_src,
         .flags = &cflags,
     });
     // tag
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &tag_src,
         .flags = &cflags,
     });
     // unicode
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &unicode_src,
         .flags = &cflags,
     });
     // url
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .files = &url_src,
         .flags = &cflags,
     });
     // utils
-    if (with_utils) lib.addCSourceFiles(.{
+    if (with_utils) lib.root_module.addCSourceFiles(.{
         .files = &utils_src,
         .flags = &cflags,
     });
-    lib.linkLibC();
+    lib.root_module.link_libc = true;
     b.installArtifact(lib);
 }
 

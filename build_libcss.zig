@@ -19,14 +19,14 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
             .link_libc = true,
         }),
     });
-    libwapcaplet.addCSourceFiles(.{
+    libwapcaplet.root_module.addCSourceFiles(.{
         .root = b.path("deps/libwapcaplet"),
         .files = &.{
             "src/libwapcaplet.c",
         },
         .flags = common_cflags,
     });
-    libwapcaplet.addIncludePath(b.path("deps/libwapcaplet/include"));
+    libwapcaplet.root_module.addIncludePath(b.path("deps/libwapcaplet/include"));
 
     // --- LibParserUtils ---
     const libparserutils = b.addLibrary(.{
@@ -38,7 +38,7 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
             .link_libc = true,
         }),
     });
-    libparserutils.addCSourceFiles(.{
+    libparserutils.root_module.addCSourceFiles(.{
         .root = b.path("deps/libparserutils"),
         .files = &.{
             "src/charset/aliases.c",
@@ -59,8 +59,8 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         },
         .flags = common_cflags,
     });
-    libparserutils.addIncludePath(b.path("deps/libparserutils/include"));
-    libparserutils.addIncludePath(b.path("deps/libparserutils/src"));
+    libparserutils.root_module.addIncludePath(b.path("deps/libparserutils/include"));
+    libparserutils.root_module.addIncludePath(b.path("deps/libparserutils/src"));
 
     // --- LibCSS ---
     const libcss = b.addLibrary(.{
@@ -79,26 +79,26 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         "-std=c99",
         "-fno-sanitize=undefined",
     };
-    libcss.addCSourceFiles(.{
+    libcss.root_module.addCSourceFiles(.{
         .root = b.path("deps/libcss"),
         .files = &libcss_sources,
         .flags = libcss_cflags,
     });
     // LibCSS include paths
-    libcss.addIncludePath(b.path("deps/libcss/include"));
-    libcss.addIncludePath(b.path("deps/libcss/src"));
+    libcss.root_module.addIncludePath(b.path("deps/libcss/include"));
+    libcss.root_module.addIncludePath(b.path("deps/libcss/src"));
     // Dependencies' include paths
-    libcss.addIncludePath(b.path("deps/libparserutils/include"));
-    libcss.addIncludePath(b.path("deps/libwapcaplet/include"));
+    libcss.root_module.addIncludePath(b.path("deps/libparserutils/include"));
+    libcss.root_module.addIncludePath(b.path("deps/libwapcaplet/include"));
 
     // Include wapcaplet and parserutils sources directly in libcss
     // to avoid separate linking that forces object resolution
-    libcss.addCSourceFiles(.{
+    libcss.root_module.addCSourceFiles(.{
         .root = b.path("deps/libwapcaplet"),
         .files = &.{"src/libwapcaplet.c"},
         .flags = common_cflags,
     });
-    libcss.addCSourceFiles(.{
+    libcss.root_module.addCSourceFiles(.{
         .root = b.path("deps/libparserutils"),
         .files = &.{
             "src/charset/aliases.c",
@@ -119,8 +119,8 @@ pub fn buildLibCss(b: *std.Build, target: std.Build.ResolvedTarget, optimize: st
         },
         .flags = common_cflags,
     });
-    libcss.addIncludePath(b.path("deps/libparserutils/src"));
-    libcss.addIncludePath(b.path("deps/libparserutils/src/charset"));
+    libcss.root_module.addIncludePath(b.path("deps/libparserutils/src"));
+    libcss.root_module.addIncludePath(b.path("deps/libparserutils/src/charset"));
 
     return libcss;
 }

@@ -42,7 +42,7 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
 
     lib.step.dependOn(&applyLibNsfbXimPatch(b).step);
 
-    lib.addCSourceFiles(.{
+    lib.root_module.addCSourceFiles(.{
         .root = b.path("deps/libnsfb"),
         .files = &.{
             // Core
@@ -70,12 +70,12 @@ pub fn buildLibNsfb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: s
     });
 
     // Include paths
-    lib.addIncludePath(b.path("deps/libnsfb/include"));
-    lib.addIncludePath(b.path("deps/libnsfb/src"));
+    lib.root_module.addIncludePath(b.path("deps/libnsfb/include"));
+    lib.root_module.addIncludePath(b.path("deps/libnsfb/src"));
 
     // System xcb include paths for compilation (headers only)
     // Actual library linking is done by the final executable
-    lib.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
+    lib.root_module.addSystemIncludePath(.{ .cwd_relative = "/usr/include" });
 
     return lib;
 }

@@ -14,8 +14,8 @@ pub fn build(b: *std.Build) void {
             .link_libc = true,
         }),
     });
-    lib.addCSourceFile(.{ .file = b.path("src/harfbuzz.cc") });
-    lib.linkLibCpp();
+    lib.root_module.addCSourceFile(.{ .file = b.path("src/harfbuzz.cc") });
+    lib.root_module.link_libcpp = true;
     lib.installHeadersDirectory(b.path("src"), "harfbuzz", .{
         .exclude_extensions = &.{".cc"},
     });
@@ -26,7 +26,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         })) |dep| {
-            lib.linkLibrary(dep.artifact("freetype"));
+            lib.root_module.linkLibrary(dep.artifact("freetype"));
         }
     }
     b.installArtifact(lib);
