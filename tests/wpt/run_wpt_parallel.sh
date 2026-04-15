@@ -17,6 +17,7 @@ JOBS=4
 while [ $# -gt 0 ]; do
     case "$1" in
         --jobs|-j) JOBS="$2"; shift 2 ;;
+        --port|-p) PORT="$2"; shift 2 ;;
         setup)
             echo "=== Setting up WPT ==="
             [ -d "$WPT_DIR" ] || git clone --depth 1 https://github.com/web-platform-tests/wpt.git "$WPT_DIR"

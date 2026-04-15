@@ -433,7 +433,14 @@ pub const VM = struct {
                     const idx = self.readU16(frame);
                     if (idx < frame.upvalues.len) {
                         if (frame.upvalues[idx]) |cell| {
-                            self.push(cell.value);
+                            // Open upvalue: read directly from the live stack slot
+                            // so mutations to the captured local (via store_local in
+                            // the enclosing frame) are immediately visible here.
+                            if (cell.is_open) {
+                                self.push(self.stack[cell.stack_index]);
+                            } else {
+                                self.push(cell.value);
+                            }
                         } else {
                             self.push(JsValue.undefined_val);
                         }
@@ -446,7 +453,13 @@ pub const VM = struct {
                     const val = self.pop();
                     if (idx < frame.upvalues.len) {
                         if (frame.upvalues[idx]) |cell| {
-                            cell.value = val;
+                            if (cell.is_open) {
+                                // Open upvalue: write directly to the live stack slot
+                                // so the enclosing frame sees the mutation via load_local.
+                                self.stack[cell.stack_index] = val;
+                            } else {
+                                cell.value = val;
+                            }
                         }
                     }
                 },
@@ -907,6 +920,17 @@ pub const VM = struct {
                             self.push(val);
                             continue;
                         }
+                        // window_proxy SET → forward to globals (mirrors GET path).
+                        // testharness.js calls expose(fn, 'name') which does
+                        // global_scope[name] = fn where global_scope = self (window_proxy).
+                        // Without this, exposed globals (add_completion_callback, tests, …)
+                        // are stored on the proxy object rather than in self.globals, so
+                        // later scripts that reference them as bare identifiers see undefined.
+                        if (obj.obj_type == .window_proxy) {
+                            try self.globals.put(self.allocator, name_id, val);
+                            self.push(val);
+                            continue;
+                        }
                         // DOM node/style property interception
                         if ((obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_set_prop != null) {
                             if (self.dom_set_prop.?(self, obj, name_id, val)) {
@@ -953,6 +977,16 @@ pub const VM = struct {
                             const key_sid = if (key.isString()) key.asStringId() else try self.keyToStringId(key);
                             const result = try self.proxyGet(obj, key_sid, obj_val);
                             self.push(result);
+                            continue;
+                        }
+                        // window_proxy GET via bracket notation → forward to globals.
+                        if (obj.obj_type == .window_proxy and key.isString()) {
+                            const key_sid = key.asStringId();
+                            if (self.globals.get(key_sid)) |global_val| {
+                                self.push(global_val);
+                            } else {
+                                self.push(JsValue.undefined_val);
+                            }
                             continue;
                         }
                         // Symbol property access (walk prototype chain)
@@ -1013,6 +1047,15 @@ pub const VM = struct {
                         if (obj.obj_type == .proxy) {
                             const key_sid = if (key.isString()) key.asStringId() else try self.keyToStringId(key);
                             _ = try self.proxySet(obj, key_sid, val, obj_val);
+                            self.push(val);
+                            continue;
+                        }
+                        // window_proxy SET via bracket notation → forward to globals.
+                        // testharness.js expose() uses target[string_key] = fn where
+                        // target is self (window_proxy). Forward to VM globals so bare
+                        // identifier access (load_global) in later scripts finds them.
+                        if (obj.obj_type == .window_proxy and key.isString()) {
+                            try self.globals.put(self.allocator, key.asStringId(), val);
                             self.push(val);
                             continue;
                         }
@@ -2012,6 +2055,7 @@ pub const VM = struct {
         try self.registerNativeMethod(ap, "at", &nativeArrayAt);
         try self.registerNativeMethod(ap, "unshift", &nativeArrayUnshift);
         try self.registerNativeMethod(ap, "keys", &nativeArrayKeys);
+        try self.registerNativeMethod(ap, "hasOwnProperty", &nativeObjHasOwnProperty);
         try self.registerNativeMethod(ap, "values", &nativeArrayValues);
         try self.registerNativeMethod(ap, "entries", &nativeArrayEntries);
         try self.registerNativeMethod(ap, "toString", &nativeArrayToString);
@@ -2421,9 +2465,16 @@ pub const VM = struct {
             try self.globals.put(self.allocator, try self.pool.intern("Float64Array"), JsValue.initObject(u8_ctor));
         }
 
-        // ── globalThis ──
+        // ── globalThis / self / window ──
+        // `self` and `window` are Browser/Worker aliases for globalThis.
+        // testharness.js wraps itself in `(function(global_scope){...})(self)` —
+        // without `self` defined, global_scope is undefined and expose() throws,
+        // leaving add_completion_callback and tests unregistered.
         const global_this = try self.createObj(.{ .obj_type = .window_proxy });
-        try self.globals.put(self.allocator, try self.pool.intern("globalThis"), JsValue.initObject(global_this));
+        const global_this_val = JsValue.initObject(global_this);
+        try self.globals.put(self.allocator, try self.pool.intern("globalThis"), global_this_val);
+        try self.globals.put(self.allocator, try self.pool.intern("self"), global_this_val);
+        try self.globals.put(self.allocator, try self.pool.intern("window"), global_this_val);
 
         // ── structuredClone ──
         {
@@ -2519,6 +2570,36 @@ pub const VM = struct {
     // ── console methods ─────────────────────────────────────────────
 
     fn consoleWriteWithPrefix(vm: *VM, prefix: []const u8, args: []const JsValue) void {
+        // WPT mode: if the first (string) arg starts with "ALERT:", route the
+        // whole line (without indent / prefix noise) to stdout so wptrunner
+        // can capture it. "ALERT: RESULT:" also flips `wpt_result_sent` so
+        // main's event loop can break. Mirrors web_api.zig consoleWrite for
+        // the QuickJS path; kotori needs its own copy because it uses a
+        // separate console.log binding.
+        if (kio.wpt_mode and prefix.len == 0 and args.len > 0) {
+            var fbuf: [64]u8 = undefined;
+            const first = formatValue(vm.pool, args[0], &fbuf);
+            if (std.mem.startsWith(u8, first, "ALERT:")) {
+                // Emit the joined args on stdout
+                for (args, 0..) |arg, i| {
+                    if (i > 0) kio.stdoutWrite(" ");
+                    var buf: [64]u8 = undefined;
+                    kio.stdoutWrite(formatValue(vm.pool, arg, &buf));
+                }
+                kio.stdoutWrite("\n");
+                if (std.mem.startsWith(u8, first, "ALERT: RESULT:")) {
+                    kio.wpt_result_sent = true;
+                    // Force-exit immediately: the main loop's per-iteration
+                    // check is reliable, but Zig's DebugAllocator shutdown can
+                    // take many seconds dumping leak reports, and WPT runners
+                    // need sub-second turnaround per test. Process exit skips
+                    // cleanup (safe — OS reclaims pages).
+                    std.process.exit(0);
+                }
+                return;
+            }
+        }
+
         var indent: u32 = 0;
         while (indent < vm.console_indent) : (indent += 1) kio.stderrWrite("  ");
         if (prefix.len > 0) {
@@ -4483,9 +4564,40 @@ pub const VM = struct {
         return JsValue.initBool(args[0].asJsObject().isSealed());
     }
 
-    fn nativeObjHasOwnProperty(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
-        return JsValue.initBool(this.asJsObject().properties.get(args[0].asStringId()) != null);
+    fn nativeObjHasOwnProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
+        const obj = this.asJsObject();
+        const key = args[0];
+        // Numeric key → check array index
+        if (key.isNumber()) {
+            const n = key.asNumber();
+            const idx: usize = @intFromFloat(n);
+            if (@as(f64, @floatFromInt(idx)) == n) {
+                if (obj.obj_type == .array) {
+                    return JsValue.initBool(idx < obj.data.array.items.len);
+                }
+            }
+            return JsValue.initBool(false);
+        }
+        // String key
+        if (key.isString()) {
+            const vm = vmFromCtx(ctx);
+            const name_str = vm.pool.get(key.asStringId()) orelse return JsValue.initBool(false);
+            // Check numeric string for arrays
+            if (obj.obj_type == .array) {
+                var is_numeric = name_str.len > 0;
+                for (name_str) |c| {
+                    if (c < '0' or c > '9') { is_numeric = false; break; }
+                }
+                if (is_numeric) {
+                    var idx: usize = 0;
+                    for (name_str) |c| idx = idx * 10 + (c - '0');
+                    return JsValue.initBool(idx < obj.data.array.items.len);
+                }
+            }
+            return JsValue.initBool(obj.properties.get(key.asStringId()) != null);
+        }
+        return JsValue.initBool(false);
     }
 
     fn nativeObjToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {

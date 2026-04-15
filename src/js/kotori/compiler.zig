@@ -621,13 +621,64 @@ pub const Compiler = struct {
 
     fn storeBinding(self: *Compiler, name_id: StringId) CompileError!void {
         if (self.current.scope_depth > 0 or !self.current.is_script) {
-            const slot = try self.addLocal(name_id);
+            // Reuse an existing local slot if hoisting pre-registered this name,
+            // otherwise allocate a new one. This prevents duplicate slots when
+            // hoistVarDeclarations() already called addLocal for this name.
+            const slot = if (self.resolveLocal(&self.current, name_id)) |existing|
+                existing
+            else
+                try self.addLocal(name_id);
             if (!self.current.is_script and self.current.scope_depth == 0) {
                 try self.emitOpU16(.store_local, slot);
             }
         } else {
             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
             try self.emitOpU16(.store_global, ci);
+        }
+    }
+
+    /// Pre-scan a function body block and register all top-level var/function_decl
+    /// names as locals (scope_depth==0 slots). This implements JS var hoisting:
+    /// all var bindings are visible throughout the function, even before the
+    /// declaration point in the source. Function bodies that close over var
+    /// names declared later in the same scope can thus resolve them as upvalues
+    /// during compileFunctionBody (rather than falling back to globals).
+    ///
+    /// Only scans the immediate block children (not nested blocks inside
+    /// if/for/etc.) because JS var hoisting is function-scoped, not block-scoped.
+    fn hoistVarDeclarations(self: *Compiler, block_list: NodeList) CompileError!void {
+        const items = self.parser.ast.getNodeList(block_list);
+        for (items) |item| {
+            switch (self.parser.ast.getNode(item)) {
+                .var_decl => |decl| {
+                    if (decl.kind != .@"var") continue; // only `var`, not let/const
+                    const declarators = self.parser.ast.getNodeList(decl.declarators);
+                    for (declarators) |d_idx| {
+                        const decl_node = self.parser.ast.getNode(d_idx);
+                        switch (decl_node) {
+                            .var_declarator => |vd| {
+                                const name_node = self.parser.ast.getNode(vd.name);
+                                switch (name_node) {
+                                    .identifier => |name_id| {
+                                        if (self.resolveLocal(&self.current, name_id) == null) {
+                                            _ = try self.addLocal(name_id);
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                .function_decl => |fd| {
+                    const name_id = fd.name orelse continue;
+                    if (self.resolveLocal(&self.current, name_id) == null) {
+                        _ = try self.addLocal(name_id);
+                    }
+                },
+                else => {},
+            }
         }
     }
 
@@ -903,9 +954,14 @@ pub const Compiler = struct {
     fn compileFunctionDecl(self: *Compiler, func: ast_mod.Function) CompileError!void {
         const name_id = func.name orelse return;
         try self.compileFunctionBody(func);
-        // Bind to variable
+        // Bind to variable: compileFunctionBody leaves the function object on the stack.
+        // In script scope (scope_depth==0, is_script==true) → store_global.
+        // In function/block scope → addLocal to reserve the slot, then store_local.
+        // Previously addLocal was called without store_local, leaving the fn object
+        // on the stack and the local slot uninitialized (= undefined at runtime).
         if (self.current.scope_depth > 0 or !self.current.is_script) {
-            _ = try self.addLocal(name_id);
+            const slot = try self.addLocal(name_id);
+            try self.emitOpU16(.store_local, slot);
         } else {
             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
             try self.emitOpU16(.store_global, ci);
@@ -1061,9 +1117,38 @@ pub const Compiler = struct {
         const body = self.parser.ast.getNode(func.body);
         switch (body) {
             .block => |list| {
-                const items = self.parser.ast.getNodeList(list);
-                for (items) |item| {
-                    try self.compileNode(item);
+                // Hoisting pre-pass: register all var/function_decl names as
+                // locals before compiling any statements. This ensures that
+                // function bodies compiled later in the same scope can resolve
+                // these names as upvalues (rather than globals), which is
+                // required for JS's function-scoped var hoisting semantics.
+                try self.hoistVarDeclarations(list);
+
+                // Also hoist function bodies: emit function objects and store
+                // them into their pre-reserved local slots so they are
+                // available at call-sites that appear before the declaration.
+                const all_items = self.parser.ast.getNodeList(list);
+                for (all_items) |item| {
+                    switch (self.parser.ast.getNode(item)) {
+                        .function_decl => |fd| {
+                            const fd_name = fd.name orelse continue;
+                            const slot = self.resolveLocal(&self.current, fd_name) orelse continue;
+                            try self.compileFunctionBody(fd);
+                            try self.emitOpU16(.store_local, slot);
+                        },
+                        else => {},
+                    }
+                }
+
+                // Main pass: compile all statements, skipping function_decl
+                // (already emitted above) but processing var assignments normally.
+                // var declarations whose slots were pre-reserved skip addLocal
+                // (storeBinding calls resolveLocal first).
+                for (all_items) |item| {
+                    switch (self.parser.ast.getNode(item)) {
+                        .function_decl => {}, // already emitted in hoisting pass
+                        else => try self.compileNode(item),
+                    }
                 }
             },
             else => {

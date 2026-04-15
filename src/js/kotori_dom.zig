@@ -336,6 +336,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "removeAttribute", &nativeRemoveAttribute);
     try vm.registerNativeMethod(ep, "addEventListener", &nativeAddEventListener);
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
+    try vm.registerNativeMethod(ep, "querySelectorAll", &nativeQuerySelectorAll);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     try vm.registerNativeMethod(ep, "getRootNode", &nativeGetRootNode);
     try vm.registerNativeMethod(ep, "dispatchEvent", &nativeDispatchEvent);
@@ -350,6 +351,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     doc_obj.prototype = ep;
     try vm.registerNativeMethod(doc_obj, "getElementById", &nativeGetElementById);
     try vm.registerNativeMethod(doc_obj, "querySelector", &nativeDocQuerySelector);
+    try vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeDocQuerySelectorAll);
     try vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement);
     try vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode);
 
@@ -623,6 +625,39 @@ fn nativeDocQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     if (findFirstMatch(root, sel)) |found|
         return wrapNode(vm, found) orelse JsValue.null_val;
     return JsValue.null_val;
+}
+
+fn nativeDocQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    const root = getThisNode(this) orelse return JsValue.null_val;
+    const matches = findAllMatches(root, sel, vm.allocator);
+    defer vm.allocator.free(matches);
+    // Return a JS Array of wrapped nodes
+    const arr_obj = try vm.createObj(.{ .obj_type = .array });
+    arr_obj.data = .{ .array = .empty };
+    for (matches) |node| {
+        const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+        try arr_obj.data.array.append(vm.allocator, wrapped);
+    }
+    return JsValue.initObject(arr_obj);
+}
+
+fn nativeQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    const root = getThisNode(this) orelse return JsValue.null_val;
+    const matches = findAllMatches(root, sel, vm.allocator);
+    defer vm.allocator.free(matches);
+    const arr_obj = try vm.createObj(.{ .obj_type = .array });
+    arr_obj.data = .{ .array = .empty };
+    for (matches) |node| {
+        const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+        try arr_obj.data.array.append(vm.allocator, wrapped);
+    }
+    return JsValue.initObject(arr_obj);
 }
 
 fn nativeCreateElement(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -1433,6 +1468,37 @@ fn findFirstMatch(root: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb_dom
         }
     }
     return null;
+}
+
+/// Collect all elements under `root` matching `selector`.
+/// Caller owns the returned slice (allocated with `alloc`).
+fn findAllMatches(root: *lxb.lxb_dom_node_t, selector: []const u8, alloc: std.mem.Allocator) []const *lxb.lxb_dom_node_t {
+    const sel = std.mem.trim(u8, selector, " \t\r\n");
+    if (sel.len == 0) return &.{};
+
+    var results: std.ArrayListUnmanaged(*lxb.lxb_dom_node_t) = .empty;
+    var cur: ?*lxb.lxb_dom_node_t = nodeFirstChild(root);
+    while (cur) |node| {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            if (matchSimpleSelector(@ptrCast(node), sel)) {
+                results.append(alloc, node) catch {};
+            }
+        }
+        if (nodeFirstChild(node)) |child| {
+            cur = child;
+        } else {
+            var n = node;
+            cur = null;
+            while (true) {
+                if (nodeNext(n)) |nx| { cur = nx; break; }
+                if (nodeParent(n)) |p| {
+                    if (@intFromPtr(p) == @intFromPtr(root)) break;
+                    n = p;
+                } else break;
+            }
+        }
+    }
+    return results.toOwnedSlice(alloc) catch &.{};
 }
 
 /// Match a simple CSS selector: tag, #id, .class, tag.class, tag#id, .a.b

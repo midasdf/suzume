@@ -953,6 +953,11 @@ pub fn main(init: std.process.Init) !void {
             run_test_dom_js = true;
         } else if (std.mem.eql(u8, arg, "--wpt-mode")) {
             web_api.wpt_mode = true;
+            // Mirror into the kotori engine's IO bridge (separate module,
+            // cannot @import web_api). kotori's console.log consults this
+            // flag to route "ALERT:" lines to stdout and set
+            // `kotori.io.wpt_result_sent` on "ALERT: RESULT:".
+            kotori.io.wpt_mode = true;
         } else if (std.mem.eql(u8, arg, "--screenshot")) {
             screenshot_path = args.next();
         } else if (std.mem.startsWith(u8, arg, "--webdriver=")) {
@@ -1270,8 +1275,10 @@ pub fn main(init: std.process.Init) !void {
     // Event loop
     var running = true;
     while (running) {
-        // WPT mode: exit after test result is sent
-        if (web_api.wpt_mode and web_api.wpt_result_sent) {
+        // WPT mode: exit after test result is sent.
+        // Either engine (QuickJS via web_api, or kotori via kotori_io) may
+        // emit the "ALERT: RESULT:" line that flips these flags.
+        if (web_api.wpt_mode and (web_api.wpt_result_sent or kotori.io.wpt_result_sent)) {
             break;
         }
 
@@ -1504,6 +1511,17 @@ pub fn main(init: std.process.Init) !void {
                         events.dispatchWindowEvent(js_rt.ctx, "scroll");
                         js_rt.executePending();
                     }
+                }
+
+                // Tick kotori timers (separate engine, separate timer list).
+                // Without this, setInterval/setTimeout callbacks only fire when
+                // script_executor.zig drives the runtime (at initPageJs) — so
+                // long-running pages (like WPT testharness) would see timers
+                // throttle to ~one tick per render pass (~2 s) instead of the
+                // requested cadence. runPendingTimers ignores delay on purpose
+                // (see vm.zig comment); the caller — the main loop — gates it.
+                if (pg.kotori_rt) |*krt| {
+                    _ = krt.runPendingTimers();
                 }
 
                 // Tick CSS animations

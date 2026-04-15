@@ -34,3 +34,29 @@ pub fn sleepNs(ns: u64) void {
 pub fn stderrWrite(bytes: []const u8) void {
     std.Io.File.stderr().writeStreamingAll(ioOrPanic(), bytes) catch {};
 }
+
+/// Write `bytes` to process stdout. On failure, the error is surfaced to
+/// stderr so WPT runners do not silently lose result lines (regression
+/// guard — Zig 0.16 Io migration previously hid failures behind `catch {}`).
+pub fn stdoutWrite(bytes: []const u8) void {
+    std.Io.File.stdout().writeStreamingAll(ioOrPanic(), bytes) catch |err| {
+        var buf: [128]u8 = undefined;
+        const msg = std.fmt.bufPrint(&buf, "[kotori_io] stdout write failed: {s}\n", .{@errorName(err)}) catch "[kotori_io] stdout write failed\n";
+        std.Io.File.stderr().writeStreamingAll(ioOrPanic(), msg) catch {};
+    };
+}
+
+// ── WPT integration ─────────────────────────────────────────────────
+//
+// kotori does not depend on src/js/web_api.zig, so we cannot read
+// `web_api.wpt_mode` from here. main.zig mirrors the flag into this
+// module at startup; kotori's console.log routes "ALERT:" lines to
+// stdout (matching web_api.zig:consoleWrite for the QuickJS path).
+
+/// When true, console.log lines starting with "ALERT:" go to stdout
+/// instead of stderr, and "ALERT: RESULT:" sets `wpt_result_sent`.
+pub var wpt_mode: bool = false;
+
+/// Set to true after an "ALERT: RESULT:" line has been emitted. The
+/// main event loop checks this each iteration to break out and exit.
+pub var wpt_result_sent: bool = false;

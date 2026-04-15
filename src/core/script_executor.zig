@@ -612,6 +612,11 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
     // window 'load' event (HTML §8.2.9 step 7)
     kotori_dom.dispatchWindowEvent(&krt.vm, "load");
 
+    // HTML §8.2.9: also fire body.onload attribute (event handler content attribute).
+    // dispatchWindowEvent only fires window.addEventListener listeners; body onload=""
+    // is a separate mechanism. Find <body> and eval its onload attribute if present.
+    kotoriDispatchBodyOnload(doc_node.lxb_node, &krt);
+
     // Flush timers fired by load handlers (e.g. testharness.js completion callback).
     _ = krt.runMicrotasks();
     timer_iters = 0;
@@ -621,6 +626,59 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
 
     page_kotori_rt.* = krt;
     std.debug.print("[kotori] Page JS initialized (kotori engine)\n", .{});
+}
+
+/// Walk the DOM to find <body> and eval its onload="" attribute via kotori.
+/// Mirrors the QuickJS path and the browser behaviour: body onload="" is an
+/// event handler content attribute that fires after window 'load' fires.
+fn kotoriDispatchBodyOnload(root: *lxb.lxb_dom_node_t, krt: *KotoriRuntime) void {
+    // Walk to find <body> (typically html > body, but search broadly)
+    var node: ?*lxb.lxb_dom_node_t = root;
+    while (node) |n| {
+        if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(n);
+            var name_len: usize = 0;
+            const name_ptr = lxb.lxb_dom_element_local_name(elem, &name_len);
+            if (name_ptr != null and name_len == 4 and
+                std.mem.eql(u8, name_ptr[0..4], "body"))
+            {
+                // Found <body>; read onload attribute
+                var attr_len: usize = 0;
+                const attr_ptr = lxb.lxb_dom_element_get_attribute(
+                    elem, "onload", 6, &attr_len);
+                if (attr_ptr != null and attr_len > 0) {
+                    const code = attr_ptr[0..attr_len];
+                    std.debug.print("[kotori] body.onload: {s}\n", .{code});
+                    const result = krt.eval(code);
+                    if (!result.isOk()) {
+                        if (result == .err) {
+                            std.debug.print("[kotori:ERROR] body.onload: {s}\n", .{result.err});
+                        }
+                    }
+                }
+                return;
+            }
+        }
+        // Depth-first traversal
+        if (n.first_child) |child| {
+            node = child;
+        } else {
+            var cur: ?*lxb.lxb_dom_node_t = n;
+            while (cur) |c| {
+                if (c.next) |sibling| {
+                    node = sibling;
+                    break;
+                }
+                cur = c.parent;
+                if (cur == root) {
+                    node = null;
+                    break;
+                }
+            } else {
+                node = null;
+            }
+        }
+    }
 }
 
 /// Walk DOM tree and execute <script> tags (inline + external) via kotori.

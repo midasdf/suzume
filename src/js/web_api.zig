@@ -517,10 +517,19 @@ fn consoleWrite(
             line;
         if (std.mem.startsWith(u8, payload, "ALERT: ")) {
             const stdout_file = std.Io.File.stdout();
-            stdout_file.writeStreamingAll(env.ioOrPanic(), payload) catch {};
-            stdout_file.writeStreamingAll(env.ioOrPanic(), "\n") catch {};
+            stdout_file.writeStreamingAll(env.ioOrPanic(), payload) catch |e| {
+                std.debug.print("[web_api] WPT stdout write failed: {s}\n", .{@errorName(e)});
+            };
+            stdout_file.writeStreamingAll(env.ioOrPanic(), "\n") catch |e| {
+                std.debug.print("[web_api] WPT stdout newline write failed: {s}\n", .{@errorName(e)});
+            };
             if (std.mem.startsWith(u8, payload, "ALERT: RESULT: ")) {
                 wpt_result_sent = true;
+                // Force-exit immediately: the main loop's per-iteration check
+                // is reliable, but debug-mode shutdown can be slow enough that
+                // WPT runners misinterpret it as a hang. Process exit skips
+                // cleanup (safe — OS reclaims pages).
+                std.process.exit(0);
             }
             return quickjs.JS_UNDEFINED();
         }
