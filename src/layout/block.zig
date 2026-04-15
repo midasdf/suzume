@@ -689,7 +689,14 @@ fn createsBfc(style: ComputedStyle) bool {
 /// so that percentage heights in the item's descendants resolve correctly.
 /// Does NOT change the box's own `content.height`.
 pub fn relayoutChildrenWithContainingHeight(box: *Box, fonts: *FontCache, containing_height: f32) void {
+    // CSS Flexbox L1 §9.4 + CSS Sizing L3 §5.3: re-layout the item's block
+    // children so that `height: <pct>` descendants resolve against the item's
+    // definite main-axis size (containing_height).  We must NOT let
+    // layoutBlockChildren overwrite the item's own content.height, which was
+    // already set to the flex-resolved size by the caller.  Save and restore.
+    const saved_h = box.content.height;
     layoutBlockChildren(box, fonts, containing_height);
+    box.content.height = saved_h;
 }
 
 fn layoutBlockChildren(box: *Box, fonts: *FontCache, containing_height: f32) void {
