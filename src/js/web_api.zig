@@ -155,24 +155,24 @@ fn jsSuzumeLsLoad(
 
     // Migration: if partition file absent but legacy flat file exists, migrate it
     const partition_exists = blk: {
-        std.fs.accessAbsolute(path, .{}) catch break :blk false;
+        std.Io.Dir.accessAbsolute(env.ioOrPanic(), path, .{}) catch break :blk false;
         break :blk true;
     };
     if (!partition_exists) {
         var legacy_buf: [768]u8 = undefined;
         if (localStorageLegacyPath(&legacy_buf) catch null) |legacy_path| {
-            if (std.fs.openFileAbsolute(legacy_path, .{}) catch null) |lf| {
-                defer lf.close();
+            if (std.Io.Dir.openFileAbsolute(env.ioOrPanic(), legacy_path, .{}) catch null) |lf| {
+                defer lf.close(env.ioOrPanic());
                 if (lf.readToEndAlloc(std.heap.c_allocator, 6 * 1024 * 1024) catch null) |contents| {
                     defer std.heap.c_allocator.free(contents);
                     // Write to partition
-                    if (std.fs.createFileAbsolute(path, .{ .truncate = true }) catch null) |pf| {
-                        defer pf.close();
+                    if (std.Io.Dir.createFileAbsolute(env.ioOrPanic(), path, .{ .truncate = true }) catch null) |pf| {
+                        defer pf.close(env.ioOrPanic());
                         pf.writeAll(contents) catch {};
                         std.log.warn("localStorage: migrated legacy localStorage.json → {s}", .{path});
                     }
                     // Remove legacy file
-                    std.fs.deleteFileAbsolute(legacy_path) catch {};
+                    std.Io.Dir.deleteFileAbsolute(env.ioOrPanic(), legacy_path) catch {};
                     return qjs.JS_NewStringLen(c, contents.ptr, contents.len);
                 }
             }
@@ -180,8 +180,8 @@ fn jsSuzumeLsLoad(
         return quickjs.JS_NULL();
     }
 
-    const file = std.fs.openFileAbsolute(path, .{}) catch return quickjs.JS_NULL();
-    defer file.close();
+    const file = std.Io.Dir.openFileAbsolute(env.ioOrPanic(), path, .{}) catch return quickjs.JS_NULL();
+    defer file.close(env.ioOrPanic());
     const contents = file.readToEndAlloc(std.heap.c_allocator, 6 * 1024 * 1024) catch return quickjs.JS_NULL();
     defer std.heap.c_allocator.free(contents);
     return qjs.JS_NewStringLen(c, contents.ptr, contents.len);
@@ -226,8 +226,8 @@ fn jsSuzumeLsSave(
         }
     }
 
-    const file = std.fs.createFileAbsolute(path, .{ .truncate = true }) catch return quickjs.JS_UNDEFINED();
-    defer file.close();
+    const file = std.Io.Dir.createFileAbsolute(env.ioOrPanic(), path, .{ .truncate = true }) catch return quickjs.JS_UNDEFINED();
+    defer file.close(env.ioOrPanic());
     file.writeAll(json) catch {};
     return quickjs.JS_UNDEFINED();
 }

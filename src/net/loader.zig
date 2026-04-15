@@ -303,7 +303,7 @@ pub const Loader = struct {
         defer allocator.free(downloads_dir);
 
         // Ensure directory exists
-        std.fs.cwd().makePath(downloads_dir) catch {};
+        std.Io.Dir.cwd().createDirPath(env.ioOrPanic(), downloads_dir) catch {};
 
         // Split filename into base and extension for suffix insertion
         const dot_idx = std.mem.lastIndexOf(u8, safe_name, ".");
@@ -320,7 +320,7 @@ pub const Loader = struct {
             errdefer allocator.free(filepath);
 
             // Check if file already exists
-            if (std.fs.cwd().access(filepath, .{})) |_| {
+            if (std.Io.Dir.cwd().access(env.ioOrPanic(), filepath, .{})) |_| {
                 // File exists, try next suffix
                 allocator.free(filepath);
                 suffix += 1;
@@ -328,8 +328,8 @@ pub const Loader = struct {
             } else |_| {}
 
             // File does not exist, create it
-            const file = try std.fs.cwd().createFile(filepath, .{ .exclusive = true });
-            defer file.close();
+            const file = try std.Io.Dir.cwd().createFile(env.ioOrPanic(), filepath, .{ .exclusive = true });
+            defer file.close(env.ioOrPanic());
             try file.writeAll(body);
 
             return filepath;
@@ -339,8 +339,8 @@ pub const Loader = struct {
         const filepath = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ downloads_dir, safe_name });
         errdefer allocator.free(filepath);
 
-        const file = try std.fs.cwd().createFile(filepath, .{});
-        defer file.close();
+        const file = try std.Io.Dir.cwd().createFile(env.ioOrPanic(), filepath, .{});
+        defer file.close(env.ioOrPanic());
         try file.writeAll(body);
 
         return filepath;

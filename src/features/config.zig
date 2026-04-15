@@ -60,19 +60,19 @@ pub const Config = struct {
         defer self.allocator.free(config_dir);
 
         // Create config directory if needed
-        std.fs.cwd().makePath(config_dir) catch {};
+        std.Io.Dir.cwd().createDirPath(env.ioOrPanic(), config_dir) catch {};
 
         const config_path = std.fmt.allocPrint(self.allocator, "{s}/config", .{config_dir}) catch return;
         defer self.allocator.free(config_path);
 
-        const file = std.fs.cwd().openFile(config_path, .{}) catch |err| {
+        const file = std.Io.Dir.cwd().openFile(env.ioOrPanic(), config_path, .{}) catch |err| {
             if (err == error.FileNotFound) {
                 // Write default config file
                 self.writeDefaults(config_path);
             }
             return;
         };
-        defer file.close();
+        defer file.close(env.ioOrPanic());
 
         var buf: [4096]u8 = undefined;
         const content = file.readAll(&buf) catch return;
@@ -116,8 +116,8 @@ pub const Config = struct {
 
     fn writeDefaults(self: *Config, path: []const u8) void {
         _ = self;
-        const file = std.fs.cwd().createFile(path, .{}) catch return;
-        defer file.close();
+        const file = std.Io.Dir.cwd().createFile(env.ioOrPanic(), path, .{}) catch return;
+        defer file.close(env.ioOrPanic());
 
         const content =
             \\# Suzume browser configuration

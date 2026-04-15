@@ -199,8 +199,8 @@ fn findFont() [*:0]const u8 {
     if (fc_sans_path) |p| return p.ptr;
     // Fallback to hardcoded paths
     const cjk_path: []const u8 = font_cjk[0..font_cjk.len];
-    if (std.fs.openFileAbsolute(cjk_path, .{})) |f| {
-        f.close();
+    if (std.Io.Dir.openFileAbsolute(env.ioOrPanic(), cjk_path, .{})) |f| {
+        f.close(env.ioOrPanic());
         return font_cjk;
     } else |_| {}
     return font_fallback;
@@ -219,13 +219,13 @@ fn findMonoFont() [*:0]const u8 {
 fn findFallbackFont() ?[*:0]const u8 {
     // If the primary font is fontconfig-resolved, provide CJK fallback
     const cjk_path: []const u8 = font_cjk[0..font_cjk.len];
-    if (std.fs.openFileAbsolute(cjk_path, .{})) |f| {
-        f.close();
+    if (std.Io.Dir.openFileAbsolute(env.ioOrPanic(), cjk_path, .{})) |f| {
+        f.close(env.ioOrPanic());
         return font_cjk;
     } else |_| {}
     const latin_path: []const u8 = font_fallback[0..font_fallback.len];
-    if (std.fs.openFileAbsolute(latin_path, .{})) |f| {
-        f.close();
+    if (std.Io.Dir.openFileAbsolute(env.ioOrPanic(), latin_path, .{})) |f| {
+        f.close(env.ioOrPanic());
         return font_fallback;
     } else |_| {}
     return null;
@@ -912,9 +912,10 @@ fn extractTitle(doc: *Document) ?[]const u8 {
 }
 
 pub fn main(init: std.process.Init) !void {
-    // Stash the Environ.Map pointer so former std.posix.getenv call sites
-    // can still perform global lookups via src/env.zig.
+    // Stash the Environ.Map and Io so former std.posix.getenv / std.fs.cwd
+    // call sites can still perform global-style lookups via src/env.zig.
     env.map = init.environ_map;
+    env.io = init.io;
 
     // Use GeneralPurposeAllocator in debug mode for double-free / use-after-free detection.
     // In release mode, use c_allocator for performance.
@@ -1005,7 +1006,7 @@ pub fn main(init: std.process.Init) !void {
         // Ensure directory exists
         const dir_end = std.mem.lastIndexOf(u8, cp, "/") orelse 0;
         if (dir_end > 0) {
-            std.fs.cwd().makePath(cp[0..dir_end]) catch {};
+            std.Io.Dir.cwd().createDirPath(env.ioOrPanic(), cp[0..dir_end]) catch {};
         }
         http_client.setCookieFile(cp);
         std.debug.print("Cookie file: {s}\n", .{cp});
@@ -3416,8 +3417,8 @@ fn handleWebDriverCommand(
                 }
             }
             if (surface.dumpToPng(tmp_path)) {
-                const file = std.fs.cwd().openFile(tmp_path, .{}) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
-                defer file.close();
+                const file = std.Io.Dir.cwd().openFile(env.ioOrPanic(), tmp_path, .{}) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
+                defer file.close(env.ioOrPanic());
                 const png_data = file.readToEndAlloc(allocator, 10 * 1024 * 1024) catch return .{ .status = 500, .body = "{\"value\":\"\"}" };
                 defer allocator.free(png_data);
 

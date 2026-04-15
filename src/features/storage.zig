@@ -54,7 +54,7 @@ pub const Storage = struct {
         defer allocator.free(data_dir);
 
         // Create directory (recursive)
-        std.fs.cwd().makePath(data_dir) catch {};
+        std.Io.Dir.cwd().createDirPath(env.ioOrPanic(), data_dir) catch {};
 
         const db_path_slice = try std.fmt.allocPrint(allocator, "{s}/suzume.db", .{data_dir});
         defer allocator.free(db_path_slice);

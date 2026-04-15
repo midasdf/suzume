@@ -13,27 +13,27 @@ pub fn executeUserScripts(js_rt: *JsRuntime, allocator: std.mem.Allocator) void 
     const scripts_dir_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ home, scripts_subdir }) catch return;
     defer allocator.free(scripts_dir_path);
 
-    var dir = std.fs.cwd().openDir(scripts_dir_path, .{ .iterate = true }) catch |err| {
+    var dir = std.Io.Dir.cwd().openDir(env.ioOrPanic(), scripts_dir_path, .{ .iterate = true }) catch |err| {
         // Directory doesn't exist — that's fine, no user scripts to run
         if (err == error.FileNotFound) return;
         std.debug.print("[UserScript] Failed to open scripts directory: {}\n", .{err});
         return;
     };
-    defer dir.close();
+    defer dir.close(env.ioOrPanic());
 
     var iter = dir.iterate();
-    while (iter.next() catch null) |entry| {
+    while (iter.next(env.ioOrPanic()) catch null) |entry| {
         if (entry.kind != .file) continue;
 
         // Only .js files
         if (!std.mem.endsWith(u8, entry.name, ".js")) continue;
 
         // Read the file
-        const file = dir.openFile(entry.name, .{}) catch |err| {
+        const file = dir.openFile(env.ioOrPanic(), entry.name, .{}) catch |err| {
             std.debug.print("[UserScript] Failed to open {s}: {}\n", .{ entry.name, err });
             continue;
         };
-        defer file.close();
+        defer file.close(env.ioOrPanic());
 
         // Read up to 1MB
         const max_size = 1024 * 1024;
@@ -61,5 +61,5 @@ pub fn ensureScriptsDir(allocator: std.mem.Allocator) void {
     const home = env.get("HOME") orelse return;
     const dir_path = std.fmt.allocPrint(allocator, "{s}{s}", .{ home, scripts_subdir }) catch return;
     defer allocator.free(dir_path);
-    std.fs.cwd().makePath(dir_path) catch {};
+    std.Io.Dir.cwd().createDirPath(env.ioOrPanic(), dir_path) catch {};
 }
