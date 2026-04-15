@@ -44,7 +44,7 @@ fn jsSuzumeSecureRandom(
     if (base == null) return qjs.JS_ThrowTypeError(c, "not an ArrayBuffer");
     if (byte_offset + byte_length > ab_size) return qjs.JS_ThrowRangeError(c, "buffer out of range");
     const dest = base[byte_offset .. byte_offset + byte_length];
-    std.crypto.random.bytes(dest);
+    std.Io.random(env.ioOrPanic(), dest);
     return qjs.JS_DupValue(c, args[0]);
 }
 
@@ -112,7 +112,7 @@ fn localStorageLegacyPath(buf: []u8) ![]const u8 {
 
 /// Ensure a directory exists (create if absent).
 fn ensureDir(path: []const u8) void {
-    std.fs.makeDirAbsolute(path) catch |e| switch (e) {
+    std.Io.Dir.createDirAbsolute(env.ioOrPanic(), path, .default_dir) catch |e| switch (e) {
         error.PathAlreadyExists => {},
         else => {},
     };
@@ -516,9 +516,9 @@ fn consoleWrite(
         else
             line;
         if (std.mem.startsWith(u8, payload, "ALERT: ")) {
-            const stdout_file = std.fs.File.stdout();
-            _ = stdout_file.write(payload) catch 0;
-            _ = stdout_file.write("\n") catch 0;
+            const stdout_file = std.Io.File.stdout();
+            stdout_file.writeStreamingAll(env.ioOrPanic(), payload) catch {};
+            stdout_file.writeStreamingAll(env.ioOrPanic(), "\n") catch {};
             if (std.mem.startsWith(u8, payload, "ALERT: RESULT: ")) {
                 wpt_result_sent = true;
             }
