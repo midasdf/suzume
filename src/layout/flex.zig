@@ -328,6 +328,11 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
     var main_offset: f32 = 0;
     var per_gap = gap;
 
+    // CSS Flexbox L1 §9.5 / Box Alignment L3 §6.3 "Overflow Alignment": when
+    // free space is negative (items overflow), center/space-* fall back to
+    // flex-start so content doesn't get pushed past the start edge. flex-end
+    // keeps its negative offset (spec-correct start overflow).
+    const overflow_clamped = if (remaining < 0) @as(f32, 0) else remaining;
     switch (style.justify_content) {
         // CSS Box Alignment L3 §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
         .normal, .flex_start => {
@@ -337,24 +342,24 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
             main_offset = remaining;
         },
         .center => {
-            main_offset = remaining / 2;
+            main_offset = overflow_clamped / 2;
         },
         .space_between => {
             main_offset = 0;
             if (flex_child_count > 1) {
-                per_gap = gap + remaining / @as(f32, @floatFromInt(flex_child_count - 1));
+                per_gap = gap + overflow_clamped / @as(f32, @floatFromInt(flex_child_count - 1));
             }
         },
         .space_around => {
             if (flex_child_count > 0) {
-                const space = remaining / @as(f32, @floatFromInt(flex_child_count));
+                const space = overflow_clamped / @as(f32, @floatFromInt(flex_child_count));
                 main_offset = space / 2;
                 per_gap = gap + space;
             }
         },
         .space_evenly => {
             if (flex_child_count > 0) {
-                const space = remaining / @as(f32, @floatFromInt(flex_child_count + 1));
+                const space = overflow_clamped / @as(f32, @floatFromInt(flex_child_count + 1));
                 main_offset = space;
                 per_gap = gap + space;
             }
@@ -721,6 +726,9 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         var main_offset: f32 = 0;
         var per_gap = gap;
 
+        // Flexbox L1 §9.5 / Box Alignment L3 §6.3: negative free space falls
+        // back to flex-start for center/space-* (prevents pushing past start edge).
+        const line_overflow_clamped = if (line_remaining < 0) @as(f32, 0) else line_remaining;
         switch (style.justify_content) {
             // §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
             .normal, .flex_start => {
@@ -730,24 +738,24 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
                 main_offset = line_remaining;
             },
             .center => {
-                main_offset = line_remaining / 2;
+                main_offset = line_overflow_clamped / 2;
             },
             .space_between => {
                 main_offset = 0;
                 if (line_item_count > 1) {
-                    per_gap = gap + line_remaining / @as(f32, @floatFromInt(line_item_count - 1));
+                    per_gap = gap + line_overflow_clamped / @as(f32, @floatFromInt(line_item_count - 1));
                 }
             },
             .space_around => {
                 if (line_item_count > 0) {
-                    const space = line_remaining / @as(f32, @floatFromInt(line_item_count));
+                    const space = line_overflow_clamped / @as(f32, @floatFromInt(line_item_count));
                     main_offset = space / 2;
                     per_gap = gap + space;
                 }
             },
             .space_evenly => {
                 if (line_item_count > 0) {
-                    const space = line_remaining / @as(f32, @floatFromInt(line_item_count + 1));
+                    const space = line_overflow_clamped / @as(f32, @floatFromInt(line_item_count + 1));
                     main_offset = space;
                     per_gap = gap + space;
                 }
@@ -1090,6 +1098,9 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
         var main_offset: f32 = 0;
         var per_gap = gap;
 
+        // Flexbox L1 §9.5 / Box Alignment L3 §6.3: negative free space falls
+        // back to flex-start for center/space-*.
+        const col_overflow_clamped = if (col_remaining < 0) @as(f32, 0) else col_remaining;
         switch (style.justify_content) {
             // §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
             .normal, .flex_start => {},
@@ -1097,23 +1108,23 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
                 main_offset = col_remaining;
             },
             .center => {
-                main_offset = col_remaining / 2;
+                main_offset = col_overflow_clamped / 2;
             },
             .space_between => {
                 if (line_item_count > 1) {
-                    per_gap = gap + col_remaining / @as(f32, @floatFromInt(line_item_count - 1));
+                    per_gap = gap + col_overflow_clamped / @as(f32, @floatFromInt(line_item_count - 1));
                 }
             },
             .space_around => {
                 if (line_item_count > 0) {
-                    const space = col_remaining / @as(f32, @floatFromInt(line_item_count));
+                    const space = col_overflow_clamped / @as(f32, @floatFromInt(line_item_count));
                     main_offset = space / 2;
                     per_gap = gap + space;
                 }
             },
             .space_evenly => {
                 if (line_item_count > 0) {
-                    const space = col_remaining / @as(f32, @floatFromInt(line_item_count + 1));
+                    const space = col_overflow_clamped / @as(f32, @floatFromInt(line_item_count + 1));
                     main_offset = space;
                     per_gap = gap + space;
                 }
@@ -1374,6 +1385,9 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
     const justify_space = container_main - total_used;
     var per_gap = gap;
 
+    // Flexbox L1 §9.5 / Box Alignment L3 §6.3: negative free space falls back
+    // to flex-start for center/space-*.
+    const justify_space_clamped = if (justify_space < 0) @as(f32, 0) else justify_space;
     switch (style.justify_content) {
         // §5.1 + Flexbox L1 §8.1: "normal" resolves to "flex-start"
         .normal, .flex_start => {},
@@ -1381,23 +1395,23 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
             cursor_y = justify_space;
         },
         .center => {
-            cursor_y = justify_space / 2;
+            cursor_y = justify_space_clamped / 2;
         },
         .space_between => {
             if (col_flex_count > 1) {
-                per_gap = gap + justify_space / @as(f32, @floatFromInt(col_flex_count - 1));
+                per_gap = gap + justify_space_clamped / @as(f32, @floatFromInt(col_flex_count - 1));
             }
         },
         .space_around => {
             if (col_flex_count > 0) {
-                const space = justify_space / @as(f32, @floatFromInt(col_flex_count));
+                const space = justify_space_clamped / @as(f32, @floatFromInt(col_flex_count));
                 cursor_y = space / 2;
                 per_gap = gap + space;
             }
         },
         .space_evenly => {
             if (col_flex_count > 0) {
-                const space = justify_space / @as(f32, @floatFromInt(col_flex_count + 1));
+                const space = justify_space_clamped / @as(f32, @floatFromInt(col_flex_count + 1));
                 cursor_y = space;
                 per_gap = gap + space;
             }
@@ -2218,4 +2232,196 @@ test "box-sizing: border-box row with border and padding combined" {
     var widths: [1]f32 = undefined;
     tfRun(&root, &fonts, &widths);
     try testing.expectApproxEqAbs(@as(f32, 170), widths[0], 0.5);
+}
+
+// -----------------------------------------------------------------------------
+// justify-content overflow (negative free space) fallback tests
+//
+// CSS Flexbox L1 §9.5 "Main-Axis Alignment" + CSS Box Alignment L3 §6.3
+// "Overflow Alignment": when sum of item main sizes > container main size
+// (negative free space), `center` / `space-between` / `space-around` /
+// `space-evenly` must fall back to `flex-start` positioning rather than push
+// items past the start edge. `flex-end` still shifts by the (negative)
+// remaining space, which is spec-correct start overflow.
+// -----------------------------------------------------------------------------
+
+/// Build three fixed-size flex items that overflow a `container_w` container.
+/// Each item has flex_basis = item_w, flex_shrink = 0, flex_grow = 0.
+fn tfMakeOverflowChild(alloc: std.mem.Allocator, parent: *Box, w: f32, buf: *Box) !void {
+    buf.* = tfMakeChild(0);
+    buf.style.flex_basis = .{ .px = w };
+    buf.style.flex_grow = 0;
+    buf.style.flex_shrink = 0;
+    try tfAttach(alloc, parent, buf);
+}
+
+test "justify-content overflow row: center falls back to flex-start" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.justify_content = .center;
+    defer root.children.deinit(alloc);
+
+    var a: Box = undefined;
+    var b: Box = undefined;
+    var c: Box = undefined;
+    try tfMakeOverflowChild(alloc, &root, 150, &a);
+    try tfMakeOverflowChild(alloc, &root, 150, &b);
+    try tfMakeOverflowChild(alloc, &root, 150, &c);
+    defer a.children.deinit(alloc);
+    defer b.children.deinit(alloc);
+    defer c.children.deinit(alloc);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    // Overflow → flex-start fallback: first item at x=0, not at negative x.
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 150), b.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 300), c.content.x, 0.5);
+}
+
+test "justify-content overflow row: space-between falls back to flex-start" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.justify_content = .space_between;
+    defer root.children.deinit(alloc);
+
+    var a: Box = undefined;
+    var b: Box = undefined;
+    var c: Box = undefined;
+    try tfMakeOverflowChild(alloc, &root, 150, &a);
+    try tfMakeOverflowChild(alloc, &root, 150, &b);
+    try tfMakeOverflowChild(alloc, &root, 150, &c);
+    defer a.children.deinit(alloc);
+    defer b.children.deinit(alloc);
+    defer c.children.deinit(alloc);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    // flex-start fallback: items packed contiguously from 0.
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 150), b.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 300), c.content.x, 0.5);
+}
+
+test "justify-content overflow row: space-around falls back to flex-start" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.justify_content = .space_around;
+    defer root.children.deinit(alloc);
+
+    var a: Box = undefined;
+    var b: Box = undefined;
+    var c: Box = undefined;
+    try tfMakeOverflowChild(alloc, &root, 150, &a);
+    try tfMakeOverflowChild(alloc, &root, 150, &b);
+    try tfMakeOverflowChild(alloc, &root, 150, &c);
+    defer a.children.deinit(alloc);
+    defer b.children.deinit(alloc);
+    defer c.children.deinit(alloc);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 150), b.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 300), c.content.x, 0.5);
+}
+
+test "justify-content overflow row: space-evenly falls back to flex-start" {
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.justify_content = .space_evenly;
+    defer root.children.deinit(alloc);
+
+    var a: Box = undefined;
+    var b: Box = undefined;
+    var c: Box = undefined;
+    try tfMakeOverflowChild(alloc, &root, 150, &a);
+    try tfMakeOverflowChild(alloc, &root, 150, &b);
+    try tfMakeOverflowChild(alloc, &root, 150, &c);
+    defer a.children.deinit(alloc);
+    defer b.children.deinit(alloc);
+    defer c.children.deinit(alloc);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 150), b.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 300), c.content.x, 0.5);
+}
+
+test "justify-content overflow row: flex-end still overflows start (spec-correct)" {
+    // Per Flexbox L1 §9.5, flex-end uses remaining space directly. With
+    // negative remaining, items shift left (off the start edge). This is
+    // intentional spec behavior — unlike center/space-*, flex-end is NOT
+    // overflow-safe by default.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.justify_content = .flex_end;
+    defer root.children.deinit(alloc);
+
+    var a: Box = undefined;
+    var b: Box = undefined;
+    var c: Box = undefined;
+    try tfMakeOverflowChild(alloc, &root, 150, &a);
+    try tfMakeOverflowChild(alloc, &root, 150, &b);
+    try tfMakeOverflowChild(alloc, &root, 150, &c);
+    defer a.children.deinit(alloc);
+    defer b.children.deinit(alloc);
+    defer c.children.deinit(alloc);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    // remaining = 300 - 450 = -150, so items shift left by 150.
+    try testing.expectApproxEqAbs(@as(f32, -150), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 0), b.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 150), c.content.x, 0.5);
+}
+
+test "justify-content overflow column: center falls back to flex-start" {
+    // flex-direction: column, items overflow container height.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = Box{};
+    root.box_type = .block;
+    root.style.display = .flex;
+    root.style.flex_direction = .column;
+    root.style.width = .{ .px = 200 };
+    root.style.height = .{ .px = 100 };
+    root.style.justify_content = .center;
+    root.content = .{ .x = 0, .y = 0, .width = 200, .height = 100 };
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeColumnChild(60);
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeColumnChild(60);
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    var c = tfMakeColumnChild(60);
+    c.style.flex_grow = 0;
+    c.style.flex_shrink = 0;
+    defer c.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+
+    layoutFlex(&root, 200, 0, &fonts);
+    // Sum 180 > 100, overflow = -80. center falls back to flex-start: y=0,60,120.
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 60), b.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 120), c.content.y, 0.5);
 }
