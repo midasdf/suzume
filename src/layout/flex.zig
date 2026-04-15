@@ -88,17 +88,23 @@ pub fn layoutFlex(box: *Box, containing_width: f32, cursor_y: f32, fonts: *FontC
 
     const is_column = (style.flex_direction == .column or style.flex_direction == .column_reverse);
     const is_reverse = (style.flex_direction == .row_reverse or style.flex_direction == .column_reverse);
-    const gap = style.gap;
+
+    // CSS Box Alignment L3 §8 "Gaps Between Boxes":
+    // `gap` shorthand = row-gap column-gap.
+    // Row-direction:    main-axis gap = column-gap (style.gap),  cross-axis gap = row-gap (style.row_gap)
+    // Column-direction: main-axis gap = row-gap (style.row_gap), cross-axis gap = column-gap (style.gap)
+    const main_gap: f32 = if (is_column) style.row_gap else style.gap;
+    const cross_gap: f32 = if (is_column) style.gap else style.row_gap;
 
     if (is_column) {
-        layoutFlexColumn(box, is_reverse, gap, fonts);
+        layoutFlexColumn(box, is_reverse, main_gap, cross_gap, fonts);
     } else {
-        layoutFlexRow(box, is_reverse, gap, fonts);
+        layoutFlexRow(box, is_reverse, main_gap, cross_gap, fonts);
     }
 }
 
 /// Row-direction flex layout.
-fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void {
+fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *FontCache) void {
     const style = box.style;
     const container_width = box.content.width;
     const children = box.children.items;
@@ -177,7 +183,7 @@ fn layoutFlexRow(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void 
         layoutFlexRowNowrap(box, is_reverse, gap, fonts, flex_child_count);
     } else {
         // === WRAP path ===
-        layoutFlexRowWrap(box, is_reverse, gap, fonts);
+        layoutFlexRowWrap(box, is_reverse, gap, cross_gap, fonts);
     }
 }
 
@@ -463,7 +469,7 @@ fn layoutFlexRowNowrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache,
 }
 
 /// Wrap path for flex row layout. Splits children into multiple lines.
-fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void {
+fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *FontCache) void {
     const style = box.style;
     const container_width = box.content.width;
     const children = box.children.items;
@@ -642,9 +648,8 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
         line_heights[line_idx] = line_max_cross;
     }
 
-    // Compute total cross size (sum of all line heights + gaps between lines)
-    // Use row_gap for cross-axis gaps between wrap lines (gap is column-gap for main axis)
-    const cross_gap = if (style.row_gap > 0) style.row_gap else gap;
+    // Compute total cross size (sum of all line heights + cross-axis gaps between lines).
+    // CSS Box Alignment L3 §8: for row-direction flex, cross-axis gap = row-gap (cross_gap param).
     var total_cross: f32 = if (line_count > 1)
         cross_gap * @as(f32, @floatFromInt(line_count - 1))
     else
@@ -685,21 +690,21 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
             },
             .space_between => {
                 if (line_count > 1) {
-                    ac_line_gap = gap + free_cross / @as(f32, @floatFromInt(line_count - 1));
+                    ac_line_gap = cross_gap + free_cross / @as(f32, @floatFromInt(line_count - 1));
                 }
             },
             .space_around => {
                 if (line_count > 0) {
                     const space = free_cross / @as(f32, @floatFromInt(line_count));
                     ac_offset = space / 2;
-                    ac_line_gap = gap + space;
+                    ac_line_gap = cross_gap + space;
                 }
             },
             .space_evenly => {
                 if (line_count > 0) {
                     const space = free_cross / @as(f32, @floatFromInt(line_count + 1));
                     ac_offset = space;
-                    ac_line_gap = gap + space;
+                    ac_line_gap = cross_gap + space;
                 }
             },
         }
@@ -844,7 +849,7 @@ fn layoutFlexRowWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) v
 /// - CSS Flexbox L1 §9.4  — Cross Size Determination (multi-line = sum of column widths)
 /// - CSS Flexbox L1 §9.5  — Main-Axis Alignment (justify-content along column)
 /// - CSS Flexbox L1 §9.6  — Cross-Axis Alignment (align-items / align-content across columns)
-fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void {
+fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *FontCache) void {
     const style = box.style;
     const container_width = box.content.width;
     const children = box.children.items;
@@ -1018,7 +1023,7 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
     }
 
     // Compute total cross size (sum of all column widths + gaps). §9.4.
-    const cross_gap = if (style.row_gap > 0) style.row_gap else gap;
+    // CSS Box Alignment L3 §8: for column-direction flex, cross-axis gap = column-gap (cross_gap param).
     var total_cross: f32 = if (line_count > 1)
         cross_gap * @as(f32, @floatFromInt(line_count - 1))
     else
@@ -1217,7 +1222,7 @@ fn layoutFlexColumnWrap(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache
 }
 
 /// Column-direction flex layout.
-fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) void {
+fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, cross_gap: f32, fonts: *FontCache) void {
     const style = box.style;
     const container_width = box.content.width;
     const children = box.children.items;
@@ -1241,7 +1246,7 @@ fn layoutFlexColumn(box: *Box, is_reverse: bool, gap: f32, fonts: *FontCache) vo
 
     // Dispatch to wrap path if flex-wrap is enabled (CSS Flexbox L1 §5.2, §9.3)
     if (style.flex_wrap == .wrap or style.flex_wrap == .wrap_reverse) {
-        layoutFlexColumnWrap(box, is_reverse, gap, fonts);
+        layoutFlexColumnWrap(box, is_reverse, gap, cross_gap, fonts);
         return;
     }
 
@@ -2424,4 +2429,250 @@ test "justify-content overflow column: center falls back to flex-start" {
     try testing.expectApproxEqAbs(@as(f32, 0), a.content.y, 0.5);
     try testing.expectApproxEqAbs(@as(f32, 60), b.content.y, 0.5);
     try testing.expectApproxEqAbs(@as(f32, 120), c.content.y, 0.5);
+}
+
+// -----------------------------------------------------------------------------
+// CSS Box Alignment L3 §8 / CSS Flexbox L1 §9.5 — gap / row-gap / column-gap
+//
+// Spec mapping:
+//   Row-direction:    main-axis gap = column-gap (style.gap)
+//                     cross-axis gap = row-gap (style.row_gap)
+//   Column-direction: main-axis gap = row-gap (style.row_gap)
+//                     cross-axis gap = column-gap (style.gap)
+// -----------------------------------------------------------------------------
+
+test "gap: row direction — column-gap applied on main axis" {
+    // Container 300px row, 3 items each 80px wide, gap (column-gap) = 10px.
+    // Total used = 3*80 + 2*10 = 260. free = 40.
+    // flex-start: items at x=0, 90, 180.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(300);
+    root.style.gap = 10; // column-gap = main-axis gap for row-direction
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 80 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 80 };
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    var c = tfMakeChild(0);
+    c.style.flex_basis = .{ .px = 80 };
+    c.style.flex_grow = 0;
+    c.style.flex_shrink = 0;
+    defer c.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+
+    layoutFlex(&root, 300, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 90), b.content.x, 0.5);  // 80+10
+    try testing.expectApproxEqAbs(@as(f32, 180), c.content.x, 0.5); // 80+10+80+10
+}
+
+test "gap: column direction — row-gap applied on main axis" {
+    // Container 200×300 column, 3 items each 80px height, row-gap = 10px.
+    // Total used = 3*80 + 2*10 = 260. flex-start: y=0, 90, 180.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = Box{};
+    root.box_type = .block;
+    root.style.display = .flex;
+    root.style.flex_direction = .column;
+    root.style.width = .{ .px = 200 };
+    root.style.height = .{ .px = 300 };
+    root.style.row_gap = 10; // row-gap = main-axis gap for column-direction
+    root.content = .{ .x = 0, .y = 0, .width = 200, .height = 300 };
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeColumnChild(80);
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeColumnChild(80);
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    var c = tfMakeColumnChild(80);
+    c.style.flex_grow = 0;
+    c.style.flex_shrink = 0;
+    defer c.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+
+    layoutFlex(&root, 200, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 90), b.content.y, 0.5);  // 80+10
+    try testing.expectApproxEqAbs(@as(f32, 180), c.content.y, 0.5); // 80+10+80+10
+}
+
+test "gap: column-gap ignored on column main axis (only row-gap applies)" {
+    // Container 200×300 column, 3 items each 80px height.
+    // column-gap = 20 (cross-axis, should not affect main-axis spacing).
+    // row-gap = 0 (no main-axis gap).
+    // Items should be at y=0, 80, 160 — same as no-gap.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = Box{};
+    root.box_type = .block;
+    root.style.display = .flex;
+    root.style.flex_direction = .column;
+    root.style.width = .{ .px = 200 };
+    root.style.height = .{ .px = 300 };
+    root.style.gap = 20;     // column-gap: cross-axis for column-direction → no main-axis effect
+    root.style.row_gap = 0;  // no main-axis gap
+    root.content = .{ .x = 0, .y = 0, .width = 200, .height = 300 };
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeColumnChild(80);
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeColumnChild(80);
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    var c = tfMakeColumnChild(80);
+    c.style.flex_grow = 0;
+    c.style.flex_shrink = 0;
+    defer c.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+
+    layoutFlex(&root, 200, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 80), b.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 160), c.content.y, 0.5);
+}
+
+test "gap: row-wrap — column-gap on main axis, row-gap between lines" {
+    // Container 220px row-wrap, 4 items each 100px wide.
+    // column-gap=10 (main-axis): each line holds 2 items (100+10+100=210 ≤ 220).
+    // 3rd item starts a new line. 2 lines total.
+    // row-gap=20 (cross-axis): gap between line1 and line2 = 20px.
+    // Each item height=30. Line 1 ends at y=30, line 2 starts at y=30+20=50.
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = Box{};
+    root.box_type = .block;
+    root.style.display = .flex;
+    root.style.flex_direction = .row;
+    root.style.flex_wrap = .wrap;
+    root.style.align_items = .flex_start;
+    root.style.width = .{ .px = 220 };
+    root.style.gap = 10;     // column-gap = main-axis gap for row-direction
+    root.style.row_gap = 20; // row-gap = cross-axis gap between wrap lines
+    root.content = .{ .x = 0, .y = 0, .width = 220, .height = 0 };
+    defer root.children.deinit(alloc);
+
+    var a = Box{};
+    a.box_type = .block;
+    a.style.display = .block;
+    a.style.width = .{ .px = 100 };
+    a.style.height = .{ .px = 30 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = a;
+    defer b.children.deinit(alloc);
+    var c = a;
+    defer c.children.deinit(alloc);
+    var d = a;
+    defer d.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+    try tfAttach(alloc, &root, &c);
+    try tfAttach(alloc, &root, &d);
+
+    layoutFlex(&root, 220, 0, &fonts);
+
+    // Line 1: items a,b at x=0, x=110 (100+10)
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 110), b.content.x, 0.5);
+    // Both in line 1: y=0
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 0), b.content.y, 0.5);
+    // Line 2: items c,d at y = line1_height + row_gap = 30 + 20 = 50
+    try testing.expectApproxEqAbs(@as(f32, 50), c.content.y, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 50), d.content.y, 0.5);
+}
+
+test "gap: asymmetric — column-gap ≠ row-gap in row-wrap" {
+    // Container 350px row-wrap, 2 items 150px each per line (1 line, no wrap).
+    // column-gap=30, row-gap=0.
+    // Items at x=0 and x=180 (150+30).
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    var root = tfMakeContainer(350);
+    root.style.flex_wrap = .nowrap;
+    root.style.gap = 30;     // column-gap
+    root.style.row_gap = 0;
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 150 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 150 };
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    layoutFlex(&root, 350, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 180), b.content.x, 0.5); // 150+30
+}
+
+test "gap: percent column-gap resolves against container main axis (row)" {
+    // Container 400px row, 2 items 100px each, column-gap = 25% of 400 = 100px.
+    // Total used = 100+100+100 = 300. free = 100.
+    // flex-start: items at x=0 and x=200 (100+100).
+    const alloc = testing.allocator;
+    var fonts = tfFonts(alloc);
+    defer fonts.deinit();
+
+    // Percent gap resolves at computed style level to px before reaching layout.
+    // We test with a pre-resolved px value equivalent (25% of 400 = 100).
+    var root = tfMakeContainer(400);
+    root.style.gap = 100; // pre-resolved 25% of 400
+    defer root.children.deinit(alloc);
+
+    var a = tfMakeChild(0);
+    a.style.flex_basis = .{ .px = 100 };
+    a.style.flex_grow = 0;
+    a.style.flex_shrink = 0;
+    defer a.children.deinit(alloc);
+    var b = tfMakeChild(0);
+    b.style.flex_basis = .{ .px = 100 };
+    b.style.flex_grow = 0;
+    b.style.flex_shrink = 0;
+    defer b.children.deinit(alloc);
+    try tfAttach(alloc, &root, &a);
+    try tfAttach(alloc, &root, &b);
+
+    layoutFlex(&root, 400, 0, &fonts);
+    try testing.expectApproxEqAbs(@as(f32, 0), a.content.x, 0.5);
+    try testing.expectApproxEqAbs(@as(f32, 200), b.content.x, 0.5); // 100+100
 }
