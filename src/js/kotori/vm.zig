@@ -30,6 +30,7 @@ const CallFrame = struct {
     async_promise: ?*JsObject = null, // Promise to resolve when async function returns
     arg_count: u16 = 0,
     rest_args: ?[]JsValue = null, // Saved excess args for rest parameters
+    all_args: ?[]JsValue = null, // All args saved for `arguments` object
 };
 
 pub const VM = struct {
@@ -437,6 +438,30 @@ pub const VM = struct {
                     const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
                     if (self.globals.get(name_id)) |val| {
                         self.push(val);
+                    } else if (self.frame_count > 1) blk: {
+                        // ES2023 §10.4.4: `arguments` object for non-arrow functions
+                        const args_id = self.pool.intern("arguments") catch break :blk;
+                        if (name_id == args_id) {
+                            const args_obj = self.createObj(.{ .obj_type = .array }) catch break :blk;
+                            args_obj.data = .{ .array = .empty };
+                            // Use saved all_args (captures all arguments before truncation)
+                            if (frame.all_args) |aa| {
+                                for (aa) |val| {
+                                    args_obj.data.array.append(self.allocator, val) catch break;
+                                }
+                            } else {
+                                // Fallback: copy from current stack locals (parameter range only)
+                                const ac: u16 = frame.arg_count;
+                                const min_count = @min(ac, frame.bc.param_count);
+                                for (0..min_count) |i| {
+                                    const val = self.stack[frame.base_sp + i];
+                                    args_obj.data.array.append(self.allocator, val) catch break;
+                                }
+                            }
+                            self.push(JsValue.initObject(args_obj));
+                        } else {
+                            self.push(JsValue.undefined_val);
+                        }
                     } else {
                         self.push(JsValue.undefined_val);
                     }
@@ -594,7 +619,24 @@ pub const VM = struct {
                     if (obj.obj_type == .native_function) {
                         const native = obj.data.native_fn;
                         const base = self.sp - arg_count;
-                        const result = try native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]);
+                        const result = native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]) catch |err| blk: {
+                            // Convert Zig-level errors to JS throws so JS try-catch can handle them
+                            if (err == error.TypeError) {
+                                self.sp = base - 1;
+                                const caught = try self.throwTypeError("TypeError");
+                                if (!caught) break :blk JsValue.undefined_val;
+                                continue;
+                            } else if (err == error.RangeError) {
+                                self.sp = base - 1;
+                                const err_obj = try self.createObj(.{});
+                                if (self.error_proto) |ep| err_obj.prototype = ep;
+                                try err_obj.setProperty(self.allocator, try self.pool.intern("name"), JsValue.initString(try self.pool.intern("RangeError")));
+                                try err_obj.setProperty(self.allocator, try self.pool.intern("message"), JsValue.initString(try self.pool.intern("RangeError")));
+                                if (!self.throwJsErrorVal(JsValue.initObject(err_obj))) break :blk JsValue.undefined_val;
+                                continue;
+                            }
+                            return err;
+                        };
                         self.sp = base - 1; // pop func
                         if (self.pending_throw) |thrown| {
                             self.pending_throw = null;
@@ -659,17 +701,30 @@ pub const VM = struct {
 
                     const base = self.sp - arg_count;
 
-                    // Save excess args for rest parameters before truncation.
-                    // collect_rest reads from rest_args instead of (overwritten) stack slots.
+                    // Save excess args before truncation — needed for:
+                    // 1. Rest parameters (collect_rest reads from rest_args)
+                    // 2. The `arguments` object (ES2023 §10.4.4)
                     var rest_args_saved: ?[]JsValue = null;
-                    if (func.bytecode.has_rest and arg_count > 0) {
-                        const rest_start: u16 = func.param_count - 1; // rest param is last
-                        if (arg_count > rest_start) {
-                            const count = arg_count - rest_start;
-                            const saved = self.allocator.alloc(JsValue, count) catch null;
+                    var all_args_saved: ?[]JsValue = null;
+                    if (arg_count > 0) {
+                        // Save ALL args for the arguments object
+                        if (arg_count > func.param_count or true) {
+                            const saved = self.allocator.alloc(JsValue, arg_count) catch null;
                             if (saved) |s| {
-                                @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
-                                rest_args_saved = s;
+                                @memcpy(s, self.stack[base .. base + arg_count]);
+                                all_args_saved = s;
+                            }
+                        }
+                        // Save rest-specific args for collect_rest opcode
+                        if (func.bytecode.has_rest) {
+                            const rest_start: u16 = func.param_count - 1; // rest param is last
+                            if (arg_count > rest_start) {
+                                const count = arg_count - rest_start;
+                                const saved = self.allocator.alloc(JsValue, count) catch null;
+                                if (saved) |s| {
+                                    @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
+                                    rest_args_saved = s;
+                                }
                             }
                         }
                     }
@@ -712,6 +767,7 @@ pub const VM = struct {
                         .async_promise = async_p,
                         .arg_count = arg_count,
                         .rest_args = rest_args_saved,
+                        .all_args = all_args_saved,
                     };
                     self.frame_count += 1;
                 },
@@ -764,6 +820,16 @@ pub const VM = struct {
                     const ci = self.readU16(frame);
                     const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
                     const obj_val = self.pop();
+                    // ES2023 §6.2.4.5: TypeError on null/undefined property access
+                    if (obj_val.isNull() or obj_val.isUndefined()) {
+                        const type_str = if (obj_val.isNull()) "null" else "undefined";
+                        const prop_str = self.pool.get(name_id) orelse "?";
+                        var msg_buf: [128]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&msg_buf, "Cannot read properties of {s} (reading '{s}')", .{ type_str, prop_str }) catch "Cannot read properties of null";
+                        const caught = try self.throwTypeError(msg);
+                        if (!caught) return JsValue.undefined_val;
+                        continue;
+                    }
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
                         // Proxy interception
@@ -945,6 +1011,16 @@ pub const VM = struct {
                     const name_id: StringId = @bitCast(frame.bc.constants.items[ci].asInt());
                     const val = self.pop();
                     const obj_val = self.pop();
+                    // ES2023 §6.2.4.6: TypeError on null/undefined property assignment
+                    if (obj_val.isNull() or obj_val.isUndefined()) {
+                        const type_str = if (obj_val.isNull()) "null" else "undefined";
+                        const prop_str = self.pool.get(name_id) orelse "?";
+                        var msg_buf: [128]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&msg_buf, "Cannot set properties of {s} (setting '{s}')", .{ type_str, prop_str }) catch "Cannot set properties of null";
+                        const caught = try self.throwTypeError(msg);
+                        if (!caught) return JsValue.undefined_val;
+                        continue;
+                    }
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
                         // Proxy interception
@@ -1012,6 +1088,14 @@ pub const VM = struct {
                 .get_elem => {
                     const key = self.pop();
                     const obj_val = self.pop();
+                    if (obj_val.isNull() or obj_val.isUndefined()) {
+                        const type_str = if (obj_val.isNull()) "null" else "undefined";
+                        var msg_buf: [128]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&msg_buf, "Cannot read properties of {s}", .{type_str}) catch "Cannot read properties of null";
+                        const caught = try self.throwTypeError(msg);
+                        if (!caught) return JsValue.undefined_val;
+                        continue;
+                    }
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
                         // Proxy interception
@@ -1083,6 +1167,14 @@ pub const VM = struct {
                     const val = self.pop();
                     const key = self.pop();
                     const obj_val = self.pop();
+                    if (obj_val.isNull() or obj_val.isUndefined()) {
+                        const type_str = if (obj_val.isNull()) "null" else "undefined";
+                        var msg_buf: [128]u8 = undefined;
+                        const msg = std.fmt.bufPrint(&msg_buf, "Cannot set properties of {s}", .{type_str}) catch "Cannot set properties of null";
+                        const caught = try self.throwTypeError(msg);
+                        if (!caught) return JsValue.undefined_val;
+                        continue;
+                    }
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
                         // Proxy interception
@@ -1328,7 +1420,23 @@ pub const VM = struct {
                     if (obj.obj_type == .native_function) {
                         const native = obj.data.native_fn;
                         const base = self.sp - arg_count;
-                        const result = try native(@ptrCast(self), this_val, self.stack[base..self.sp]);
+                        const result = native(@ptrCast(self), this_val, self.stack[base..self.sp]) catch |err| blk: {
+                            if (err == error.TypeError) {
+                                self.sp = this_pos;
+                                const caught = try self.throwTypeError("TypeError");
+                                if (!caught) break :blk JsValue.undefined_val;
+                                continue;
+                            } else if (err == error.RangeError) {
+                                self.sp = this_pos;
+                                const err_obj = try self.createObj(.{});
+                                if (self.error_proto) |ep| err_obj.prototype = ep;
+                                try err_obj.setProperty(self.allocator, try self.pool.intern("name"), JsValue.initString(try self.pool.intern("RangeError")));
+                                try err_obj.setProperty(self.allocator, try self.pool.intern("message"), JsValue.initString(try self.pool.intern("RangeError")));
+                                if (!self.throwJsErrorVal(JsValue.initObject(err_obj))) break :blk JsValue.undefined_val;
+                                continue;
+                            }
+                            return err;
+                        };
                         self.sp = this_pos;
                         if (self.pending_throw) |thrown| {
                             self.pending_throw = null;
@@ -2497,10 +2605,17 @@ pub const VM = struct {
 
             const error_ctor = try self.createNativeFn(&nativeErrorConstructor);
             const ctor_proto_sid = try self.pool.intern("prototype");
+            const ctor_sid = try self.pool.intern("constructor");
             try error_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(error_proto));
+            // Function.name for Error constructor
+            try error_ctor.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern("Error")));
+            // Error.prototype.constructor = Error
+            try error_proto.setProperty(self.allocator, ctor_sid, JsValue.initObject(error_ctor));
+            // [[Prototype]] = Function.prototype (for Object.getPrototypeOf)
+            if (self.function_proto) |fn_p| error_ctor.prototype = fn_p;
             try self.globals.put(self.allocator, try self.pool.intern("Error"), JsValue.initObject(error_ctor));
 
-            // Sub-error types
+            // Sub-error types: TypeError.__proto__ = Error (so getPrototypeOf(TypeError) === Error)
             const error_types = [_][]const u8{ "TypeError", "ReferenceError", "SyntaxError", "RangeError", "URIError", "EvalError", "AggregateError" };
             for (error_types) |err_name| {
                 const sub_proto = try self.createObj(.{});
@@ -2511,6 +2626,12 @@ pub const VM = struct {
 
                 const sub_ctor = try self.createNativeFn(&nativeErrorConstructor);
                 try sub_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(sub_proto));
+                // Function.name for sub-error constructor
+                try sub_ctor.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern(err_name)));
+                // TypeError.prototype.constructor = TypeError
+                try sub_proto.setProperty(self.allocator, ctor_sid, JsValue.initObject(sub_ctor));
+                // [[Prototype]] = Error (so Object.getPrototypeOf(TypeError) === Error)
+                sub_ctor.prototype = error_ctor;
                 try self.globals.put(self.allocator, try self.pool.intern(err_name), JsValue.initObject(sub_ctor));
             }
         }
@@ -2649,6 +2770,66 @@ pub const VM = struct {
         try self.objects.append(self.allocator, fn_obj);
         const name_id = try self.pool.intern(name);
         try target.setProperty(self.allocator, name_id, JsValue.initObject(fn_obj));
+    }
+
+    // ── JS-level error throwing (via try_stack, catchable by JS try-catch) ──
+
+    /// Throw a JS value via the try_stack. Returns true if a JS catch handler
+    /// caught the error (caller should `continue`), false if uncaught (caller
+    /// should `return JsValue.undefined_val` to stop execution).
+    fn throwJsErrorVal(self: *VM, thrown: JsValue) bool {
+        if (self.try_depth == 0) return false;
+        self.try_depth -= 1;
+        const tc = self.try_stack[self.try_depth];
+        while (self.frame_count > tc.frame_idx + 1) {
+            const f = self.frames[self.frame_count - 1];
+            self.closeUpvaluesAbove(f.base_sp);
+            self.frame_count -= 1;
+        }
+        self.sp = tc.sp;
+        self.push(thrown);
+        self.frames[self.frame_count - 1].ip = tc.catch_offset;
+        return true;
+    }
+
+    /// Create a TypeError object with proper prototype chain and throw it.
+    /// The error object will pass `instanceof TypeError` and `instanceof Error`.
+    fn throwTypeError(self: *VM, message: []const u8) !bool {
+        const err = try self.createObj(.{});
+        // Set prototype to TypeError.prototype for correct instanceof chain
+        const proto_sid = try self.pool.intern("prototype");
+        const te_sid = try self.pool.intern("TypeError");
+        var te_ctor: ?*JsObject = null;
+        if (self.globals.get(te_sid)) |te_ctor_val| {
+            if (te_ctor_val.isObject()) {
+                te_ctor = te_ctor_val.asJsObject();
+                if (te_ctor.?.getProperty(proto_sid)) |pv| {
+                    if (pv.isObject()) err.prototype = pv.asJsObject();
+                }
+            }
+        }
+        if (err.prototype == null) {
+            if (self.error_proto) |ep| err.prototype = ep;
+        }
+        try err.setProperty(self.allocator, try self.pool.intern("name"), JsValue.initString(te_sid));
+        try err.setProperty(self.allocator, try self.pool.intern("message"), JsValue.initString(try self.pool.intern(message)));
+        // Set .constructor = TypeError (testharness.js assert_throws_js checks e.constructor === constructor)
+        if (te_ctor) |tc| {
+            try err.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(tc));
+        }
+        return self.throwJsErrorVal(JsValue.initObject(err));
+    }
+
+    /// Create a DOMException-like error object and throw it.
+    fn throwDOMException(self: *VM, name: []const u8, message: []const u8) !bool {
+        const err = try self.createObj(.{});
+        if (self.error_proto) |ep| err.prototype = ep;
+        try err.setProperty(self.allocator, try self.pool.intern("name"), JsValue.initString(try self.pool.intern(name)));
+        try err.setProperty(self.allocator, try self.pool.intern("message"), JsValue.initString(try self.pool.intern(message)));
+        // Set DOMException code for legacy constants
+        const code: f64 = if (std.mem.eql(u8, name, "NotFoundError")) 8 else if (std.mem.eql(u8, name, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, name, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, name, "NotSupportedError")) 9 else if (std.mem.eql(u8, name, "InvalidStateError")) 11 else if (std.mem.eql(u8, name, "SyntaxError")) 12 else if (std.mem.eql(u8, name, "WrongDocumentError")) 4 else 0;
+        try err.setProperty(self.allocator, try self.pool.intern("code"), JsValue.initNumber(code));
+        return self.throwJsErrorVal(JsValue.initObject(err));
     }
 
     pub fn vmFromCtx(ctx: *anyopaque) *VM {

@@ -394,6 +394,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "querySelectorAll", &nativeQuerySelectorAll);
     try vm.registerNativeMethod(ep, "matches", &nativeMatches);
     try vm.registerNativeMethod(ep, "closest", &nativeClosest);
+    try vm.registerNativeMethod(ep, "getElementsByTagName", &nativeGetElementsByTagName);
+    try vm.registerNativeMethod(ep, "getElementsByClassName", &nativeGetElementsByClassName);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
     try vm.registerNativeMethod(ep, "scroll", &nativeScroll);
@@ -407,6 +409,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(doc_obj, "getElementById", &nativeGetElementById);
     try vm.registerNativeMethod(doc_obj, "querySelector", &nativeDocQuerySelector);
     try vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeDocQuerySelectorAll);
+    try vm.registerNativeMethod(doc_obj, "getElementsByTagName", &nativeGetElementsByTagName);
+    try vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName);
     try vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement);
     try vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode);
     try vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment);
@@ -563,6 +567,29 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
                 return JsValue.initNumber(@floatFromInt(len));
             }
             return JsValue.initNumber(0);
+        }
+    }
+    // CharacterData mutation methods (§4.2.5)
+    if (eql(name, "appendData") or eql(name, "deleteData") or
+        eql(name, "insertData") or eql(name, "replaceData") or eql(name, "substringData"))
+    {
+        const nt = nodeType(node);
+        if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT or
+            nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+        {
+            const fn_ptr: kotori.JsObject.NativeFn = if (eql(name, "appendData"))
+                &nativeAppendData
+            else if (eql(name, "deleteData"))
+                &nativeDeleteData
+            else if (eql(name, "insertData"))
+                &nativeInsertData
+            else if (eql(name, "replaceData"))
+                &nativeReplaceData
+            else
+                &nativeSubstringData;
+            const fn_obj = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+            fn_obj.data = .{ .native_fn = fn_ptr };
+            return JsValue.initObject(fn_obj);
         }
     }
     // Node.hasChildNodes()
@@ -813,6 +840,75 @@ fn nativeQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     defer vm.allocator.free(matches);
     const arr_obj = try vm.createObj(.{ .obj_type = .array });
     arr_obj.data = .{ .array = .empty };
+    for (matches) |node| {
+        const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+        try arr_obj.data.array.append(vm.allocator, wrapped);
+    }
+    return JsValue.initObject(arr_obj);
+}
+
+fn nativeGetElementsByTagName(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) {
+        // Return empty array
+        const arr = try vm.createObj(.{ .obj_type = .array });
+        arr.data = .{ .array = .empty };
+        return JsValue.initObject(arr);
+    }
+    const tag = vm.pool.get(args[0].asStringId()) orelse {
+        const arr = try vm.createObj(.{ .obj_type = .array });
+        arr.data = .{ .array = .empty };
+        return JsValue.initObject(arr);
+    };
+    const root = getThisNode(this) orelse {
+        const arr = try vm.createObj(.{ .obj_type = .array });
+        arr.data = .{ .array = .empty };
+        return JsValue.initObject(arr);
+    };
+    // Walk DOM tree and match by tag name (case-insensitive for HTML)
+    const arr_obj = try vm.createObj(.{ .obj_type = .array });
+    arr_obj.data = .{ .array = .empty };
+    try collectByTagName(vm, root, tag, arr_obj);
+    return JsValue.initObject(arr_obj);
+}
+
+fn collectByTagName(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8, arr: *kotori.JsObject) !void {
+    const is_wildcard = tag.len == 1 and tag[0] == '*';
+    var child: ?*lxb.lxb_dom_node_t = @ptrCast(root.first_child);
+    while (child) |node| : (child = @ptrCast(node.next)) {
+        if (node.type == 1) { // ELEMENT_NODE
+            if (is_wildcard) {
+                const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+                try arr.data.array.append(vm.allocator, wrapped);
+            } else {
+                const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+                var name_len: usize = 0;
+                const name_ptr = dom_b.lxb_dom_element_local_name(elem, &name_len);
+                if (name_ptr) |np| {
+                    if (std.ascii.eqlIgnoreCase(np[0..name_len], tag)) {
+                        const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+                        try arr.data.array.append(vm.allocator, wrapped);
+                    }
+                }
+            }
+            // Recurse into children
+            try collectByTagName(vm, node, tag, arr);
+        }
+    }
+}
+
+fn nativeGetElementsByClassName(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const arr_obj = try vm.createObj(.{ .obj_type = .array });
+    arr_obj.data = .{ .array = .empty };
+    if (args.len == 0 or !args[0].isString()) return JsValue.initObject(arr_obj);
+    const cls = vm.pool.get(args[0].asStringId()) orelse return JsValue.initObject(arr_obj);
+    const root = getThisNode(this) orelse return JsValue.initObject(arr_obj);
+    // Delegate to querySelectorAll with "." + className
+    var sel_buf: [256]u8 = undefined;
+    const sel = std.fmt.bufPrint(&sel_buf, ".{s}", .{cls}) catch return JsValue.initObject(arr_obj);
+    const matches = findAllMatches(root, sel, vm.allocator);
+    defer vm.allocator.free(matches);
     for (matches) |node| {
         const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
         try arr_obj.data.array.append(vm.allocator, wrapped);
@@ -1793,6 +1889,91 @@ fn countAttrs(elem: *lxb.lxb_dom_element_t) usize {
 
 // Helpers — textContent / innerHTML
 // ══════════════════════════════════════════════════════════════════════
+
+// ── CharacterData mutation methods ──────────────────────────────────
+
+fn getCharData(vm: *VM, this: JsValue) ?struct { node: *lxb.lxb_dom_node_t, text: []const u8 } {
+    const node = getThisNode(this) orelse return null;
+    var len: usize = 0;
+    const ptr = dom_b.lxb_dom_node_text_content(node, &len);
+    const text = if (ptr) |p| p[0..len] else "";
+    _ = vm;
+    return .{ .node = node, .text = text };
+}
+
+fn nativeAppendData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const info = getCharData(vm, this) orelse return JsValue.undefined_val;
+    if (args.len == 0) return error.TypeError;
+    const append_str = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else if (args[0].isNull()) "null" else if (args[0].isUndefined()) "undefined" else "";
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(g_alloc);
+    buf.appendSlice(g_alloc, info.text) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, append_str) catch return JsValue.undefined_val;
+    _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    return JsValue.undefined_val;
+}
+
+fn nativeDeleteData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const info = getCharData(vm, this) orelse return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
+    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
+    if (offset >= info.text.len) return JsValue.undefined_val;
+    const end = @min(offset + count, info.text.len);
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(g_alloc);
+    buf.appendSlice(g_alloc, info.text[0..offset]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[end..]) catch return JsValue.undefined_val;
+    _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    return JsValue.undefined_val;
+}
+
+fn nativeInsertData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const info = getCharData(vm, this) orelse return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
+    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const ins_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    const clamped = @min(offset, info.text.len);
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(g_alloc);
+    buf.appendSlice(g_alloc, info.text[0..clamped]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, ins_str) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[clamped..]) catch return JsValue.undefined_val;
+    _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    return JsValue.undefined_val;
+}
+
+fn nativeReplaceData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const info = getCharData(vm, this) orelse return JsValue.undefined_val;
+    if (args.len < 3) return JsValue.undefined_val;
+    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
+    const rep_str = if (args[2].isString()) (vm.pool.get(args[2].asStringId()) orelse "") else "";
+    if (offset >= info.text.len) return JsValue.undefined_val;
+    const end = @min(offset + count, info.text.len);
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(g_alloc);
+    buf.appendSlice(g_alloc, info.text[0..offset]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, rep_str) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[end..]) catch return JsValue.undefined_val;
+    _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    return JsValue.undefined_val;
+}
+
+fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const info = getCharData(vm, this) orelse return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
+    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
+    if (offset >= info.text.len) return JsValue.initString(vm.pool.intern("") catch return JsValue.undefined_val);
+    const end = @min(offset + count, info.text.len);
+    return JsValue.initString(vm.pool.intern(info.text[offset..end]) catch return JsValue.undefined_val);
+}
 
 fn getTextContent(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
     var len: usize = 0;
