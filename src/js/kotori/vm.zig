@@ -268,7 +268,16 @@ pub const VM = struct {
             switch (op) {
                 .load_const => {
                     const idx = self.readU16(frame);
-                    self.push(frame.bc.constants.items[idx]);
+                    if (idx < frame.bc.constants.items.len) {
+                        self.push(frame.bc.constants.items[idx]);
+                    } else {
+                        // Bytecode corruption: bail out of this frame gracefully
+                        if (self.frame_count > 1) {
+                            self.frame_count -= 1;
+                            self.push(JsValue.undefined_val);
+                        }
+                        continue;
+                    }
                 },
                 .pop => _ = self.pop(),
                 .dup => self.push(self.stack[self.sp - 1]),

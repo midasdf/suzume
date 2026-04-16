@@ -499,6 +499,54 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const comment_id = try vm.pool.intern("Comment");
     try vm.globals.put(vm.allocator, comment_id, JsValue.initObject(comment_ctor));
 
+    // ── Element / HTMLElement constructor globals (for instanceof + WPT) ──
+    const elem_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    elem_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    elem_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ep)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("Element"), JsValue.initObject(elem_ctor));
+    try vm.globals.put(vm.allocator, try vm.pool.intern("EventTarget"), JsValue.initObject(node_ctor));
+
+    const html_elem_val = JsValue.initObject(ep);
+    const html_names = [_][]const u8{
+        "HTMLElement",             "HTMLAnchorElement",        "HTMLAreaElement",
+        "HTMLAudioElement",        "HTMLBaseElement",          "HTMLBodyElement",
+        "HTMLBRElement",           "HTMLButtonElement",        "HTMLCanvasElement",
+        "HTMLDataElement",         "HTMLDataListElement",      "HTMLDetailsElement",
+        "HTMLDialogElement",       "HTMLDivElement",           "HTMLDListElement",
+        "HTMLEmbedElement",        "HTMLFieldSetElement",      "HTMLFontElement",
+        "HTMLFormElement",         "HTMLFrameElement",         "HTMLFrameSetElement",
+        "HTMLHeadElement",         "HTMLHeadingElement",       "HTMLHRElement",
+        "HTMLHtmlElement",         "HTMLIFrameElement",        "HTMLImageElement",
+        "HTMLInputElement",        "HTMLLabelElement",         "HTMLLegendElement",
+        "HTMLLIElement",           "HTMLLinkElement",          "HTMLMapElement",
+        "HTMLMarqueeElement",      "HTMLMediaElement",         "HTMLMenuElement",
+        "HTMLMetaElement",         "HTMLMeterElement",         "HTMLModElement",
+        "HTMLObjectElement",       "HTMLOListElement",         "HTMLOptGroupElement",
+        "HTMLOptionElement",       "HTMLOutputElement",        "HTMLParagraphElement",
+        "HTMLParamElement",        "HTMLPictureElement",       "HTMLPreElement",
+        "HTMLProgressElement",     "HTMLQuoteElement",         "HTMLScriptElement",
+        "HTMLSelectElement",       "HTMLSlotElement",          "HTMLSourceElement",
+        "HTMLSpanElement",         "HTMLStyleElement",         "HTMLTableElement",
+        "HTMLTableCaptionElement", "HTMLTableCellElement",     "HTMLTableColElement",
+        "HTMLTableRowElement",     "HTMLTableSectionElement",  "HTMLTemplateElement",
+        "HTMLTextAreaElement",     "HTMLTimeElement",          "HTMLTitleElement",
+        "HTMLTrackElement",        "HTMLUListElement",         "HTMLVideoElement",
+        "HTMLUnknownElement",      "HTMLDirectoryElement",
+    };
+    for (html_names) |ename| {
+        const hctor = try vm.createObj(.{ .obj_type = .native_function });
+        hctor.data = .{ .native_fn = &nativeNoOpConstructor };
+        hctor.setProperty(vm.allocator, proto_sid, html_elem_val) catch {};
+        try vm.globals.put(vm.allocator, try vm.pool.intern(ename), JsValue.initObject(hctor));
+    }
+
+    const df_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    df_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    df_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(np)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("DocumentFragment"), JsValue.initObject(df_ctor));
+    try vm.globals.put(vm.allocator, try vm.pool.intern("Document"), JsValue.initObject(elem_ctor));
+    try vm.globals.put(vm.allocator, try vm.pool.intern("HTMLDocument"), JsValue.initObject(elem_ctor));
+
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
     vm.dom_set_prop = &domSetProp;
