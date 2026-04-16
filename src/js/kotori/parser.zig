@@ -344,9 +344,119 @@ pub const Parser = struct {
         const text = self.tokenSlice(self.current);
         self.advance();
         // Strip quotes
-        const content = if (text.len >= 2) text[1 .. text.len - 1] else "";
+        const raw = if (text.len >= 2) text[1 .. text.len - 1] else "";
+        const content = self.processEscapes(raw) catch return error.OutOfMemory;
         const sid = self.pool.intern(content) catch return error.OutOfMemory;
         return self.ast.addNode(self.allocator, .{ .string_literal = sid }) catch return error.OutOfMemory;
+    }
+
+    /// Process JS string escape sequences: \n \t \r \\ \' \" \0 \xNN \uXXXX \u{XXXXX}
+    fn processEscapes(self: *Parser, raw: []const u8) ![]const u8 {
+        // Fast path: no backslashes → no escapes
+        if (std.mem.indexOfScalar(u8, raw, '\\') == null) return raw;
+
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer buf.deinit(self.allocator);
+        var i: usize = 0;
+        while (i < raw.len) {
+            if (raw[i] == '\\' and i + 1 < raw.len) {
+                i += 1;
+                switch (raw[i]) {
+                    'n' => { try buf.append(self.allocator,'\n'); i += 1; },
+                    't' => { try buf.append(self.allocator,'\t'); i += 1; },
+                    'r' => { try buf.append(self.allocator,'\r'); i += 1; },
+                    '\\' => { try buf.append(self.allocator,'\\'); i += 1; },
+                    '\'' => { try buf.append(self.allocator,'\''); i += 1; },
+                    '"' => { try buf.append(self.allocator,'"'); i += 1; },
+                    '0' => { try buf.append(self.allocator,0); i += 1; },
+                    'b' => { try buf.append(self.allocator,8); i += 1; },
+                    'f' => { try buf.append(self.allocator,12); i += 1; },
+                    'v' => { try buf.append(self.allocator,11); i += 1; },
+                    'x' => {
+                        // \xNN — 2-digit hex
+                        if (i + 2 < raw.len) {
+                            if (std.fmt.parseInt(u8, raw[i + 1 .. i + 3], 16)) |byte| {
+                                try buf.append(self.allocator,byte);
+                                i += 3;
+                            } else |_| {
+                                try buf.append(self.allocator,'\\');
+                                try buf.append(self.allocator,'x');
+                                i += 1;
+                            }
+                        } else {
+                            try buf.append(self.allocator,'\\');
+                            try buf.append(self.allocator,'x');
+                            i += 1;
+                        }
+                    },
+                    'u' => {
+                        if (i + 1 < raw.len and raw[i + 1] == '{') {
+                            // \u{XXXXX} — code point escape
+                            if (std.mem.indexOfScalar(u8, raw[i + 2 ..], '}')) |close| {
+                                const hex = raw[i + 2 .. i + 2 + close];
+                                if (std.fmt.parseInt(u21, hex, 16)) |cp| {
+                                    var utf8_buf: [4]u8 = undefined;
+                                    const len = std.unicode.utf8Encode(cp, &utf8_buf) catch 0;
+                                    if (len > 0) try buf.appendSlice(self.allocator,utf8_buf[0..len]);
+                                    i += 3 + close; // skip u{XXXX}
+                                } else |_| {
+                                    try buf.append(self.allocator,'\\');
+                                    try buf.append(self.allocator,'u');
+                                    i += 1;
+                                }
+                            } else {
+                                try buf.append(self.allocator,'\\');
+                                try buf.append(self.allocator,'u');
+                                i += 1;
+                            }
+                        } else if (i + 4 < raw.len) {
+                            // \uXXXX — 4-digit hex
+                            if (std.fmt.parseInt(u16, raw[i + 1 .. i + 5], 16)) |code| {
+                                // Check for surrogate pair: \uD800-\uDBFF followed by \uDC00-\uDFFF
+                                if (code >= 0xD800 and code <= 0xDBFF and i + 10 < raw.len and raw[i + 5] == '\\' and raw[i + 6] == 'u') {
+                                    if (std.fmt.parseInt(u16, raw[i + 7 .. i + 11], 16)) |low| {
+                                        if (low >= 0xDC00 and low <= 0xDFFF) {
+                                            const cp: u21 = 0x10000 + (@as(u21, code - 0xD800) << 10) + @as(u21, low - 0xDC00);
+                                            var utf8_buf: [4]u8 = undefined;
+                                            const len = std.unicode.utf8Encode(cp, &utf8_buf) catch 0;
+                                            if (len > 0) try buf.appendSlice(self.allocator,utf8_buf[0..len]);
+                                            i += 11;
+                                            continue;
+                                        }
+                                    } else |_| {}
+                                }
+                                // Single \uXXXX — encode as UTF-8
+                                if (code <= 0x7F) {
+                                    try buf.append(self.allocator,@intCast(code));
+                                } else if (code <= 0x7FF) {
+                                    try buf.append(self.allocator,@intCast(0xC0 | (code >> 6)));
+                                    try buf.append(self.allocator,@intCast(0x80 | (code & 0x3F)));
+                                } else {
+                                    try buf.append(self.allocator,@intCast(0xE0 | (code >> 12)));
+                                    try buf.append(self.allocator,@intCast(0x80 | ((code >> 6) & 0x3F)));
+                                    try buf.append(self.allocator,@intCast(0x80 | (code & 0x3F)));
+                                }
+                                i += 5;
+                            } else |_| {
+                                try buf.append(self.allocator,'\\');
+                                try buf.append(self.allocator,'u');
+                                i += 1;
+                            }
+                        } else {
+                            try buf.append(self.allocator,'\\');
+                            try buf.append(self.allocator,'u');
+                            i += 1;
+                        }
+                    },
+                    '\n' => { i += 1; }, // line continuation
+                    else => |c| { try buf.append(self.allocator,c); i += 1; },
+                }
+            } else {
+                try buf.append(self.allocator,raw[i]);
+                i += 1;
+            }
+        }
+        return buf.items;
     }
 
     fn parseTemplateLiteral(self: *Parser) ParseError!NodeIndex {

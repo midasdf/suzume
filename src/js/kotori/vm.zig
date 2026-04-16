@@ -641,6 +641,13 @@ pub const VM = struct {
 
                     const base = self.sp - arg_count;
 
+                    // Truncate excess args (ES2023 §10.2.11 step 20: extra args are ignored
+                    // unless accessed via `arguments`). Keeps local variable slots aligned
+                    // with what the compiler emitted.
+                    if (arg_count > func.param_count) {
+                        self.sp = base + func.param_count;
+                    }
+
                     // Pad missing args with undefined
                     while (self.sp - base < func.param_count) {
                         self.push(JsValue.undefined_val);
@@ -1319,6 +1326,11 @@ pub const VM = struct {
                     const func = &obj.data.function;
                     const base = self.sp - arg_count;
 
+                    // Truncate excess args to keep local slots aligned
+                    if (arg_count > func.param_count) {
+                        self.sp = base + func.param_count;
+                    }
+
                     while (self.sp - base < func.param_count) {
                         self.push(JsValue.undefined_val);
                     }
@@ -1403,6 +1415,11 @@ pub const VM = struct {
                     const func = &obj.data.function;
                     const base = self.sp - arg_count;
 
+                    // Truncate excess args to keep local slots aligned
+                    if (arg_count > func.param_count) {
+                        self.sp = base + func.param_count;
+                    }
+
                     while (self.sp - base < func.param_count) {
                         self.push(JsValue.undefined_val);
                     }
@@ -1464,6 +1481,14 @@ pub const VM = struct {
                     const arr = try self.createArray();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // Array indices first (ES2023 §23.1.3.19.2)
+                        if (obj.obj_type == .array) {
+                            for (0..obj.data.array.items.len) |idx| {
+                                var buf: [20]u8 = undefined;
+                                const s = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch continue;
+                                arr.data.array.append(self.allocator, JsValue.initString(try self.pool.intern(s))) catch {};
+                            }
+                        }
                         // Fast-path: all-default attrs are enumerable=true.
                         for (obj.properties.keys()) |key_id| {
                             arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
@@ -2991,8 +3016,52 @@ pub const VM = struct {
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
 
-        if (args.len == 0 or !args[0].isString()) {
+        if (args.len == 0) {
             // No separator — return array with the whole string
+            try new_arr.data.array.append(vm.allocator, this);
+            return JsValue.initObject(new_arr);
+        }
+
+        // RegExp separator (ES2023 §22.1.3.21)
+        if (args[0].isObject()) {
+            const obj = args[0].asJsObject();
+            if (obj.obj_type == .regexp) {
+                const re = obj.data.regexp_data;
+                const pattern = vm.pool.get(re.source) orelse {
+                    try new_arr.data.array.append(vm.allocator, this);
+                    return JsValue.initObject(new_arr);
+                };
+                var search_from: usize = 0;
+                var iterations: usize = 0;
+                while (search_from <= s.len and iterations < 10000) : (iterations += 1) {
+                    const sub = s[search_from..];
+                    const result = regexSearch(pattern, sub, re.ignore_case) orelse break;
+                    // Add text before match
+                    const before = s[search_from .. search_from + result.start];
+                    try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(before)));
+                    // Add capture groups (ES2023 §22.1.3.21 step 14.c.iii)
+                    for (result.captures) |cap| {
+                        if (cap) |c| {
+                            const captured = sub[c.start..c.end];
+                            try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(captured)));
+                        } else break;
+                    }
+                    search_from += result.end;
+                    if (result.end == result.start) {
+                        if (search_from < s.len) {
+                            try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s[search_from..][0..1])));
+                        }
+                        search_from += 1;
+                    }
+                }
+                // Add remainder
+                try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s[search_from..])));
+                return JsValue.initObject(new_arr);
+            }
+        }
+
+        if (!args[0].isString()) {
+            // Non-string, non-regexp — return array with the whole string
             try new_arr.data.array.append(vm.allocator, this);
             return JsValue.initObject(new_arr);
         }
@@ -3066,6 +3135,7 @@ pub const VM = struct {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         if (args.len < 2) return this;
         const vm = vmFromCtx(ctx);
+        const is_fn_replacement = args[1].isObject() and args[1].asJsObject().obj_type == .function;
         const replacement = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse "" else "";
         // RegExp argument
         if (args[0].isObject()) {
@@ -3083,7 +3153,14 @@ pub const VM = struct {
                         const sub = s[search_from..];
                         const result = regexSearch(pattern, sub, re.ignore_case) orelse break;
                         try buf.appendSlice(vm.allocator, sub[0..result.start]);
-                        try buf.appendSlice(vm.allocator, replacement);
+                        if (is_fn_replacement) {
+                            const rep = try replaceWithCallback(vm, args[1], sub, result, search_from, this);
+                            if (vm.pool.get(rep.asStringId())) |rep_str| {
+                                try buf.appendSlice(vm.allocator, rep_str);
+                            }
+                        } else {
+                            try buf.appendSlice(vm.allocator, replacement);
+                        }
                         search_from += result.end;
                         if (result.end == result.start) {
                             if (search_from < s.len) try buf.append(vm.allocator, s[search_from]);
@@ -3095,7 +3172,14 @@ pub const VM = struct {
                     // Replace first match only
                     const result = regexSearch(pattern, s, re.ignore_case) orelse return this;
                     try buf.appendSlice(vm.allocator, s[0..result.start]);
-                    try buf.appendSlice(vm.allocator, replacement);
+                    if (is_fn_replacement) {
+                        const rep = try replaceWithCallback(vm, args[1], s, result, 0, this);
+                        if (vm.pool.get(rep.asStringId())) |rep_str| {
+                            try buf.appendSlice(vm.allocator, rep_str);
+                        }
+                    } else {
+                        try buf.appendSlice(vm.allocator, replacement);
+                    }
                     try buf.appendSlice(vm.allocator, s[result.end..]);
                 }
                 return JsValue.initString(try vm.pool.intern(buf.items));
@@ -3108,11 +3192,53 @@ pub const VM = struct {
             var buf: std.ArrayListUnmanaged(u8) = .empty;
             defer buf.deinit(vm.allocator);
             try buf.appendSlice(vm.allocator, s[0..pos]);
-            try buf.appendSlice(vm.allocator, replacement);
+            if (is_fn_replacement) {
+                const match_result = RegexResult{ .start = pos, .end = pos + needle.len };
+                const rep = try replaceWithCallback(vm, args[1], s, match_result, 0, this);
+                if (vm.pool.get(rep.asStringId())) |rep_str| {
+                    try buf.appendSlice(vm.allocator, rep_str);
+                }
+            } else {
+                try buf.appendSlice(vm.allocator, replacement);
+            }
             try buf.appendSlice(vm.allocator, s[pos + needle.len ..]);
             return JsValue.initString(try vm.pool.intern(buf.items));
         }
         return this;
+    }
+
+    /// Helper: call replacement function with (match, group1, ..., offset, string)
+    fn replaceWithCallback(vm: *VM, func: JsValue, str: []const u8, result: RegexResult, base_offset: usize, original: JsValue) !JsValue {
+        var cb_args_buf: [20]JsValue = undefined;
+        var cb_argc: usize = 0;
+        // arg 0: full match
+        const matched = str[result.start..result.end];
+        cb_args_buf[cb_argc] = JsValue.initString(try vm.pool.intern(matched));
+        cb_argc += 1;
+        // args 1..N: capture groups (undefined for non-participating groups)
+        // Find the last non-null capture to know how many groups to pass
+        var last_cap: usize = 0;
+        for (result.captures, 0..) |cap, ci| {
+            if (cap != null) last_cap = ci + 1;
+        }
+        for (result.captures[0..last_cap]) |cap| {
+            if (cap) |c| {
+                cb_args_buf[cb_argc] = JsValue.initString(try vm.pool.intern(str[c.start..c.end]));
+            } else {
+                cb_args_buf[cb_argc] = JsValue.undefined_val;
+            }
+            cb_argc += 1;
+        }
+        // arg N+1: offset
+        cb_args_buf[cb_argc] = JsValue.initNumber(@floatFromInt(base_offset + result.start));
+        cb_argc += 1;
+        // arg N+2: original string
+        cb_args_buf[cb_argc] = original;
+        cb_argc += 1;
+        const ret = try vm.callJsFunction(func, JsValue.undefined_val, cb_args_buf[0..cb_argc]);
+        if (ret.isString()) return ret;
+        // Convert to string
+        return JsValue.initString(try vm.pool.intern("undefined"));
     }
 
     // ── JS callback invocation ──────────────────────────────────────
@@ -3137,7 +3263,9 @@ pub const VM = struct {
 
         self.push(func_val); // function slot (popped by return)
         const base = self.sp;
-        for (args) |arg| self.push(arg);
+        // Push args, but only up to param_count to keep local slots aligned
+        const push_count = @min(args.len, func.param_count);
+        for (args[0..push_count]) |arg| self.push(arg);
         while (self.sp - base < func.param_count) self.push(JsValue.undefined_val);
         const extra: u16 = if (func.local_count > func.param_count) func.local_count - func.param_count else 0;
         var j: u16 = 0;
@@ -4244,6 +4372,14 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Array indices first (ES2023 §23.1.3.19.2 — integer indices in ascending order)
+        if (obj.obj_type == .array) {
+            for (0..obj.data.array.items.len) |idx| {
+                var buf: [20]u8 = undefined;
+                const s = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch continue;
+                try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s)));
+            }
+        }
         // Fast-path: all-default attrs are enumerable=true.
         for (obj.properties.keys()) |key_id| {
             try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
@@ -4264,6 +4400,12 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Array elements first (ES2023 §23.1.3.19.2)
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items) |val| {
+                try new_arr.data.array.append(vm.allocator, val);
+            }
+        }
         // Fast-path: all-default attrs are enumerable=true.
         for (obj.properties.values()) |val| {
             try new_arr.data.array.append(vm.allocator, val);
@@ -4288,6 +4430,17 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Array elements first (ES2023 §23.1.3.19.2)
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |val, idx| {
+                var buf: [20]u8 = undefined;
+                const s = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch continue;
+                const pair = try vm.createArray();
+                try pair.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s)));
+                try pair.data.array.append(vm.allocator, val);
+                try new_arr.data.array.append(vm.allocator, JsValue.initObject(pair));
+            }
+        }
         // Fast-path: all-default attrs are enumerable=true.
         const keys = obj.properties.keys();
         const vals = obj.properties.values();
@@ -5144,6 +5297,14 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // Array indices first (ES2023 §23.1.3.19.2)
+        if (obj.obj_type == .array) {
+            for (0..obj.data.array.items.len) |idx| {
+                var buf: [20]u8 = undefined;
+                const s = std.fmt.bufPrint(&buf, "{d}", .{idx}) catch continue;
+                try new_arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(s)));
+            }
+        }
         // Fast-path keys (all-default attrs, enumerable properties not yet promoted)
         for (obj.properties.keys()) |key_id| {
             try new_arr.data.array.append(vm.allocator, JsValue.initString(key_id));
@@ -5740,6 +5901,18 @@ pub const VM = struct {
         return .{ .min = min_val, .max = max_val, .end = i + 1 };
     }
 
+    /// Parse a \uXXXX escape at position j in pattern, returning the code point and advance count.
+    /// Returns null if not a valid \uXXXX escape.
+    fn parseUnicodeEscape(pat: []const u8, j: usize) ?struct { cp: u21, advance: usize } {
+        // \uXXXX requires at least 6 chars: \uXXXX
+        if (j + 5 < pat.len and pat[j] == '\\' and pat[j + 1] == 'u') {
+            if (std.fmt.parseInt(u16, pat[j + 2 .. j + 6], 16)) |cp| {
+                return .{ .cp = cp, .advance = 6 };
+            } else |_| {}
+        }
+        return null;
+    }
+
     fn matchCharClass(pat: []const u8, pi: usize, ch: u8, ic: bool) bool {
         var j = pi + 1;
         var negate = false;
@@ -5747,9 +5920,39 @@ pub const VM = struct {
             negate = true;
             j += 1;
         }
+        const ch_cp: u21 = ch; // ASCII code point
         var matched = false;
         while (j < pat.len and pat[j] != ']') {
             if (pat[j] == '\\' and j + 1 < pat.len) {
+                // Check for \uXXXX
+                if (pat[j + 1] == 'u') {
+                    if (parseUnicodeEscape(pat, j)) |esc| {
+                        const lo_cp = esc.cp;
+                        const adv = esc.advance;
+                        // Check for range: \uXXXX-\uYYYY
+                        if (j + adv < pat.len and pat[j + adv] == '-') {
+                            if (parseUnicodeEscape(pat, j + adv + 1)) |esc2| {
+                                // Unicode range
+                                if (ch_cp >= lo_cp and ch_cp <= esc2.cp) matched = true;
+                                j += adv + 1 + esc2.advance;
+                            } else {
+                                // \uXXXX-<byte>
+                                if (j + adv + 1 < pat.len) {
+                                    const hi: u21 = pat[j + adv + 1];
+                                    if (ch_cp >= lo_cp and ch_cp <= hi) matched = true;
+                                    j += adv + 2;
+                                } else {
+                                    j += adv;
+                                }
+                            }
+                        } else {
+                            // Single \uXXXX
+                            if (ch_cp == lo_cp) matched = true;
+                            j += adv;
+                        }
+                        continue;
+                    }
+                }
                 // Escaped char class inside [...]
                 const ok = switch (pat[j + 1]) {
                     'd' => ch >= '0' and ch <= '9',
@@ -5766,13 +5969,20 @@ pub const VM = struct {
                 if (ok) matched = true;
                 j += 2;
             } else if (j + 2 < pat.len and pat[j + 1] == '-' and pat[j + 2] != ']') {
-                // Range
-                if (ic) {
-                    if (toLowerAscii(ch) >= toLowerAscii(pat[j]) and toLowerAscii(ch) <= toLowerAscii(pat[j + 2])) matched = true;
+                // Check if right side of range is \uXXXX
+                if (parseUnicodeEscape(pat, j + 2)) |esc| {
+                    const lo: u21 = pat[j];
+                    if (ch_cp >= lo and ch_cp <= esc.cp) matched = true;
+                    j += 2 + esc.advance;
                 } else {
-                    if (ch >= pat[j] and ch <= pat[j + 2]) matched = true;
+                    // Regular byte range
+                    if (ic) {
+                        if (toLowerAscii(ch) >= toLowerAscii(pat[j]) and toLowerAscii(ch) <= toLowerAscii(pat[j + 2])) matched = true;
+                    } else {
+                        if (ch >= pat[j] and ch <= pat[j + 2]) matched = true;
+                    }
+                    j += 3;
                 }
-                j += 3;
             } else {
                 if (ic) {
                     if (toLowerAscii(ch) == toLowerAscii(pat[j])) matched = true;
