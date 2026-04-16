@@ -484,6 +484,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName);
     try vm.registerNativeMethod(doc_obj, "getElementsByTagNameNS", &nativeGetElementsByTagNameNS);
     try vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement);
+    try vm.registerNativeMethod(doc_obj, "createElementNS", &nativeCreateElementNS);
     try vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode);
     try vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment);
     try vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment);
@@ -646,13 +647,13 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "tagName")) {
         if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
         const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-        return tagNameUpper(vm, elem);
+        return tagNameUpperWithPrefix(vm, obj, elem);
     }
     if (eql(name, "nodeName")) {
         const nt = nodeType(node);
         if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
             const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-            return tagNameUpper(vm, elem);
+            return tagNameUpperWithPrefix(vm, obj, elem);
         }
         const spec_name: []const u8 = switch (nt) {
             lxb.LXB_DOM_NODE_TYPE_TEXT => "#text",
@@ -675,14 +676,21 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "namespaceURI")) {
         if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
             const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            // Check lexbor namespace first
             if (nsIdToUri(elem.node.ns)) |uri| {
                 return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
             }
+            // Check __nsURI own property for non-standard namespaces
+            const ns_sid = vm.pool.intern("__nsURI") catch return JsValue.null_val;
+            if (obj.getProperty(ns_sid)) |v| return v;
         }
         return JsValue.null_val;
     }
     if (eql(name, "prefix")) {
         if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            // Check __prefix own property first (set by createElementNS)
+            const prefix_sid = vm.pool.intern("__prefix") catch return JsValue.null_val;
+            if (obj.getProperty(prefix_sid)) |v| return v;
             const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
             var qn_len: usize = 0;
             const qn = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
@@ -700,6 +708,9 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     }
     if (eql(name, "localName")) {
         if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            // Check __origLocal first (preserves case from createElementNS, since lexbor lowercases)
+            const orig_sid = vm.pool.intern("__origLocal") catch return JsValue.null_val;
+            if (obj.getProperty(orig_sid)) |v| return v;
             const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
             var len: usize = 0;
             if (dom_b.lxb_dom_element_local_name(elem, &len)) |ln| {
@@ -747,15 +758,15 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         // For Element/Document, nodeValue is null per DOM spec
         if (eql(name, "nodeValue")) return JsValue.null_val;
     }
-    // CharacterData.length — number of code units in data
+    // CharacterData.length — number of UTF-16 code units in data (DOM §4.2.5)
     if (eql(name, "length")) {
         const nt = nodeType(node);
         if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT or
             nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
         {
             var len: usize = 0;
-            if (dom_b.lxb_dom_node_text_content(node, &len)) |_| {
-                return JsValue.initNumber(@floatFromInt(len));
+            if (dom_b.lxb_dom_node_text_content(node, &len)) |ptr| {
+                return JsValue.initNumber(@floatFromInt(VM.utf16Len(ptr[0..len])));
             }
             return JsValue.initNumber(0);
         }
@@ -902,6 +913,11 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         chd_fn.data = .{ .native_fn = &nativeImplementationCreateHTMLDocument };
         const chd_sid = vm.pool.intern("createHTMLDocument") catch return null;
         impl_obj.setProperty(vm.allocator, chd_sid, JsValue.initObject(chd_fn)) catch {};
+        // createDocumentType(qualifiedName, publicId, systemId) — DOM §7.1
+        const cdt_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+        cdt_fn.data = .{ .native_fn = &nativeImplementationCreateDocumentType };
+        const cdt_sid = vm.pool.intern("createDocumentType") catch return null;
+        impl_obj.setProperty(vm.allocator, cdt_sid, JsValue.initObject(cdt_fn)) catch {};
         return JsValue.initObject(impl_obj);
     }
 
@@ -1257,6 +1273,102 @@ fn nativeCreateElement(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyer
     return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
 }
 
+/// Map W3C namespace URI string to lexbor namespace ID (reverse of nsIdToUri).
+fn uriToNsId(uri: []const u8) ?usize {
+    if (eql(uri, "http://www.w3.org/1999/xhtml")) return 0x02; // LXB_NS_HTML
+    if (eql(uri, "http://www.w3.org/1998/Math/MathML")) return 0x03; // LXB_NS_MATH
+    if (eql(uri, "http://www.w3.org/2000/svg")) return 0x04; // LXB_NS_SVG
+    if (eql(uri, "http://www.w3.org/1999/xlink")) return 0x05; // LXB_NS_XLINK
+    if (eql(uri, "http://www.w3.org/XML/1998/namespace")) return 0x06; // LXB_NS_XML
+    if (eql(uri, "http://www.w3.org/2000/xmlns/")) return 0x07; // LXB_NS_XMLNS
+    return null;
+}
+
+/// DOM §4.1 — document.createElementNS(namespace, qualifiedName).
+/// Creates an element with the specified namespace URI and qualified name.
+fn nativeCreateElementNS(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.null_val;
+    const doc = g_document orelse return JsValue.null_val;
+
+    // Get qualifiedName (arg[1]) — must be a string
+    const qn = if (args[1].isString())
+        vm.pool.get(args[1].asStringId()) orelse return JsValue.null_val
+    else
+        return JsValue.null_val;
+
+    // Get namespace URI (arg[0]) — null/undefined → no namespace
+    const ns_str: ?[]const u8 = blk: {
+        if (args[0].isNull() or args[0].isUndefined()) break :blk null;
+        if (args[0].isString()) {
+            const s = vm.pool.get(args[0].asStringId()) orelse break :blk null;
+            if (s.len == 0) break :blk null; // "" treated as null per spec
+            break :blk s;
+        }
+        break :blk null;
+    };
+
+    // Extract prefix and localName from qualifiedName
+    const colon_pos = std.mem.indexOf(u8, qn, ":");
+    const prefix: ?[]const u8 = if (colon_pos) |cp| qn[0..cp] else null;
+    const local_name: []const u8 = if (colon_pos) |cp| qn[cp + 1 ..] else qn;
+    const create_name = if (local_name.len > 0) local_name else qn;
+
+    // Create element via lexbor using localName
+    const elem = dom_b.lxb_dom_document_create_element(doc, create_name.ptr, create_name.len, null) orelse return JsValue.null_val;
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+
+    // Set namespace ID on lexbor element
+    if (ns_str) |uri| {
+        if (uriToNsId(uri)) |ns_id| {
+            node.ns = ns_id;
+        } else {
+            // Custom namespace — clear lexbor's default HTML ns
+            node.ns = 0x01; // LXB_NS_UNDEF — nsIdToUri returns null
+        }
+    } else {
+        // null namespace — clear HTML default
+        node.ns = 0x01;
+    }
+
+    // Wrap node as JS object
+    const obj_val = wrapNode(vm, node) orelse return JsValue.null_val;
+    const obj = obj_val.asJsObject();
+
+    // Store prefix as own property for prefix getter
+    if (prefix) |p| {
+        const prefix_sid = try vm.pool.intern("__prefix");
+        const prefix_val = JsValue.initString(try vm.pool.intern(p));
+        obj.setProperty(vm.allocator, prefix_sid, prefix_val) catch {};
+    }
+
+    // Store namespace URI as own property for non-standard namespaces (not in lexbor)
+    if (ns_str) |uri| {
+        if (uriToNsId(uri) == null) {
+            const ns_sid = try vm.pool.intern("__nsURI");
+            const ns_val = JsValue.initString(try vm.pool.intern(uri));
+            obj.setProperty(vm.allocator, ns_sid, ns_val) catch {};
+        }
+    }
+
+    // Store original localName for case preservation (lexbor lowercases)
+    // Only needed if localName contains uppercase chars
+    var has_upper = false;
+    for (create_name) |ch| {
+        if (ch >= 'A' and ch <= 'Z') {
+            has_upper = true;
+            break;
+        }
+    }
+    if (has_upper) {
+        const orig_sid = try vm.pool.intern("__origLocal");
+        const orig_val = JsValue.initString(try vm.pool.intern(create_name));
+        obj.setProperty(vm.allocator, orig_sid, orig_val) catch {};
+    }
+
+    return obj_val;
+}
+
 /// CSSOM §6.5 — Window.getComputedStyle(element[, pseudoElt]).
 ///
 /// MVP: returns a CSSStyleDeclaration-like object backed by the element's
@@ -1343,9 +1455,9 @@ fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue)
 
 fn nativeCreateTextNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const text = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
     const doc = g_document orelse return JsValue.null_val;
+    // DOMString conversion: null→"null", undefined→"undefined", number→string
+    const text = if (args.len > 0) argToString(vm, args[0]) else "";
     const tn = dom_b.lxb_dom_document_create_text_node(doc, text.ptr, text.len) orelse return JsValue.null_val;
     return wrapNode(vm, tn) orelse JsValue.null_val;
 }
@@ -1388,6 +1500,26 @@ fn argToString(vm: *VM, val: JsValue) []const u8 {
         return vm.pool.get(vm.pool.intern(s) catch return "") orelse "";
     }
     if (val.isBool()) return if (val.asBool()) "true" else "false";
+    // Web IDL DOMString: call object's toString() method
+    if (val.isObject()) {
+        const obj = val.asJsObject();
+        const toString_id = vm.pool.intern("toString") catch return "[object Object]";
+        if (obj.getProperty(toString_id)) |ts_val| {
+            if (ts_val.isObject()) {
+                const result = vm.callJsFunction(ts_val, val, &.{}) catch return "[object Object]";
+                if (result.isString()) return vm.pool.get(result.asStringId()) orelse "[object Object]";
+            }
+        }
+        // Check prototype chain
+        if (obj.prototype) |proto| {
+            if (proto.getProperty(toString_id)) |ts_val| {
+                if (ts_val.isObject()) {
+                    const result = vm.callJsFunction(ts_val, val, &.{}) catch return "[object Object]";
+                    if (result.isString()) return vm.pool.get(result.asStringId()) orelse "[object Object]";
+                }
+            }
+        }
+    }
     return "[object Object]";
 }
 
@@ -1990,6 +2122,16 @@ fn getArgNode(val: JsValue) ?*lxb.lxb_dom_node_t {
     return getThisNode(val);
 }
 
+/// ECMA-262 §7.1.7 ToUint32: convert f64 to unsigned 32-bit integer.
+/// Equivalent to JS `value >>> 0`. Negative values wrap around.
+fn toUint32(n: f64) usize {
+    if (std.math.isNan(n) or std.math.isInf(n) or n == 0) return 0;
+    // Truncate to i64 first, then mask to u32
+    const i: i64 = @intFromFloat(@trunc(n));
+    const u: u32 = @bitCast(@as(i32, @truncate(i)));
+    return @intCast(u);
+}
+
 fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
     obj.data = .{ .dom_node = @ptrCast(node) };
@@ -2045,18 +2187,63 @@ fn tagNameUpper(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
         for (0..n) |i| buf[i] = std.ascii.toUpper(local[i]);
         return JsValue.initString(vm.pool.intern(buf[0..n]) catch return JsValue.null_val);
     };
-    // For HTML namespace elements, uppercase the whole thing
-    // For non-HTML namespace, preserve case of prefix but uppercase local name
-    if (nsIdToUri(elem.node.ns)) |uri| {
-        if (!eql(uri, "http://www.w3.org/1999/xhtml")) {
-            // Non-HTML: return qualified name as-is (lowercase per SVG/MathML spec)
-            return JsValue.initString(vm.pool.intern(raw[0..len]) catch return JsValue.null_val);
-        }
+    // Only HTML namespace elements get uppercased tagName (DOM §4.9.2)
+    // All others (SVG, MathML, custom, null namespace) preserve case
+    const is_html_ns = (elem.node.ns == 0x02); // LXB_NS_HTML
+    if (!is_html_ns) {
+        return JsValue.initString(vm.pool.intern(raw[0..len]) catch return JsValue.null_val);
     }
     var buf: [128]u8 = undefined;
     const n = @min(len, buf.len);
     for (0..n) |i| buf[i] = std.ascii.toUpper(raw[i]);
     return JsValue.initString(vm.pool.intern(buf[0..n]) catch return JsValue.null_val);
+}
+
+/// Like tagNameUpper but checks __prefix own property on the JS wrapper.
+/// For elements created via createElementNS with a prefix, the prefix is stored
+/// as a JS property since lexbor doesn't track it.
+fn tagNameUpperWithPrefix(vm: *VM, js_obj: *JsObject, elem: *lxb.lxb_dom_element_t) ?JsValue {
+    // Check for __prefix own property (set by createElementNS)
+    const prefix_sid = vm.pool.intern("__prefix") catch return tagNameUpper(vm, elem);
+    const prefix_val = js_obj.getProperty(prefix_sid);
+    if (prefix_val) |pv| {
+        if (pv.isString()) {
+            const prefix_str = vm.pool.get(pv.asStringId()) orelse return tagNameUpper(vm, elem);
+            // Get local name (check __origLocal first for case preservation)
+            const orig_sid = vm.pool.intern("__origLocal") catch return tagNameUpper(vm, elem);
+            var local_name: []const u8 = "";
+            if (js_obj.getProperty(orig_sid)) |ov| {
+                if (ov.isString()) local_name = vm.pool.get(ov.asStringId()) orelse "";
+            }
+            if (local_name.len == 0) {
+                var ln_len: usize = 0;
+                if (dom_b.lxb_dom_element_local_name(elem, &ln_len)) |ln| {
+                    local_name = ln[0..ln_len];
+                } else return tagNameUpper(vm, elem);
+            }
+            // Build PREFIX:LOCALNAME, uppercase for HTML namespace
+            var buf: [256]u8 = undefined;
+            var pos: usize = 0;
+            const is_html = nsIdToUri(elem.node.ns) != null and
+                eql(nsIdToUri(elem.node.ns).?, "http://www.w3.org/1999/xhtml");
+            for (prefix_str) |ch| {
+                if (pos >= buf.len) break;
+                buf[pos] = if (is_html) std.ascii.toUpper(ch) else ch;
+                pos += 1;
+            }
+            if (pos < buf.len) {
+                buf[pos] = ':';
+                pos += 1;
+            }
+            for (local_name) |ch| {
+                if (pos >= buf.len) break;
+                buf[pos] = if (is_html) std.ascii.toUpper(ch) else ch;
+                pos += 1;
+            }
+            return JsValue.initString(vm.pool.intern(buf[0..pos]) catch return JsValue.null_val);
+        }
+    }
+    return tagNameUpper(vm, elem);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2286,19 +2473,22 @@ fn nativeDeleteData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
-    const off_f = args[0].toNumber();
-    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+    const u16len = VM.utf16Len(info.text);
+    const offset_cu = toUint32(args[0].toNumber());
+    if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
-    const offset: usize = @intFromFloat(@max(0, off_f));
-    const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
-    if (offset > info.text.len) return JsValue.undefined_val;
-    const end = @min(offset + count, info.text.len);
+    // DOM §4.2.5: count = min(count, length - offset) in UTF-16 code units
+    const raw_count = toUint32(args[1].toNumber());
+    const count_cu = @min(raw_count, u16len - offset_cu);
+    // Convert UTF-16 indices to byte offsets
+    const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
+    const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
-    buf.appendSlice(g_alloc, info.text[0..offset]) catch return JsValue.undefined_val;
-    buf.appendSlice(g_alloc, info.text[end..]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[0..byte_start]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[byte_end..]) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
     return JsValue.undefined_val;
 }
@@ -2307,19 +2497,20 @@ fn nativeInsertData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
-    const off_f = args[0].toNumber();
-    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+    const u16len = VM.utf16Len(info.text);
+    const offset_cu = toUint32(args[0].toNumber());
+    if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
-    const offset: usize = @intFromFloat(@max(0, off_f));
-    const ins_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
-    const clamped = @min(offset, info.text.len);
+    const byte_off = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
+    var buf_fmt: [64]u8 = undefined;
+    const ins_str = VM.formatValue(vm.pool, args[1], &buf_fmt);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
-    buf.appendSlice(g_alloc, info.text[0..clamped]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[0..byte_off]) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, ins_str) catch return JsValue.undefined_val;
-    buf.appendSlice(g_alloc, info.text[clamped..]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[byte_off..]) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
     return JsValue.undefined_val;
 }
@@ -2328,21 +2519,24 @@ fn nativeReplaceData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 3) return JsValue.undefined_val;
-    const off_f = args[0].toNumber();
-    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+    const u16len = VM.utf16Len(info.text);
+    const offset_cu = toUint32(args[0].toNumber());
+    if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
-    const offset: usize = @intFromFloat(@max(0, off_f));
-    const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
-    const rep_str = if (args[2].isString()) (vm.pool.get(args[2].asStringId()) orelse "") else "";
-    if (offset > info.text.len) return JsValue.undefined_val;
-    const end = @min(offset + count, info.text.len);
+    // DOM §4.2.5: count = min(count, length - offset) in UTF-16 code units
+    const raw_count = toUint32(args[1].toNumber());
+    const count_cu = @min(raw_count, u16len - offset_cu);
+    const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
+    const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
+    var buf_fmt: [64]u8 = undefined;
+    const rep_str = VM.formatValue(vm.pool, args[2], &buf_fmt);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
-    buf.appendSlice(g_alloc, info.text[0..offset]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[0..byte_start]) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, rep_str) catch return JsValue.undefined_val;
-    buf.appendSlice(g_alloc, info.text[end..]) catch return JsValue.undefined_val;
+    buf.appendSlice(g_alloc, info.text[byte_end..]) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
     return JsValue.undefined_val;
 }
@@ -2351,16 +2545,17 @@ fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
-    const off_f = args[0].toNumber();
-    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+    const u16len = VM.utf16Len(info.text);
+    const offset_cu = toUint32(args[0].toNumber());
+    if (offset_cu > u16len) {
         vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
         return JsValue.undefined_val;
     }
-    const offset: usize = @intFromFloat(@max(0, off_f));
-    const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
-    if (offset > info.text.len) return JsValue.initString(vm.pool.intern("") catch return JsValue.undefined_val);
-    const end = @min(offset + count, info.text.len);
-    return JsValue.initString(vm.pool.intern(info.text[offset..end]) catch return JsValue.undefined_val);
+    const raw_count = toUint32(args[1].toNumber());
+    const count_cu = @min(raw_count, u16len - offset_cu);
+    const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
+    const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
+    return JsValue.initString(vm.pool.intern(info.text[byte_start..byte_end]) catch return JsValue.undefined_val);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -2841,6 +3036,66 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, _: []cons
     return vm.globals.get(doc_sid) orelse JsValue.null_val;
 }
 
+/// DOM §7.1: DOMImplementation.createDocumentType(qualifiedName, publicId, systemId)
+/// Returns a new DocumentType node with the given name, publicId, and systemId.
+fn nativeImplementationCreateDocumentType(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 3) return JsValue.null_val;
+
+    const qname = argToString(vm, args[0]);
+    const public_id = argToString(vm, args[1]);
+    const system_id = argToString(vm, args[2]);
+
+    // TODO: validate qualifiedName per DOM spec (Name production)
+
+    // Create a JS object that behaves like a DocumentType node
+    const obj = try vm.createObj(.{});
+    obj.prototype = g_doctype_proto;
+
+    // nodeType = 10 (DOCUMENT_TYPE_NODE)
+    const nt_sid = try vm.pool.intern("nodeType");
+    obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(10)) catch {};
+
+    // name = qualifiedName
+    const name_sid = try vm.pool.intern("name");
+    obj.setProperty(vm.allocator, name_sid, JsValue.initString(try vm.pool.intern(qname))) catch {};
+
+    // nodeName = qualifiedName
+    const nn_sid = try vm.pool.intern("nodeName");
+    obj.setProperty(vm.allocator, nn_sid, JsValue.initString(try vm.pool.intern(qname))) catch {};
+
+    // publicId
+    const pid_sid = try vm.pool.intern("publicId");
+    obj.setProperty(vm.allocator, pid_sid, JsValue.initString(try vm.pool.intern(public_id))) catch {};
+
+    // systemId
+    const sid_sid = try vm.pool.intern("systemId");
+    obj.setProperty(vm.allocator, sid_sid, JsValue.initString(try vm.pool.intern(system_id))) catch {};
+
+    // ownerDocument = document
+    const od_sid = try vm.pool.intern("ownerDocument");
+    const doc_sid = try vm.pool.intern("document");
+    obj.setProperty(vm.allocator, od_sid, vm.globals.get(doc_sid) orelse JsValue.null_val) catch {};
+
+    // childNodes (empty NodeList-like)
+    const cn_sid = try vm.pool.intern("childNodes");
+    const cn_arr = try vm.createObj(.{ .obj_type = .array });
+    cn_arr.data = .{ .array = .empty };
+    obj.setProperty(vm.allocator, cn_sid, JsValue.initObject(cn_arr)) catch {};
+
+    // parentNode/parentElement/previousSibling/nextSibling = null
+    const pn_sid = try vm.pool.intern("parentNode");
+    obj.setProperty(vm.allocator, pn_sid, JsValue.null_val) catch {};
+    const pe_sid = try vm.pool.intern("parentElement");
+    obj.setProperty(vm.allocator, pe_sid, JsValue.null_val) catch {};
+    const ps_sid = try vm.pool.intern("previousSibling");
+    obj.setProperty(vm.allocator, ps_sid, JsValue.null_val) catch {};
+    const ns_sid = try vm.pool.intern("nextSibling");
+    obj.setProperty(vm.allocator, ns_sid, JsValue.null_val) catch {};
+
+    return JsValue.initObject(obj);
+}
+
 fn getTextContent(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
     var len: usize = 0;
     if (dom_b.lxb_dom_node_text_content(node, &len)) |ptr|
@@ -2849,11 +3104,14 @@ fn getTextContent(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
 }
 
 fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
-    if (val.isString()) {
-        if (vm.pool.get(val.asStringId())) |s|
-            _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
-    } else {
+    if (val.isNull()) {
+        // DOM spec: textContent setter — null sets empty string
         _ = dom_b.lxb_dom_node_text_content_set(node, "", 0);
+    } else {
+        // DOMString conversion: string as-is, undefined→"undefined", number→digits, bool→"true"/"false"
+        var buf: [64]u8 = undefined;
+        const s = VM.formatValue(vm.pool, val, &buf);
+        _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
     }
 }
 

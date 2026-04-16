@@ -983,11 +983,11 @@ pub const VM = struct {
                             self.push(JsValue.undefined_val);
                         }
                     } else if (obj_val.isString()) {
-                        // String .length
+                        // String .length — UTF-16 code units per ECMA-262 §6.1.4
                         if (self.pool.get(name_id)) |name_str| {
                             if (std.mem.eql(u8, name_str, "length")) {
                                 if (self.pool.get(obj_val.asStringId())) |s| {
-                                    self.push(JsValue.initNumber(@floatFromInt(s.len)));
+                                    self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
                                 } else {
                                     self.push(JsValue.initNumber(0));
                                 }
@@ -1703,7 +1703,7 @@ pub const VM = struct {
                     }
                     if (obj_val.isString()) {
                         if (self.pool.get(obj_val.asStringId())) |s| {
-                            self.push(JsValue.initNumber(@floatFromInt(s.len)));
+                            self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
                             continue;
                         }
                     }
@@ -2198,7 +2198,7 @@ pub const VM = struct {
         return JsValue.initString(new_id);
     }
 
-    fn formatValue(pool: *StringPool, val: JsValue, buf: *[64]u8) []const u8 {
+    pub fn formatValue(pool: *StringPool, val: JsValue, buf: *[64]u8) []const u8 {
         if (val.isString()) return pool.get(val.asStringId()) orelse "";
         if (val.isInt()) return std.fmt.bufPrint(buf, "{d}", .{val.asInt()}) catch "0";
         if (val.isNumber()) {
@@ -3300,19 +3300,178 @@ pub const VM = struct {
         return vmFromCtx(ctx).pool.get(this.asStringId());
     }
 
+    // ── UTF-16 helpers (JS strings are UTF-16 code unit sequences) ───
+
+    /// Count UTF-16 code units in a UTF-8 string.
+    pub fn utf16Len(s: []const u8) usize {
+        var count: usize = 0;
+        var i: usize = 0;
+        while (i < s.len) {
+            const b = s[i];
+            if (b < 0x80) {
+                i += 1;
+                count += 1;
+            } else if (b < 0xC0) {
+                i += 1; // invalid continuation, count as 1
+                count += 1;
+            } else if (b < 0xE0) {
+                i += 2;
+                count += 1;
+            } else if (b < 0xF0) {
+                i += 3;
+                count += 1;
+            } else {
+                i += 4;
+                count += 2; // surrogate pair
+            }
+        }
+        return count;
+    }
+
+    /// Convert UTF-16 code unit index to UTF-8 byte offset.
+    /// Returns null if index is out of range.
+    pub fn utf16IdxToByteOff(s: []const u8, utf16_idx: usize) ?usize {
+        var cu: usize = 0; // current UTF-16 code unit index
+        var i: usize = 0; // current byte offset
+        while (i < s.len and cu < utf16_idx) {
+            const b = s[i];
+            if (b < 0x80) {
+                i += 1;
+                cu += 1;
+            } else if (b < 0xC0) {
+                i += 1;
+                cu += 1;
+            } else if (b < 0xE0) {
+                i += @min(2, s.len - i);
+                cu += 1;
+            } else if (b < 0xF0) {
+                i += @min(3, s.len - i);
+                cu += 1;
+            } else {
+                i += @min(4, s.len - i);
+                cu += 2;
+            }
+        }
+        if (cu == utf16_idx) return i;
+        return null;
+    }
+
+    /// Convert UTF-8 byte offset to UTF-16 code unit index.
+    fn byteOffToUtf16Idx(s: []const u8, byte_off: usize) usize {
+        var cu: usize = 0;
+        var i: usize = 0;
+        while (i < s.len and i < byte_off) {
+            const b = s[i];
+            if (b < 0x80) {
+                i += 1;
+                cu += 1;
+            } else if (b < 0xC0) {
+                i += 1;
+                cu += 1;
+            } else if (b < 0xE0) {
+                i += @min(2, s.len - i);
+                cu += 1;
+            } else if (b < 0xF0) {
+                i += @min(3, s.len - i);
+                cu += 1;
+            } else {
+                i += @min(4, s.len - i);
+                cu += 2;
+            }
+        }
+        return cu;
+    }
+
+    /// Get the UTF-16 code unit at a given UTF-16 index.
+    /// Returns the code unit value, or null if out of range.
+    fn utf16CodeUnitAt(s: []const u8, utf16_idx: usize) ?u16 {
+        var cu: usize = 0;
+        var i: usize = 0;
+        while (i < s.len) {
+            if (cu == utf16_idx) {
+                // Decode the codepoint at this position
+                const b = s[i];
+                if (b < 0x80) {
+                    return @intCast(b);
+                } else if (b < 0xC0) {
+                    return @intCast(b); // replacement
+                } else if (b < 0xE0 and i + 1 < s.len) {
+                    const cp: u21 = (@as(u21, b & 0x1F) << 6) | @as(u21, s[i + 1] & 0x3F);
+                    return @intCast(cp);
+                } else if (b < 0xF0 and i + 2 < s.len) {
+                    const cp: u21 = (@as(u21, b & 0x0F) << 12) | (@as(u21, s[i + 1] & 0x3F) << 6) | @as(u21, s[i + 2] & 0x3F);
+                    return @intCast(cp);
+                } else if (i + 3 < s.len) {
+                    // 4-byte → surrogate pair, return high surrogate
+                    const cp: u21 = (@as(u21, b & 0x07) << 18) | (@as(u21, s[i + 1] & 0x3F) << 12) | (@as(u21, s[i + 2] & 0x3F) << 6) | @as(u21, s[i + 3] & 0x3F);
+                    const adj = cp - 0x10000;
+                    return @intCast(0xD800 + (adj >> 10));
+                }
+                return 0xFFFD;
+            }
+            const b = s[i];
+            if (b < 0x80) {
+                i += 1;
+                cu += 1;
+            } else if (b < 0xC0) {
+                i += 1;
+                cu += 1;
+            } else if (b < 0xE0) {
+                i += @min(2, s.len - i);
+                cu += 1;
+            } else if (b < 0xF0) {
+                i += @min(3, s.len - i);
+                cu += 1;
+            } else {
+                // Check if requesting low surrogate (cu+1 == utf16_idx)
+                if (cu + 1 == utf16_idx) {
+                    const cp: u21 = (@as(u21, b & 0x07) << 18) | (@as(u21, s[i + 1] & 0x3F) << 12) | (@as(u21, s[i + 2] & 0x3F) << 6) | (@as(u21, s[i + 3] & 0x3F));
+                    const adj = cp - 0x10000;
+                    return @intCast(0xDC00 + (adj & 0x3FF));
+                }
+                i += @min(4, s.len - i);
+                cu += 2;
+            }
+        }
+        return null;
+    }
+
+    /// Extract UTF-8 byte slice for a UTF-16 range [start_cu..end_cu).
+    fn utf16SliceToBytes(s: []const u8, start_cu: usize, end_cu: usize) []const u8 {
+        const byte_start = utf16IdxToByteOff(s, start_cu) orelse s.len;
+        const byte_end = utf16IdxToByteOff(s, end_cu) orelse s.len;
+        return s[byte_start..byte_end];
+    }
+
     fn nativeStringCharAt(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const idx: usize = if (args.len > 0) clampToUsize(args[0]) else 0;
-        if (idx >= s.len) return JsValue.initString(try vm.pool.intern(""));
-        return JsValue.initString(try vm.pool.intern(s[idx .. idx + 1]));
+        const u16len = utf16Len(s);
+        if (idx >= u16len) return JsValue.initString(try vm.pool.intern(""));
+        // Get the UTF-16 code unit and encode back to UTF-8
+        const cu = utf16CodeUnitAt(s, idx) orelse return JsValue.initString(try vm.pool.intern(""));
+        var buf: [4]u8 = undefined;
+        if (cu < 0x80) {
+            buf[0] = @intCast(cu);
+            return JsValue.initString(try vm.pool.intern(buf[0..1]));
+        } else if (cu < 0x800) {
+            buf[0] = @intCast(0xC0 | (cu >> 6));
+            buf[1] = @intCast(0x80 | (cu & 0x3F));
+            return JsValue.initString(try vm.pool.intern(buf[0..2]));
+        } else {
+            buf[0] = @intCast(0xE0 | (cu >> 12));
+            buf[1] = @intCast(0x80 | ((cu >> 6) & 0x3F));
+            buf[2] = @intCast(0x80 | (cu & 0x3F));
+            return JsValue.initString(try vm.pool.intern(buf[0..3]));
+        }
     }
 
     fn nativeStringCharCodeAt(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.nan_val;
         const idx: usize = if (args.len > 0) clampToUsize(args[0]) else 0;
-        if (idx >= s.len) return JsValue.nan_val;
-        return JsValue.initNumber(@floatFromInt(s[idx]));
+        const cu = utf16CodeUnitAt(s, idx) orelse return JsValue.nan_val;
+        return JsValue.initNumber(@floatFromInt(cu));
     }
 
     fn nativeStringIndexOf(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -3323,7 +3482,7 @@ pub const VM = struct {
         const needle = vm.pool.get(args[0].asStringId()) orelse return JsValue.initNumber(-1);
         if (needle.len == 0) return JsValue.initNumber(0);
         if (std.mem.indexOf(u8, s, needle)) |pos| {
-            return JsValue.initNumber(@floatFromInt(pos));
+            return JsValue.initNumber(@floatFromInt(byteOffToUtf16Idx(s, pos)));
         }
         return JsValue.initNumber(-1);
     }
@@ -3340,31 +3499,31 @@ pub const VM = struct {
     fn nativeStringSubstring(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const len = s.len;
-        var start: usize = if (args.len > 0) @min(clampToUsize(args[0]), len) else 0;
-        var end: usize = if (args.len > 1) @min(clampToUsize(args[1]), len) else len;
+        const u16len = utf16Len(s);
+        var start: usize = if (args.len > 0) @min(clampToUsize(args[0]), u16len) else 0;
+        var end: usize = if (args.len > 1) @min(clampToUsize(args[1]), u16len) else u16len;
         if (start > end) {
             const tmp = start;
             start = end;
             end = tmp;
         }
-        return JsValue.initString(try vm.pool.intern(s[start..end]));
+        return JsValue.initString(try vm.pool.intern(utf16SliceToBytes(s, start, end)));
     }
 
     fn nativeStringSlice(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const len: i64 = @intCast(s.len);
+        const u16len: i64 = @intCast(utf16Len(s));
         var start: i64 = if (args.len > 0) clampToI64(args[0]) else 0;
-        var end: i64 = if (args.len > 1) clampToI64(args[1]) else len;
-        if (start < 0) start = @max(start + len, 0);
-        if (end < 0) end = @max(end + len, 0);
-        start = @min(start, len);
-        end = @min(end, len);
+        var end: i64 = if (args.len > 1) clampToI64(args[1]) else u16len;
+        if (start < 0) start = @max(start + u16len, 0);
+        if (end < 0) end = @max(end + u16len, 0);
+        start = @min(start, u16len);
+        end = @min(end, u16len);
         if (end < start) end = start;
         const si: usize = @intCast(start);
         const ei: usize = @intCast(end);
-        return JsValue.initString(try vm.pool.intern(s[si..ei]));
+        return JsValue.initString(try vm.pool.intern(utf16SliceToBytes(s, si, ei)));
     }
 
     fn nativeStringSplit(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -7457,7 +7616,7 @@ pub const VM = struct {
         var i: usize = 0;
         while (i + search.len <= s.len) : (i += 1) {
             if (std.mem.eql(u8, s[i..][0..search.len], search)) {
-                last = @intCast(i);
+                last = @intCast(byteOffToUtf16Idx(s, i));
             }
         }
         return JsValue.initNumber(@floatFromInt(last));
@@ -7483,46 +7642,56 @@ pub const VM = struct {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         if (args.len == 0 or s.len == 0) return JsValue.undefined_val;
-        const len: i64 = @intCast(s.len);
+        const u16len: i64 = @intCast(utf16Len(s));
         var idx: i64 = clampToI64(args[0]);
-        if (idx < 0) idx += len;
-        if (idx < 0 or idx >= len) return JsValue.undefined_val;
+        if (idx < 0) idx += u16len;
+        if (idx < 0 or idx >= u16len) return JsValue.undefined_val;
         const uidx: usize = @intCast(idx);
-        return JsValue.initString(try vm.pool.intern(s[uidx .. uidx + 1]));
+        // Get the UTF-16 code unit and encode as UTF-8
+        const cu = utf16CodeUnitAt(s, uidx) orelse return JsValue.undefined_val;
+        var buf: [4]u8 = undefined;
+        if (cu < 0x80) {
+            buf[0] = @intCast(cu);
+            return JsValue.initString(try vm.pool.intern(buf[0..1]));
+        } else if (cu < 0x800) {
+            buf[0] = @intCast(0xC0 | (cu >> 6));
+            buf[1] = @intCast(0x80 | (cu & 0x3F));
+            return JsValue.initString(try vm.pool.intern(buf[0..2]));
+        } else {
+            buf[0] = @intCast(0xE0 | (cu >> 12));
+            buf[1] = @intCast(0x80 | ((cu >> 6) & 0x3F));
+            buf[2] = @intCast(0x80 | (cu & 0x3F));
+            return JsValue.initString(try vm.pool.intern(buf[0..3]));
+        }
     }
 
     fn nativeStringCodePointAt(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.undefined_val;
         if (args.len == 0 or s.len == 0) return JsValue.undefined_val;
         const pos: usize = @intCast(@max(@as(i64, 0), clampToI64(args[0])));
-        // Walk UTF-8 codepoints to find the one at JS index `pos`
-        var cp_index: usize = 0;
-        var i: usize = 0;
-        while (i < s.len) {
-            const cp_len = std.unicode.utf8ByteSequenceLength(s[i]) catch 1;
-            if (cp_index == pos) {
-                const cp = std.unicode.utf8Decode(s[i..@min(i + cp_len, s.len)]) catch return JsValue.undefined_val;
-                return JsValue.initNumber(@floatFromInt(cp));
-            }
-            i += cp_len;
-            cp_index += 1;
-        }
-        return JsValue.undefined_val;
+        const u16len = utf16Len(s);
+        if (pos >= u16len) return JsValue.undefined_val;
+        // Walk to the UTF-16 position
+        const byte_off = utf16IdxToByteOff(s, pos) orelse return JsValue.undefined_val;
+        if (byte_off >= s.len) return JsValue.undefined_val;
+        const cp_len = std.unicode.utf8ByteSequenceLength(s[byte_off]) catch 1;
+        const cp = std.unicode.utf8Decode(s[byte_off..@min(byte_off + cp_len, s.len)]) catch return JsValue.undefined_val;
+        return JsValue.initNumber(@floatFromInt(cp));
     }
 
     fn nativeStringSubstr(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const s = getStr(ctx, this) orelse return JsValue.initString(try vmFromCtx(ctx).pool.intern(""));
         const vm = vmFromCtx(ctx);
         if (args.len == 0) return JsValue.initString(try vm.pool.intern(s));
-        const len: i64 = @intCast(s.len);
+        const u16len: i64 = @intCast(utf16Len(s));
         var start = clampToI64(args[0]);
-        if (start < 0) start = @max(len + start, 0);
-        if (start >= len) return JsValue.initString(try vm.pool.intern(""));
-        const count: i64 = if (args.len > 1 and !args[1].isUndefined()) clampToI64(args[1]) else len - start;
+        if (start < 0) start = @max(u16len + start, 0);
+        if (start >= u16len) return JsValue.initString(try vm.pool.intern(""));
+        const count: i64 = if (args.len > 1 and !args[1].isUndefined()) clampToI64(args[1]) else u16len - start;
         if (count <= 0) return JsValue.initString(try vm.pool.intern(""));
         const ustart: usize = @intCast(start);
-        const end: usize = @intCast(@min(start + count, len));
-        return JsValue.initString(try vm.pool.intern(s[ustart..end]));
+        const end: usize = @intCast(@min(start + count, u16len));
+        return JsValue.initString(try vm.pool.intern(utf16SliceToBytes(s, ustart, end)));
     }
 
     fn nativeStringToString(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
