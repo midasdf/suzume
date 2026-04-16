@@ -1,15 +1,178 @@
-=== WPT Baseline 2026-04-03 02:54 ===
+=== WPT Parallel Baseline 2026-04-16 13:26 ===
+  Areas: 9  Jobs-per-area: 4  Base-port: 9876
 
+[area 0] Starting: dom/nodes on port 9876
+[area 3] Starting: css/css-display on port 9879
+[area 4] Starting: css/selectors on port 9880
+[area 1] Starting: dom/events on port 9877
+[area 5] Starting: css/css-color on port 9881
+[area 6] Starting: css/cssom on port 9882
+[area 7] Starting: html/dom on port 9883
+[area 8] Starting: css/css-box on port 9884
+[area 2] Starting: css/css-values on port 9878
+[area 8] Done: css/css-box
+[area 5] Done: css/css-color
+[area 3] Done: css/css-display
+[area 7] Done: html/dom
+[area 1] Done: dom/events
+[area 6] Done: css/cssom
+[area 0] Done: dom/nodes
+[area 2] Done: css/css-values
+[area 4] Done: css/selectors
+
+===========================================
+  Parallel baseline complete (0 area failures)
+===========================================
+
+--- dom/nodes ---
   WPT Results: dom/nodes
 ===========================================
-  Test files: 227 (pass=57 fail=161 err=9)
-  Subtests: 5607/7928 pass
-  Pass rate: 70.7%
+  Test files: 231 (pass=16 fail=53 err=162)
+  Subtests: 227/676 pass
+  Pass rate: 33.6%
 ===========================================
 
+--- dom/events ---
   WPT Results: dom/events
 ===========================================
-  Test files: 149 (pass=102 fail=40 err=7)
-  Subtests: 300/425 pass
-  Pass rate: 70.6%
+  Test files: 151 (pass=7 fail=35 err=109)
+  Subtests: 35/168 pass
+  Pass rate: 20.8%
 ===========================================
+
+--- css/css-values ---
+  WPT Results: css/css-values
+===========================================
+  Test files: 237 (pass=12 fail=33 err=192)
+  Subtests: 89/857 pass
+  Pass rate: 10.4%
+===========================================
+
+--- css/css-display ---
+  WPT Results: css/css-display
+===========================================
+  Test files: 33 (pass=8 fail=20 err=5)
+  Subtests: 85/360 pass
+  Pass rate: 23.6%
+===========================================
+
+--- css/selectors ---
+  WPT Results: css/selectors
+===========================================
+  Test files: 261 (pass=1 fail=14 err=246)
+  Subtests: 14/125 pass
+  Pass rate: 11.2%
+===========================================
+
+--- css/css-color ---
+  WPT Results: css/css-color
+===========================================
+  Test files: 60 (pass=13 fail=39 err=8)
+  Subtests: 164/6400 pass
+  Pass rate: 2.6%
+===========================================
+
+--- css/cssom ---
+  WPT Results: css/cssom
+===========================================
+  Test files: 182 (pass=18 fail=54 err=110)
+  Subtests: 146/328 pass
+  Pass rate: 44.5%
+===========================================
+
+--- html/dom ---
+  WPT Results: html/dom
+===========================================
+  Test files: 223 (pass=48 fail=93 err=82)
+  Subtests: 380/4092 pass
+  Pass rate: 9.3%
+===========================================
+
+--- css/css-box ---
+  WPT Results: css/css-box
+===========================================
+  Test files: 83 (pass=55 fail=26 err=2)
+  Subtests: 178/714 pass
+  Pass rate: 24.9%
+===========================================
+
+Results saved to: /home/midasdf/suzume/tests/wpt/baseline_results.txt
+t
+
+  Test files: 83 (pass=53 fail=26 err=4)
+  Subtests: 138/674 pass
+  Pass rate: 20.5%
+===========================================
+
+--- dom/nodes ---
+  WPT Results: dom/nodes
+===========================================
+  Test files: 231 (pass=16 fail=53 err=162)
+  Subtests: 227/676 pass
+  Pass rate: 33.6%
+===========================================
+
+--- dom/events ---
+  WPT Results: dom/events
+===========================================
+  Test files: 151 (pass=7 fail=35 err=109)
+  Subtests: 35/168 pass
+  Pass rate: 20.8%
+===========================================
+
+--- css/css-values ---
+  WPT Results: css/css-values
+===========================================
+  Test files: 237 (pass=12 fail=33 err=192)
+  Subtests: 89/857 pass
+  Pass rate: 10.4%
+===========================================
+
+--- css/css-display ---
+  WPT Results: css/css-display
+===========================================
+  Test files: 33 (pass=8 fail=20 err=5)
+  Subtests: 85/360 pass
+  Pass rate: 23.6%
+===========================================
+
+--- css/selectors ---
+  WPT Results: css/selectors
+===========================================
+  Test files: 261 (pass=1 fail=14 err=246)
+  Subtests: 14/125 pass
+  Pass rate: 11.2%
+===========================================
+
+--- css/css-color ---
+  WPT Results: css/css-color
+===========================================
+  Test files: 60 (pass=13 fail=39 err=8)
+  Subtests: 164/6400 pass
+  Pass rate: 2.6%
+===========================================
+
+--- css/cssom ---
+  WPT Results: css/cssom
+===========================================
+  Test files: 182 (pass=18 fail=54 err=110)
+  Subtests: 146/328 pass
+  Pass rate: 44.5%
+===========================================
+
+--- html/dom ---
+  WPT Results: html/dom
+===========================================
+  Test files: 223 (pass=48 fail=93 err=82)
+  Subtests: 380/4092 pass
+  Pass rate: 9.3%
+===========================================
+
+--- css/css-box ---
+  WPT Results: css/css-box
+===========================================
+  Test files: 83 (pass=55 fail=26 err=2)
+  Subtests: 178/714 pass
+  Pass rate: 24.9%
+===========================================
+
