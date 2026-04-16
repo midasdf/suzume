@@ -378,6 +378,9 @@ pub fn getListeners() []const EventListener {
 /// Requires an active VM context (krt.vm must be initialized).
 pub fn dispatchWindowEvent(vm: *VM, event_type: []const u8) void {
     const sentinel_ptr = @intFromPtr(&g_window_sentinel);
+    // Clear any stale pending_throw from prior script execution — event dispatch
+    // is a new "task" per HTML spec, errors shouldn't leak across task boundaries.
+    vm.pending_throw = null;
     // Build a minimal event object with .type set.
     const ev_obj = vm.createObj(.{}) catch return;
     const type_sid = vm.pool.intern("type") catch return;
@@ -388,6 +391,9 @@ pub fn dispatchWindowEvent(vm: *VM, event_type: []const u8) void {
         if (@intFromPtr(entry.node_ptr) != sentinel_ptr) continue;
         if (!std.mem.eql(u8, entry.event_type, event_type)) continue;
         _ = vm.callJsFunction(entry.callback, global, &.{JsValue.initObject(ev_obj)}) catch {};
+        // Clear pending_throw between listeners so one failing listener
+        // doesn't prevent subsequent listeners from executing.
+        vm.pending_throw = null;
     }
 }
 
@@ -535,6 +541,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(doc_obj, "adoptNode", &nativeAdoptNode);
     try vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode);
 
+    // document.readyState — needed by testharness.js for completion detection
+    const rs_sid = try vm.pool.intern("readyState");
+    doc_obj.setProperty(vm.allocator, rs_sid, JsValue.initString(try vm.pool.intern("complete"))) catch {};
+
     const doc_id = try vm.pool.intern("document");
     try vm.globals.put(vm.allocator, doc_id, JsValue.initObject(doc_obj));
 
@@ -565,6 +575,22 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.globals.put(vm.allocator, self_id, JsValue.initObject(win_obj));
     const globalthis_id = try vm.pool.intern("globalThis");
     try vm.globals.put(vm.allocator, globalthis_id, JsValue.initObject(win_obj));
+    // window.parent / window.top / window.frames — self-referential for top-level window
+    const win_val = JsValue.initObject(win_obj);
+    const parent_id = try vm.pool.intern("parent");
+    win_obj.setProperty(vm.allocator, parent_id, win_val) catch {};
+    const top_id = try vm.pool.intern("top");
+    win_obj.setProperty(vm.allocator, top_id, win_val) catch {};
+    const frames_id = try vm.pool.intern("frames");
+    win_obj.setProperty(vm.allocator, frames_id, win_val) catch {};
+    const opener_id = try vm.pool.intern("opener");
+    win_obj.setProperty(vm.allocator, opener_id, JsValue.null_val) catch {};
+    // window.location — basic object for testharness.js
+    const loc_obj = try vm.createObj(.{});
+    const href_sid = try vm.pool.intern("href");
+    loc_obj.setProperty(vm.allocator, href_sid, JsValue.initString(try vm.pool.intern("about:blank"))) catch {};
+    const loc_id = try vm.pool.intern("location");
+    win_obj.setProperty(vm.allocator, loc_id, JsValue.initObject(loc_obj)) catch {};
 
     // ── DOM constructor globals (for instanceof and WPT) ──
     // Node constructor + prototype
