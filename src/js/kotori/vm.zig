@@ -93,6 +93,8 @@ pub const VM = struct {
     try_depth: u32 = 0,
     /// Set by native functions (e.g. DOM) to inject a JS-catchable throw.
     pending_throw: ?JsValue = null,
+    /// Floor frame index for current run() scope.
+    run_scope_floor: u32 = 0,
 
     pub const TimerEntry = struct {
         id: u32,
@@ -236,24 +238,29 @@ pub const VM = struct {
     }
 
     fn run(self: *VM, until_frame: u32) anyerror!JsValue {
+        const saved_scope_floor = self.run_scope_floor;
+        self.run_scope_floor = until_frame;
+        defer self.run_scope_floor = saved_scope_floor;
+
         while (self.frame_count > until_frame) {
             // Process any pending JS throw (from callJsFunction error conversion)
             if (self.pending_throw) |thrown| {
-                self.pending_throw = null;
-                if (self.try_depth == 0) {
-                    return JsValue.undefined_val;
+                if (self.try_depth > 0 and self.try_stack[self.try_depth - 1].frame_idx >= until_frame) {
+                    self.pending_throw = null;
+                    self.try_depth -= 1;
+                    const tc = self.try_stack[self.try_depth];
+                    while (self.frame_count > tc.frame_idx + 1) {
+                        const f2 = self.frames[self.frame_count - 1];
+                        self.closeUpvaluesAbove(f2.base_sp);
+                        self.frame_count -= 1;
+                    }
+                    self.sp = tc.sp;
+                    self.push(thrown);
+                    self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                    continue;
                 }
-                self.try_depth -= 1;
-                const tc = self.try_stack[self.try_depth];
-                while (self.frame_count > tc.frame_idx + 1) {
-                    const f2 = self.frames[self.frame_count - 1];
-                    self.closeUpvaluesAbove(f2.base_sp);
-                    self.frame_count -= 1;
-                }
-                self.sp = tc.sp;
-                self.push(thrown);
-                self.frames[self.frame_count - 1].ip = tc.catch_offset;
-                continue;
+                // No in-scope try context — propagate to caller
+                return JsValue.undefined_val;
             }
             const frame = &self.frames[self.frame_count - 1];
             if (frame.ip >= frame.bc.code.items.len) {
@@ -446,6 +453,18 @@ pub const VM = struct {
                         continue;
                     }
                     if (lhs.isString()) {
+                        // window_proxy → check globals
+                        if (obj.obj_type == .window_proxy) {
+                            self.push(JsValue.initBool(self.globals.get(lhs.asStringId()) != null));
+                            continue;
+                        }
+                        // DOM node → check DOM property interception
+                        if ((obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_get_prop != null) {
+                            if (self.dom_get_prop.?(self, obj, lhs.asStringId()) != null) {
+                                self.push(JsValue.initBool(true));
+                                continue;
+                            }
+                        }
                         self.push(JsValue.initBool(obj.getProperty(lhs.asStringId()) != null));
                     } else if (lhs.isInt()) {
                         var buf: [20]u8 = undefined;
@@ -1739,21 +1758,22 @@ pub const VM = struct {
 
                 .throw_ => {
                     const thrown = self.pop();
-                    if (self.try_depth == 0) {
-                        // Uncaught exception
+                    if (self.try_depth > 0 and self.try_stack[self.try_depth - 1].frame_idx >= until_frame) {
+                        self.try_depth -= 1;
+                        const tc = self.try_stack[self.try_depth];
+                        while (self.frame_count > tc.frame_idx + 1) {
+                            const f = self.frames[self.frame_count - 1];
+                            self.closeUpvaluesAbove(f.base_sp);
+                            self.frame_count -= 1;
+                        }
+                        self.sp = tc.sp;
+                        self.push(thrown); // catch parameter
+                        self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                    } else {
+                        // Uncaught in this scope — propagate to caller
+                        self.pending_throw = thrown;
                         return JsValue.undefined_val;
                     }
-                    self.try_depth -= 1;
-                    const tc = self.try_stack[self.try_depth];
-                    // Unwind frames to the try's frame
-                    while (self.frame_count > tc.frame_idx + 1) {
-                        const f = self.frames[self.frame_count - 1];
-                        self.closeUpvaluesAbove(f.base_sp);
-                        self.frame_count -= 1;
-                    }
-                    self.sp = tc.sp;
-                    self.push(thrown); // catch parameter
-                    self.frames[self.frame_count - 1].ip = tc.catch_offset;
                 },
 
                 // ── Async / Promise ──────────────────────────────────
@@ -2840,18 +2860,21 @@ pub const VM = struct {
     /// caught the error (caller should `continue`), false if uncaught (caller
     /// should `return JsValue.undefined_val` to stop execution).
     fn throwJsErrorVal(self: *VM, thrown: JsValue) bool {
-        if (self.try_depth == 0) return false;
-        self.try_depth -= 1;
-        const tc = self.try_stack[self.try_depth];
-        while (self.frame_count > tc.frame_idx + 1) {
-            const f = self.frames[self.frame_count - 1];
-            self.closeUpvaluesAbove(f.base_sp);
-            self.frame_count -= 1;
+        if (self.try_depth > 0 and self.try_stack[self.try_depth - 1].frame_idx >= self.run_scope_floor) {
+            self.try_depth -= 1;
+            const tc = self.try_stack[self.try_depth];
+            while (self.frame_count > tc.frame_idx + 1) {
+                const f = self.frames[self.frame_count - 1];
+                self.closeUpvaluesAbove(f.base_sp);
+                self.frame_count -= 1;
+            }
+            self.sp = tc.sp;
+            self.push(thrown);
+            self.frames[self.frame_count - 1].ip = tc.catch_offset;
+            return true;
         }
-        self.sp = tc.sp;
-        self.push(thrown);
-        self.frames[self.frame_count - 1].ip = tc.catch_offset;
-        return true;
+        self.pending_throw = thrown;
+        return false;
     }
 
     /// Create a TypeError object with proper prototype chain and throw it.

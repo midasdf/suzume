@@ -256,6 +256,12 @@ const dom_b = struct {
     pub extern fn lxb_dom_node_clone(node: *lxb.lxb_dom_node_t, deep: bool) ?*lxb.lxb_dom_node_t;
     // Document fragment creation
     pub extern fn lxb_dom_document_create_document_fragment(document: *anyopaque) ?*lxb.lxb_dom_node_t;
+    // Qualified name (includes prefix for namespaced elements)
+    pub extern fn lxb_dom_element_qualified_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
+    // DocumentType accessors
+    pub extern fn lxb_dom_document_type_name_noi(dtype: *anyopaque, len: *usize) ?[*]const u8;
+    pub extern fn lxb_dom_document_type_public_id_noi(dtype: *anyopaque, len: *usize) ?[*]const u8;
+    pub extern fn lxb_dom_document_type_system_id_noi(dtype: *anyopaque, len: *usize) ?[*]const u8;
 };
 
 // ── C pointer helpers (convert [*c] to ?* for field access) ─────────
@@ -300,6 +306,20 @@ var g_node_proto: ?*JsObject = null;
 var g_chardata_proto: ?*JsObject = null;
 var g_text_proto: ?*JsObject = null;
 var g_comment_proto: ?*JsObject = null;
+var g_doctype_proto: ?*JsObject = null;
+
+/// Map lexbor namespace IDs to W3C namespace URI strings.
+fn nsIdToUri(ns_id: usize) ?[]const u8 {
+    return switch (ns_id) {
+        0x02 => "http://www.w3.org/1999/xhtml", // LXB_NS_HTML
+        0x03 => "http://www.w3.org/1998/Math/MathML", // LXB_NS_MATH
+        0x04 => "http://www.w3.org/2000/svg", // LXB_NS_SVG
+        0x05 => "http://www.w3.org/1999/xlink", // LXB_NS_XLINK
+        0x06 => "http://www.w3.org/XML/1998/namespace", // LXB_NS_XML
+        0x07 => "http://www.w3.org/2000/xmlns/", // LXB_NS_XMLNS
+        else => null,
+    };
+}
 
 /// Sentinel address used as node_ptr for window-level event listeners.
 /// DOM events on elements never match this because it points to a Zig
@@ -390,6 +410,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(np, "before", &nativeBefore);
     try vm.registerNativeMethod(np, "after", &nativeAfter);
     try vm.registerNativeMethod(np, "replaceWith", &nativeReplaceWith);
+    try vm.registerNativeMethod(np, "remove", &nativeRemove);
+    try vm.registerNativeMethod(np, "lookupNamespaceURI", &nativeLookupNamespaceURI);
 
     // ── Node.prototype constants ──
     // Node type constants (DOM §4.4)
@@ -422,6 +444,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     g_comment_proto = try vm.createObj(.{});
     g_comment_proto.?.prototype = g_chardata_proto;
 
+    // ── DocumentType.prototype → Node.prototype ──
+    g_doctype_proto = try vm.createObj(.{});
+    g_doctype_proto.?.prototype = g_node_proto;
+
     // ── Element.prototype → Node.prototype ──
     vm.element_proto = try vm.createObj(.{});
     const ep = vm.element_proto.?;
@@ -436,10 +462,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "closest", &nativeClosest);
     try vm.registerNativeMethod(ep, "getElementsByTagName", &nativeGetElementsByTagName);
     try vm.registerNativeMethod(ep, "getElementsByClassName", &nativeGetElementsByClassName);
+    try vm.registerNativeMethod(ep, "getElementsByTagNameNS", &nativeGetElementsByTagNameNS);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     try vm.registerNativeMethod(ep, "hasAttribute", &nativeHasAttribute);
     try vm.registerNativeMethod(ep, "hasAttributes", &nativeHasAttributes);
-    try vm.registerNativeMethod(ep, "remove", &nativeRemove);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
@@ -456,6 +482,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeDocQuerySelectorAll);
     try vm.registerNativeMethod(doc_obj, "getElementsByTagName", &nativeGetElementsByTagName);
     try vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName);
+    try vm.registerNativeMethod(doc_obj, "getElementsByTagNameNS", &nativeGetElementsByTagNameNS);
     try vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement);
     try vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode);
     try vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment);
@@ -564,11 +591,17 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     }
 
     const df_ctor = try vm.createObj(.{ .obj_type = .native_function });
-    df_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    df_ctor.data = .{ .native_fn = &nativeDocumentFragmentConstructor };
     df_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(np)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("DocumentFragment"), JsValue.initObject(df_ctor));
     try vm.globals.put(vm.allocator, try vm.pool.intern("Document"), JsValue.initObject(elem_ctor));
     try vm.globals.put(vm.allocator, try vm.pool.intern("HTMLDocument"), JsValue.initObject(elem_ctor));
+
+    // DocumentType constructor + prototype
+    const dt_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    dt_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    dt_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_doctype_proto.?)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("DocumentType"), JsValue.initObject(dt_ctor));
 
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
@@ -637,8 +670,73 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, node, "id");
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
-    if (eql(name, "textContent"))
+
+    // Element namespace properties (DOM §4.9)
+    if (eql(name, "namespaceURI")) {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            if (nsIdToUri(elem.node.ns)) |uri| {
+                return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
+            }
+        }
+        return JsValue.null_val;
+    }
+    if (eql(name, "prefix")) {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var qn_len: usize = 0;
+            const qn = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
+            var ln_len: usize = 0;
+            const ln = dom_b.lxb_dom_element_local_name(elem, &ln_len);
+            if (qn != null and ln != null and qn_len > ln_len) {
+                // prefix is everything before the ':'
+                const prefix_len = qn_len - ln_len - 1;
+                if (prefix_len > 0) {
+                    return JsValue.initString(vm.pool.intern(qn.?[0..prefix_len]) catch return JsValue.null_val);
+                }
+            }
+        }
+        return JsValue.null_val;
+    }
+    if (eql(name, "localName")) {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var len: usize = 0;
+            if (dom_b.lxb_dom_element_local_name(elem, &len)) |ln| {
+                return JsValue.initString(vm.pool.intern(ln[0..len]) catch return JsValue.null_val);
+            }
+        }
+        return JsValue.null_val;
+    }
+
+    // DocumentType properties (DOM §4.6)
+    if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) {
+        if (eql(name, "name")) {
+            return getDocTypeName(vm, node);
+        }
+        if (eql(name, "publicId")) {
+            var len: usize = 0;
+            if (dom_b.lxb_dom_document_type_public_id_noi(@ptrCast(node), &len)) |p| {
+                return JsValue.initString(vm.pool.intern(p[0..len]) catch return JsValue.null_val);
+            }
+            return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+        }
+        if (eql(name, "systemId")) {
+            var len: usize = 0;
+            if (dom_b.lxb_dom_document_type_system_id_noi(@ptrCast(node), &len)) |p| {
+                return JsValue.initString(vm.pool.intern(p[0..len]) catch return JsValue.null_val);
+            }
+            return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+        }
+    }
+
+    // textContent: null for Document and DocumentType nodes (DOM §4.4)
+    if (eql(name, "textContent")) {
+        const nt = nodeType(node);
+        if (nt == lxb.LXB_DOM_NODE_TYPE_DOCUMENT or nt == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE)
+            return JsValue.null_val;
         return getTextContent(vm, node);
+    }
     // CharacterData §4.2.5: data and nodeValue are equivalent to textContent
     // for Text, Comment, and ProcessingInstruction nodes.
     if (eql(name, "data") or eql(name, "nodeValue")) {
@@ -691,8 +789,9 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         fn_obj.data = .{ .native_fn = &nativeHasChildNodes };
         return JsValue.initObject(fn_obj);
     }
-    // Node.ownerDocument
+    // Node.ownerDocument — null for Document nodes (DOM §4.4)
     if (eql(name, "ownerDocument")) {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) return JsValue.null_val;
         if (g_document != null) {
             const doc_id = vm.pool.intern("document") catch return JsValue.null_val;
             return vm.globals.get(doc_id) orelse JsValue.null_val;
@@ -747,10 +846,21 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return JsValue.initNumber(pos.left);
     }
 
-    // document-specific: body, head, documentElement
+    // document-specific: body, head, documentElement, doctype
     if (eql(name, "body")) return findByTag(vm, node, "body");
     if (eql(name, "head")) return findByTag(vm, node, "head");
     if (eql(name, "documentElement")) return findByTag(vm, node, "html");
+    if (eql(name, "doctype") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        // Return first DocumentType child node
+        var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+        while (ch) |c| {
+            if (nodeType(c) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE) {
+                return wrapNode(vm, c) orelse JsValue.null_val;
+            }
+            ch = nodeNext(c);
+        }
+        return JsValue.null_val;
+    }
 
     // Shadow DOM Phase 1
     if (eql(name, "isConnected"))
@@ -912,6 +1022,108 @@ fn domStyleSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool
 
 // ══════════════════════════════════════════════════════════════════════
 // Document native methods
+fn nativeGetElementsByTagNameNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) {
+        const arr = try vm.createObj(.{ .obj_type = .array });
+        arr.data = .{ .array = .empty };
+        return JsValue.initObject(arr);
+    }
+    // args[0] = namespace URI (string or null), args[1] = localName
+    const ns_str: ?[]const u8 = if (args[0].isNull()) null else if (args[0].isString()) vm.pool.get(args[0].asStringId()) else null;
+    const local_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    const root = getThisNode(this) orelse {
+        const arr = try vm.createObj(.{ .obj_type = .array });
+        arr.data = .{ .array = .empty };
+        return JsValue.initObject(arr);
+    };
+    const arr_obj = try vm.createObj(.{ .obj_type = .array });
+    arr_obj.data = .{ .array = .empty };
+    try collectByTagNameNS(vm, root, ns_str, local_str, arr_obj);
+    return JsValue.initObject(arr_obj);
+}
+
+fn collectByTagNameNS(vm: *VM, root: *lxb.lxb_dom_node_t, ns: ?[]const u8, local: []const u8, arr: *kotori.JsObject) !void {
+    const is_local_wildcard = local.len == 1 and local[0] == '*';
+    const is_ns_wildcard = if (ns) |n| (n.len == 1 and n[0] == '*') else false;
+    var child: ?*lxb.lxb_dom_node_t = @ptrCast(root.first_child);
+    while (child) |node| : (child = @ptrCast(node.next)) {
+        if (node.type == 1) { // ELEMENT_NODE
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            // Check namespace match
+            const elem_ns = nsIdToUri(elem.node.ns);
+            const ns_match = if (is_ns_wildcard) true else if (ns) |wanted_ns| (if (elem_ns) |ens| eql(ens, wanted_ns) else false) else (elem_ns == null);
+            if (ns_match) {
+                // Check local name match
+                if (is_local_wildcard) {
+                    const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+                    try arr.data.array.append(vm.allocator, wrapped);
+                } else {
+                    var name_len: usize = 0;
+                    const name_ptr = dom_b.lxb_dom_element_local_name(elem, &name_len);
+                    if (name_ptr) |np| {
+                        if (std.ascii.eqlIgnoreCase(np[0..name_len], local)) {
+                            const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
+                            try arr.data.array.append(vm.allocator, wrapped);
+                        }
+                    }
+                }
+            }
+            try collectByTagNameNS(vm, node, ns, local, arr);
+        }
+    }
+}
+
+fn nativeDocumentFragmentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const doc = g_document orelse return JsValue.null_val;
+    const frag = sr.lxb_dom_document_create_document_fragment(doc) orelse return JsValue.null_val;
+    return wrapNode(vm, frag) orelse JsValue.null_val;
+}
+
+fn nativeLookupNamespaceURI(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.null_val;
+    // args[0] = prefix (string or null)
+    const prefix: ?[]const u8 = if (args.len > 0 and args[0].isString()) vm.pool.get(args[0].asStringId()) else null;
+    // Walk up the tree looking for namespace declarations
+    var cur: ?*lxb.lxb_dom_node_t = node;
+    while (cur) |n| {
+        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(n);
+            // Check if this element's own namespace matches the prefix
+            if (prefix == null) {
+                // Looking for default namespace
+                var qn_len: usize = 0;
+                const qn = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
+                var ln_len: usize = 0;
+                _ = dom_b.lxb_dom_element_local_name(elem, &ln_len);
+                if (qn != null and qn_len == ln_len) {
+                    // No prefix on this element — its namespace is the default
+                    if (nsIdToUri(elem.node.ns)) |uri| {
+                        return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
+                    }
+                }
+            } else if (prefix) |pfx| {
+                var qn_len: usize = 0;
+                const qn = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
+                var ln_len: usize = 0;
+                _ = dom_b.lxb_dom_element_local_name(elem, &ln_len);
+                if (qn != null and qn_len > ln_len) {
+                    const elem_prefix_len = qn_len - ln_len - 1;
+                    if (elem_prefix_len == pfx.len and eql(qn.?[0..elem_prefix_len], pfx)) {
+                        if (nsIdToUri(elem.node.ns)) |uri| {
+                            return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
+                        }
+                    }
+                }
+            }
+        }
+        cur = nodeParent(n);
+    }
+    return JsValue.null_val;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 
 fn nativeGetElementById(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -1144,10 +1356,8 @@ fn nativeHasChildNodes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerro
 }
 
 fn getDocTypeName(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
-    // DocumentType.name is stored as the local_name in lexbor
     var len: usize = 0;
-    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    if (dom_b.lxb_dom_element_local_name(elem, &len)) |n| {
+    if (dom_b.lxb_dom_document_type_name_noi(@ptrCast(node), &len)) |n| {
         return JsValue.initString(vm.pool.intern(n[0..len]) catch return JsValue.null_val);
     }
     return JsValue.initString(vm.pool.intern("html") catch return JsValue.null_val);
@@ -1742,7 +1952,7 @@ fn nativeNoOpConstructor(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror
 fn nativeTextConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const doc = g_document orelse return JsValue.null_val;
-    const data = if (args.len > 0) argToString(vm, args[0]) else "";
+    const data = if (args.len > 0 and !args[0].isUndefined()) argToString(vm, args[0]) else "";
     const node = dom_b.lxb_dom_document_create_text_node(doc, data.ptr, data.len) orelse return JsValue.null_val;
     return wrapNode(vm, node) orelse JsValue.null_val;
 }
@@ -1750,7 +1960,7 @@ fn nativeTextConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
 fn nativeCommentConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const doc = g_document orelse return JsValue.null_val;
-    const data = if (args.len > 0) argToString(vm, args[0]) else "";
+    const data = if (args.len > 0 and !args[0].isUndefined()) argToString(vm, args[0]) else "";
     const node = dom_b.lxb_dom_document_create_comment(doc, data.ptr, data.len) orelse return JsValue.null_val;
     return wrapNode(vm, node) orelse JsValue.null_val;
 }
@@ -1788,6 +1998,7 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
         lxb.LXB_DOM_NODE_TYPE_ELEMENT => vm.element_proto,
         lxb.LXB_DOM_NODE_TYPE_TEXT => g_text_proto,
         lxb.LXB_DOM_NODE_TYPE_COMMENT => g_comment_proto,
+        lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE => g_doctype_proto,
         lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
         else => g_node_proto,
     };
@@ -1824,8 +2035,24 @@ fn setAttrFromVal(vm: *VM, node: *lxb.lxb_dom_node_t, attr_name: []const u8, val
 }
 
 fn tagNameUpper(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
+    // Use qualified name to include prefix (e.g. "svg:rect" → "SVG:RECT")
     var len: usize = 0;
-    const raw = dom_b.lxb_dom_element_local_name(elem, &len) orelse return JsValue.null_val;
+    const raw = dom_b.lxb_dom_element_qualified_name(elem, &len) orelse {
+        // Fallback to local name
+        const local = dom_b.lxb_dom_element_local_name(elem, &len) orelse return JsValue.null_val;
+        var buf: [128]u8 = undefined;
+        const n = @min(len, buf.len);
+        for (0..n) |i| buf[i] = std.ascii.toUpper(local[i]);
+        return JsValue.initString(vm.pool.intern(buf[0..n]) catch return JsValue.null_val);
+    };
+    // For HTML namespace elements, uppercase the whole thing
+    // For non-HTML namespace, preserve case of prefix but uppercase local name
+    if (nsIdToUri(elem.node.ns)) |uri| {
+        if (!eql(uri, "http://www.w3.org/1999/xhtml")) {
+            // Non-HTML: return qualified name as-is (lowercase per SVG/MathML spec)
+            return JsValue.initString(vm.pool.intern(raw[0..len]) catch return JsValue.null_val);
+        }
+    }
     var buf: [128]u8 = undefined;
     const n = @min(len, buf.len);
     for (0..n) |i| buf[i] = std.ascii.toUpper(raw[i]);
