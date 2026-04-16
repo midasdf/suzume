@@ -2604,7 +2604,11 @@ pub const VM = struct {
         if (kio.wpt_mode and prefix.len == 0 and args.len > 0) {
             var fbuf: [64]u8 = undefined;
             const first = formatValue(vm.pool, args[0], &fbuf);
-            if (std.mem.startsWith(u8, first, "ALERT:")) {
+            // Route WPT harness lines to stdout: ALERT:, WPT_FAIL:, WPT_SUMMARY:
+            if (std.mem.startsWith(u8, first, "ALERT:") or
+                std.mem.startsWith(u8, first, "WPT_FAIL:") or
+                std.mem.startsWith(u8, first, "WPT_SUMMARY:"))
+            {
                 // Emit the joined args on stdout
                 for (args, 0..) |arg, i| {
                     if (i > 0) kio.stdoutWrite(" ");
@@ -2612,9 +2616,10 @@ pub const VM = struct {
                     kio.stdoutWrite(formatValue(vm.pool, arg, &buf));
                 }
                 kio.stdoutWrite("\n");
-                // Only the SUMMARY line marks end-of-test; WPT_FAIL lines come
-                // first and exiting on them would truncate output.
-                if (std.mem.startsWith(u8, first, "ALERT: RESULT: WPT_SUMMARY:")) {
+                // SUMMARY line marks end-of-test; exit immediately
+                if (std.mem.startsWith(u8, first, "WPT_SUMMARY:") or
+                    std.mem.startsWith(u8, first, "ALERT: RESULT: WPT_SUMMARY:"))
+                {
                     kio.wpt_result_sent = true;
                     std.process.exit(0);
                 }
