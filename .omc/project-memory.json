@@ -1,0 +1,412 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1776284739191,
+  "projectRoot": "/home/midasdf/suzume",
+  "techStack": {
+    "languages": [],
+    "frameworks": [],
+    "packageManager": null,
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": null,
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": null,
+    "scripts": {}
+  },
+  "conventions": {
+    "namingStyle": null,
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": "feature-based"
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "docs",
+      "scripts",
+      "src",
+      "tests"
+    ],
+    "gitBranches": {
+      "defaultBranch": "main",
+      "branchingStrategy": null
+    }
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "deps": {
+      "path": "deps",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776284739188,
+      "keyFiles": []
+    },
+    "docs": {
+      "path": "docs",
+      "purpose": "Documentation",
+      "fileCount": 2,
+      "lastAccessed": 1776284739189,
+      "keyFiles": [
+        "next-session-prompt.md",
+        "wpt-results-20260325.md"
+      ]
+    },
+    "patches": {
+      "path": "patches",
+      "purpose": null,
+      "fileCount": 1,
+      "lastAccessed": 1776284739189,
+      "keyFiles": [
+        "libnsfb-xim.patch"
+      ]
+    },
+    "screenshots": {
+      "path": "screenshots",
+      "purpose": null,
+      "fileCount": 39,
+      "lastAccessed": 1776284739190,
+      "keyFiles": [
+        "cmp-firefox-hn.png",
+        "cmp-suzume-anthropic-vis.png",
+        "cmp-suzume-brave.png",
+        "cmp-suzume-cern.png",
+        "cmp-suzume-cern2.png"
+      ]
+    },
+    "scripts": {
+      "path": "scripts",
+      "purpose": "Build/utility scripts",
+      "fileCount": 2,
+      "lastAccessed": 1776284739190,
+      "keyFiles": [
+        "analyze_wpt_failures.sh",
+        "apply-libnsfb-patch.sh"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 16,
+      "lastAccessed": 1776284739190,
+      "keyFiles": [
+        "browser.zig",
+        "coords.zig",
+        "env.zig",
+        "event_loop.zig",
+        "hit_test.zig"
+      ]
+    },
+    "sysroot": {
+      "path": "sysroot",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776284739190,
+      "keyFiles": []
+    },
+    "sysroot-aarch64": {
+      "path": "sysroot-aarch64",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776284739190,
+      "keyFiles": []
+    },
+    "tests": {
+      "path": "tests",
+      "purpose": "Test files",
+      "fileCount": 21,
+      "lastAccessed": 1776284739190,
+      "keyFiles": [
+        "Dockerfile.compare",
+        "compare-firefox.sh",
+        "error-check.sh",
+        "kotori_test.html",
+        "run-compare.sh"
+      ]
+    },
+    "tools": {
+      "path": "tools",
+      "purpose": null,
+      "fileCount": 4,
+      "lastAccessed": 1776284739190,
+      "keyFiles": [
+        "CompositionExclusions.txt",
+        "IdnaMappingTable.txt",
+        "UnicodeData.txt",
+        "gen_idna_tables.py"
+      ]
+    },
+    "zig-out": {
+      "path": "zig-out",
+      "purpose": null,
+      "fileCount": 0,
+      "lastAccessed": 1776284739190,
+      "keyFiles": []
+    },
+    "tests/fixtures": {
+      "path": "tests/fixtures",
+      "purpose": "Test fixtures",
+      "fileCount": 13,
+      "lastAccessed": 1776284739190,
+      "keyFiles": [
+        "japanese.html",
+        "simple.html",
+        "styled.html"
+      ]
+    },
+    "zig-out/bin": {
+      "path": "zig-out/bin",
+      "purpose": "Executable scripts",
+      "fileCount": 1,
+      "lastAccessed": 1776284739191,
+      "keyFiles": [
+        "suzume"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/js/kotori/vm.zig",
+      "accessCount": 79,
+      "lastAccessed": 1776348449986,
+      "type": "file"
+    },
+    {
+      "path": "src/js/kotori_dom.zig",
+      "accessCount": 76,
+      "lastAccessed": 1776350456752,
+      "type": "directory"
+    },
+    {
+      "path": "src/layout/flex.zig",
+      "accessCount": 20,
+      "lastAccessed": 1776287457424,
+      "type": "file"
+    },
+    {
+      "path": "src/main.zig",
+      "accessCount": 14,
+      "lastAccessed": 1776287161295,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/kotori/compiler.zig",
+      "accessCount": 10,
+      "lastAccessed": 1776350429632,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/kotori/parser.zig",
+      "accessCount": 9,
+      "lastAccessed": 1776311801339,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/kotori",
+      "accessCount": 9,
+      "lastAccessed": 1776350422536,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/dom_style.zig",
+      "accessCount": 8,
+      "lastAccessed": 1776285240536,
+      "type": "directory"
+    },
+    {
+      "path": "src/js",
+      "accessCount": 8,
+      "lastAccessed": 1776340775813,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/dom_api.zig",
+      "accessCount": 7,
+      "lastAccessed": 1776307754007,
+      "type": "directory"
+    },
+    {
+      "path": "src/css/computed.zig",
+      "accessCount": 6,
+      "lastAccessed": 1776287363334,
+      "type": "file"
+    },
+    {
+      "path": "src/js/kotori_runtime.zig",
+      "accessCount": 5,
+      "lastAccessed": 1776328453561,
+      "type": "directory"
+    },
+    {
+      "path": "src/css/cssom/computed_slice.zig",
+      "accessCount": 4,
+      "lastAccessed": 1776285767054,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 4,
+      "lastAccessed": 1776287503719,
+      "type": "directory"
+    },
+    {
+      "path": "tests/wpt/run_wpt_parallel.sh",
+      "accessCount": 4,
+      "lastAccessed": 1776340746992,
+      "type": "file"
+    },
+    {
+      "path": "src/layout/block.zig",
+      "accessCount": 3,
+      "lastAccessed": 1776287271948,
+      "type": "file"
+    },
+    {
+      "path": "src/js/dom_node.zig",
+      "accessCount": 3,
+      "lastAccessed": 1776324562096,
+      "type": "directory"
+    },
+    {
+      "path": "src/layout/box.zig",
+      "accessCount": 2,
+      "lastAccessed": 1776285251310,
+      "type": "directory"
+    },
+    {
+      "path": "src/css",
+      "accessCount": 2,
+      "lastAccessed": 1776285752666,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/kotori/value.zig",
+      "accessCount": 2,
+      "lastAccessed": 1776311069624,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/kotori/lexer.zig",
+      "accessCount": 2,
+      "lastAccessed": 1776311687943,
+      "type": "directory"
+    },
+    {
+      "path": "tests/wpt/run_all_baselines.sh",
+      "accessCount": 2,
+      "lastAccessed": 1776317697423,
+      "type": "file"
+    },
+    {
+      "path": "tests/wpt/baseline_results.txt",
+      "accessCount": 2,
+      "lastAccessed": 1776321506592,
+      "type": "file"
+    },
+    {
+      "path": "tests/wpt/run_wpt.sh",
+      "accessCount": 2,
+      "lastAccessed": 1776340702031,
+      "type": "file"
+    },
+    {
+      "path": "tests/wpt/run_all.sh",
+      "accessCount": 2,
+      "lastAccessed": 1776340734326,
+      "type": "directory"
+    },
+    {
+      "path": "src/dom/node.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776285436292,
+      "type": "directory"
+    },
+    {
+      "path": "src/css/cssom",
+      "accessCount": 1,
+      "lastAccessed": 1776285734911,
+      "type": "directory"
+    },
+    {
+      "path": "src/layout",
+      "accessCount": 1,
+      "lastAccessed": 1776285943642,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/web_api.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776287154454,
+      "type": "file"
+    },
+    {
+      "path": "src/js/dom_element.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776287495100,
+      "type": "directory"
+    },
+    {
+      "path": "src/js/dom_bindings.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776287517752,
+      "type": "directory"
+    },
+    {
+      "path": "",
+      "accessCount": 1,
+      "lastAccessed": 1776324530564,
+      "type": "directory"
+    },
+    {
+      "path": "docs/wpt-results-20260325.md",
+      "accessCount": 1,
+      "lastAccessed": 1776324536800,
+      "type": "file"
+    },
+    {
+      "path": "scripts",
+      "accessCount": 1,
+      "lastAccessed": 1776324537464,
+      "type": "directory"
+    },
+    {
+      "path": "scripts/analyze_wpt_failures.sh",
+      "accessCount": 1,
+      "lastAccessed": 1776324543552,
+      "type": "file"
+    },
+    {
+      "path": "src/core/script_executor.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776328442532,
+      "type": "directory"
+    },
+    {
+      "path": "tests/wpt",
+      "accessCount": 1,
+      "lastAccessed": 1776340719871,
+      "type": "directory"
+    },
+    {
+      "path": "tests/wpt/run_tests.sh",
+      "accessCount": 1,
+      "lastAccessed": 1776340727857,
+      "type": "file"
+    },
+    {
+      "path": "src/js/kotori/kotori.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776341565186,
+      "type": "file"
+    },
+    {
+      "path": "src/js/kotori/ast.zig",
+      "accessCount": 1,
+      "lastAccessed": 1776350402322,
+      "type": "directory"
+    }
+  ],
+  "userDirectives": []
+}

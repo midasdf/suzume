@@ -1330,6 +1330,12 @@ pub const Compiler = struct {
         const elems = self.parser.ast.getNodeList(list);
         try self.emitOpU16(.new_array, @intCast(elems.len));
         for (elems) |e_idx| {
+            if (e_idx == ast_mod.null_node) {
+                // Array elision (e.g. [,,] or trailing comma) — push undefined
+                try self.emitConstant(JsValue.undefined_val);
+                try self.emitOp(.array_push);
+                continue;
+            }
             switch (self.parser.ast.getNode(e_idx)) {
                 .spread => |inner| {
                     try self.compileNode(inner);

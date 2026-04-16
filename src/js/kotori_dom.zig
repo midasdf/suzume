@@ -381,11 +381,31 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(np, "cloneNode", &nativeCloneNode);
     try vm.registerNativeMethod(np, "isSameNode", &nativeIsSameNode);
     try vm.registerNativeMethod(np, "contains", &nativeContains);
+    try vm.registerNativeMethod(np, "compareDocumentPosition", &nativeCompareDocumentPosition);
     try vm.registerNativeMethod(np, "replaceChild", &nativeReplaceChild);
     try vm.registerNativeMethod(np, "normalize", &nativeNormalize);
     try vm.registerNativeMethod(np, "prepend", &nativePrepend);
     try vm.registerNativeMethod(np, "append", &nativeAppend);
     try vm.registerNativeMethod(np, "replaceChildren", &nativeReplaceChildren);
+
+    // ── Node.prototype constants ──
+    // Node type constants (DOM §4.4)
+    try np.setProperty(vm.allocator, try vm.pool.intern("ELEMENT_NODE"), JsValue.initNumber(1));
+    try np.setProperty(vm.allocator, try vm.pool.intern("ATTRIBUTE_NODE"), JsValue.initNumber(2));
+    try np.setProperty(vm.allocator, try vm.pool.intern("TEXT_NODE"), JsValue.initNumber(3));
+    try np.setProperty(vm.allocator, try vm.pool.intern("CDATA_SECTION_NODE"), JsValue.initNumber(4));
+    try np.setProperty(vm.allocator, try vm.pool.intern("PROCESSING_INSTRUCTION_NODE"), JsValue.initNumber(7));
+    try np.setProperty(vm.allocator, try vm.pool.intern("COMMENT_NODE"), JsValue.initNumber(8));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_NODE"), JsValue.initNumber(9));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_TYPE_NODE"), JsValue.initNumber(10));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_FRAGMENT_NODE"), JsValue.initNumber(11));
+    // Document position bitmask constants (DOM §4.4)
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_DISCONNECTED"), JsValue.initNumber(1));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_PRECEDING"), JsValue.initNumber(2));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_FOLLOWING"), JsValue.initNumber(4));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_CONTAINS"), JsValue.initNumber(8));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_CONTAINED_BY"), JsValue.initNumber(16));
+    try np.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC"), JsValue.initNumber(32));
 
     // ── CharacterData.prototype → Node.prototype ──
     g_chardata_proto = try vm.createObj(.{});
@@ -2149,6 +2169,103 @@ fn nativeContains(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!
         cur = nodeParent(c);
     }
     return JsValue.initBool(false);
+}
+
+// ── Node.compareDocumentPosition (DOM §4.4) ──────────────────────────
+
+fn nativeCompareDocumentPosition(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const DISCONNECTED: f64 = 0x01;
+    const PRECEDING: f64 = 0x02;
+    const FOLLOWING: f64 = 0x04;
+    const CONTAINS: f64 = 0x08;
+    const CONTAINED_BY: f64 = 0x10;
+    const IMPLEMENTATION_SPECIFIC: f64 = 0x20;
+
+    const self_node = getThisNode(this) orelse return JsValue.initNumber(0);
+    if (args.len == 0 or args[0].isNull() or args[0].isUndefined())
+        return JsValue.initNumber(0);
+    const other_node = getArgNode(args[0]) orelse return JsValue.initNumber(0);
+
+    // Step 1: same node → 0
+    if (self_node == other_node) return JsValue.initNumber(0);
+
+    // Build ancestor chains for self and other (root first)
+    // We use a fixed-size stack buffer; depth >512 is pathological
+    const MAX_DEPTH = 512;
+    var self_chain: [MAX_DEPTH]*lxb.lxb_dom_node_t = undefined;
+    var other_chain: [MAX_DEPTH]*lxb.lxb_dom_node_t = undefined;
+    var self_len: usize = 0;
+    var other_len: usize = 0;
+
+    var cur: ?*lxb.lxb_dom_node_t = self_node;
+    while (cur) |n| : (cur = nodeParent(n)) {
+        if (self_len < MAX_DEPTH) {
+            self_chain[self_len] = n;
+            self_len += 1;
+        }
+    }
+    cur = other_node;
+    while (cur) |n| : (cur = nodeParent(n)) {
+        if (other_len < MAX_DEPTH) {
+            other_chain[other_len] = n;
+            other_len += 1;
+        }
+    }
+
+    // Chains are leaf→root; reverse to get root→leaf
+    // self_chain[0] is self_node, self_chain[self_len-1] is tree root
+    const self_root = self_chain[self_len - 1];
+    const other_root = other_chain[other_len - 1];
+
+    // Step 2: disconnected trees
+    if (self_root != other_root) {
+        // Implementation-specific ordering by pointer value
+        const order: f64 = if (@intFromPtr(self_node) < @intFromPtr(other_node))
+            FOLLOWING
+        else
+            PRECEDING;
+        return JsValue.initNumber(DISCONNECTED + IMPLEMENTATION_SPECIFIC + order);
+    }
+
+    // Find common ancestor by walking root→leaf on both chains
+    // self_chain is stored leaf→root, so index (self_len-1) is root
+    // Find how deep the common prefix goes (from root side)
+    var common_depth: usize = 0;
+    while (common_depth < self_len and common_depth < other_len) {
+        const si = self_chain[self_len - 1 - common_depth];
+        const oi = other_chain[other_len - 1 - common_depth];
+        if (si != oi) break;
+        common_depth += 1;
+    }
+    // common_depth is the number of shared ancestors from root
+    // self_chain[self_len - common_depth] is the first node unique to self's path
+    // other_chain[other_len - common_depth] is the first node unique to other's path
+
+    // Step 3: other is ancestor of self → CONTAINS | PRECEDING
+    if (common_depth == other_len) {
+        // other_node is an ancestor of self_node
+        return JsValue.initNumber(CONTAINS + PRECEDING);
+    }
+
+    // Step 4: self is ancestor of other → CONTAINED_BY | FOLLOWING
+    if (common_depth == self_len) {
+        // self_node is an ancestor of other_node
+        return JsValue.initNumber(CONTAINED_BY + FOLLOWING);
+    }
+
+    // Step 5: siblings under common ancestor — walk next siblings to determine order
+    // self_chain[self_len - 1 - (common_depth-1)] is common ancestor
+    // self_chain[self_len - 1 - common_depth] is the child of common_ancestor on self's path
+    // other_chain[other_len - 1 - common_depth] is the child on other's path
+    const self_child = self_chain[self_len - 1 - common_depth];
+    const other_child = other_chain[other_len - 1 - common_depth];
+
+    // Walk next siblings from self_child; if we hit other_child first → other is FOLLOWING
+    var sib: ?*lxb.lxb_dom_node_t = nodeNext(self_child);
+    while (sib) |s| : (sib = nodeNext(s)) {
+        if (s == other_child) return JsValue.initNumber(FOLLOWING);
+    }
+    return JsValue.initNumber(PRECEDING);
 }
 
 // ── Node.replaceChild (DOM §4.4) ─────────────────────────────────────
