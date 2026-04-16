@@ -363,6 +363,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "addEventListener", &nativeAddEventListener);
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
     try vm.registerNativeMethod(ep, "querySelectorAll", &nativeQuerySelectorAll);
+    try vm.registerNativeMethod(ep, "isEqualNode", &nativeIsEqualNode);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     try vm.registerNativeMethod(ep, "getRootNode", &nativeGetRootNode);
     try vm.registerNativeMethod(ep, "dispatchEvent", &nativeDispatchEvent);
@@ -1471,6 +1472,102 @@ fn findByTag(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8) ?JsValue {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// ── isEqualNode (DOM §4.4) ──────────────────────────────────────────
+
+fn nativeIsEqualNode(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const a = getThisNode(this) orelse return JsValue.initBool(false);
+    if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) return JsValue.initBool(false);
+    const b = getArgNode(args[0]) orelse return JsValue.initBool(false);
+    return JsValue.initBool(nodesEqual(a, b));
+}
+
+fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
+    // Step 1: same nodeType
+    if (nodeType(a) != nodeType(b)) return false;
+
+    const nt = nodeType(a);
+
+    // Step 2: type-specific checks
+    if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        // Compare local name
+        const a_elem: *lxb.lxb_dom_element_t = @ptrCast(a);
+        const b_elem: *lxb.lxb_dom_element_t = @ptrCast(b);
+        var a_len: usize = 0;
+        var b_len: usize = 0;
+        const a_name = dom_b.lxb_dom_element_local_name(a_elem, &a_len);
+        const b_name = dom_b.lxb_dom_element_local_name(b_elem, &b_len);
+        if (a_len != b_len) return false;
+        if (a_name != null and b_name != null) {
+            if (!std.mem.eql(u8, a_name.?[0..a_len], b_name.?[0..b_len])) return false;
+        }
+        // Compare attribute count and values
+        if (!attrsEqual(a_elem, b_elem)) return false;
+    } else if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
+        // Compare text data
+        var a_len: usize = 0;
+        var b_len: usize = 0;
+        const a_txt = dom_b.lxb_dom_node_text_content(a, &a_len);
+        const b_txt = dom_b.lxb_dom_node_text_content(b, &b_len);
+        if (a_len != b_len) return false;
+        if (a_txt != null and b_txt != null) {
+            if (!std.mem.eql(u8, a_txt.?[0..a_len], b_txt.?[0..b_len])) return false;
+        } else if (a_txt != b_txt) return false;
+    }
+    // DocumentType, PI: skip for now (handled as equal if same nodeType)
+
+    // Step 3: compare children recursively
+    var a_child = nodeFirstChild(a);
+    var b_child = nodeFirstChild(b);
+    while (a_child != null and b_child != null) {
+        if (!nodesEqual(a_child.?, b_child.?)) return false;
+        a_child = nodeNext(a_child.?);
+        b_child = nodeNext(b_child.?);
+    }
+    // Both must be null (same number of children)
+    return a_child == null and b_child == null;
+}
+
+fn attrsEqual(a: *lxb.lxb_dom_element_t, b: *lxb.lxb_dom_element_t) bool {
+    // Count attributes
+    const a_count = countAttrs(a);
+    const b_count = countAttrs(b);
+    if (a_count != b_count) return false;
+    // Check each attribute of a exists in b with same value
+    const a_node: *lxb.lxb_dom_node_t = @ptrCast(a);
+    _ = a_node;
+    // Use lexbor attribute iteration
+    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(a.first_attr);
+    while (attr) |at| {
+        var name_len: usize = 0;
+        const name_ptr = lxb.lxb_dom_attr_qualified_name(at, &name_len);
+        if (name_ptr) |np| {
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(a, np, name_len, &val_len);
+            // Check b has same attribute with same value
+            var b_val_len: usize = 0;
+            const b_val_ptr = dom_b.lxb_dom_element_get_attribute(b, np, name_len, &b_val_len);
+            if (val_ptr == null and b_val_ptr == null) {
+                // both null — equal
+            } else if (val_ptr != null and b_val_ptr != null) {
+                if (val_len != b_val_len) return false;
+                if (!std.mem.eql(u8, val_ptr.?[0..val_len], b_val_ptr.?[0..b_val_len])) return false;
+            } else return false;
+        }
+        attr = @ptrCast(at.node.next);
+    }
+    return true;
+}
+
+fn countAttrs(elem: *lxb.lxb_dom_element_t) usize {
+    var count: usize = 0;
+    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(elem.first_attr);
+    while (attr) |at| {
+        count += 1;
+        attr = @ptrCast(at.node.next);
+    }
+    return count;
+}
+
 // Helpers — textContent / innerHTML
 // ══════════════════════════════════════════════════════════════════════
 
