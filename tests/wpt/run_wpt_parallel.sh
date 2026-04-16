@@ -12,6 +12,7 @@ SUZUME_BIN="$(cd "$(dirname "$0")/../.." && pwd)/zig-out/bin/suzume"
 PORT=9876
 TIMEOUT=90
 JOBS=4
+JS_ENGINE="${SUZUME_JS:-kotori}"
 
 # Parse args
 while [ $# -gt 0 ]; do
@@ -57,6 +58,15 @@ case "$AREA" in css-*) AREA="css/$AREA" ;; esac
 [ -d "$WPT_DIR" ] || { echo "ERROR: Run '$0 setup' first."; exit 1; }
 [ -f "$SUZUME_BIN" ] || { echo "ERROR: Run 'zig build' first."; exit 1; }
 
+case "$JS_ENGINE" in
+    kotori|quickjs) ;;
+    *)
+        echo "ERROR: Unsupported JS engine: $JS_ENGINE"
+        echo "Use SUZUME_JS=kotori or SUZUME_JS=quickjs"
+        exit 1
+        ;;
+esac
+
 # Start shared HTTP server
 cd "$WPT_DIR"
 python3 -m http.server "$PORT" --bind 127.0.0.1 &>/dev/null &
@@ -80,7 +90,7 @@ trap cleanup EXIT
 TESTS=$(grep -rl "testharness.js" "$AREA/" 2>/dev/null | grep '\.html$' | sort)
 TEST_COUNT=$(echo "$TESTS" | grep -c '^' || echo 0)
 
-echo "=== WPT Tests: $AREA ($TEST_COUNT files, $JOBS parallel) ==="
+echo "=== WPT Tests: $AREA ($TEST_COUNT files, $JOBS parallel, engine=$JS_ENGINE) ==="
 
 # Temp dir for results
 TMPDIR=$(mktemp -d)
@@ -92,7 +102,7 @@ run_single_test() {
     local disp=$((98 + (job_id % JOBS)))
     local url="http://127.0.0.1:$PORT/$test"
     local output
-    output=$(DISPLAY=":$disp" timeout "$TIMEOUT" "$SUZUME_BIN" --wpt-mode "$url" 2>&1 || true)
+    output=$(DISPLAY=":$disp" SUZUME_JS="$JS_ENGINE" timeout "$TIMEOUT" "$SUZUME_BIN" --wpt-mode "$url" 2>&1 || true)
     local summary
     summary=$(echo "$output" | grep "WPT_SUMMARY:" | tail -1)
     if [ -n "$summary" ]; then
@@ -110,7 +120,7 @@ run_single_test() {
     fi
 }
 export -f run_single_test
-export SUZUME_BIN PORT TIMEOUT JOBS TMPDIR
+export SUZUME_BIN PORT TIMEOUT JOBS TMPDIR JS_ENGINE
 
 # Execute with parallel (GNU parallel or xargs fallback)
 echo "$TESTS" | nl -ba | while read num test; do

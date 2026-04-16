@@ -262,6 +262,14 @@ const dom_b = struct {
     pub extern fn lxb_dom_document_type_name_noi(dtype: *anyopaque, len: *usize) ?[*]const u8;
     pub extern fn lxb_dom_document_type_public_id_noi(dtype: *anyopaque, len: *usize) ?[*]const u8;
     pub extern fn lxb_dom_document_type_system_id_noi(dtype: *anyopaque, len: *usize) ?[*]const u8;
+    // Attribute accessors
+    pub extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
+    pub extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
+    // HTML document creation (for createHTMLDocument)
+    pub extern fn lxb_html_document_create() ?*anyopaque;
+    pub extern fn lxb_html_document_parse(document: *anyopaque, html: [*]const u8, size: usize) u32;
+    pub extern fn lxb_html_document_body_element_noi(document: *anyopaque) ?*lxb.lxb_dom_node_t;
+    pub extern fn lxb_html_document_head_element_noi(document: *anyopaque) ?*lxb.lxb_dom_node_t;
 };
 
 // ── C pointer helpers (convert [*c] to ?* for field access) ─────────
@@ -285,6 +293,40 @@ fn nodeType(node: *lxb.lxb_dom_node_t) c_uint {
 pub var dom_dirty: bool = false;
 var g_alloc: std.mem.Allocator = undefined;
 var g_document: ?*anyopaque = null; // lxb_dom_document_t*
+
+// Storage for createHTMLDocument-created documents (prevent deallocation)
+var created_docs: [32]?*anyopaque = .{null} ** 32;
+var created_doc_count: usize = 0;
+
+// Namespace info for createElementNS elements (lexbor HTML DOM doesn't store XML prefixes)
+const NsInfo = struct { prefix: []const u8, uri: []const u8 };
+var ns_info_map: ?std.AutoHashMapUnmanaged(usize, NsInfo) = null;
+
+fn ensureNsInfoMap() *std.AutoHashMapUnmanaged(usize, NsInfo) {
+    if (ns_info_map == null) ns_info_map = .empty;
+    return &ns_info_map.?;
+}
+
+fn getNsInfo(node: *lxb.lxb_dom_node_t) ?NsInfo {
+    const map = &(ns_info_map orelse return null);
+    return map.get(@intFromPtr(node));
+}
+
+/// Get the lexbor document from `this` (if it's a document node) or fall back to g_document.
+/// Enables createElement/createTextNode/etc. to work on both the main document and
+/// documents created by createHTMLDocument.
+fn getDocFromThis(this: JsValue) ?*anyopaque {
+    if (this.isObject()) {
+        const obj = this.asJsObject();
+        if (obj.obj_type == .dom_node) {
+            const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(obj.data.dom_node));
+            if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+                return obj.data.dom_node;
+            }
+        }
+    }
+    return g_document;
+}
 
 fn setDomDirty() void {
     dom_dirty = true;
@@ -412,6 +454,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(np, "replaceWith", &nativeReplaceWith);
     try vm.registerNativeMethod(np, "remove", &nativeRemove);
     try vm.registerNativeMethod(np, "lookupNamespaceURI", &nativeLookupNamespaceURI);
+    try vm.registerNativeMethod(np, "isDefaultNamespace", &nativeIsDefaultNamespace);
 
     // ── Node.prototype constants ──
     // Node type constants (DOM §4.4)
@@ -454,6 +497,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     ep.prototype = g_node_proto;
     // Element-specific methods (Node methods inherited via prototype chain)
     try vm.registerNativeMethod(ep, "setAttribute", &nativeSetAttribute);
+    try vm.registerNativeMethod(ep, "setAttributeNS", &nativeSetAttributeNS);
     try vm.registerNativeMethod(ep, "getAttribute", &nativeGetAttribute);
     try vm.registerNativeMethod(ep, "removeAttribute", &nativeRemoveAttribute);
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
@@ -488,6 +532,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode);
     try vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment);
     try vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment);
+    try vm.registerNativeMethod(doc_obj, "adoptNode", &nativeAdoptNode);
+    try vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode);
 
     const doc_id = try vm.pool.intern("document");
     try vm.globals.put(vm.allocator, doc_id, JsValue.initObject(doc_obj));
@@ -595,7 +641,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     df_ctor.data = .{ .native_fn = &nativeDocumentFragmentConstructor };
     df_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(np)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("DocumentFragment"), JsValue.initObject(df_ctor));
-    try vm.globals.put(vm.allocator, try vm.pool.intern("Document"), JsValue.initObject(elem_ctor));
+    const doc_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    doc_ctor.data = .{ .native_fn = &nativeDocumentConstructor };
+    doc_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(np)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("Document"), JsValue.initObject(doc_ctor));
     try vm.globals.put(vm.allocator, try vm.pool.intern("HTMLDocument"), JsValue.initObject(elem_ctor));
 
     // DocumentType constructor + prototype
@@ -918,6 +967,11 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         cdt_fn.data = .{ .native_fn = &nativeImplementationCreateDocumentType };
         const cdt_sid = vm.pool.intern("createDocumentType") catch return null;
         impl_obj.setProperty(vm.allocator, cdt_sid, JsValue.initObject(cdt_fn)) catch {};
+        // createDocument(namespace, qualifiedName, doctype) — DOM §7.1
+        const cd_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+        cd_fn.data = .{ .native_fn = &nativeImplementationCreateDocument };
+        const cd_sid = vm.pool.intern("createDocument") catch return null;
+        impl_obj.setProperty(vm.allocator, cd_sid, JsValue.initObject(cd_fn)) catch {};
         return JsValue.initObject(impl_obj);
     }
 
@@ -1097,47 +1151,154 @@ fn nativeDocumentFragmentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsV
     return wrapNode(vm, frag) orelse JsValue.null_val;
 }
 
+/// DOM §4.4: Node.lookupNamespaceURI(prefix)
+/// Follows the DOM Living Standard algorithm for locating namespace URI.
 fn nativeLookupNamespaceURI(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const node = getThisNode(this) orelse return JsValue.null_val;
-    // args[0] = prefix (string or null)
-    const prefix: ?[]const u8 = if (args.len > 0 and args[0].isString()) vm.pool.get(args[0].asStringId()) else null;
-    // Walk up the tree looking for namespace declarations
-    var cur: ?*lxb.lxb_dom_node_t = node;
-    while (cur) |n| {
-        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            const elem: *lxb.lxb_dom_element_t = @ptrCast(n);
-            // Check if this element's own namespace matches the prefix
+    // Normalize prefix: null, undefined, or "" → null
+    const prefix: ?[]const u8 = blk: {
+        if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) break :blk null;
+        if (args[0].isString()) {
+            const s = vm.pool.get(args[0].asStringId()) orelse break :blk null;
+            if (s.len == 0) break :blk null;
+            break :blk s;
+        }
+        break :blk null;
+    };
+    const result = lookupNamespaceURIImpl(node, prefix);
+    if (result) |uri| {
+        return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
+    }
+    return JsValue.null_val;
+}
+
+/// Core lookupNamespaceURI algorithm (DOM §4.4)
+fn lookupNamespaceURIImpl(node: *lxb.lxb_dom_node_t, prefix: ?[]const u8) ?[]const u8 {
+    const nt = nodeType(node);
+    switch (nt) {
+        lxb.LXB_DOM_NODE_TYPE_ELEMENT => return elementLookupNamespaceURI(node, prefix),
+        lxb.LXB_DOM_NODE_TYPE_DOCUMENT => {
+            // Document: delegate to documentElement
+            var child: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+            while (child) |ch| {
+                if (nodeType(ch) == lxb.LXB_DOM_NODE_TYPE_ELEMENT)
+                    return lookupNamespaceURIImpl(ch, prefix);
+                child = nodeNext(ch);
+            }
+            return null;
+        },
+        lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE,
+        lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT,
+        => return null,
+        else => {
+            // Text, Comment, etc.: delegate to parent element
+            if (nodeParent(node)) |parent| return lookupNamespaceURIImpl(parent, prefix);
+            return null;
+        },
+    }
+}
+
+/// Element-specific namespace lookup (DOM §4.4)
+fn elementLookupNamespaceURI(node: *lxb.lxb_dom_node_t, prefix: ?[]const u8) ?[]const u8 {
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    // Built-in prefixes (always available, even without xmlns attributes)
+    if (prefix) |pfx| {
+        if (eql(pfx, "xml")) return "http://www.w3.org/XML/1998/namespace";
+        if (eql(pfx, "xmlns")) return "http://www.w3.org/2000/xmlns/";
+    }
+
+    // Check this element's own namespace (if its prefix matches)
+    // First check ns_info_map for createElementNS-created elements
+    if (getNsInfo(node)) |info| {
+        if (prefix == null) {
+            // Looking for default namespace: element has no prefix and has namespace
+            if (info.prefix.len == 0) return info.uri;
+        } else if (prefix) |pfx| {
+            if (info.prefix.len > 0 and eql(info.prefix, pfx)) return info.uri;
+        }
+    } else {
+        // Fall back to lexbor's namespace info (for elements created by HTML parser)
+        const ns_uri = nsIdToUri(elem.node.ns);
+        if (ns_uri != null) {
+            var qn_len: usize = 0;
+            const qn_ptr = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
+            var ln_len: usize = 0;
+            _ = dom_b.lxb_dom_element_local_name(elem, &ln_len);
             if (prefix == null) {
-                // Looking for default namespace
-                var qn_len: usize = 0;
-                const qn = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
-                var ln_len: usize = 0;
-                _ = dom_b.lxb_dom_element_local_name(elem, &ln_len);
-                if (qn != null and qn_len == ln_len) {
-                    // No prefix on this element — its namespace is the default
-                    if (nsIdToUri(elem.node.ns)) |uri| {
-                        return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
+                if (qn_ptr != null and qn_len == ln_len) return ns_uri;
+            } else if (prefix) |pfx| {
+                if (qn_ptr != null and qn_len > ln_len) {
+                    const elem_prefix_len = qn_len - ln_len - 1;
+                    if (elem_prefix_len == pfx.len and eql(qn_ptr.?[0..elem_prefix_len], pfx)) return ns_uri;
+                }
+            }
+        }
+    }
+
+    // Check xmlns attributes on this element
+    // Look for xmlns:prefix="uri" or xmlns="uri" (default namespace)
+    // Use attr.next (attribute chain), NOT node.next (DOM tree siblings)
+    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (attr) |a| {
+        var attr_qn_len: usize = 0;
+        const attr_qn = dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len);
+        if (attr_qn) |aqn| {
+            const attr_name = aqn[0..attr_qn_len];
+            if (prefix == null) {
+                // Looking for default namespace: check for xmlns="..."
+                if (eql(attr_name, "xmlns")) {
+                    var val_len: usize = 0;
+                    const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
+                    if (val_ptr) |vp| {
+                        const val = vp[0..val_len];
+                        if (val.len == 0) return null; // xmlns="" resets default namespace
+                        return val;
                     }
+                    return null;
                 }
             } else if (prefix) |pfx| {
-                var qn_len: usize = 0;
-                const qn = dom_b.lxb_dom_element_qualified_name(elem, &qn_len);
-                var ln_len: usize = 0;
-                _ = dom_b.lxb_dom_element_local_name(elem, &ln_len);
-                if (qn != null and qn_len > ln_len) {
-                    const elem_prefix_len = qn_len - ln_len - 1;
-                    if (elem_prefix_len == pfx.len and eql(qn.?[0..elem_prefix_len], pfx)) {
-                        if (nsIdToUri(elem.node.ns)) |uri| {
-                            return JsValue.initString(vm.pool.intern(uri) catch return JsValue.null_val);
-                        }
+                // Check for xmlns:prefix="..."
+                if (attr_name.len > 6 and std.mem.startsWith(u8, attr_name, "xmlns:")) {
+                    const attr_prefix = attr_name[6..];
+                    if (eql(attr_prefix, pfx)) {
+                        var val_len: usize = 0;
+                        const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
+                        if (val_ptr) |vp| return vp[0..val_len];
+                        return null;
                     }
                 }
             }
         }
-        cur = nodeParent(n);
+        attr = a.next; // use attribute chain, not DOM tree
     }
-    return JsValue.null_val;
+
+    // Walk up to parent element
+    if (nodeParent(node)) |parent| return lookupNamespaceURIImpl(parent, prefix);
+    return null;
+}
+
+/// DOM §4.4: Node.isDefaultNamespace(namespace)
+fn nativeIsDefaultNamespace(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.initBool(false);
+    // Get namespace argument: null/undefined/"" → null
+    const namespace: ?[]const u8 = blk: {
+        if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) break :blk null;
+        if (args[0].isString()) {
+            const s = vm.pool.get(args[0].asStringId()) orelse break :blk null;
+            if (s.len == 0) break :blk null;
+            break :blk s;
+        }
+        break :blk null;
+    };
+    // Look up default namespace (prefix = null)
+    const default_ns = lookupNamespaceURIImpl(node, null);
+    // Compare
+    if (namespace == null and default_ns == null) return JsValue.initBool(true);
+    if (namespace != null and default_ns != null) return JsValue.initBool(eql(namespace.?, default_ns.?));
+    return JsValue.initBool(false);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1264,11 +1425,11 @@ fn nativeGetElementsByClassName(ctx: *anyopaque, this: JsValue, args: []const Js
     return JsValue.initObject(arr_obj);
 }
 
-fn nativeCreateElement(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
     const tag = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
-    const doc = g_document orelse return JsValue.null_val;
+    const doc = getDocFromThis(this) orelse return JsValue.null_val;
     const elem = dom_b.lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return JsValue.null_val;
     return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
 }
@@ -1286,10 +1447,10 @@ fn uriToNsId(uri: []const u8) ?usize {
 
 /// DOM §4.1 — document.createElementNS(namespace, qualifiedName).
 /// Creates an element with the specified namespace URI and qualified name.
-fn nativeCreateElementNS(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeCreateElementNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len < 2) return JsValue.null_val;
-    const doc = g_document orelse return JsValue.null_val;
+    const doc = getDocFromThis(this) orelse return JsValue.null_val;
 
     // Get qualifiedName (arg[1]) — must be a string
     const qn = if (args[1].isString())
@@ -1314,8 +1475,8 @@ fn nativeCreateElementNS(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
     const local_name: []const u8 = if (colon_pos) |cp| qn[cp + 1 ..] else qn;
     const create_name = if (local_name.len > 0) local_name else qn;
 
-    // Create element via lexbor using localName
-    const elem = dom_b.lxb_dom_document_create_element(doc, create_name.ptr, create_name.len, null) orelse return JsValue.null_val;
+    // Create element via lexbor using FULL qualifiedName so prefix is stored in qualified_name
+    const elem = dom_b.lxb_dom_document_create_element(doc, qn.ptr, qn.len, null) orelse return JsValue.null_val;
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
 
     // Set namespace ID on lexbor element
@@ -1325,6 +1486,13 @@ fn nativeCreateElementNS(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
         } else {
             // Custom namespace — clear lexbor's default HTML ns
             node.ns = 0x01; // LXB_NS_UNDEF — nsIdToUri returns null
+        }
+        // Store prefix+URI in ns_info_map for lookupNamespaceURI
+        if (prefix) |pfx| {
+            ensureNsInfoMap().put(g_alloc, @intFromPtr(node), .{ .prefix = pfx, .uri = uri }) catch {};
+        } else {
+            // No prefix — store as default namespace for this element
+            ensureNsInfoMap().put(g_alloc, @intFromPtr(node), .{ .prefix = "", .uri = uri }) catch {};
         }
     } else {
         // null namespace — clear HTML default
@@ -1453,9 +1621,9 @@ fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue)
     return JsValue.initString(try vm.pool.intern(""));
 }
 
-fn nativeCreateTextNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeCreateTextNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    const doc = g_document orelse return JsValue.null_val;
+    const doc = getDocFromThis(this) orelse return JsValue.null_val;
     // DOMString conversion: null→"null", undefined→"undefined", number→string
     const text = if (args.len > 0) argToString(vm, args[0]) else "";
     const tn = dom_b.lxb_dom_document_create_text_node(doc, text.ptr, text.len) orelse return JsValue.null_val;
@@ -1475,9 +1643,9 @@ fn getDocTypeName(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
     return JsValue.initString(vm.pool.intern("html") catch return JsValue.null_val);
 }
 
-fn nativeCreateComment(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeCreateComment(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    const doc = g_document orelse return JsValue.null_val;
+    const doc = getDocFromThis(this) orelse return JsValue.null_val;
     const data = if (args.len > 0) argToString(vm, args[0]) else "";
     const node = dom_b.lxb_dom_document_create_comment(doc, data.ptr, data.len) orelse return JsValue.null_val;
     return wrapNode(vm, node) orelse JsValue.null_val;
@@ -1523,11 +1691,31 @@ fn argToString(vm: *VM, val: JsValue) []const u8 {
     return "[object Object]";
 }
 
-fn nativeCreateDocumentFragment(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+fn nativeCreateDocumentFragment(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    const doc = g_document orelse return JsValue.null_val;
+    const doc = getDocFromThis(this) orelse return JsValue.null_val;
     const frag = sr.lxb_dom_document_create_document_fragment(doc) orelse return JsValue.null_val;
     return wrapNode(vm, frag) orelse JsValue.null_val;
+}
+
+/// DOM §4.4: document.adoptNode(node) — removes from current parent, returns node.
+fn nativeAdoptNode(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (args.len == 0) return JsValue.null_val;
+    const node = getArgNode(args[0]) orelse return args[0]; // JS-only node: return as-is
+    // Remove from current parent
+    dom_b.lxb_dom_node_remove(node);
+    setDomDirty();
+    return args[0];
+}
+
+/// DOM §4.4: document.importNode(node, deep) — clones a node into this document.
+fn nativeImportNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.null_val;
+    const node = getArgNode(args[0]) orelse return JsValue.null_val;
+    const deep = if (args.len > 1 and args[1].isBool()) args[1].asBool() else false;
+    const cloned = dom_b.lxb_dom_node_clone(node, deep) orelse return JsValue.null_val;
+    return wrapNode(vm, cloned) orelse JsValue.null_val;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1579,6 +1767,22 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
     _ = dom_b.lxb_dom_element_set_attribute(elem, n.ptr, n.len, v.ptr, v.len);
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+/// DOM §4.9: Element.setAttributeNS(namespace, qualifiedName, value)
+fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 3) return JsValue.undefined_val;
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    // args[0] = namespace (ignored for storage, lexbor uses qualified name)
+    // args[1] = qualifiedName, args[2] = value
+    const qn = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[1]);
+    const v = if (args[2].isString()) vm.pool.get(args[2].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[2]);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -2079,6 +2283,36 @@ fn throwDomError(vm: *VM, name: []const u8) JsValue {
 
 fn nativeNoOpConstructor(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     return JsValue.undefined_val;
+}
+
+/// DOM: new Document() — creates an empty XML document (no children).
+fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    // Create a new empty lexbor document
+    const new_doc = dom_b.lxb_html_document_create() orelse return JsValue.undefined_val;
+    if (created_doc_count < created_docs.len) {
+        created_docs[created_doc_count] = new_doc;
+        created_doc_count += 1;
+    }
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_doc));
+    const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
+    doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
+    doc_obj.prototype = g_node_proto;
+    const nt_sid = try vm.pool.intern("nodeType");
+    doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
+    const nn_sid = try vm.pool.intern("nodeName");
+    doc_obj.setProperty(vm.allocator, nn_sid, JsValue.initString(try vm.pool.intern("#document"))) catch {};
+    const url_sid = try vm.pool.intern("URL");
+    doc_obj.setProperty(vm.allocator, url_sid, JsValue.initString(try vm.pool.intern("about:blank"))) catch {};
+    const ct_sid = try vm.pool.intern("contentType");
+    doc_obj.setProperty(vm.allocator, ct_sid, JsValue.initString(try vm.pool.intern("application/xml"))) catch {};
+    vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement) catch {};
+    vm.registerNativeMethod(doc_obj, "createElementNS", &nativeCreateElementNS) catch {};
+    vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
+    vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment) catch {};
+    vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment) catch {};
+    vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
+    return JsValue.initObject(doc_obj);
 }
 
 fn nativeTextConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -3029,11 +3263,189 @@ fn nativeImplementationHasFeature(_: *anyopaque, _: JsValue, _: []const JsValue)
     return JsValue.initBool(true);
 }
 
-fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+/// DOM §7.1: DOMImplementation.createHTMLDocument([title])
+/// Creates a new standalone HTML document with <!DOCTYPE html><html><head></head><body></body></html>.
+/// If title is given, adds <title>title</title> inside <head>.
+fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    // Return the existing document object as a minimal implementation
-    const doc_sid = vm.pool.intern("document") catch return JsValue.null_val;
-    return vm.globals.get(doc_sid) orelse JsValue.null_val;
+
+    // Build minimal HTML to parse
+    var html_buf: [512]u8 = undefined;
+    const html: []const u8 = blk: {
+        if (args.len > 0 and !args[0].isUndefined()) {
+            const title_str = argToString(vm, args[0]);
+            const len = std.fmt.bufPrint(&html_buf, "<!DOCTYPE html><html><head><title>{s}</title></head><body></body></html>", .{title_str}) catch
+                break :blk "<!DOCTYPE html><html><head></head><body></body></html>";
+            break :blk len;
+        }
+        break :blk "<!DOCTYPE html><html><head></head><body></body></html>";
+    };
+
+    // Create new lexbor document and parse
+    const new_doc = dom_b.lxb_html_document_create() orelse return JsValue.null_val;
+    const status = dom_b.lxb_html_document_parse(new_doc, html.ptr, html.len);
+    if (status != 0) return JsValue.null_val;
+
+    // Store to prevent deallocation
+    if (created_doc_count < created_docs.len) {
+        created_docs[created_doc_count] = new_doc;
+        created_doc_count += 1;
+    }
+
+    // Wrap document node
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_doc));
+    const doc_obj = vm.createObj(.{ .obj_type = .dom_node }) catch return JsValue.null_val;
+    doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
+    doc_obj.prototype = g_node_proto;
+    const doc_val = JsValue.initObject(doc_obj);
+
+    // nodeType = 9 (DOCUMENT_NODE)
+    const nt_sid = vm.pool.intern("nodeType") catch return JsValue.null_val;
+    doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
+
+    // nodeName = "#document"
+    const nn_sid = vm.pool.intern("nodeName") catch return JsValue.null_val;
+    doc_obj.setProperty(vm.allocator, nn_sid, JsValue.initString(vm.pool.intern("#document") catch return JsValue.null_val)) catch {};
+
+    // Metadata properties
+    const meta_props = .{
+        .{ "URL", "about:blank" },
+        .{ "documentURI", "about:blank" },
+        .{ "compatMode", "CSS1Compat" },
+        .{ "characterSet", "UTF-8" },
+        .{ "charset", "UTF-8" },
+        .{ "inputEncoding", "UTF-8" },
+        .{ "contentType", "text/html" },
+    };
+    inline for (meta_props) |pair| {
+        const sid = vm.pool.intern(pair[0]) catch break;
+        const val_sid = vm.pool.intern(pair[1]) catch break;
+        doc_obj.setProperty(vm.allocator, sid, JsValue.initString(val_sid)) catch {};
+    }
+
+    // location = null (no browsing context)
+    const loc_sid = vm.pool.intern("location") catch return JsValue.null_val;
+    doc_obj.setProperty(vm.allocator, loc_sid, JsValue.null_val) catch {};
+
+    // Register DOM methods on this document
+    vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement) catch {};
+    vm.registerNativeMethod(doc_obj, "createElementNS", &nativeCreateElementNS) catch {};
+    vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
+    vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment) catch {};
+    vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment) catch {};
+    vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
+    vm.registerNativeMethod(doc_obj, "removeChild", &nativeRemoveChild) catch {};
+    vm.registerNativeMethod(doc_obj, "insertBefore", &nativeInsertBefore) catch {};
+    vm.registerNativeMethod(doc_obj, "replaceChild", &nativeReplaceChild) catch {};
+    vm.registerNativeMethod(doc_obj, "hasChildNodes", &nativeHasChildNodes) catch {};
+    vm.registerNativeMethod(doc_obj, "cloneNode", &nativeCloneNode) catch {};
+    vm.registerNativeMethod(doc_obj, "contains", &nativeContains) catch {};
+    vm.registerNativeMethod(doc_obj, "getElementById", &nativeGetElementById) catch {};
+    vm.registerNativeMethod(doc_obj, "getElementsByTagName", &nativeGetElementsByTagName) catch {};
+    vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName) catch {};
+    vm.registerNativeMethod(doc_obj, "querySelector", &nativeQuerySelector) catch {};
+    vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeQuerySelectorAll) catch {};
+
+    // implementation (self-referential for chained calls)
+    const impl_obj = vm.createObj(.{}) catch return doc_val;
+    const hf_fn = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    hf_fn.data = .{ .native_fn = &nativeImplementationHasFeature };
+    const hf_sid = vm.pool.intern("hasFeature") catch return doc_val;
+    impl_obj.setProperty(vm.allocator, hf_sid, JsValue.initObject(hf_fn)) catch {};
+    const chd_fn2 = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    chd_fn2.data = .{ .native_fn = &nativeImplementationCreateHTMLDocument };
+    const chd_sid2 = vm.pool.intern("createHTMLDocument") catch return doc_val;
+    impl_obj.setProperty(vm.allocator, chd_sid2, JsValue.initObject(chd_fn2)) catch {};
+    const cdt_fn2 = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    cdt_fn2.data = .{ .native_fn = &nativeImplementationCreateDocumentType };
+    const cdt_sid2 = vm.pool.intern("createDocumentType") catch return doc_val;
+    impl_obj.setProperty(vm.allocator, cdt_sid2, JsValue.initObject(cdt_fn2)) catch {};
+    const impl_sid = vm.pool.intern("implementation") catch return doc_val;
+    doc_obj.setProperty(vm.allocator, impl_sid, JsValue.initObject(impl_obj)) catch {};
+
+    return doc_val;
+}
+
+/// DOM §7.1: DOMImplementation.createDocument(namespace, qualifiedName, doctype)
+/// Creates a new XML document. If qualifiedName is non-empty, appends a root element.
+fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+
+    // Create empty document (no HTML parsing — this is an XML document)
+    const new_doc = dom_b.lxb_html_document_create() orelse return JsValue.null_val;
+
+    // Store to prevent deallocation
+    if (created_doc_count < created_docs.len) {
+        created_docs[created_doc_count] = new_doc;
+        created_doc_count += 1;
+    }
+
+    // Wrap document node
+    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_doc));
+    const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
+    doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
+    doc_obj.prototype = g_node_proto;
+    const doc_val = JsValue.initObject(doc_obj);
+
+    // nodeType = 9, nodeName = "#document"
+    const nt_sid = try vm.pool.intern("nodeType");
+    doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
+    const nn_sid = try vm.pool.intern("nodeName");
+    doc_obj.setProperty(vm.allocator, nn_sid, JsValue.initString(try vm.pool.intern("#document"))) catch {};
+
+    // Metadata
+    const meta = .{
+        .{ "URL", "about:blank" },
+        .{ "documentURI", "about:blank" },
+        .{ "compatMode", "CSS1Compat" },
+        .{ "characterSet", "UTF-8" },
+        .{ "contentType", "application/xml" },
+    };
+    inline for (meta) |pair| {
+        const sid = vm.pool.intern(pair[0]) catch break;
+        const val_sid = vm.pool.intern(pair[1]) catch break;
+        doc_obj.setProperty(vm.allocator, sid, JsValue.initString(val_sid)) catch {};
+    }
+
+    // Register DOM methods
+    vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement) catch {};
+    vm.registerNativeMethod(doc_obj, "createElementNS", &nativeCreateElementNS) catch {};
+    vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
+    vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment) catch {};
+    vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment) catch {};
+    vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
+    vm.registerNativeMethod(doc_obj, "removeChild", &nativeRemoveChild) catch {};
+    vm.registerNativeMethod(doc_obj, "insertBefore", &nativeInsertBefore) catch {};
+
+    // If doctype provided (arg[2]), prepend it
+    if (args.len >= 3 and args[2].isObject()) {
+        // doctype is a JS DocumentType object — store reference
+        const dt_sid = try vm.pool.intern("doctype");
+        doc_obj.setProperty(vm.allocator, dt_sid, args[2]) catch {};
+    }
+
+    // If qualifiedName is non-empty (arg[1]), create root element
+    if (args.len >= 2 and args[1].isString()) {
+        const qn = vm.pool.get(args[1].asStringId()) orelse "";
+        if (qn.len > 0) {
+            // Get namespace (arg[0])
+            const ns_str: ?[]const u8 = blk: {
+                if (args.len > 0 and args[0].isString()) {
+                    const s = vm.pool.get(args[0].asStringId()) orelse break :blk null;
+                    if (s.len == 0) break :blk null;
+                    break :blk s;
+                }
+                break :blk null;
+            };
+            _ = ns_str;
+            // Create root element using lexbor
+            const elem = dom_b.lxb_dom_document_create_element(new_doc, qn.ptr, qn.len, null) orelse return doc_val;
+            const elem_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+            dom_b.lxb_dom_node_insert_child(doc_node, elem_node);
+        }
+    }
+
+    return doc_val;
 }
 
 /// DOM §7.1: DOMImplementation.createDocumentType(qualifiedName, publicId, systemId)

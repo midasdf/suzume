@@ -4541,6 +4541,119 @@ test "eval: Object.hasOwn missing property" {
     try std.testing.expect(!result.asBool());
 }
 
+test "eval: hasOwnProperty sees defineProperty data property" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { value: 1 });
+        \\o.hasOwnProperty("x")
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.hasOwn sees defineProperty data property" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { value: 1 });
+        \\Object.hasOwn(o, "x")
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.defineProperty defaults are false" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { value: 1 });
+        \\var d = Object.getOwnPropertyDescriptor(o, "x");
+        \\d.writable === false && d.enumerable === false && d.configurable === false
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: propertyIsEnumerable false for default defineProperty" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { value: 1 });
+        \\o.propertyIsEnumerable("x")
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(!result.asBool());
+}
+
+test "eval: preventExtensions blocks adding new property" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.preventExtensions(o);
+        \\o.x = 1;
+        \\Object.hasOwn(o, "x") === false && o.x === undefined
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: delete non-configurable property returns false" {
+    const result = try evalExpr(
+        \\var o = {};
+        \\Object.defineProperty(o, "x", { value: 1, configurable: false });
+        \\var deleted = delete o.x;
+        \\deleted === false && o.x === 1
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: Object.getOwnPropertyNames includes array length" {
+    const result = try evalExpr(
+        \\Object.getOwnPropertyNames(["a", "b"]).indexOf("length") >= 0
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: array length is visible to in operator" {
+    const result = try evalExpr(
+        \\"length" in ["a", "b"]
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: array length has own property descriptor" {
+    const result = try evalExpr(
+        \\var d = Object.getOwnPropertyDescriptor(["a", "b"], "length");
+        \\d && d.enumerable === false && d.configurable === false && d.writable === true && d.value === 2
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "eval: new Array zero args has length 0" {
+    const result = try evalExpr(
+        \\var arr = new Array;
+        \\arr.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: array defineProperty accessor updates length and join" {
+    const result = try evalExpr(
+        \\var arr = new Array;
+        \\var called = 0;
+        \\Object.defineProperty(arr, 0, { get: function() { ++called; return 7; } });
+        \\var ok = arr.length === 1;
+        \\ok = ok && called === 0;
+        \\ok = ok && arr[0] === 7;
+        \\ok = ok && called === 1;
+        \\ok = ok && String(arr) === "7";
+        \\ok = ok && called === 2;
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
 // ── Phase I: Object.fromEntries ─────────────────────────────────
 
 test "eval: Object.fromEntries basic" {
@@ -5442,17 +5555,23 @@ test "eval: class accessor configurable is true" {
 
 // Item 13: Number.prototype.toFixed RangeError (ES2023 §21.1.3.3 step 2)
 test "Number.toFixed RangeError negative digits" {
-    // fractionDigits < 0 must throw RangeError, not silently clamp to 0
-    try std.testing.expectError(error.RangeError, evalExpr(
-        \\(1.5).toFixed(-1)
-    ));
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (1.5).toFixed(-1); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
 }
 
 test "Number.toFixed RangeError digits > 100" {
-    // fractionDigits > 100 must throw RangeError
-    try std.testing.expectError(error.RangeError, evalExpr(
-        \\(1.5).toFixed(101)
-    ));
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (1.5).toFixed(101); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
 }
 
 test "Number.toFixed valid range no error" {
@@ -5465,29 +5584,44 @@ test "Number.toFixed valid range no error" {
 
 // Item 13: Number.prototype.toPrecision RangeError (ES2023 §21.1.3.5 step 3)
 test "Number.toPrecision RangeError precision < 1" {
-    // precision < 1 must throw RangeError
-    try std.testing.expectError(error.RangeError, evalExpr(
-        \\(1.5).toPrecision(0)
-    ));
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (1.5).toPrecision(0); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
 }
 
 test "Number.toPrecision RangeError precision > 100" {
-    try std.testing.expectError(error.RangeError, evalExpr(
-        \\(1.5).toPrecision(101)
-    ));
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (1.5).toPrecision(101); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
 }
 
 // Item 13: Number.prototype.toExponential RangeError (ES2023 §21.1.3.4 step 4)
 test "Number.toExponential RangeError digits < 0" {
-    try std.testing.expectError(error.RangeError, evalExpr(
-        \\(1.5).toExponential(-1)
-    ));
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (1.5).toExponential(-1); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
 }
 
 test "Number.toExponential RangeError digits > 100" {
-    try std.testing.expectError(error.RangeError, evalExpr(
-        \\(1.5).toExponential(101)
-    ));
+    const result = try evalExpr(
+        \\let ok = false;
+        \\try { (1.5).toExponential(101); } catch (e) { ok = e.name === "RangeError"; }
+        \\ok
+    );
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
 }
 
 test "Number.toExponential undefined arg no error" {

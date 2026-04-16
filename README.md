@@ -53,12 +53,16 @@ Selected test files at 100%: CharacterData (128/128), ChildNode (135/135), Eleme
 # First-time setup
 bash tests/wpt/run_wpt.sh setup
 
-# Run a test area
+# Run a test area with kotori (default)
 bash tests/wpt/run_wpt.sh dom/nodes
 bash tests/wpt/run_wpt.sh css/css-box
 bash tests/wpt/run_wpt.sh html/dom
 
-# Multiple areas can run in parallel (reuses shared HTTP server + Xvfb)
+# Parallel runner also uses kotori by default
+bash tests/wpt/run_wpt_parallel.sh --jobs 4 dom/nodes
+
+# QuickJS fallback remains available for comparison/debugging
+SUZUME_JS=quickjs bash tests/wpt/run_wpt.sh dom/nodes
 ```
 
 ## Building

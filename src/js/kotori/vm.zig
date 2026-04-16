@@ -835,7 +835,12 @@ pub const VM = struct {
 
                 .return_ => {
                     var result = self.pop();
-                    const ret_frame = self.frames[self.frame_count - 1];
+                    const ret_frame_idx = self.frame_count - 1;
+                    const ret_frame = self.frames[ret_frame_idx];
+                    // Pop try contexts belonging to this frame (return skips try_end)
+                    while (self.try_depth > 0 and self.try_stack[self.try_depth - 1].frame_idx == ret_frame_idx) {
+                        self.try_depth -= 1;
+                    }
                     self.closeUpvaluesAbove(ret_frame.base_sp);
                     // For construct: if result is not an object, return this
                     if (ret_frame.is_construct and !result.isObject()) {
@@ -848,7 +853,12 @@ pub const VM = struct {
                 },
 
                 .return_undefined => {
-                    const ret_frame = self.frames[self.frame_count - 1];
+                    const ret_frame_idx = self.frame_count - 1;
+                    const ret_frame = self.frames[ret_frame_idx];
+                    // Pop try contexts belonging to this frame (return skips try_end)
+                    while (self.try_depth > 0 and self.try_stack[self.try_depth - 1].frame_idx == ret_frame_idx) {
+                        self.try_depth -= 1;
+                    }
                     self.closeUpvaluesAbove(ret_frame.base_sp);
                     self.sp = ret_frame.base_sp - 1;
                     if (ret_frame.has_this_on_stack) self.sp -= 1;

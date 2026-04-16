@@ -21,6 +21,7 @@ PORT=9876
 TIMEOUT=${TIMEOUT:-90}
 AREA="${1:-css/css-box}"
 DISPLAY_NUM=":98"
+JS_ENGINE="${SUZUME_JS:-kotori}"
 
 # Setup mode
 if [ "$AREA" = "setup" ]; then
@@ -74,6 +75,15 @@ if [ ! -f "$SUZUME_BIN" ]; then
     echo "ERROR: suzume not built. Run: zig build"
     exit 1
 fi
+
+case "$JS_ENGINE" in
+    kotori|quickjs) ;;
+    *)
+        echo "ERROR: Unsupported JS engine: $JS_ENGINE"
+        echo "Use SUZUME_JS=kotori or SUZUME_JS=quickjs"
+        exit 1
+        ;;
+esac
 
 # Reuse existing HTTP server and Xvfb if available, otherwise start new ones
 OWN_HTTP=0
@@ -135,15 +145,15 @@ TOTAL_PASS=0
 TOTAL_FAIL=0
 
 echo "=== WPT Tests: $AREA ($TEST_COUNT files) ==="
+echo "=== JS Engine: $JS_ENGINE ==="
 echo ""
 
 for test in $TESTS; do
     TOTAL=$((TOTAL + 1))
     URL="http://127.0.0.1:$PORT/$test"
 
-    # Run suzume with Xvfb, capture stderr (console output)
-    # Use QuickJS for WPT tests (kotori lacks setTimeout and other Web APIs needed by testharness.js)
-    OUTPUT=$(DISPLAY="$DISPLAY_NUM" SUZUME_JS=quickjs timeout "$TIMEOUT" "$SUZUME_BIN" "$URL" 2>&1 || true)
+    # Run suzume with Xvfb, capture stderr/stdout (WPT summary is emitted in --wpt-mode)
+    OUTPUT=$(DISPLAY="$DISPLAY_NUM" SUZUME_JS="$JS_ENGINE" timeout "$TIMEOUT" "$SUZUME_BIN" --wpt-mode "$URL" 2>&1 || true)
 
     # Extract WPT_SUMMARY line
     SUMMARY=$(echo "$OUTPUT" | grep "WPT_SUMMARY:" | tail -1)
