@@ -141,6 +141,7 @@ pub const Bytecode = struct {
     local_count: u16,
     param_count: u16,
     max_stack: u16,
+    has_rest: bool = false,
 
     pub fn init() Bytecode {
         return .{

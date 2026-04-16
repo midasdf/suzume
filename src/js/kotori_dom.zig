@@ -241,6 +241,7 @@ const dom_b = struct {
     // Document operations
     pub extern fn lxb_dom_document_create_element(document: *anyopaque, local_name: [*]const u8, lname_len: usize, reserved: ?*anyopaque) ?*lxb.lxb_dom_element_t;
     pub extern fn lxb_dom_document_create_text_node(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
+    pub extern fn lxb_dom_document_create_comment(document: *anyopaque, data: [*]const u8, len: usize) ?*lxb.lxb_dom_node_t;
     // HTML serialization
     pub const serialize_cb_f = ?*const fn (data: ?[*]const u8, len: usize, ctx: ?*anyopaque) callconv(.c) lxb.lxb_status_t;
     pub extern fn lxb_html_serialize_tree_cb(node: *lxb.lxb_dom_node_t, cb: serialize_cb_f, ctx: ?*anyopaque) lxb.lxb_status_t;
@@ -283,6 +284,13 @@ pub const EventListener = struct {
 };
 
 var g_listeners: std.ArrayListUnmanaged(EventListener) = .empty;
+
+// DOM prototype chain: Node.prototype → CharacterData.prototype → Text/Comment.prototype
+// Element.prototype also inherits from Node.prototype
+var g_node_proto: ?*JsObject = null;
+var g_chardata_proto: ?*JsObject = null;
+var g_text_proto: ?*JsObject = null;
+var g_comment_proto: ?*JsObject = null;
 
 /// Sentinel address used as node_ptr for window-level event listeners.
 /// DOM events on elements never match this because it points to a Zig
@@ -351,22 +359,42 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     g_alloc = vm.allocator;
     g_document = document_ptr;
 
-    // ── Element.prototype ──
+    // ── Node.prototype (base for all DOM nodes) ──
+    g_node_proto = try vm.createObj(.{});
+    const np = g_node_proto.?;
+    try vm.registerNativeMethod(np, "appendChild", &nativeAppendChild);
+    try vm.registerNativeMethod(np, "removeChild", &nativeRemoveChild);
+    try vm.registerNativeMethod(np, "insertBefore", &nativeInsertBefore);
+    try vm.registerNativeMethod(np, "isEqualNode", &nativeIsEqualNode);
+    try vm.registerNativeMethod(np, "getRootNode", &nativeGetRootNode);
+    try vm.registerNativeMethod(np, "addEventListener", &nativeAddEventListener);
+    try vm.registerNativeMethod(np, "dispatchEvent", &nativeDispatchEvent);
+
+    // ── CharacterData.prototype → Node.prototype ──
+    g_chardata_proto = try vm.createObj(.{});
+    g_chardata_proto.?.prototype = g_node_proto;
+
+    // ── Text.prototype → CharacterData.prototype ──
+    g_text_proto = try vm.createObj(.{});
+    g_text_proto.?.prototype = g_chardata_proto;
+
+    // ── Comment.prototype → CharacterData.prototype ──
+    g_comment_proto = try vm.createObj(.{});
+    g_comment_proto.?.prototype = g_chardata_proto;
+
+    // ── Element.prototype → Node.prototype ──
     vm.element_proto = try vm.createObj(.{});
     const ep = vm.element_proto.?;
-    try vm.registerNativeMethod(ep, "appendChild", &nativeAppendChild);
-    try vm.registerNativeMethod(ep, "removeChild", &nativeRemoveChild);
-    try vm.registerNativeMethod(ep, "insertBefore", &nativeInsertBefore);
+    ep.prototype = g_node_proto;
+    // Element-specific methods (Node methods inherited via prototype chain)
     try vm.registerNativeMethod(ep, "setAttribute", &nativeSetAttribute);
     try vm.registerNativeMethod(ep, "getAttribute", &nativeGetAttribute);
     try vm.registerNativeMethod(ep, "removeAttribute", &nativeRemoveAttribute);
-    try vm.registerNativeMethod(ep, "addEventListener", &nativeAddEventListener);
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
     try vm.registerNativeMethod(ep, "querySelectorAll", &nativeQuerySelectorAll);
-    try vm.registerNativeMethod(ep, "isEqualNode", &nativeIsEqualNode);
+    try vm.registerNativeMethod(ep, "matches", &nativeMatches);
+    try vm.registerNativeMethod(ep, "closest", &nativeClosest);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
-    try vm.registerNativeMethod(ep, "getRootNode", &nativeGetRootNode);
-    try vm.registerNativeMethod(ep, "dispatchEvent", &nativeDispatchEvent);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
     try vm.registerNativeMethod(ep, "scroll", &nativeScroll);
     try vm.registerNativeMethod(ep, "scrollTo", &nativeScrollTo);
@@ -412,6 +440,36 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.globals.put(vm.allocator, self_id, JsValue.initObject(win_obj));
     const globalthis_id = try vm.pool.intern("globalThis");
     try vm.globals.put(vm.allocator, globalthis_id, JsValue.initObject(win_obj));
+
+    // ── DOM constructor globals (for instanceof and WPT) ──
+    // Node constructor + prototype
+    const node_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    node_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    const proto_sid = try vm.pool.intern("prototype");
+    node_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(np)) catch {};
+    const node_id = try vm.pool.intern("Node");
+    try vm.globals.put(vm.allocator, node_id, JsValue.initObject(node_ctor));
+
+    // CharacterData constructor + prototype
+    const cd_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    cd_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    cd_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_chardata_proto.?)) catch {};
+    const cd_id = try vm.pool.intern("CharacterData");
+    try vm.globals.put(vm.allocator, cd_id, JsValue.initObject(cd_ctor));
+
+    // Text constructor + prototype
+    const text_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    text_ctor.data = .{ .native_fn = &nativeTextConstructor };
+    text_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_text_proto.?)) catch {};
+    const text_id = try vm.pool.intern("Text");
+    try vm.globals.put(vm.allocator, text_id, JsValue.initObject(text_ctor));
+
+    // Comment constructor + prototype
+    const comment_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    comment_ctor.data = .{ .native_fn = &nativeCommentConstructor };
+    comment_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_comment_proto.?)) catch {};
+    const comment_id = try vm.pool.intern("Comment");
+    try vm.globals.put(vm.allocator, comment_id, JsValue.initObject(comment_ctor));
 
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
@@ -464,6 +522,16 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, node, "class");
     if (eql(name, "textContent"))
         return getTextContent(vm, node);
+    // CharacterData §4.2.5: data and nodeValue are equivalent to textContent
+    // for Text, Comment, and ProcessingInstruction nodes.
+    if (eql(name, "data") or eql(name, "nodeValue")) {
+        const nt = nodeType(node);
+        if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT or
+            nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+            return getTextContent(vm, node);
+        // For Element/Document, nodeValue is null per DOM spec
+        if (eql(name, "nodeValue")) return JsValue.null_val;
+    }
     if (eql(name, "innerHTML"))
         return getInnerHTML(vm, node);
     if (eql(name, "outerHTML"))
@@ -541,7 +609,7 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
 fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool {
     const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(obj.data.dom_node));
 
-    if (eql(name, "textContent")) {
+    if (eql(name, "textContent") or eql(name, "data") or eql(name, "nodeValue")) {
         setTextContent(vm, node, val);
         setDomDirty();
         return true;
@@ -957,6 +1025,35 @@ fn nativeQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     return JsValue.null_val;
 }
 
+// ── Element.matches() / closest() — DOM Selectors API §4.1/§4.2 ────
+
+/// C-ABI bridge to dom_selector.zig's full selector matching engine
+extern fn suzume_element_matches(node: *lxb.lxb_dom_node_t, sel_ptr: [*]const u8, sel_len: usize) bool;
+
+fn nativeMatches(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
+    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    const node = getThisNode(this) orelse return JsValue.initBool(false);
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
+    return JsValue.initBool(suzume_element_matches(node, sel.ptr, sel.len));
+}
+
+fn nativeClosest(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    var cur: ?*lxb.lxb_dom_node_t = getThisNode(this);
+    while (cur) |n| {
+        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            if (suzume_element_matches(n, sel.ptr, sel.len))
+                return wrapNode(vm, n) orelse JsValue.null_val;
+        }
+        cur = nodeParent(n);
+    }
+    return JsValue.null_val;
+}
+
 // ── Shadow DOM Phase 1 native methods ───────────────────────────────
 
 fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -1323,6 +1420,34 @@ fn throwDomError(vm: *VM, name: []const u8) JsValue {
     return JsValue.undefined_val;
 }
 
+// ── DOM constructors ────────────────────────────────────────────────
+
+fn nativeNoOpConstructor(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    return JsValue.undefined_val;
+}
+
+fn nativeTextConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const doc = g_document orelse return JsValue.null_val;
+    const data = if (args.len > 0 and args[0].isString())
+        vm.pool.get(args[0].asStringId()) orelse ""
+    else
+        "";
+    const node = dom_b.lxb_dom_document_create_text_node(doc, data.ptr, data.len) orelse return JsValue.null_val;
+    return wrapNode(vm, node) orelse JsValue.null_val;
+}
+
+fn nativeCommentConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const doc = g_document orelse return JsValue.null_val;
+    const data = if (args.len > 0 and args[0].isString())
+        vm.pool.get(args[0].asStringId()) orelse ""
+    else
+        "";
+    const node = dom_b.lxb_dom_document_create_comment(doc, data.ptr, data.len) orelse return JsValue.null_val;
+    return wrapNode(vm, node) orelse JsValue.null_val;
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Helpers — value extraction
 // ══════════════════════════════════════════════════════════════════════
@@ -1351,7 +1476,14 @@ fn getArgNode(val: JsValue) ?*lxb.lxb_dom_node_t {
 fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
     obj.data = .{ .dom_node = @ptrCast(node) };
-    obj.prototype = vm.element_proto;
+    // Assign prototype based on node type (DOM spec prototype chain)
+    obj.prototype = switch (nodeType(node)) {
+        lxb.LXB_DOM_NODE_TYPE_ELEMENT => vm.element_proto,
+        lxb.LXB_DOM_NODE_TYPE_TEXT => g_text_proto,
+        lxb.LXB_DOM_NODE_TYPE_COMMENT => g_comment_proto,
+        lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
+        else => g_node_proto,
+    };
     return JsValue.initObject(obj);
 }
 

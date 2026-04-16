@@ -1329,6 +1329,11 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     };
 }
 
+/// C-ABI bridge for kotori_dom.zig (cross-module access to elementMatchesSelector)
+export fn suzume_element_matches(node: *lxb.lxb_dom_node_t, sel_ptr: [*]const u8, sel_len: usize) bool {
+    return elementMatchesSelector(node, sel_ptr[0..sel_len]);
+}
+
 pub fn elementMatches(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,

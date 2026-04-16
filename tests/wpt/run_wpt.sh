@@ -33,18 +33,24 @@ if [ "$AREA" = "setup" ]; then
 
 // suzume browser WPT integration
 (function() {
-    add_completion_callback(function(tests, harness_status) {
+    var _results = [];
+    var _reported = false;
+    function _report(tests) {
+        if (_reported) return;
+        _reported = true;
         var pass = 0, fail = 0, total = tests.length;
         for (var i = 0; i < tests.length; i++) {
-            if (tests[i].status === 0) {
-                pass++;
-            } else {
-                fail++;
-                console.log("WPT_FAIL: " + tests[i].name + " — " + (tests[i].message || ""));
-            }
+            if (tests[i].status === 0) { pass++; }
+            else { fail++; console.log("WPT_FAIL: " + tests[i].name + " — " + (tests[i].message || "")); }
         }
         console.log("WPT_SUMMARY: PASS=" + pass + " FAIL=" + fail + " TOTAL=" + total);
-    });
+    }
+    add_result_callback(function(test) { _results.push(test); });
+    add_completion_callback(function(tests, harness_status) { _report(tests); });
+    setTimeout(function() {
+        if (!_reported && _results.length > 0) _report(_results);
+        else if (!_reported) console.log("WPT_SUMMARY: PASS=0 FAIL=0 TOTAL=0");
+    }, 6000);
 })();
 JSEOF
     echo "Setup complete. WPT at $WPT_DIR"

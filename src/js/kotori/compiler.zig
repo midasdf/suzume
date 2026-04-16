@@ -1071,6 +1071,7 @@ pub const Compiler = struct {
                     }
                 },
                 .rest_element => {
+                    self.current.bc.has_rest = true;
                     try self.emitOpU16(.collect_rest, @intCast(i));
                     try self.emitOpU16(.store_local, @intCast(i));
                 },

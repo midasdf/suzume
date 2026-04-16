@@ -29,10 +29,11 @@ const CallFrame = struct {
     is_construct: bool = false,
     async_promise: ?*JsObject = null, // Promise to resolve when async function returns
     arg_count: u16 = 0,
+    rest_args: ?[]JsValue = null, // Saved excess args for rest parameters
 };
 
 pub const VM = struct {
-    frames: [256]CallFrame = undefined,
+    frames: []CallFrame = &.{},
     frame_count: u32 = 0,
     stack: [4096]JsValue = undefined,
     sp: u32 = 0,
@@ -87,7 +88,7 @@ pub const VM = struct {
     module_loader_fn: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, specifier: []const u8) ?[]const u8 = null,
 
     // Exception handling
-    try_stack: [128]TryContext = undefined,
+    try_stack: []TryContext = &.{},
     try_depth: u32 = 0,
     /// Set by native functions (e.g. DOM) to inject a JS-catchable throw.
     pending_throw: ?JsValue = null,
@@ -148,6 +149,9 @@ pub const VM = struct {
 
     pub fn init(allocator: std.mem.Allocator, bc: *const Bytecode, pool: *StringPool) VM {
         var self = VM{ .allocator = allocator, .pool = pool };
+        // Allocate dynamic frame and try stacks
+        self.frames = allocator.alloc(CallFrame, 256) catch &.{};
+        self.try_stack = allocator.alloc(TryContext, 128) catch &.{};
         // Push the top-level frame
         self.frames[0] = .{
             .bc = bc,
@@ -162,6 +166,8 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
+        if (self.frames.len > 0) self.allocator.free(self.frames);
+        if (self.try_stack.len > 0) self.allocator.free(self.try_stack);
         self.globals.deinit(self.allocator);
         self.timers.deinit(self.allocator);
         self.microtasks.deinit(self.allocator);
@@ -187,6 +193,18 @@ pub const VM = struct {
         self.module_exports.deinit(self.allocator);
         self.console_timers.deinit(self.allocator);
         self.console_counts.deinit(self.allocator);
+    }
+
+    fn ensureFrameCapacity(self: *VM) void {
+        if (self.frame_count < self.frames.len) return;
+        const new_cap = if (self.frames.len == 0) 256 else self.frames.len * 2;
+        self.frames = self.allocator.realloc(self.frames, new_cap) catch return;
+    }
+
+    fn ensureTryCapacity(self: *VM) void {
+        if (self.try_depth < self.try_stack.len) return;
+        const new_cap = if (self.try_stack.len == 0) 128 else self.try_stack.len * 2;
+        self.try_stack = self.allocator.realloc(self.try_stack, new_cap) catch return;
     }
 
     pub fn execute(self: *VM) !JsValue {
@@ -641,6 +659,21 @@ pub const VM = struct {
 
                     const base = self.sp - arg_count;
 
+                    // Save excess args for rest parameters before truncation.
+                    // collect_rest reads from rest_args instead of (overwritten) stack slots.
+                    var rest_args_saved: ?[]JsValue = null;
+                    if (func.bytecode.has_rest and arg_count > 0) {
+                        const rest_start: u16 = func.param_count - 1; // rest param is last
+                        if (arg_count > rest_start) {
+                            const count = arg_count - rest_start;
+                            const saved = self.allocator.alloc(JsValue, count) catch null;
+                            if (saved) |s| {
+                                @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
+                                rest_args_saved = s;
+                            }
+                        }
+                    }
+
                     // Truncate excess args (ES2023 §10.2.11 step 20: extra args are ignored
                     // unless accessed via `arguments`). Keeps local variable slots aligned
                     // with what the compiler emitted.
@@ -670,6 +703,7 @@ pub const VM = struct {
                     const async_p: ?*JsObject = if (func.is_async) try self.createPromiseObj() else null;
 
                     // Push call frame
+                    self.ensureFrameCapacity();
                     self.frames[self.frame_count] = .{
                         .bc = &func.bytecode,
                         .ip = 0,
@@ -677,6 +711,7 @@ pub const VM = struct {
                         .upvalues = uv_array,
                         .async_promise = async_p,
                         .arg_count = arg_count,
+                        .rest_args = rest_args_saved,
                     };
                     self.frame_count += 1;
                 },
@@ -1326,6 +1361,19 @@ pub const VM = struct {
                     const func = &obj.data.function;
                     const base = self.sp - arg_count;
 
+                    var rest_args_saved2: ?[]JsValue = null;
+                    if (func.bytecode.has_rest and arg_count > 0) {
+                        const rest_start: u16 = func.param_count - 1;
+                        if (arg_count > rest_start) {
+                            const count = arg_count - rest_start;
+                            const saved = self.allocator.alloc(JsValue, count) catch null;
+                            if (saved) |s| {
+                                @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
+                                rest_args_saved2 = s;
+                            }
+                        }
+                    }
+
                     // Truncate excess args to keep local slots aligned
                     if (arg_count > func.param_count) {
                         self.sp = base + func.param_count;
@@ -1348,6 +1396,7 @@ pub const VM = struct {
 
                     const async_p: ?*JsObject = if (func.is_async) try self.createPromiseObj() else null;
 
+                    self.ensureFrameCapacity();
                     self.frames[self.frame_count] = .{
                         .bc = &func.bytecode,
                         .ip = 0,
@@ -1357,6 +1406,7 @@ pub const VM = struct {
                         .has_this_on_stack = true,
                         .async_promise = async_p,
                         .arg_count = arg_count,
+                        .rest_args = rest_args_saved2,
                     };
                     self.frame_count += 1;
                 },
@@ -1415,6 +1465,19 @@ pub const VM = struct {
                     const func = &obj.data.function;
                     const base = self.sp - arg_count;
 
+                    var rest_args_saved3: ?[]JsValue = null;
+                    if (func.bytecode.has_rest and arg_count > 0) {
+                        const rest_start: u16 = func.param_count - 1;
+                        if (arg_count > rest_start) {
+                            const count = arg_count - rest_start;
+                            const saved = self.allocator.alloc(JsValue, count) catch null;
+                            if (saved) |s| {
+                                @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
+                                rest_args_saved3 = s;
+                            }
+                        }
+                    }
+
                     // Truncate excess args to keep local slots aligned
                     if (arg_count > func.param_count) {
                         self.sp = base + func.param_count;
@@ -1435,6 +1498,7 @@ pub const VM = struct {
 
                     const uv_array = self.getClosureUpvalues(obj);
 
+                    self.ensureFrameCapacity();
                     self.frames[self.frame_count] = .{
                         .bc = &func.bytecode,
                         .ip = 0,
@@ -1442,6 +1506,7 @@ pub const VM = struct {
                         .upvalues = uv_array,
                         .this_val = this_val,
                         .is_construct = true,
+                        .rest_args = rest_args_saved3,
                         .arg_count = arg_count,
                     };
                     self.frame_count += 1;
@@ -1509,6 +1574,7 @@ pub const VM = struct {
                 .try_begin => {
                     const offset = self.readI16(frame);
                     const catch_ip: u32 = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    self.ensureTryCapacity();
                     self.try_stack[self.try_depth] = .{
                         .catch_offset = catch_ip,
                         .frame_idx = self.frame_count - 1,
@@ -1778,16 +1844,12 @@ pub const VM = struct {
                     self.push(JsValue.undefined_val);
                 },
                 .collect_rest => {
-                    const start = self.readU16(frame);
+                    _ = self.readU16(frame); // start index (consumed for backward compat)
                     const arr = try self.createArray();
-                    const actual = frame.arg_count;
-                    if (start < actual) {
-                        var i: u16 = start;
-                        while (i < actual) : (i += 1) {
-                            const slot = frame.base_sp + i;
-                            if (slot < self.sp) {
-                                try arr.data.array.append(self.allocator, self.stack[slot]);
-                            }
+                    // Use saved rest_args (captured before stack truncation)
+                    if (frame.rest_args) |saved| {
+                        for (saved) |val| {
+                            try arr.data.array.append(self.allocator, val);
                         }
                     }
                     self.push(JsValue.initObject(arr));
@@ -1813,6 +1875,7 @@ pub const VM = struct {
                                         // Execute module via new call frame
                                         const saved_frame_count = self.frame_count;
                                         const saved_sp = self.sp;
+                                        self.ensureFrameCapacity();
                                         self.frames[self.frame_count] = .{
                                             .bc = &module_bc,
                                             .ip = 0,
@@ -3276,7 +3339,21 @@ pub const VM = struct {
         var j: u16 = 0;
         while (j < extra) : (j += 1) self.push(JsValue.undefined_val);
 
+        // Save rest args for collect_rest
+        var rest_args_cjf: ?[]JsValue = null;
+        if (func.bytecode.has_rest and args.len > 0) {
+            const rest_start: usize = func.param_count - 1;
+            if (args.len > rest_start) {
+                const saved = self.allocator.alloc(JsValue, args.len - rest_start) catch null;
+                if (saved) |s| {
+                    @memcpy(s, args[rest_start..]);
+                    rest_args_cjf = s;
+                }
+            }
+        }
+
         const uv_array = self.getClosureUpvalues(obj);
+        self.ensureFrameCapacity();
         self.frames[self.frame_count] = .{
             .bc = &func.bytecode,
             .ip = 0,
@@ -3284,6 +3361,7 @@ pub const VM = struct {
             .upvalues = uv_array,
             .this_val = this_val,
             .arg_count = @intCast(@min(args.len, std.math.maxInt(u16))),
+            .rest_args = rest_args_cjf,
         };
         self.frame_count += 1;
 
@@ -3966,6 +4044,7 @@ pub const VM = struct {
                     self.push(res.value);
 
                     const target = self.frame_count;
+                    self.ensureFrameCapacity();
                     self.frames[self.frame_count] = .{
                         .bc = cont.bc,
                         .ip = cont.ip,
@@ -8643,6 +8722,7 @@ pub const VM = struct {
             }
 
             const uv_array = self.getClosureUpvalues(func_obj);
+            self.ensureFrameCapacity();
             self.frames[self.frame_count] = .{
                 .bc = &func.bytecode,
                 .ip = gen.saved_ip,
@@ -8698,6 +8778,7 @@ pub const VM = struct {
             }
 
             const uv_array = self.getClosureUpvalues(func_obj);
+            self.ensureFrameCapacity();
             self.frames[self.frame_count] = .{
                 .bc = &func.bytecode,
                 .ip = 0,
