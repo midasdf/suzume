@@ -1892,6 +1892,27 @@ fn countAttrs(elem: *lxb.lxb_dom_element_t) usize {
 
 // ── CharacterData mutation methods ──────────────────────────────────
 
+fn createDOMExceptionObj(vm: *VM, err_name: []const u8) !JsValue {
+    const err = try vm.createObj(.{});
+    if (vm.error_proto) |ep| err.prototype = ep;
+    try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern(err_name)));
+    try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern(err_name)));
+    const code: f64 = if (std.mem.eql(u8, err_name, "IndexSizeError")) 1 else if (std.mem.eql(u8, err_name, "NotFoundError")) 8 else if (std.mem.eql(u8, err_name, "HierarchyRequestError")) 3 else 0;
+    try err.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(code));
+    // Set constructor to DOMException
+    const de_sid = try vm.pool.intern("DOMException");
+    if (vm.globals.get(de_sid)) |de_ctor| {
+        try err.setProperty(vm.allocator, try vm.pool.intern("constructor"), de_ctor);
+        // Set prototype to DOMException.prototype for instanceof
+        if (de_ctor.isObject()) {
+            if (de_ctor.asJsObject().getProperty(try vm.pool.intern("prototype"))) |pv| {
+                if (pv.isObject()) err.prototype = pv.asJsObject();
+            }
+        }
+    }
+    return JsValue.initObject(err);
+}
+
 fn getCharData(vm: *VM, this: JsValue) ?struct { node: *lxb.lxb_dom_node_t, text: []const u8 } {
     const node = getThisNode(this) orelse return null;
     var len: usize = 0;
@@ -1918,9 +1939,14 @@ fn nativeDeleteData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
-    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const off_f = args[0].toNumber();
+    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
+        return JsValue.undefined_val;
+    }
+    const offset: usize = @intFromFloat(@max(0, off_f));
     const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
-    if (offset >= info.text.len) return JsValue.undefined_val;
+    if (offset > info.text.len) return JsValue.undefined_val;
     const end = @min(offset + count, info.text.len);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
@@ -1934,7 +1960,12 @@ fn nativeInsertData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
-    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const off_f = args[0].toNumber();
+    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
+        return JsValue.undefined_val;
+    }
+    const offset: usize = @intFromFloat(@max(0, off_f));
     const ins_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
     const clamped = @min(offset, info.text.len);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
@@ -1950,10 +1981,15 @@ fn nativeReplaceData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 3) return JsValue.undefined_val;
-    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const off_f = args[0].toNumber();
+    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
+        return JsValue.undefined_val;
+    }
+    const offset: usize = @intFromFloat(@max(0, off_f));
     const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
     const rep_str = if (args[2].isString()) (vm.pool.get(args[2].asStringId()) orelse "") else "";
-    if (offset >= info.text.len) return JsValue.undefined_val;
+    if (offset > info.text.len) return JsValue.undefined_val;
     const end = @min(offset + count, info.text.len);
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
@@ -1968,9 +2004,14 @@ fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len < 2) return JsValue.undefined_val;
-    const offset: usize = @intFromFloat(@max(0, args[0].toNumber()));
+    const off_f = args[0].toNumber();
+    if (off_f < 0 or off_f > @as(f64, @floatFromInt(info.text.len))) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "IndexSizeError");
+        return JsValue.undefined_val;
+    }
+    const offset: usize = @intFromFloat(@max(0, off_f));
     const count: usize = @intFromFloat(@max(0, args[1].toNumber()));
-    if (offset >= info.text.len) return JsValue.initString(vm.pool.intern("") catch return JsValue.undefined_val);
+    if (offset > info.text.len) return JsValue.initString(vm.pool.intern("") catch return JsValue.undefined_val);
     const end = @min(offset + count, info.text.len);
     return JsValue.initString(vm.pool.intern(info.text[offset..end]) catch return JsValue.undefined_val);
 }
