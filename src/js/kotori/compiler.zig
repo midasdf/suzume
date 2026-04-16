@@ -369,14 +369,32 @@ pub const Compiler = struct {
 
             .program => |list| {
                 const items = self.parser.ast.getNodeList(list);
+
+                // Hoisting pre-pass: compile function declarations first so
+                // they are available before their declaration point (ES2023
+                // §16.1.7 — GlobalDeclarationInstantiation step 17).
+                for (items) |item| {
+                    switch (self.parser.ast.getNode(item)) {
+                        .function_decl => |func| try self.compileFunctionDecl(func),
+                        else => {},
+                    }
+                }
+
+                // Main pass: compile all statements, skipping function_decl
                 for (items, 0..) |item, i| {
                     const is_last = (i == items.len - 1);
                     const item_node = self.parser.ast.getNode(item);
-                    if (is_last and item_node == .expression_stmt) {
-                        // Last expression in program: keep value on stack for eval
-                        try self.compileNode(item_node.expression_stmt);
-                    } else {
-                        try self.compileNode(item);
+                    switch (item_node) {
+                        .function_decl => {}, // already emitted in hoisting pass
+                        .expression_stmt => |expr_idx| {
+                            if (is_last) {
+                                // Last expression: keep value on stack for eval
+                                try self.compileNode(expr_idx);
+                            } else {
+                                try self.compileNode(item);
+                            }
+                        },
+                        else => try self.compileNode(item),
                     }
                 }
             },

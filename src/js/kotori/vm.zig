@@ -87,7 +87,7 @@ pub const VM = struct {
     module_loader_fn: ?*const fn (ctx: *anyopaque, allocator: std.mem.Allocator, specifier: []const u8) ?[]const u8 = null,
 
     // Exception handling
-    try_stack: [32]TryContext = undefined,
+    try_stack: [128]TryContext = undefined,
     try_depth: u32 = 0,
     /// Set by native functions (e.g. DOM) to inject a JS-catchable throw.
     pending_throw: ?JsValue = null,
