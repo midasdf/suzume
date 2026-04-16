@@ -228,6 +228,24 @@ pub const VM = struct {
 
     fn run(self: *VM, until_frame: u32) anyerror!JsValue {
         while (self.frame_count > until_frame) {
+            // Process any pending JS throw (from callJsFunction error conversion)
+            if (self.pending_throw) |thrown| {
+                self.pending_throw = null;
+                if (self.try_depth == 0) {
+                    return JsValue.undefined_val;
+                }
+                self.try_depth -= 1;
+                const tc = self.try_stack[self.try_depth];
+                while (self.frame_count > tc.frame_idx + 1) {
+                    const f2 = self.frames[self.frame_count - 1];
+                    self.closeUpvaluesAbove(f2.base_sp);
+                    self.frame_count -= 1;
+                }
+                self.sp = tc.sp;
+                self.push(thrown);
+                self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                continue;
+            }
             const frame = &self.frames[self.frame_count - 1];
             if (frame.ip >= frame.bc.code.items.len) {
                 // Fell off the end of top-level script
@@ -2832,6 +2850,30 @@ pub const VM = struct {
         return self.throwJsErrorVal(JsValue.initObject(err));
     }
 
+    /// Create a JS error object with proper prototype chain (for pending_throw).
+    fn createErrorObj(self: *VM, err_name: []const u8) !JsValue {
+        const err = try self.createObj(.{});
+        const name_sid = try self.pool.intern(err_name);
+        // Look up constructor prototype for correct instanceof chain
+        if (self.globals.get(name_sid)) |ctor_val| {
+            if (ctor_val.isObject()) {
+                if (ctor_val.asJsObject().getProperty(try self.pool.intern("prototype"))) |pv| {
+                    if (pv.isObject()) err.prototype = pv.asJsObject();
+                }
+            }
+        }
+        if (err.prototype == null) {
+            if (self.error_proto) |ep| err.prototype = ep;
+        }
+        try err.setProperty(self.allocator, try self.pool.intern("name"), JsValue.initString(name_sid));
+        try err.setProperty(self.allocator, try self.pool.intern("message"), JsValue.initString(name_sid));
+        // Set constructor reference
+        if (self.globals.get(name_sid)) |ctor_val| {
+            try err.setProperty(self.allocator, try self.pool.intern("constructor"), ctor_val);
+        }
+        return JsValue.initObject(err);
+    }
+
     pub fn vmFromCtx(ctx: *anyopaque) *VM {
         return @ptrCast(@alignCast(ctx));
     }
@@ -3500,7 +3542,14 @@ pub const VM = struct {
         if (obj.obj_type == .native_function) {
             // Push func on stack so getCallerFuncObj can find it
             self.push(func_val);
-            const result = try obj.data.native_fn(@ptrCast(self), this_val, args);
+            const result = obj.data.native_fn(@ptrCast(self), this_val, args) catch |err| {
+                self.sp -= 1;
+                if (err == error.TypeError or err == error.RangeError) {
+                    self.pending_throw = try self.createErrorObj(if (err == error.TypeError) "TypeError" else "RangeError");
+                    return JsValue.undefined_val;
+                }
+                return err;
+            };
             self.sp -= 1; // pop func
             return result;
         }
@@ -3546,7 +3595,13 @@ pub const VM = struct {
         };
         self.frame_count += 1;
 
-        _ = try self.run(target);
+        _ = self.run(target) catch |err| {
+            if (err == error.TypeError or err == error.RangeError) {
+                self.pending_throw = self.createErrorObj(if (err == error.TypeError) "TypeError" else "RangeError") catch return err;
+                return JsValue.undefined_val;
+            }
+            return err;
+        };
         return self.pop();
     }
 
