@@ -247,6 +247,15 @@ const dom_b = struct {
     pub extern fn lxb_html_serialize_tree_cb(node: *lxb.lxb_dom_node_t, cb: serialize_cb_f, ctx: ?*anyopaque) lxb.lxb_status_t;
     // HTML fragment parsing
     pub extern fn lxb_html_document_parse_fragment(document: *anyopaque, element: *lxb.lxb_dom_element_t, html: [*]const u8, size: usize) ?*lxb.lxb_dom_node_t;
+    // Attribute existence / first-attr (used by hasAttribute, hasAttributes)
+    pub extern fn lxb_dom_element_has_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) bool;
+    pub extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
+    // Insert after a reference node (used by insertAdjacentElement "afterend")
+    pub extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
+    // Clone a node (shallow or deep)
+    pub extern fn lxb_dom_node_clone(node: *lxb.lxb_dom_node_t, deep: bool) ?*lxb.lxb_dom_node_t;
+    // Document fragment creation
+    pub extern fn lxb_dom_document_create_document_fragment(document: *anyopaque) ?*lxb.lxb_dom_node_t;
 };
 
 // ── C pointer helpers (convert [*c] to ?* for field access) ─────────
@@ -369,6 +378,14 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(np, "getRootNode", &nativeGetRootNode);
     try vm.registerNativeMethod(np, "addEventListener", &nativeAddEventListener);
     try vm.registerNativeMethod(np, "dispatchEvent", &nativeDispatchEvent);
+    try vm.registerNativeMethod(np, "cloneNode", &nativeCloneNode);
+    try vm.registerNativeMethod(np, "isSameNode", &nativeIsSameNode);
+    try vm.registerNativeMethod(np, "contains", &nativeContains);
+    try vm.registerNativeMethod(np, "replaceChild", &nativeReplaceChild);
+    try vm.registerNativeMethod(np, "normalize", &nativeNormalize);
+    try vm.registerNativeMethod(np, "prepend", &nativePrepend);
+    try vm.registerNativeMethod(np, "append", &nativeAppend);
+    try vm.registerNativeMethod(np, "replaceChildren", &nativeReplaceChildren);
 
     // ── CharacterData.prototype → Node.prototype ──
     g_chardata_proto = try vm.createObj(.{});
@@ -397,6 +414,11 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "getElementsByTagName", &nativeGetElementsByTagName);
     try vm.registerNativeMethod(ep, "getElementsByClassName", &nativeGetElementsByClassName);
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
+    try vm.registerNativeMethod(ep, "hasAttribute", &nativeHasAttribute);
+    try vm.registerNativeMethod(ep, "hasAttributes", &nativeHasAttributes);
+    try vm.registerNativeMethod(ep, "remove", &nativeRemove);
+    try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
+    try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
     try vm.registerNativeMethod(ep, "scroll", &nativeScroll);
     try vm.registerNativeMethod(ep, "scrollTo", &nativeScrollTo);
@@ -673,6 +695,33 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
             }
         }
         return JsValue.null_val;
+    }
+
+    // Element.childElementCount — DOM §4.9
+    if (eql(name, "childElementCount")) {
+        var count: f64 = 0;
+        var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+        while (ch) |c| {
+            if (nodeType(c) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) count += 1;
+            ch = nodeNext(c);
+        }
+        return JsValue.initNumber(count);
+    }
+
+    // document.implementation — DOM §7.1: DOMImplementation object
+    if (eql(name, "implementation") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        const impl_obj = vm.createObj(.{}) catch return null;
+        // hasFeature always returns true per DOM Living Standard §7.1
+        const hf_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+        hf_fn.data = .{ .native_fn = &nativeImplementationHasFeature };
+        const hf_sid = vm.pool.intern("hasFeature") catch return null;
+        impl_obj.setProperty(vm.allocator, hf_sid, JsValue.initObject(hf_fn)) catch {};
+        // createHTMLDocument — creates a minimal new document object
+        const chd_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+        chd_fn.data = .{ .native_fn = &nativeImplementationCreateHTMLDocument };
+        const chd_sid = vm.pool.intern("createHTMLDocument") catch return null;
+        impl_obj.setProperty(vm.allocator, chd_sid, JsValue.initObject(chd_fn)) catch {};
+        return JsValue.initObject(impl_obj);
     }
 
     return null; // fall through to prototype chain (methods live there)
@@ -2014,6 +2063,267 @@ fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     if (offset > info.text.len) return JsValue.initString(vm.pool.intern("") catch return JsValue.undefined_val);
     const end = @min(offset + count, info.text.len);
     return JsValue.initString(vm.pool.intern(info.text[offset..end]) catch return JsValue.undefined_val);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// New DOM API implementations
+// ══════════════════════════════════════════════════════════════════════
+
+// ── Node.cloneNode (DOM §4.4) ───────────────────────────────────────
+
+fn nativeCloneNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm: *VM = @ptrCast(@alignCast(ctx));
+    const node = getThisNode(this) orelse return JsValue.null_val;
+    // deep defaults to false per spec
+    const deep = if (args.len > 0 and args[0].isBool()) args[0].asBool() else false;
+    const cloned = dom_b.lxb_dom_node_clone(node, deep) orelse return JsValue.null_val;
+    return wrapNode(vm, cloned) orelse JsValue.null_val;
+}
+
+// ── Node.isSameNode (DOM §4.4) ───────────────────────────────────────
+
+fn nativeIsSameNode(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const a = getThisNode(this) orelse return JsValue.initBool(false);
+    if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) return JsValue.initBool(false);
+    const b = getArgNode(args[0]) orelse return JsValue.initBool(false);
+    return JsValue.initBool(a == b);
+}
+
+// ── Node.contains (DOM §4.4) ─────────────────────────────────────────
+
+fn nativeContains(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const ancestor = getThisNode(this) orelse return JsValue.initBool(false);
+    if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) return JsValue.initBool(false);
+    const target = getArgNode(args[0]) orelse return JsValue.initBool(false);
+    var cur: ?*lxb.lxb_dom_node_t = target;
+    while (cur) |c| {
+        if (c == ancestor) return JsValue.initBool(true);
+        cur = nodeParent(c);
+    }
+    return JsValue.initBool(false);
+}
+
+// ── Node.replaceChild (DOM §4.4) ─────────────────────────────────────
+
+fn nativeReplaceChild(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (args.len < 2) return JsValue.null_val;
+    const new_child = getArgNode(args[0]) orelse return JsValue.null_val;
+    const old_child = getArgNode(args[1]) orelse return JsValue.null_val;
+    dom_b.lxb_dom_node_remove(new_child);
+    dom_b.lxb_dom_node_insert_before(old_child, new_child);
+    dom_b.lxb_dom_node_remove(old_child);
+    setDomDirty();
+    return args[1];
+}
+
+// ── Node.normalize (DOM §4.4) ────────────────────────────────────────
+
+fn nativeNormalize(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    normalizeChildren(node);
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+fn normalizeChildren(node: *lxb.lxb_dom_node_t) void {
+    var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+    var prev_text: ?*lxb.lxb_dom_node_t = null;
+    while (ch) |c| {
+        const next = nodeNext(c);
+        if (nodeType(c) == lxb.LXB_DOM_NODE_TYPE_TEXT) {
+            var len: usize = 0;
+            _ = dom_b.lxb_dom_node_text_content(c, &len);
+            if (len == 0) {
+                // Remove empty text node
+                dom_b.lxb_dom_node_remove(c);
+                _ = dom_b.lxb_dom_node_destroy(c);
+                ch = next;
+                continue;
+            }
+            if (prev_text) |pt| {
+                // Merge c into prev_text
+                var pt_len: usize = 0;
+                var c_len: usize = 0;
+                const pt_ptr = dom_b.lxb_dom_node_text_content(pt, &pt_len);
+                const c_ptr = dom_b.lxb_dom_node_text_content(c, &c_len);
+                var buf: std.ArrayListUnmanaged(u8) = .empty;
+                defer buf.deinit(g_alloc);
+                if (pt_ptr) |p| buf.appendSlice(g_alloc, p[0..pt_len]) catch {};
+                if (c_ptr) |p| buf.appendSlice(g_alloc, p[0..c_len]) catch {};
+                _ = dom_b.lxb_dom_node_text_content_set(pt, buf.items.ptr, buf.items.len);
+                dom_b.lxb_dom_node_remove(c);
+                _ = dom_b.lxb_dom_node_destroy(c);
+                ch = next;
+                continue;
+            }
+            prev_text = c;
+        } else {
+            prev_text = null;
+            // Recurse into element children
+            normalizeChildren(c);
+        }
+        ch = next;
+    }
+}
+
+// ── Element.hasAttribute (DOM §4.9) ─────────────────────────────────
+
+fn nativeHasAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
+    const node = getThisNode(this) orelse return JsValue.initBool(false);
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const name = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
+    return JsValue.initBool(dom_b.lxb_dom_element_has_attribute(elem, name.ptr, name.len));
+}
+
+// ── Element.hasAttributes (DOM §4.9) ────────────────────────────────
+
+fn nativeHasAttributes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const node = getThisNode(this) orelse return JsValue.initBool(false);
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    return JsValue.initBool(dom_b.lxb_dom_element_first_attribute_noi(elem) != null);
+}
+
+// ── Element.remove (ChildNode mixin, DOM §4.7) ───────────────────────
+
+fn nativeRemove(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    dom_b.lxb_dom_node_remove(node);
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+// ── Element.insertAdjacentElement (DOM §4.9) ─────────────────────────
+
+fn nativeInsertAdjacentElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2 or !args[0].isString()) return JsValue.null_val;
+    const node = getThisNode(this) orelse return JsValue.null_val;
+    const elem_node = getArgNode(args[1]) orelse return JsValue.null_val;
+    const position = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    dom_b.lxb_dom_node_remove(elem_node);
+    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        // Insert before this node in parent
+        dom_b.lxb_dom_node_insert_before(node, elem_node);
+    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+        // Insert before first child
+        if (nodeFirstChild(node)) |fc| {
+            dom_b.lxb_dom_node_insert_before(fc, elem_node);
+        } else {
+            dom_b.lxb_dom_node_insert_child(node, elem_node);
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+        // Append as last child
+        dom_b.lxb_dom_node_insert_child(node, elem_node);
+    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        // Insert after this node in parent
+        if (nodeNext(node)) |ns| {
+            dom_b.lxb_dom_node_insert_before(ns, elem_node);
+        } else if (nodeParent(node)) |parent| {
+            dom_b.lxb_dom_node_insert_child(parent, elem_node);
+        }
+    } else {
+        return JsValue.null_val;
+    }
+    setDomDirty();
+    return args[1];
+}
+
+// ── Element.insertAdjacentText (DOM §4.9) ────────────────────────────
+
+fn nativeInsertAdjacentText(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+    const text_str = argToString(vm, args[1]);
+    const text_node = dom_b.lxb_dom_document_create_text_node(doc, text_str.ptr, text_str.len) orelse return JsValue.undefined_val;
+    // Reuse insertAdjacentElement logic by wrapping text_node in a JsValue
+    const wrapped = wrapNode(vm, text_node) orelse return JsValue.undefined_val;
+    const new_args = [2]JsValue{ args[0], wrapped };
+    _ = try nativeInsertAdjacentElement(ctx, this, &new_args);
+    return JsValue.undefined_val;
+}
+
+// ── ParentNode.prepend (DOM §4.4) ────────────────────────────────────
+
+fn nativePrepend(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const parent = getThisNodeOrFragment(this) orelse return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+    // Collect nodes in reverse order so we can insertBefore firstChild repeatedly
+    // and maintain the original argument order.
+    // Insert each node before the current firstChild.
+    var i: usize = args.len;
+    while (i > 0) {
+        i -= 1;
+        const arg = args[i];
+        const child_node: *lxb.lxb_dom_node_t = blk: {
+            if (arg.isString()) {
+                const s = vm.pool.get(arg.asStringId()) orelse "";
+                break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+            }
+            break :blk getArgNode(arg) orelse continue;
+        };
+        dom_b.lxb_dom_node_remove(child_node);
+        if (nodeFirstChild(parent)) |fc| {
+            dom_b.lxb_dom_node_insert_before(fc, child_node);
+        } else {
+            dom_b.lxb_dom_node_insert_child(parent, child_node);
+        }
+    }
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+// ── ParentNode.append (DOM §4.4) ─────────────────────────────────────
+
+fn nativeAppend(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const parent = getThisNodeOrFragment(this) orelse return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+    for (args) |arg| {
+        const child_node: *lxb.lxb_dom_node_t = blk: {
+            if (arg.isString()) {
+                const s = vm.pool.get(arg.asStringId()) orelse "";
+                break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+            }
+            break :blk getArgNode(arg) orelse continue;
+        };
+        dom_b.lxb_dom_node_remove(child_node);
+        dom_b.lxb_dom_node_insert_child(parent, child_node);
+        sr.propagateScopeFromParent(parent, child_node);
+    }
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+// ── ParentNode.replaceChildren (DOM §4.4) ────────────────────────────
+
+fn nativeReplaceChildren(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const parent = getThisNodeOrFragment(this) orelse return JsValue.undefined_val;
+    // Remove all existing children
+    while (nodeFirstChild(parent)) |child| {
+        dom_b.lxb_dom_node_remove(child);
+    }
+    // Append new children (reuse nativeAppend logic)
+    return nativeAppend(ctx, this, args);
+}
+
+// ── document.implementation helpers (DOM §7.1) ───────────────────────
+
+fn nativeImplementationHasFeature(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    // DOM Living Standard §7.1: always returns true
+    return JsValue.initBool(true);
+}
+
+fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    // Return the existing document object as a minimal implementation
+    const doc_sid = vm.pool.intern("document") catch return JsValue.null_val;
+    return vm.globals.get(doc_sid) orelse JsValue.null_val;
 }
 
 fn getTextContent(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {

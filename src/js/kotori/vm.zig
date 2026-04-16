@@ -36,7 +36,7 @@ const CallFrame = struct {
 pub const VM = struct {
     frames: []CallFrame = &.{},
     frame_count: u32 = 0,
-    stack: [4096]JsValue = undefined,
+    stack: []JsValue = &.{},
     sp: u32 = 0,
     globals: std.AutoArrayHashMapUnmanaged(StringId, JsValue) = .{},
     allocator: std.mem.Allocator,
@@ -150,9 +150,10 @@ pub const VM = struct {
 
     pub fn init(allocator: std.mem.Allocator, bc: *const Bytecode, pool: *StringPool) VM {
         var self = VM{ .allocator = allocator, .pool = pool };
-        // Allocate dynamic frame and try stacks
+        // Allocate dynamic frame, try, and value stacks
         self.frames = allocator.alloc(CallFrame, 256) catch &.{};
         self.try_stack = allocator.alloc(TryContext, 128) catch &.{};
+        self.stack = allocator.alloc(JsValue, 4096) catch &.{};
         // Push the top-level frame
         self.frames[0] = .{
             .bc = bc,
@@ -167,6 +168,7 @@ pub const VM = struct {
     }
 
     pub fn deinit(self: *VM) void {
+        if (self.stack.len > 0) self.allocator.free(self.stack);
         if (self.frames.len > 0) self.allocator.free(self.frames);
         if (self.try_stack.len > 0) self.allocator.free(self.try_stack);
         self.globals.deinit(self.allocator);
@@ -208,6 +210,12 @@ pub const VM = struct {
         self.try_stack = self.allocator.realloc(self.try_stack, new_cap) catch return;
     }
 
+    fn ensureStackCapacity(self: *VM, needed: u32) void {
+        if (needed <= self.stack.len) return;
+        const new_cap = @max(needed, @as(u32, @intCast(self.stack.len)) * 2);
+        self.stack = self.allocator.realloc(self.stack, new_cap) catch return;
+    }
+
     pub fn execute(self: *VM) !JsValue {
         return self.run(0);
     }
@@ -222,6 +230,7 @@ pub const VM = struct {
             .upvalues = &.{},
         };
         self.frame_count = 1;
+        self.ensureStackCapacity(bc.local_count);
         self.sp = bc.local_count;
         self.try_depth = 0;
     }
@@ -445,11 +454,15 @@ pub const VM = struct {
                 // ── Variables ────────────────────────────────────────
                 .load_local => {
                     const slot = self.readU16(frame);
-                    self.push(self.stack[frame.base_sp + slot]);
+                    const idx = frame.base_sp + slot;
+                    if (idx >= self.stack.len) self.ensureStackCapacity(idx + 1);
+                    self.push(self.stack[idx]);
                 },
                 .store_local => {
                     const slot = self.readU16(frame);
-                    self.stack[frame.base_sp + slot] = self.pop();
+                    const idx = frame.base_sp + slot;
+                    if (idx >= self.stack.len) self.ensureStackCapacity(idx + 1);
+                    self.stack[idx] = self.pop();
                 },
                 .load_global => {
                     const ci = self.readU16(frame);
@@ -498,6 +511,7 @@ pub const VM = struct {
                             // so mutations to the captured local (via store_local in
                             // the enclosing frame) are immediately visible here.
                             if (cell.is_open) {
+                                if (cell.stack_index >= self.stack.len) self.ensureStackCapacity(cell.stack_index + 1);
                                 self.push(self.stack[cell.stack_index]);
                             } else {
                                 self.push(cell.value);
@@ -517,6 +531,7 @@ pub const VM = struct {
                             if (cell.is_open) {
                                 // Open upvalue: write directly to the live stack slot
                                 // so the enclosing frame sees the mutation via load_local.
+                                if (cell.stack_index >= self.stack.len) self.ensureStackCapacity(cell.stack_index + 1);
                                 self.stack[cell.stack_index] = val;
                             } else {
                                 cell.value = val;
@@ -2186,6 +2201,7 @@ pub const VM = struct {
     // ── Stack helpers ────────────────────────────────────────────────
 
     inline fn push(self: *VM, val: JsValue) void {
+        if (self.sp >= self.stack.len) self.ensureStackCapacity(self.sp + 1);
         self.stack[self.sp] = val;
         self.sp += 1;
     }
