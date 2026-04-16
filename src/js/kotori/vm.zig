@@ -2654,6 +2654,25 @@ pub const VM = struct {
             }
         }
 
+        // ── DOMException constructor ──
+        {
+            const dom_exc_proto = try self.createObj(.{});
+            if (self.error_proto) |ep| dom_exc_proto.prototype = ep;
+            const name_sid_de = try self.pool.intern("name");
+            const msg_sid_de = try self.pool.intern("message");
+            const code_sid = try self.pool.intern("code");
+            try dom_exc_proto.setProperty(self.allocator, name_sid_de, JsValue.initString(try self.pool.intern("Error")));
+            try dom_exc_proto.setProperty(self.allocator, msg_sid_de, JsValue.initString(try self.pool.intern("")));
+            try dom_exc_proto.setProperty(self.allocator, code_sid, JsValue.initNumber(0));
+            try self.registerNativeMethod(dom_exc_proto, "toString", &nativeErrorToString);
+            const dom_exc_ctor = try self.createNativeFn(&nativeDOMExceptionConstructor);
+            try dom_exc_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(dom_exc_proto));
+            try dom_exc_ctor.setProperty(self.allocator, name_sid_de, JsValue.initString(try self.pool.intern("DOMException")));
+            try dom_exc_proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(dom_exc_ctor));
+            if (self.function_proto) |fn_p| dom_exc_ctor.prototype = fn_p;
+            try self.globals.put(self.allocator, try self.pool.intern("DOMException"), JsValue.initObject(dom_exc_ctor));
+        }
+
         // ── Global constants ──
         const undef_id = try self.pool.intern("undefined");
         try self.globals.put(self.allocator, undef_id, JsValue.undefined_val);
@@ -8709,6 +8728,33 @@ pub const VM = struct {
     }
 
     // ── Error methods ───────────────────────────────────────────────
+
+    /// DOMException(message, name) constructor — DOM §4.3
+    fn nativeDOMExceptionConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const err_obj = try vm.createObj(.{});
+        if (vm.error_proto) |ep| err_obj.prototype = ep;
+        // message (1st arg)
+        const msg_sid = try vm.pool.intern("message");
+        if (args.len > 0 and args[0].isString()) {
+            try err_obj.setProperty(vm.allocator, msg_sid, args[0]);
+        } else {
+            try err_obj.setProperty(vm.allocator, msg_sid, JsValue.initString(try vm.pool.intern("")));
+        }
+        // name (2nd arg, default "Error")
+        const name_sid = try vm.pool.intern("name");
+        if (args.len > 1 and args[1].isString()) {
+            try err_obj.setProperty(vm.allocator, name_sid, args[1]);
+            // Set legacy code based on name
+            const n = vm.pool.get(args[1].asStringId()) orelse "";
+            const code: f64 = if (std.mem.eql(u8, n, "IndexSizeError")) 1 else if (std.mem.eql(u8, n, "HierarchyRequestError")) 3 else if (std.mem.eql(u8, n, "WrongDocumentError")) 4 else if (std.mem.eql(u8, n, "InvalidCharacterError")) 5 else if (std.mem.eql(u8, n, "NoModificationAllowedError")) 7 else if (std.mem.eql(u8, n, "NotFoundError")) 8 else if (std.mem.eql(u8, n, "NotSupportedError")) 9 else if (std.mem.eql(u8, n, "InUseAttributeError")) 10 else if (std.mem.eql(u8, n, "InvalidStateError")) 11 else if (std.mem.eql(u8, n, "SyntaxError")) 12 else if (std.mem.eql(u8, n, "InvalidModificationError")) 13 else if (std.mem.eql(u8, n, "NamespaceError")) 14 else if (std.mem.eql(u8, n, "InvalidAccessError")) 15 else if (std.mem.eql(u8, n, "TypeMismatchError")) 17 else if (std.mem.eql(u8, n, "SecurityError")) 18 else if (std.mem.eql(u8, n, "NetworkError")) 19 else if (std.mem.eql(u8, n, "AbortError")) 20 else if (std.mem.eql(u8, n, "URLMismatchError")) 21 else if (std.mem.eql(u8, n, "QuotaExceededError")) 22 else if (std.mem.eql(u8, n, "TimeoutError")) 23 else if (std.mem.eql(u8, n, "InvalidNodeTypeError")) 24 else if (std.mem.eql(u8, n, "DataCloneError")) 25 else 0;
+            try err_obj.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(code));
+        } else {
+            try err_obj.setProperty(vm.allocator, name_sid, JsValue.initString(try vm.pool.intern("Error")));
+            try err_obj.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(0));
+        }
+        return JsValue.initObject(err_obj);
+    }
 
     fn nativeErrorConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
