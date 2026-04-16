@@ -387,6 +387,9 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(np, "prepend", &nativePrepend);
     try vm.registerNativeMethod(np, "append", &nativeAppend);
     try vm.registerNativeMethod(np, "replaceChildren", &nativeReplaceChildren);
+    try vm.registerNativeMethod(np, "before", &nativeBefore);
+    try vm.registerNativeMethod(np, "after", &nativeAfter);
+    try vm.registerNativeMethod(np, "replaceWith", &nativeReplaceWith);
 
     // ── Node.prototype constants ──
     // Node type constants (DOM §4.4)
@@ -2426,11 +2429,12 @@ fn nativePrepend(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
         i -= 1;
         const arg = args[i];
         const child_node: *lxb.lxb_dom_node_t = blk: {
-            if (arg.isString()) {
-                const s = vm.pool.get(arg.asStringId()) orelse "";
-                break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+            if (arg.isObject()) {
+                break :blk getArgNode(arg) orelse continue;
             }
-            break :blk getArgNode(arg) orelse continue;
+            // String, null, undefined, number, bool → text node
+            const s = argToString(vm, arg);
+            break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
         };
         dom_b.lxb_dom_node_remove(child_node);
         if (nodeFirstChild(parent)) |fc| {
@@ -2451,11 +2455,12 @@ fn nativeAppend(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!
     const doc = g_document orelse return JsValue.undefined_val;
     for (args) |arg| {
         const child_node: *lxb.lxb_dom_node_t = blk: {
-            if (arg.isString()) {
-                const s = vm.pool.get(arg.asStringId()) orelse "";
-                break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+            if (arg.isObject()) {
+                break :blk getArgNode(arg) orelse continue;
             }
-            break :blk getArgNode(arg) orelse continue;
+            // String, null, undefined, number, bool → text node
+            const s = argToString(vm, arg);
+            break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
         };
         dom_b.lxb_dom_node_remove(child_node);
         dom_b.lxb_dom_node_insert_child(parent, child_node);
@@ -2475,6 +2480,124 @@ fn nativeReplaceChildren(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     }
     // Append new children (reuse nativeAppend logic)
     return nativeAppend(ctx, this, args);
+}
+
+// ── ChildNode.before (DOM §4.7) ──────────────────────────────────────
+
+fn nativeBefore(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+    for (args) |arg| {
+        const new_node: *lxb.lxb_dom_node_t = blk: {
+            if (arg.isObject()) {
+                const n = getArgNode(arg) orelse continue;
+                // Skip if arg is this node itself (inserting before itself is a no-op)
+                if (n == node) continue;
+                dom_b.lxb_dom_node_remove(n);
+                break :blk n;
+            }
+            // String, null, undefined, number, bool → text node
+            const s = argToString(vm, arg);
+            break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+        };
+        dom_b.lxb_dom_node_insert_before(node, new_node);
+    }
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+// ── ChildNode.after (DOM §4.7) ───────────────────────────────────────
+
+fn nativeAfter(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+    // DOM §4.7: find the "viable next sibling" — first following sibling of
+    // `node` that is NOT in the args node list.
+    const viable_next: ?*lxb.lxb_dom_node_t = blk: {
+        var sib = nodeNext(node);
+        outer: while (sib) |s| {
+            for (args) |arg| {
+                if (arg.isObject()) {
+                    if (getArgNode(arg)) |n| {
+                        if (n == s) {
+                            sib = nodeNext(s);
+                            continue :outer;
+                        }
+                    }
+                }
+            }
+            break :blk s;
+        }
+        break :blk null;
+    };
+    // Now remove all arg nodes from their current positions and insert them
+    // before viable_next (or append to parent if null).
+    const parent = nodeParent(node) orelse return JsValue.undefined_val;
+    for (args) |arg| {
+        const new_node: *lxb.lxb_dom_node_t = blk: {
+            if (arg.isObject()) {
+                const n = getArgNode(arg) orelse continue;
+                dom_b.lxb_dom_node_remove(n);
+                break :blk n;
+            }
+            // String, null, undefined, number, bool → text node
+            const s = argToString(vm, arg);
+            break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+        };
+        if (viable_next) |vn| {
+            dom_b.lxb_dom_node_insert_before(vn, new_node);
+        } else {
+            dom_b.lxb_dom_node_insert_child(parent, new_node);
+        }
+    }
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+// ── ChildNode.replaceWith (DOM §4.7) ─────────────────────────────────
+
+fn nativeReplaceWith(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+    // DOM §4.7: if parent is null, return.
+    if (nodeParent(node) == null) return JsValue.undefined_val;
+    // Check whether this node itself appears in the args list.
+    var self_in_args = false;
+    for (args) |arg| {
+        if (arg.isObject()) {
+            if (getArgNode(arg)) |n| {
+                if (n == node) {
+                    self_in_args = true;
+                    break;
+                }
+            }
+        }
+    }
+    // Insert all args before `node`, then remove `node` (unless self is in args).
+    for (args) |arg| {
+        const new_node: *lxb.lxb_dom_node_t = blk: {
+            if (arg.isObject()) {
+                const n = getArgNode(arg) orelse continue;
+                // Don't remove this node from tree yet — it serves as insertion ref.
+                if (n == node) continue;
+                dom_b.lxb_dom_node_remove(n);
+                break :blk n;
+            }
+            // String, null, undefined, number, bool → text node
+            const s = argToString(vm, arg);
+            break :blk dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+        };
+        dom_b.lxb_dom_node_insert_before(node, new_node);
+    }
+    // Only remove this node if it was not itself one of the replacement nodes.
+    if (!self_in_args) {
+        dom_b.lxb_dom_node_remove(node);
+    }
+    setDomDirty();
+    return JsValue.undefined_val;
 }
 
 // ── document.implementation helpers (DOM §7.1) ───────────────────────
