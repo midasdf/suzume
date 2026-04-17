@@ -4303,7 +4303,14 @@ pub const VM = struct {
         if (args.len == 0) return JsValue.undefined_val;
         const callback = args[0];
         if (!callback.isObject()) return JsValue.undefined_val;
-        const delay: u32 = if (args.len > 1) @intFromFloat(@max(0, @min(args[1].toNumber(), 2147483647))) else 0;
+        // Per HTML spec §8.5: non-finite / NaN / negative delays clamp to 0.
+        const delay: u32 = blk: {
+            if (args.len <= 1) break :blk 0;
+            const n = args[1].toNumber();
+            if (std.math.isNan(n) or n <= 0) break :blk 0;
+            const clamped: f64 = @min(n, 2147483647);
+            break :blk @intFromFloat(clamped);
+        };
         const id = vm.next_timer_id;
         vm.next_timer_id += 1;
         try vm.timers.append(vm.allocator, .{
@@ -4319,7 +4326,13 @@ pub const VM = struct {
     fn nativeClearTimer(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         if (args.len == 0) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const id: u32 = @intFromFloat(@max(0, args[0].toNumber()));
+        // Per HTML spec §8.5: clearTimeout(undefined|NaN|negative) is a no-op.
+        // Guard @intFromFloat against NaN (UB) and negatives before casting.
+        const n = args[0].toNumber();
+        if (std.math.isNan(n) or n <= 0 or n >= @as(f64, @floatFromInt(std.math.maxInt(u32)))) {
+            return JsValue.undefined_val;
+        }
+        const id: u32 = @intFromFloat(n);
         for (vm.timers.items) |*entry| {
             if (entry.id == id) {
                 entry.cancelled = true;
@@ -4352,9 +4365,17 @@ pub const VM = struct {
                 continue;
             }
             // Fire the callback
+            // Clear any pending throw from a previous timer callback.
+            // Timer callbacks run in isolation: an unhandled exception from
+            // one timer must not prevent subsequent timers from executing
+            // (matches browser behaviour — uncaught exceptions go to
+            // window.onerror but don't poison the timer queue).
+            self.pending_throw = null;
             entry.fired = true;
             fired_any = true;
             _ = self.callJsFunction(entry.callback, JsValue.undefined_val, &.{}) catch {};
+            // Clear any throw produced by this callback for the same reason.
+            self.pending_throw = null;
             // After callback, re-check bounds (callback may have added timers)
             if (i < self.timers.items.len) {
                 if (!self.timers.items[i].is_interval or self.timers.items[i].cancelled) {
