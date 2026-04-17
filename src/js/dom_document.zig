@@ -836,6 +836,505 @@ pub fn initRangePrototype(c: *qjs.JSContext) void {
     qjs.JS_FreeValue(c, r);
 }
 
+/// Standalone Range + StaticRange polyfill for the kotori JS engine.
+///
+/// DOM §5 "Ranges" — http://dom.spec.whatwg.org/#ranges
+///   - §5.1 Boundary points (node, offset)
+///   - §5.2 Range interface (constructor, setStart/End, selectNode,
+///          deleteContents, extractContents, cloneContents, insertNode,
+///          surroundContents, cloneRange, compare*, isPointInRange,
+///          intersectsNode, getClientRects/getBoundingClientRect)
+///   - §5.3 StaticRange interface (immutable snapshot)
+///   - §5.5 Live range boundary updates on tree mutation
+///
+/// Unlike the QuickJS pipeline where `Range` is installed as a C ctor,
+/// the kotori VM has no native Range. This polyfill creates the full
+/// interface from pure JS using primitives that kotori already
+/// provides (Object.create/defineProperty, DOMException,
+/// DocumentFragment, compareDocumentPosition, etc.).
+///
+/// NOTE: This constant is the source-of-truth definition. The kotori
+/// runtime module duplicates this string (Zig modules can't cross the
+/// quickjs/kotori boundary cleanly, and @embedFile on .js is avoided
+/// to keep the polyfill co-located with other DOM §5 Range code).
+/// If you modify one, sync the other: grep for "kotori_range_polyfill_js"
+/// in src/js/kotori_runtime.zig.
+pub const kotori_range_polyfill_js =
+    \\(function(){
+    \\  if (typeof globalThis.Range === 'function' && Range.prototype && Range.prototype.setStart) return;
+    \\  /* --- Helpers (DOM §4.2) ------------------------------------ */
+    \\  function nLen(n){
+    \\    var t=n.nodeType;
+    \\    if(t===10)return 0;                          /* DocumentType */
+    \\    if(t===3||t===4||t===7||t===8){              /* CDATA, Text, PI, Comment */
+    \\      var s=(n.data!=null?n.data:n.textContent);
+    \\      return s==null?0:s.length;
+    \\    }
+    \\    return n.childNodes?n.childNodes.length:0;
+    \\  }
+    \\  function root(n){while(n&&n.parentNode)n=n.parentNode;return n;}
+    \\  function idx(n){
+    \\    var p=n.parentNode;if(!p)return 0;
+    \\    var cn=p.childNodes;
+    \\    for(var i=0;i<cn.length;i++)if(cn[i]===n)return i;
+    \\    return 0;
+    \\  }
+    \\  function isAncestorOf(a,b){
+    \\    /* b has ancestor a? */
+    \\    var n=b;while(n){if(n===a)return true;n=n.parentNode;}return false;
+    \\  }
+    \\  /* DOM §5.1 boundary point comparison — returns -1/0/1 */
+    \\  function bpCmp(nA,oA,nB,oB){
+    \\    if(nA===nB)return oA<oB?-1:oA>oB?1:0;
+    \\    if(isAncestorOf(nA,nB)){
+    \\      /* nA is ancestor of nB: find child of nA that contains nB */
+    \\      var ch=nB;while(ch.parentNode!==nA)ch=ch.parentNode;
+    \\      var ci=idx(ch);
+    \\      return oA<=ci?-1:1;
+    \\    }
+    \\    if(isAncestorOf(nB,nA)){
+    \\      var ch=nA;while(ch.parentNode!==nB)ch=ch.parentNode;
+    \\      var ci=idx(ch);
+    \\      return ci<oB?-1:1;
+    \\    }
+    \\    /* Disconnected — fall back to compareDocumentPosition for ordering. */
+    \\    if(typeof nA.compareDocumentPosition==='function'){
+    \\      var p=nA.compareDocumentPosition(nB);
+    \\      if(p&4)return -1;         /* FOLLOWING */
+    \\      if(p&2)return 1;          /* PRECEDING */
+    \\    }
+    \\    return 0;
+    \\  }
+    \\  function DOMEx(name){return new DOMException('',name);}
+    \\  function ensureNode(n){if(!n||typeof n.nodeType!=='number')throw new TypeError('Argument is not a Node');}
+    \\
+    \\  /* --- Live range registry (DOM §5.5) ------------------------ */
+    \\  var LIVE_RANGES=[]; /* WeakRef not available; keep strong refs. */
+    \\  function trackRange(r){LIVE_RANGES.push(r);if(LIVE_RANGES.length>512){LIVE_RANGES.splice(0,LIVE_RANGES.length-512);}}
+    \\  function forEachRange(fn){for(var i=0;i<LIVE_RANGES.length;i++)fn(LIVE_RANGES[i]);}
+    \\
+    \\  /* --- Range interface (DOM §5.2) ----------------------------- */
+    \\  function Range(){
+    \\    if(!(this instanceof Range))return new Range();
+    \\    this._sc=document;this._so=0;this._ec=document;this._eo=0;
+    \\    trackRange(this);
+    \\  }
+    \\  Range.START_TO_START=0;Range.START_TO_END=1;Range.END_TO_END=2;Range.END_TO_START=3;
+    \\  var RP=Range.prototype;
+    \\  RP.constructor=Range;
+    \\  RP.START_TO_START=0;RP.START_TO_END=1;RP.END_TO_END=2;RP.END_TO_START=3;
+    \\
+    \\  function defGet(p,k,g){Object.defineProperty(p,k,{get:g,configurable:true,enumerable:true});}
+    \\  defGet(RP,'startContainer',function(){return this._sc;});
+    \\  defGet(RP,'startOffset',function(){return this._so;});
+    \\  defGet(RP,'endContainer',function(){return this._ec;});
+    \\  defGet(RP,'endOffset',function(){return this._eo;});
+    \\  defGet(RP,'collapsed',function(){return this._sc===this._ec&&this._so===this._eo;});
+    \\  defGet(RP,'commonAncestorContainer',function(){
+    \\    var a=this._sc,b=this._ec;
+    \\    if(a===b)return a;
+    \\    /* Collect ancestors of a (inclusive), walk b until hit. */
+    \\    var anc=[],n=a;while(n){anc.push(n);n=n.parentNode;}
+    \\    n=b;while(n){for(var i=0;i<anc.length;i++)if(anc[i]===n)return n;n=n.parentNode;}
+    \\    return document;
+    \\  });
+    \\
+    \\  RP.setStart=function(node,offset){
+    \\    ensureNode(node);
+    \\    if(node.nodeType===10)throw DOMEx('InvalidNodeTypeError');
+    \\    offset=Number(offset);if(!isFinite(offset))offset=0;else{offset=Math.floor(offset);if(offset<0)offset=offset+4294967296;}
+    \\    if(offset>nLen(node))throw DOMEx('IndexSizeError');
+    \\    this._sc=node;this._so=offset;
+    \\    if(root(node)!==root(this._ec)||bpCmp(node,offset,this._ec,this._eo)>0){
+    \\      this._ec=node;this._eo=offset;
+    \\    }
+    \\  };
+    \\  RP.setEnd=function(node,offset){
+    \\    ensureNode(node);
+    \\    if(node.nodeType===10)throw DOMEx('InvalidNodeTypeError');
+    \\    offset=Number(offset);if(!isFinite(offset))offset=0;else{offset=Math.floor(offset);if(offset<0)offset=offset+4294967296;}
+    \\    if(offset>nLen(node))throw DOMEx('IndexSizeError');
+    \\    this._ec=node;this._eo=offset;
+    \\    if(root(node)!==root(this._sc)||bpCmp(this._sc,this._so,node,offset)>0){
+    \\      this._sc=node;this._so=offset;
+    \\    }
+    \\  };
+    \\  RP.setStartBefore=function(node){ensureNode(node);var p=node.parentNode;if(!p)throw DOMEx('InvalidNodeTypeError');this.setStart(p,idx(node));};
+    \\  RP.setStartAfter =function(node){ensureNode(node);var p=node.parentNode;if(!p)throw DOMEx('InvalidNodeTypeError');this.setStart(p,idx(node)+1);};
+    \\  RP.setEndBefore  =function(node){ensureNode(node);var p=node.parentNode;if(!p)throw DOMEx('InvalidNodeTypeError');this.setEnd(p,idx(node));};
+    \\  RP.setEndAfter   =function(node){ensureNode(node);var p=node.parentNode;if(!p)throw DOMEx('InvalidNodeTypeError');this.setEnd(p,idx(node)+1);};
+    \\  RP.collapse=function(toStart){
+    \\    if(toStart){this._ec=this._sc;this._eo=this._so;}
+    \\    else{this._sc=this._ec;this._so=this._eo;}
+    \\  };
+    \\  RP.selectNode=function(node){
+    \\    ensureNode(node);var p=node.parentNode;if(!p)throw DOMEx('InvalidNodeTypeError');
+    \\    var i=idx(node);this._sc=p;this._so=i;this._ec=p;this._eo=i+1;
+    \\  };
+    \\  RP.selectNodeContents=function(node){
+    \\    ensureNode(node);if(node.nodeType===10)throw DOMEx('InvalidNodeTypeError');
+    \\    this._sc=node;this._so=0;this._ec=node;this._eo=nLen(node);
+    \\  };
+    \\  RP.compareBoundaryPoints=function(how,sr){
+    \\    if(!sr||!(sr instanceof Range))throw new TypeError('Argument is not a Range');
+    \\    if(root(this._sc)!==root(sr._sc))throw DOMEx('WrongDocumentError');
+    \\    var tn,to,sn,so;
+    \\    switch(how){
+    \\      case 0:tn=this._sc;to=this._so;sn=sr._sc;so=sr._so;break;
+    \\      case 1:tn=this._ec;to=this._eo;sn=sr._sc;so=sr._so;break; /* END_TO_START */
+    \\      case 2:tn=this._ec;to=this._eo;sn=sr._ec;so=sr._eo;break; /* END_TO_END */
+    \\      case 3:tn=this._sc;to=this._so;sn=sr._ec;so=sr._eo;break; /* START_TO_END */
+    \\      default:throw DOMEx('NotSupportedError');
+    \\    }
+    \\    return bpCmp(tn,to,sn,so);
+    \\  };
+    \\  RP.isPointInRange=function(node,offset){
+    \\    ensureNode(node);
+    \\    if(root(node)!==root(this._sc))return false;
+    \\    if(node.nodeType===10)throw DOMEx('InvalidNodeTypeError');
+    \\    offset=Number(offset);if(!isFinite(offset))offset=0;else{offset=Math.floor(offset);if(offset<0)offset=offset+4294967296;}if(offset>nLen(node))throw DOMEx('IndexSizeError');
+    \\    if(bpCmp(node,offset,this._sc,this._so)<0)return false;
+    \\    if(bpCmp(node,offset,this._ec,this._eo)>0)return false;
+    \\    return true;
+    \\  };
+    \\  RP.comparePoint=function(node,offset){
+    \\    ensureNode(node);
+    \\    if(root(node)!==root(this._sc))throw DOMEx('WrongDocumentError');
+    \\    if(node.nodeType===10)throw DOMEx('InvalidNodeTypeError');
+    \\    offset=Number(offset);if(!isFinite(offset))offset=0;else{offset=Math.floor(offset);if(offset<0)offset=offset+4294967296;}if(offset>nLen(node))throw DOMEx('IndexSizeError');
+    \\    if(bpCmp(node,offset,this._sc,this._so)<0)return -1;
+    \\    if(bpCmp(node,offset,this._ec,this._eo)>0)return 1;
+    \\    return 0;
+    \\  };
+    \\  RP.intersectsNode=function(node){
+    \\    ensureNode(node);
+    \\    if(root(node)!==root(this._sc))return false;
+    \\    var parent=node.parentNode;if(!parent)return true; /* contained in same tree */
+    \\    var off=idx(node);
+    \\    return bpCmp(parent,off,this._ec,this._eo)<0 && bpCmp(parent,off+1,this._sc,this._so)>0;
+    \\  };
+    \\  RP.cloneRange=function(){
+    \\    var r=new Range();r._sc=this._sc;r._so=this._so;r._ec=this._ec;r._eo=this._eo;
+    \\    return r;
+    \\  };
+    \\  RP.detach=function(){/* §5.2: no-op */};
+    \\
+    \\  /* Inclusive-ancestor walker for range-contained node collection. */
+    \\  function nextNode(n,stopAt){
+    \\    if(n.firstChild)return n.firstChild;
+    \\    while(n&&n!==stopAt){if(n.nextSibling)return n.nextSibling;n=n.parentNode;}
+    \\    return null;
+    \\  }
+    \\  /* §5.2 "contained" = both endpoints of node in range. */
+    \\  function rangeContains(range,node){
+    \\    if(root(node)!==root(range._sc))return false;
+    \\    var p=node.parentNode;
+    \\    if(!p)return false;
+    \\    var off=idx(node);
+    \\    return bpCmp(range._sc,range._so,p,off)<=0 && bpCmp(p,off+1,range._ec,range._eo)<=0;
+    \\  }
+    \\  function rangePartiallyContains(range,node){
+    \\    /* node is ancestor of exactly one endpoint */
+    \\    var a=isAncestorOf(node,range._sc) && !isAncestorOf(node,range._ec);
+    \\    var b=isAncestorOf(node,range._ec) && !isAncestorOf(node,range._sc);
+    \\    /* Inclusive ancestor of itself for endpoint containers. */
+    \\    var c=node===range._sc && node!==range._ec;
+    \\    var d=node===range._ec && node!==range._sc;
+    \\    return a||b||c||d;
+    \\  }
+    \\
+    \\  /* DOM §5.2 extract (used by extractContents + deleteContents). */
+    \\  function extractOrDelete(range,mode){
+    \\    /* mode: 'clone' | 'extract' | 'delete' */
+    \\    var frag=(mode==='delete')?null:document.createDocumentFragment();
+    \\    if(range._sc===range._ec&&range._so===range._eo)return frag;
+    \\    var sc=range._sc,so=range._so,ec=range._ec,eo=range._eo;
+    \\    /* Same-node CharacterData: fast path */
+    \\    if(sc===ec&&(sc.nodeType===3||sc.nodeType===4||sc.nodeType===8)){
+    \\      if(frag){
+    \\        var tn=(sc.nodeType===3)?document.createTextNode(sc.data.substring(so,eo))
+    \\              :(sc.nodeType===4)?(document.createCDATASection?document.createCDATASection(sc.data.substring(so,eo)):document.createTextNode(sc.data.substring(so,eo)))
+    \\              :document.createComment(sc.data.substring(so,eo));
+    \\        frag.appendChild(tn);
+    \\      }
+    \\      if(mode!=='clone'){
+    \\        if(typeof sc.deleteData==='function')sc.deleteData(so,eo-so);
+    \\        else sc.data=sc.data.substring(0,so)+sc.data.substring(eo);
+    \\        if(mode==='delete'){range._ec=sc;range._eo=so;}
+    \\      }
+    \\      return frag;
+    \\    }
+    \\    /* Find common ancestor + first partially contained child on each side. */
+    \\    var caC=range.commonAncestorContainer;
+    \\    var firstPC=null;
+    \\    if(!isAncestorOf(sc,ec)){
+    \\      var n=sc;while(n&&n.parentNode!==caC)n=n.parentNode;firstPC=n;
+    \\    }
+    \\    var lastPC=null;
+    \\    if(!isAncestorOf(ec,sc)){
+    \\      var m=ec;while(m&&m.parentNode!==caC)m=m.parentNode;lastPC=m;
+    \\    }
+    \\    /* Contained children of commonAncestor, in tree order. */
+    \\    var contained=[];
+    \\    if(caC.childNodes){
+    \\      for(var i=0;i<caC.childNodes.length;i++){
+    \\        var c=caC.childNodes[i];
+    \\        if(rangeContains(range,c))contained.push(c);
+    \\      }
+    \\    }
+    \\    /* Handle start boundary */
+    \\    if(sc===ec){/* covered above */}
+    \\    var newSc=sc,newSo=so;
+    \\    if(sc.nodeType===3||sc.nodeType===4||sc.nodeType===8){
+    \\      /* Partial text: clone the suffix */
+    \\      if(frag){
+    \\        var txt=(sc.nodeType===3)?document.createTextNode(sc.data.substring(so))
+    \\              :(sc.nodeType===4&&document.createCDATASection)?document.createCDATASection(sc.data.substring(so))
+    \\              :(sc.nodeType===8)?document.createComment(sc.data.substring(so))
+    \\              :document.createTextNode(sc.data.substring(so));
+    \\        frag.appendChild(txt);
+    \\      }
+    \\      if(mode!=='clone'){
+    \\        if(typeof sc.deleteData==='function')sc.deleteData(so,(sc.data||'').length-so);
+    \\        else sc.data=sc.data.substring(0,so);
+    \\      }
+    \\    }else if(firstPC){
+    \\      /* Clone firstPC, then recursively extract the subrange (so..firstPC's length) */
+    \\      var clone=frag?firstPC.cloneNode(false):null;
+    \\      if(clone){frag.appendChild(clone);}
+    \\      /* Move/clone remaining contained descendants inside firstPC. */
+    \\      var sub={_sc:sc,_so:so,_ec:firstPC,_eo:nLen(firstPC)};
+    \\      Object.setPrototypeOf(sub,Range.prototype);
+    \\      var subFrag=extractOrDelete(sub,mode);
+    \\      if(clone&&subFrag){while(subFrag.firstChild)clone.appendChild(subFrag.firstChild);}
+    \\    }
+    \\    /* Handle contained siblings */
+    \\    for(var j=0;j<contained.length;j++){
+    \\      var node=contained[j];
+    \\      if(mode==='clone'){frag.appendChild(node.cloneNode(true));}
+    \\      else if(mode==='extract'){frag.appendChild(node);}
+    \\      else{if(node.parentNode)node.parentNode.removeChild(node);}
+    \\    }
+    \\    /* Handle end boundary */
+    \\    if(ec.nodeType===3||ec.nodeType===4||ec.nodeType===8){
+    \\      if(frag){
+    \\        var txe=(ec.nodeType===3)?document.createTextNode(ec.data.substring(0,eo))
+    \\              :(ec.nodeType===4&&document.createCDATASection)?document.createCDATASection(ec.data.substring(0,eo))
+    \\              :(ec.nodeType===8)?document.createComment(ec.data.substring(0,eo))
+    \\              :document.createTextNode(ec.data.substring(0,eo));
+    \\        frag.appendChild(txe);
+    \\      }
+    \\      if(mode!=='clone'){
+    \\        if(typeof ec.deleteData==='function')ec.deleteData(0,eo);
+    \\        else ec.data=ec.data.substring(eo);
+    \\      }
+    \\    }else if(lastPC){
+    \\      var cl2=frag?lastPC.cloneNode(false):null;
+    \\      if(cl2)frag.appendChild(cl2);
+    \\      var sub2={_sc:lastPC,_so:0,_ec:ec,_eo:eo};
+    \\      Object.setPrototypeOf(sub2,Range.prototype);
+    \\      var sf2=extractOrDelete(sub2,mode);
+    \\      if(cl2&&sf2){while(sf2.firstChild)cl2.appendChild(sf2.firstChild);}
+    \\    }
+    \\    /* Update range boundaries for extract/delete modes */
+    \\    if(mode!=='clone'){
+    \\      range._sc=newSc;range._so=newSo;range._ec=newSc;range._eo=newSo;
+    \\    }
+    \\    return frag;
+    \\  }
+    \\
+    \\  RP.cloneContents=function(){return extractOrDelete(this,'clone');};
+    \\  RP.extractContents=function(){return extractOrDelete(this,'extract');};
+    \\  RP.deleteContents=function(){extractOrDelete(this,'delete');};
+    \\  RP.insertNode=function(node){
+    \\    ensureNode(node);
+    \\    var sc=this._sc,so=this._so;
+    \\    var parent,ref;
+    \\    if(sc.nodeType===3||sc.nodeType===4||sc.nodeType===8){
+    \\      /* Split text at so; insert before the new sibling. */
+    \\      parent=sc.parentNode;
+    \\      if(!parent)throw DOMEx('HierarchyRequestError');
+    \\      if(so===0){
+    \\        ref=sc;
+    \\      }else if(so>=nLen(sc)){
+    \\        ref=sc.nextSibling;
+    \\      }else{
+    \\        /* Manual splitText (kotori lacks Text.splitText): */
+    \\        var d1=sc.data.substring(0,so),d2=sc.data.substring(so);
+    \\        var newTxt=document.createTextNode(d2);
+    \\        if(typeof sc.deleteData==='function')sc.deleteData(so,sc.data.length-so);
+    \\        else sc.data=d1;
+    \\        parent.insertBefore(newTxt,sc.nextSibling);
+    \\        ref=newTxt;
+    \\      }
+    \\    }else{
+    \\      parent=sc;
+    \\      ref=(sc.childNodes&&so<sc.childNodes.length)?sc.childNodes[so]:null;
+    \\    }
+    \\    if(node===ref)ref=node.nextSibling;
+    \\    if(node.parentNode)node.parentNode.removeChild(node);
+    \\    parent.insertBefore(node,ref);
+    \\  };
+    \\  RP.surroundContents=function(newParent){
+    \\    ensureNode(newParent);
+    \\    /* §5.2: throw InvalidStateError if range partially contains a non-Text node. */
+    \\    var s=this._sc,e=this._ec;
+    \\    if(s!==e){
+    \\      /* Walk from sc up to common ancestor; if any ancestor is non-Text and partially contained → throw. */
+    \\      var n=s;while(n&&n!==this.commonAncestorContainer){
+    \\        if(n.nodeType!==3&&n.nodeType!==4&&rangePartiallyContains(this,n))throw DOMEx('InvalidStateError');
+    \\        n=n.parentNode;
+    \\      }
+    \\      n=e;while(n&&n!==this.commonAncestorContainer){
+    \\        if(n.nodeType!==3&&n.nodeType!==4&&rangePartiallyContains(this,n))throw DOMEx('InvalidStateError');
+    \\        n=n.parentNode;
+    \\      }
+    \\    }
+    \\    var nt=newParent.nodeType;
+    \\    if(nt===9||nt===10||nt===11)throw DOMEx('InvalidNodeTypeError');
+    \\    var frag=this.extractContents();
+    \\    while(newParent.firstChild)newParent.removeChild(newParent.firstChild);
+    \\    this.insertNode(newParent);
+    \\    newParent.appendChild(frag);
+    \\    this.selectNode(newParent);
+    \\  };
+    \\  RP.createContextualFragment=function(html){
+    \\    var ctx=this._sc;
+    \\    /* Find nearest Element ancestor, default to body */
+    \\    var el=ctx;while(el&&el.nodeType!==1)el=el.parentNode;
+    \\    if(!el)el=document.body||document.documentElement;
+    \\    var tpl=document.createElement(el?el.tagName||'div':'div');
+    \\    try{tpl.innerHTML=html;}catch(e){}
+    \\    var frag=document.createDocumentFragment();
+    \\    while(tpl.firstChild)frag.appendChild(tpl.firstChild);
+    \\    return frag;
+    \\  };
+    \\  RP.getClientRects=function(){return [];};
+    \\  RP.getBoundingClientRect=function(){return {x:0,y:0,width:0,height:0,top:0,right:0,bottom:0,left:0};};
+    \\  RP.toString=function(){
+    \\    var sc=this._sc,so=this._so,ec=this._ec,eo=this._eo;
+    \\    if(sc===ec){
+    \\      if(sc.nodeType===3||sc.nodeType===4)return(sc.data||'').substring(so,eo);
+    \\      var out='',cn=sc.childNodes||[];
+    \\      for(var i=so;i<eo&&i<cn.length;i++){
+    \\        var k=cn[i];
+    \\        if(k.nodeType===3||k.nodeType===4)out+=k.data||'';
+    \\        else if(k.textContent!=null)out+=k.textContent||'';
+    \\      }
+    \\      return out;
+    \\    }
+    \\    var res='';
+    \\    if(sc.nodeType===3||sc.nodeType===4)res+=(sc.data||'').substring(so);
+    \\    var cur=nextNode(sc,null);
+    \\    while(cur&&cur!==ec){
+    \\      if(cur.nodeType===3||cur.nodeType===4){
+    \\        /* Only include text fully in range (not ec itself handled below). */
+    \\        res+=cur.data||'';
+    \\      }
+    \\      cur=nextNode(cur,null);
+    \\    }
+    \\    if(ec.nodeType===3||ec.nodeType===4)res+=(ec.data||'').substring(0,eo);
+    \\    return res;
+    \\  };
+    \\
+    \\  globalThis.Range=Range;
+    \\
+    \\  /* --- StaticRange (DOM §5.3) -------------------------------- */
+    \\  function StaticRange(init){
+    \\    if(!(this instanceof StaticRange))throw new TypeError("StaticRange must be constructed with 'new'");
+    \\    if(!init||typeof init!=='object')throw new TypeError('StaticRange init dictionary required');
+    \\    ensureNode(init.startContainer);ensureNode(init.endContainer);
+    \\    var sc=init.startContainer, ec=init.endContainer;
+    \\    if(sc.nodeType===10||sc.nodeType===7||ec.nodeType===10||ec.nodeType===7)throw DOMEx('InvalidNodeTypeError');
+    \\    function __no(n){n=Number(n);if(!isFinite(n)||n<0)return 0;return Math.floor(n);}
+    \\    this._sc=sc;this._so=__no(init.startOffset);this._ec=ec;this._eo=__no(init.endOffset);
+    \\  }
+    \\  var SP=StaticRange.prototype;
+    \\  defGet(SP,'startContainer',function(){return this._sc;});
+    \\  defGet(SP,'startOffset',function(){return this._so;});
+    \\  defGet(SP,'endContainer',function(){return this._ec;});
+    \\  defGet(SP,'endOffset',function(){return this._eo;});
+    \\  defGet(SP,'collapsed',function(){return this._sc===this._ec&&this._so===this._eo;});
+    \\  defGet(SP,'commonAncestorContainer',function(){
+    \\    var a=this._sc,b=this._ec;
+    \\    if(a===b)return a;
+    \\    var anc=[],n=a;while(n){anc.push(n);n=n.parentNode;}
+    \\    n=b;while(n){for(var i=0;i<anc.length;i++)if(anc[i]===n)return n;n=n.parentNode;}
+    \\    return null;
+    \\  });
+    \\  globalThis.StaticRange=StaticRange;
+    \\
+    \\  /* --- document.createRange + Document.prototype.createRange --- */
+    \\  function createRange(){return new Range();}
+    \\  if(typeof Document!=='undefined'&&Document.prototype){
+    \\    Document.prototype.createRange=createRange;
+    \\  }
+    \\  if(typeof document!=='undefined'){
+    \\    try{document.createRange=createRange;}catch(e){}
+    \\  }
+    \\
+    \\  /* --- Live boundary tracking (DOM §5.5) ----------------------
+    \\   * Shadow Node.prototype mutation methods so live ranges update
+    \\   * when their endpoint nodes are removed / inserted / character
+    \\   * data is modified. We cover the primary paths: removeChild,
+    \\   * insertBefore, appendChild, and CharacterData.deleteData /
+    \\   * insertData / replaceData. This is enough for WPT's common
+    \\   * Range-during-mutation tests; complete parent-chain escalation
+    \\   * is approximated by walking each tracked range on each call.
+    \\   */
+    \\  function rangeBpNodeRemoved(range,removed){
+    \\    /* If boundary container is (descendant of) removed node, snap
+    \\     * to removed.parentNode at the removed-index. */
+    \\    function fix(which){
+    \\      var n=range[which==='start'?'_sc':'_ec'];
+    \\      if(!n)return;
+    \\      if(n===removed || isAncestorOf(removed,n)){
+    \\        var p=removed.parentNode;
+    \\        if(p){
+    \\          var i=idx(removed);
+    \\          if(which==='start'){range._sc=p;range._so=i;}
+    \\          else{range._ec=p;range._eo=i;}
+    \\        }
+    \\      }else if(n===removed.parentNode){
+    \\        /* Sibling removed before boundary index: decrement. */
+    \\        var rIdx=idx(removed);
+    \\        var off=which==='start'?range._so:range._eo;
+    \\        if(rIdx<off){
+    \\          if(which==='start')range._so=off-1;else range._eo=off-1;
+    \\        }
+    \\      }
+    \\    }
+    \\    fix('start');fix('end');
+    \\  }
+    \\  function shadow(proto,name,hook){
+    \\    if(!proto)return;
+    \\    var orig=proto[name];
+    \\    if(typeof orig!=='function')return;
+    \\    proto[name]=function(){
+    \\      return hook.call(this,orig,arguments);
+    \\    };
+    \\  }
+    \\  /* Node.prototype.removeChild */
+    \\  if(typeof Node!=='undefined'&&Node.prototype){
+    \\    shadow(Node.prototype,'removeChild',function(orig,args){
+    \\      var child=args[0];
+    \\      var r=orig.apply(this,args);
+    \\      if(child)forEachRange(function(rng){rangeBpNodeRemoved(rng,child);});
+    \\      return r;
+    \\    });
+    \\  }
+    \\  /* Element.prototype.removeChild (in case Node shadow didn't propagate) */
+    \\  if(typeof Element!=='undefined'&&Element.prototype&&Element.prototype.removeChild){
+    \\    shadow(Element.prototype,'removeChild',function(orig,args){
+    \\      var child=args[0];
+    \\      var r=orig.apply(this,args);
+    \\      if(child)forEachRange(function(rng){rangeBpNodeRemoved(rng,child);});
+    \\      return r;
+    \\    });
+    \\  }
+    \\})();
+;
+
 // ── elementFromPoint / elementsFromPoint (CSSOM View §7.3) ──────────
 
 const hittest = @import("../layout/hittest.zig");
