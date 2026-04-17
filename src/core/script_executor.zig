@@ -604,9 +604,12 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
 
     // Flush microtasks + any setTimeout(fn,0) queued by DOMContentLoaded handlers.
     _ = krt.runMicrotasks();
+    // DOM §4.3.2: Notify MutationObservers after microtask checkpoint
+    kotori_dom.flushMutationObservers();
     var timer_iters: u32 = 0;
     while (krt.runPendingTimers() and timer_iters < 5) : (timer_iters += 1) {
         _ = krt.runMicrotasks();
+        kotori_dom.flushMutationObservers();
     }
 
     // window 'load' event (HTML §8.2.9 step 7)
@@ -619,9 +622,11 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
 
     // Flush timers fired by load handlers (e.g. testharness.js completion callback).
     _ = krt.runMicrotasks();
+    kotori_dom.flushMutationObservers();
     timer_iters = 0;
     while (krt.runPendingTimers() and timer_iters < 5) : (timer_iters += 1) {
         _ = krt.runMicrotasks();
+        kotori_dom.flushMutationObservers();
     }
 
     page_kotori_rt.* = krt;

@@ -474,14 +474,33 @@ pub const VM = struct {
                                 continue;
                             }
                         }
+                        // Array special: "length" and numeric index strings are virtual properties
+                        if (obj.obj_type == .array) {
+                            const name_str = self.pool.get(lhs.asStringId()) orelse "";
+                            if (std.mem.eql(u8, name_str, "length")) {
+                                self.push(JsValue.initBool(true));
+                                continue;
+                            }
+                            // Check numeric index (e.g. "0", "1", ...)
+                            if (std.fmt.parseInt(usize, name_str, 10)) |idx| {
+                                self.push(JsValue.initBool(idx < obj.data.array.items.len));
+                                continue;
+                            } else |_| {}
+                        }
                         self.push(JsValue.initBool(obj.getProperty(lhs.asStringId()) != null));
-                    } else if (lhs.isInt()) {
+                    } else if (lhs.isInt() or lhs.isNumber()) {
+                        const num: i64 = if (lhs.isInt()) lhs.asInt() else @intFromFloat(lhs.asNumber());
                         var buf: [20]u8 = undefined;
-                        const key_str = std.fmt.bufPrint(&buf, "{d}", .{lhs.asInt()}) catch {
+                        const key_str = std.fmt.bufPrint(&buf, "{d}", .{num}) catch {
                             self.push(JsValue.initBool(false));
                             continue;
                         };
                         const key_id = try self.pool.intern(key_str);
+                        // Array special: check numeric index
+                        if (obj.obj_type == .array and num >= 0) {
+                            self.push(JsValue.initBool(@as(usize, @intCast(num)) < obj.data.array.items.len));
+                            continue;
+                        }
                         self.push(JsValue.initBool(obj.getProperty(key_id) != null));
                     } else {
                         self.push(JsValue.initBool(false));
@@ -2464,7 +2483,8 @@ pub const VM = struct {
         try self.globals.put(self.allocator, obj_id, JsValue.initObject(obj_constructor));
 
         // ── Array constructor ──
-        const arr_constructor = try self.createObj(.{});
+        const arr_constructor = try self.createObj(.{ .obj_type = .native_function });
+        arr_constructor.data = .{ .native_fn = &nativeArrayConstructor };
         try self.registerNativeMethod(arr_constructor, "isArray", &nativeArrayIsArray);
         try self.registerNativeMethod(arr_constructor, "from", &nativeArrayFrom);
         try self.registerNativeMethod(arr_constructor, "of", &nativeArrayOf);
@@ -5901,6 +5921,26 @@ pub const VM = struct {
     }
 
     // ── Array static methods ───────────────────────────────────────
+
+    /// Array constructor: new Array(), new Array(len), new Array(item1, item2, ...)
+    fn nativeArrayConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const vm = vmFromCtx(ctx);
+        const new_arr = try vm.createArray();
+        if (args.len == 0) return JsValue.initObject(new_arr);
+        if (args.len == 1 and args[0].isNumber()) {
+            // new Array(len) — pre-size the array
+            const len: usize = @intFromFloat(args[0].asNumber());
+            const items = try vm.allocator.alloc(JsValue, len);
+            for (0..len) |i| items[i] = JsValue.undefined_val;
+            new_arr.data = .{ .array = .{ .items = items, .capacity = len } };
+            return JsValue.initObject(new_arr);
+        }
+        // new Array(item1, item2, ...) — populate with args
+        const items = try vm.allocator.alloc(JsValue, args.len);
+        @memcpy(items, args);
+        new_arr.data = .{ .array = .{ .items = items, .capacity = args.len } };
+        return JsValue.initObject(new_arr);
+    }
 
     fn nativeArrayIsArray(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         if (args.len == 0) return JsValue.initBool(false);

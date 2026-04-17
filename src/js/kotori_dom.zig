@@ -354,6 +354,40 @@ var g_doctype_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 var g_xml_doc_proto: ?*JsObject = null;
 
+// ── MutationObserver storage (DOM §4.3) ─────────────────────────────
+
+const MoTarget = struct {
+    node_ptr: usize, // @intFromPtr of observed DOM node
+    child_list: bool = false,
+    attributes: bool = false,
+    character_data: bool = false,
+    subtree: bool = false,
+    attribute_old_value: bool = false,
+    character_data_old_value: bool = false,
+};
+
+const MoRecord = struct {
+    type_str: []const u8, // "childList" or "attributes" or "characterData"
+    target: JsValue, // wrapped node
+    added_nodes: JsValue, // JS array
+    removed_nodes: JsValue, // JS array
+    previous_sibling: JsValue,
+    next_sibling: JsValue,
+    attribute_name: JsValue,
+    old_value: JsValue,
+};
+
+const MoEntry = struct {
+    callback: JsValue, // JS function
+    targets: std.ArrayListUnmanaged(MoTarget),
+    pending: std.ArrayListUnmanaged(MoRecord),
+    disconnected: bool,
+};
+
+var g_mo_list: std.ArrayListUnmanaged(MoEntry) = .empty;
+pub var g_mo_pending: bool = false;
+var g_mo_vm: ?*VM = null;
+
 /// Node wrapper cache: maps lexbor DOM node pointer → JsObject wrapper.
 /// Ensures `===` identity for the same DOM node (WebIDL §3.1 object identity).
 var g_node_cache: std.AutoHashMapUnmanaged(usize, *JsObject) = .{};
@@ -856,6 +890,11 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const do_proto = try vm.createObj(.{});
     do_proto.prototype = ev_proto;
     try registerEventCtor(vm, "DeviceOrientationEvent", do_proto, proto_sid);
+
+    // ── MutationObserver constructor (DOM §4.3) ──
+    const mo_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    mo_ctor.data = .{ .native_fn = &nativeMutationObserverConstructor };
+    try vm.globals.put(vm.allocator, try vm.pool.intern("MutationObserver"), JsValue.initObject(mo_ctor));
 
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
@@ -2169,11 +2208,16 @@ fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const parent = getThisNodeOrFragment(this) orelse return JsValue.null_val;
     const child = getArgNode(args[0]) orelse return JsValue.null_val;
     if (!try validatePreInsert(vm, child, parent, null)) return JsValue.undefined_val;
+    // MO: capture siblings before mutation
+    const prev_sib = if (dom_b.lxb_dom_node_last_child_noi(parent)) |lc| wrapNode(vm, lc) orelse JsValue.null_val else JsValue.null_val;
     dom_b.lxb_dom_node_remove(child);
     dom_b.lxb_dom_node_insert_child(parent, child);
-    // Shadow DOM Phase 1: propagate scope tag if parent is in a shadow tree.
     sr.propagateScopeFromParent(parent, child);
     setDomDirty();
+    // MO: record childList mutation
+    if (g_mo_list.items.len > 0) {
+        recordChildListMutation(vm, parent, args[0], null, prev_sib, JsValue.null_val);
+    }
     return args[0];
 }
 
@@ -2182,13 +2226,19 @@ fn nativeRemoveChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const vm = VM.vmFromCtx(ctx);
     const parent = getThisNode(this) orelse return JsValue.null_val;
     const child = getArgNode(args[0]) orelse return JsValue.null_val;
-    // DOM §4.2.3: If child's parent is not parent, throw NotFoundError
     if (nodeParent(child) != parent) {
         vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
         return JsValue.undefined_val;
     }
+    // MO: capture siblings before removal
+    const prev_sib = if (child.prev) |p| wrapNode(vm, p) orelse JsValue.null_val else JsValue.null_val;
+    const next_sib = if (nodeNext(child)) |n| wrapNode(vm, n) orelse JsValue.null_val else JsValue.null_val;
     dom_b.lxb_dom_node_remove(child);
     setDomDirty();
+    // MO: record childList mutation
+    if (g_mo_list.items.len > 0) {
+        recordChildListMutation(vm, parent, null, args[0], prev_sib, next_sib);
+    }
     return args[0];
 }
 
@@ -2198,8 +2248,10 @@ fn nativeInsertBefore(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const parent = getThisNode(this) orelse return JsValue.null_val;
     const new_node = getArgNode(args[0]) orelse return JsValue.null_val;
     const ref_node: ?*lxb.lxb_dom_node_t = if (args[1].isNull() or args[1].isUndefined()) null else getArgNode(args[1]);
-    // DOM §4.2.2: pre-insert validation
     if (!try validatePreInsert(vm, new_node, parent, ref_node)) return JsValue.undefined_val;
+    // MO: capture siblings before mutation
+    const prev_sib = if (ref_node) |ref| (if (ref.prev) |p| wrapNode(vm, p) orelse JsValue.null_val else JsValue.null_val) else (if (dom_b.lxb_dom_node_last_child_noi(parent)) |lc| wrapNode(vm, lc) orelse JsValue.null_val else JsValue.null_val);
+    const next_sib = if (ref_node) |ref| (wrapNode(vm, ref) orelse JsValue.null_val) else JsValue.null_val;
     dom_b.lxb_dom_node_remove(new_node);
     if (ref_node) |ref| {
         dom_b.lxb_dom_node_insert_before(ref, new_node);
@@ -2207,6 +2259,10 @@ fn nativeInsertBefore(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
         dom_b.lxb_dom_node_insert_child(parent, new_node);
     }
     setDomDirty();
+    // MO: record childList mutation
+    if (g_mo_list.items.len > 0) {
+        recordChildListMutation(vm, parent, args[0], null, prev_sib, next_sib);
+    }
     return args[0];
 }
 
@@ -2218,7 +2274,16 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
-    _ = dom_b.lxb_dom_element_set_attribute(elem, n.ptr, n.len, v.ptr, v.len);
+    // MO: capture old value for attribute mutation
+    if (g_mo_list.items.len > 0) {
+        var old_len: usize = 0;
+        const old_ptr = dom_b.lxb_dom_element_get_attribute(elem, n.ptr, n.len, &old_len);
+        const old_val: ?[]const u8 = if (old_ptr != null and old_len > 0) old_ptr.?[0..old_len] else null;
+        _ = dom_b.lxb_dom_element_set_attribute(elem, n.ptr, n.len, v.ptr, v.len);
+        recordAttributeMutation(vm, node, n, old_val);
+    } else {
+        _ = dom_b.lxb_dom_element_set_attribute(elem, n.ptr, n.len, v.ptr, v.len);
+    }
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -2230,11 +2295,18 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     const node = getThisNode(this) orelse return JsValue.undefined_val;
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    // args[0] = namespace (ignored for storage, lexbor uses qualified name)
-    // args[1] = qualifiedName, args[2] = value
     const qn = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[1]);
     const v = if (args[2].isString()) vm.pool.get(args[2].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[2]);
-    _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
+    // MO: capture old value for attribute mutation
+    if (g_mo_list.items.len > 0) {
+        var old_len: usize = 0;
+        const old_ptr = dom_b.lxb_dom_element_get_attribute(elem, qn.ptr, qn.len, &old_len);
+        const old_val: ?[]const u8 = if (old_ptr != null and old_len > 0) old_ptr.?[0..old_len] else null;
+        _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
+        recordAttributeMutation(vm, node, qn, old_val);
+    } else {
+        _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
+    }
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -4962,4 +5034,320 @@ fn writeDecl(buf: *[2048]u8, off: usize, prop: []const u8, val: []const u8) usiz
     p = ve;
     if (p < buf.len) { buf[p] = ';'; p += 1; }
     return p - off;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// MutationObserver native implementation (DOM §4.3)
+// ══════════════════════════════════════════════════════════════════════
+
+fn nativeMutationObserverConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.undefined_val;
+    const callback = args[0];
+    if (!callback.isObject()) return JsValue.undefined_val;
+
+    const idx: u32 = @intCast(g_mo_list.items.len);
+    try g_mo_list.append(vm.allocator, .{
+        .callback = callback,
+        .targets = .empty,
+        .pending = .empty,
+        .disconnected = false,
+    });
+    g_mo_vm = vm;
+
+    const obj = try vm.createObj(.{});
+    try obj.setProperty(vm.allocator, try vm.pool.intern("_moIdx"), JsValue.initNumber(@floatFromInt(idx)));
+    try vm.registerNativeMethod(obj, "observe", &nativeMoObserve);
+    try vm.registerNativeMethod(obj, "disconnect", &nativeMoDisconnect);
+    try vm.registerNativeMethod(obj, "takeRecords", &nativeMoTakeRecords);
+    return JsValue.initObject(obj);
+}
+
+fn getMoIdx(vm: *VM, this: JsValue) ?u32 {
+    if (!this.isObject()) return null;
+    const sid = vm.pool.intern("_moIdx") catch return null;
+    const val = this.asJsObject().getProperty(sid) orelse return null;
+    if (!val.isNumber()) return null;
+    const idx: i32 = @intFromFloat(val.asNumber());
+    if (idx < 0 or @as(usize, @intCast(idx)) >= g_mo_list.items.len) return null;
+    return @intCast(idx);
+}
+
+fn nativeMoObserve(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 1) return JsValue.undefined_val;
+    const idx = getMoIdx(vm, this) orelse return JsValue.undefined_val;
+    var obs = &g_mo_list.items[idx];
+
+    // Get target node pointer
+    const target_node = getThisNode(args[0]) orelse return JsValue.undefined_val;
+    const node_ptr = @intFromPtr(target_node);
+
+    // Parse options (args[1])
+    var child_list = false;
+    var attributes = false;
+    var character_data = false;
+    var subtree = false;
+    var attribute_old_value = false;
+    var character_data_old_value = false;
+
+    if (args.len >= 2 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (opts.getProperty(vm.pool.intern("childList") catch return JsValue.undefined_val)) |v| {
+            if (v.isBool()) child_list = v.asBool();
+        }
+        if (opts.getProperty(vm.pool.intern("attributes") catch return JsValue.undefined_val)) |v| {
+            if (v.isBool()) attributes = v.asBool();
+        }
+        if (opts.getProperty(vm.pool.intern("characterData") catch return JsValue.undefined_val)) |v| {
+            if (v.isBool()) character_data = v.asBool();
+        }
+        if (opts.getProperty(vm.pool.intern("subtree") catch return JsValue.undefined_val)) |v| {
+            if (v.isBool()) subtree = v.asBool();
+        }
+        if (opts.getProperty(vm.pool.intern("attributeOldValue") catch return JsValue.undefined_val)) |v| {
+            if (v.isBool()) attribute_old_value = v.asBool();
+            if (v.isBool() and v.asBool()) attributes = true;
+        }
+        if (opts.getProperty(vm.pool.intern("characterDataOldValue") catch return JsValue.undefined_val)) |v| {
+            if (v.isBool()) character_data_old_value = v.asBool();
+            if (v.isBool() and v.asBool()) character_data = true;
+        }
+    }
+
+    // Remove existing target with same node (re-observe replaces)
+    var i: usize = 0;
+    while (i < obs.targets.items.len) {
+        if (obs.targets.items[i].node_ptr == node_ptr) {
+            _ = obs.targets.orderedRemove(i);
+        } else {
+            i += 1;
+        }
+    }
+
+    try obs.targets.append(vm.allocator, .{
+        .node_ptr = node_ptr,
+        .child_list = child_list,
+        .attributes = attributes,
+        .character_data = character_data,
+        .subtree = subtree,
+        .attribute_old_value = attribute_old_value,
+        .character_data_old_value = character_data_old_value,
+    });
+
+    return JsValue.undefined_val;
+}
+
+fn nativeMoDisconnect(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const idx = getMoIdx(vm, this) orelse return JsValue.undefined_val;
+    var obs = &g_mo_list.items[idx];
+    obs.disconnected = true;
+    obs.targets.clearRetainingCapacity();
+    obs.pending.clearRetainingCapacity();
+    return JsValue.undefined_val;
+}
+
+fn nativeMoTakeRecords(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const idx = getMoIdx(vm, this) orelse return JsValue.undefined_val;
+    var obs = &g_mo_list.items[idx];
+    const arr = try buildRecordsArray(vm, obs.pending.items);
+    obs.pending.clearRetainingCapacity();
+    return arr;
+}
+
+/// Record a childList mutation for any matching MutationObservers.
+pub fn recordChildListMutation(
+    vm: *VM,
+    target: *lxb.lxb_dom_node_t,
+    added: ?JsValue,
+    removed: ?JsValue,
+    prev_sib: JsValue,
+    next_sib: JsValue,
+) void {
+    const target_ptr = @intFromPtr(target);
+    const target_wrapped = wrapNode(vm, target) orelse return;
+
+    // Build addedNodes / removedNodes arrays with direct items allocation
+    const added_arr = vm.createObj(.{ .obj_type = .array }) catch return;
+    added_arr.prototype = vm.array_proto;
+    if (added) |a| {
+        const ai = vm.allocator.alloc(JsValue, 1) catch return;
+        ai[0] = a;
+        added_arr.data = .{ .array = .{ .items = ai, .capacity = 1 } };
+    } else {
+        added_arr.data = .{ .array = .{ .items = &.{}, .capacity = 0 } };
+    }
+    const removed_arr = vm.createObj(.{ .obj_type = .array }) catch return;
+    removed_arr.prototype = vm.array_proto;
+    if (removed) |r| {
+        const ri = vm.allocator.alloc(JsValue, 1) catch return;
+        ri[0] = r;
+        removed_arr.data = .{ .array = .{ .items = ri, .capacity = 1 } };
+    } else {
+        removed_arr.data = .{ .array = .{ .items = &.{}, .capacity = 0 } };
+    }
+
+    for (g_mo_list.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            if (t.node_ptr != target_ptr and !t.subtree) continue;
+            if (t.node_ptr != target_ptr and t.subtree) {
+                // Check if target is a descendant
+                if (!isAncestor(target, t.node_ptr)) continue;
+            }
+            if (!t.child_list) continue;
+
+            obs.pending.append(vm.allocator, .{
+                .type_str = "childList",
+                .target = target_wrapped,
+                .added_nodes = JsValue.initObject(added_arr),
+                .removed_nodes = JsValue.initObject(removed_arr),
+                .previous_sibling = prev_sib,
+                .next_sibling = next_sib,
+                .attribute_name = JsValue.null_val,
+                .old_value = JsValue.null_val,
+            }) catch {};
+            g_mo_pending = true;
+            break;
+        }
+    }
+}
+
+/// Record an attribute mutation for any matching MutationObservers.
+pub fn recordAttributeMutation(
+    vm: *VM,
+    target: *lxb.lxb_dom_node_t,
+    attr_name: []const u8,
+    old_value: ?[]const u8,
+) void {
+    const target_ptr = @intFromPtr(target);
+    const target_wrapped = wrapNode(vm, target) orelse return;
+
+    for (g_mo_list.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            if (t.node_ptr != target_ptr and !t.subtree) continue;
+            if (t.node_ptr != target_ptr and t.subtree) {
+                if (!isAncestor(target, t.node_ptr)) continue;
+            }
+            if (!t.attributes) continue;
+
+            const attr_val = JsValue.initString(vm.pool.intern(attr_name) catch continue);
+            const ov = if (t.attribute_old_value and old_value != null)
+                JsValue.initString(vm.pool.intern(old_value.?) catch continue)
+            else
+                JsValue.null_val;
+
+            const empty_arr = vm.createObj(.{ .obj_type = .array }) catch continue;
+            empty_arr.prototype = vm.array_proto;
+            empty_arr.data = .{ .array = .{ .items = &.{}, .capacity = 0 } };
+
+            obs.pending.append(vm.allocator, .{
+                .type_str = "attributes",
+                .target = target_wrapped,
+                .added_nodes = JsValue.initObject(empty_arr),
+                .removed_nodes = JsValue.initObject(empty_arr),
+                .previous_sibling = JsValue.null_val,
+                .next_sibling = JsValue.null_val,
+                .attribute_name = attr_val,
+                .old_value = ov,
+            }) catch {};
+            g_mo_pending = true;
+            break;
+        }
+    }
+}
+
+/// Record a characterData mutation for any matching MutationObservers.
+pub fn recordCharDataMutation(
+    vm: *VM,
+    target: *lxb.lxb_dom_node_t,
+    old_value: ?[]const u8,
+) void {
+    const target_ptr = @intFromPtr(target);
+    const target_wrapped = wrapNode(vm, target) orelse return;
+
+    for (g_mo_list.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            if (t.node_ptr != target_ptr and !t.subtree) continue;
+            if (t.node_ptr != target_ptr and t.subtree) {
+                if (!isAncestor(target, t.node_ptr)) continue;
+            }
+            if (!t.character_data) continue;
+
+            const ov = if (t.character_data_old_value and old_value != null)
+                JsValue.initString(vm.pool.intern(old_value.?) catch continue)
+            else
+                JsValue.null_val;
+
+            const empty_arr = vm.createObj(.{ .obj_type = .array }) catch continue;
+            empty_arr.prototype = vm.array_proto;
+            empty_arr.data = .{ .array = .{ .items = &.{}, .capacity = 0 } };
+
+            obs.pending.append(vm.allocator, .{
+                .type_str = "characterData",
+                .target = target_wrapped,
+                .added_nodes = JsValue.initObject(empty_arr),
+                .removed_nodes = JsValue.initObject(empty_arr),
+                .previous_sibling = JsValue.null_val,
+                .next_sibling = JsValue.null_val,
+                .attribute_name = JsValue.null_val,
+                .old_value = ov,
+            }) catch {};
+            g_mo_pending = true;
+            break;
+        }
+    }
+}
+
+fn isAncestor(node: *lxb.lxb_dom_node_t, ancestor_ptr: usize) bool {
+    var cur: ?*lxb.lxb_dom_node_t = node.parent;
+    while (cur) |c| {
+        if (@intFromPtr(c) == ancestor_ptr) return true;
+        cur = c.parent;
+    }
+    return false;
+}
+
+fn buildRecordsArray(vm: *VM, records: []const MoRecord) !JsValue {
+    const arr = try vm.createObj(.{ .obj_type = .array });
+    arr.prototype = vm.array_proto;
+    // Allocate items slice and populate directly
+    const items = try vm.allocator.alloc(JsValue, records.len);
+    for (records, 0..) |rec, idx| {
+        const obj = try vm.createObj(.{});
+        try obj.setProperty(vm.allocator, try vm.pool.intern("type"), JsValue.initString(try vm.pool.intern(rec.type_str)));
+        try obj.setProperty(vm.allocator, try vm.pool.intern("target"), rec.target);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("addedNodes"), rec.added_nodes);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("removedNodes"), rec.removed_nodes);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("previousSibling"), rec.previous_sibling);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("nextSibling"), rec.next_sibling);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("attributeName"), rec.attribute_name);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("attributeNamespace"), JsValue.null_val);
+        try obj.setProperty(vm.allocator, try vm.pool.intern("oldValue"), rec.old_value);
+        items[idx] = JsValue.initObject(obj);
+    }
+    arr.data = .{ .array = .{ .items = items, .capacity = records.len } };
+    return JsValue.initObject(arr);
+}
+
+/// Flush pending MutationObserver callbacks. Called from script_executor
+/// after microtask/timer processing.
+pub fn flushMutationObservers() void {
+    const vm = g_mo_vm orelse return;
+    if (!g_mo_pending) return;
+    g_mo_pending = false;
+
+    for (g_mo_list.items) |*obs| {
+        if (obs.disconnected or obs.pending.items.len == 0) continue;
+        const records_arr = buildRecordsArray(vm, obs.pending.items) catch continue;
+        obs.pending.clearRetainingCapacity();
+
+        // Call the callback with (records, observer)
+        const cb_args = [_]JsValue{ records_arr, JsValue.undefined_val };
+        _ = vm.callJsFunction(obs.callback, JsValue.undefined_val, &cb_args) catch {};
+    }
 }
