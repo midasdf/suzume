@@ -536,6 +536,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "attachShadow", &nativeAttachShadow);
     try vm.registerNativeMethod(ep, "hasAttribute", &nativeHasAttribute);
     try vm.registerNativeMethod(ep, "hasAttributes", &nativeHasAttributes);
+    try vm.registerNativeMethod(ep, "toggleAttribute", &nativeToggleAttribute);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
@@ -1931,20 +1932,76 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, _: JsValue, args: []const 
 // Element native methods (on prototype)
 // ══════════════════════════════════════════════════════════════════════
 
+/// DOM §4.2.2 — Ensure pre-insertion validity.
+/// Returns true if valid, false if a DOMException was thrown via pending_throw.
+fn validatePreInsert(vm: *VM, node: ?*lxb.lxb_dom_node_t, parent: *lxb.lxb_dom_node_t, child: ?*lxb.lxb_dom_node_t) !bool {
+    const ptype = nodeType(parent);
+
+    // Step 1: parent must be Document, DocumentFragment, or Element
+    if (ptype != lxb.LXB_DOM_NODE_TYPE_DOCUMENT and
+        ptype != lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT and
+        ptype != lxb.LXB_DOM_NODE_TYPE_ELEMENT)
+    {
+        vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+        return false;
+    }
+
+    // Step 2: node is host-including inclusive ancestor of parent
+    if (node) |n| {
+        var cur: ?*lxb.lxb_dom_node_t = parent;
+        while (cur) |c| {
+            if (c == n) {
+                vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+                return false;
+            }
+            cur = nodeParent(c);
+        }
+    }
+
+    // Step 3: child is non-null and child.parentNode != parent
+    if (child) |ch| {
+        if (nodeParent(ch) != parent) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+            return false;
+        }
+    }
+
+    // Step 4: node must be DocumentFragment, DocumentType, Element, or CharacterData
+    if (node) |n| {
+        const ntype = nodeType(n);
+        if (ntype != lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT and
+            ntype != lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE and
+            ntype != lxb.LXB_DOM_NODE_TYPE_ELEMENT and
+            ntype != lxb.LXB_DOM_NODE_TYPE_TEXT and
+            ntype != lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION and
+            ntype != lxb.LXB_DOM_NODE_TYPE_COMMENT)
+        {
+            vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+            return false;
+        }
+
+        // Step 5: Text node into Document → throw
+        if (ntype == lxb.LXB_DOM_NODE_TYPE_TEXT and ptype == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+            return false;
+        }
+
+        // Step 6: DocumentType into non-Document → throw
+        if (ntype == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE and ptype != lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+            return false;
+        }
+    }
+
+    return true;
+}
+
 fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     if (args.len == 0) return JsValue.null_val;
+    const vm = VM.vmFromCtx(ctx);
     const parent = getThisNodeOrFragment(this) orelse return JsValue.null_val;
-    // DOM §4.2.2 pre-insert validation: parent must be Document, DocumentFragment, or Element.
-    // CharacterData nodes (Text=3, Comment=8, ProcessingInstruction=7) cannot have children.
-    const nt = nodeType(parent);
-    if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT or
-        nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
-    {
-        const vm = VM.vmFromCtx(ctx);
-        vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
-        return JsValue.undefined_val;
-    }
     const child = getArgNode(args[0]) orelse return JsValue.null_val;
+    if (!try validatePreInsert(vm, child, parent, null)) return JsValue.undefined_val;
     dom_b.lxb_dom_node_remove(child);
     dom_b.lxb_dom_node_insert_child(parent, child);
     // Shadow DOM Phase 1: propagate scope tag if parent is in a shadow tree.
@@ -1953,24 +2010,34 @@ fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     return args[0];
 }
 
-fn nativeRemoveChild(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeRemoveChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     if (args.len == 0) return JsValue.null_val;
+    const vm = VM.vmFromCtx(ctx);
+    const parent = getThisNode(this) orelse return JsValue.null_val;
     const child = getArgNode(args[0]) orelse return JsValue.null_val;
+    // DOM §4.2.3: If child's parent is not parent, throw NotFoundError
+    if (nodeParent(child) != parent) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
     dom_b.lxb_dom_node_remove(child);
     setDomDirty();
     return args[0];
 }
 
-fn nativeInsertBefore(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeInsertBefore(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     if (args.len < 2) return JsValue.null_val;
+    const vm = VM.vmFromCtx(ctx);
+    const parent = getThisNode(this) orelse return JsValue.null_val;
     const new_node = getArgNode(args[0]) orelse return JsValue.null_val;
+    const ref_node: ?*lxb.lxb_dom_node_t = if (args[1].isNull() or args[1].isUndefined()) null else getArgNode(args[1]);
+    // DOM §4.2.2: pre-insert validation
+    if (!try validatePreInsert(vm, new_node, parent, ref_node)) return JsValue.undefined_val;
     dom_b.lxb_dom_node_remove(new_node);
-    if (args[1].isNull() or args[1].isUndefined()) {
-        const parent = getThisNode(this) orelse return JsValue.null_val;
-        dom_b.lxb_dom_node_insert_child(parent, new_node);
-    } else {
-        const ref = getArgNode(args[1]) orelse return JsValue.null_val;
+    if (ref_node) |ref| {
         dom_b.lxb_dom_node_insert_before(ref, new_node);
+    } else {
+        dom_b.lxb_dom_node_insert_child(parent, new_node);
     }
     setDomDirty();
     return args[0];
@@ -3604,10 +3671,20 @@ fn nativeCompareDocumentPosition(_: *anyopaque, this: JsValue, args: []const JsV
 
 // ── Node.replaceChild (DOM §4.4) ─────────────────────────────────────
 
-fn nativeReplaceChild(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeReplaceChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     if (args.len < 2) return JsValue.null_val;
-    const new_child = getArgNode(args[0]) orelse return JsValue.null_val;
-    const old_child = getArgNode(args[1]) orelse return JsValue.null_val;
+    const vm = VM.vmFromCtx(ctx);
+    const parent = getThisNode(this) orelse return JsValue.null_val;
+    const new_child = getArgNode(args[0]) orelse {
+        // null node → TypeError
+        return error.TypeError;
+    };
+    const old_child = getArgNode(args[1]) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    // DOM §4.2.4: validate (similar to pre-insert, child = old_child)
+    if (!try validatePreInsert(vm, new_child, parent, old_child)) return JsValue.undefined_val;
     dom_b.lxb_dom_node_remove(new_child);
     dom_b.lxb_dom_node_insert_before(old_child, new_child);
     dom_b.lxb_dom_node_remove(old_child);
@@ -3684,6 +3761,55 @@ fn nativeHasAttributes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerro
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     return JsValue.initBool(dom_b.lxb_dom_element_first_attribute_noi(elem) != null);
+}
+
+// ── Element.toggleAttribute (DOM §4.9.1) ────────────────────────────
+
+fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return error.TypeError;
+    const node = getThisNode(this) orelse return JsValue.initBool(false);
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const name_raw = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
+
+    // Step 1: validate Name production (simplified: must be non-empty)
+    if (name_raw.len == 0) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
+        return JsValue.undefined_val;
+    }
+
+    // Step 2: lowercase for HTML documents
+    var lower_buf: [256]u8 = undefined;
+    const name = if (name_raw.len <= lower_buf.len) blk: {
+        for (name_raw, 0..) |c, i| {
+            lower_buf[i] = if (c >= 'A' and c <= 'Z') c + 32 else c;
+        }
+        break :blk lower_buf[0..name_raw.len];
+    } else name_raw;
+
+    const has = dom_b.lxb_dom_element_has_attribute(elem, name.ptr, name.len);
+
+    // Step 3-4: toggle logic
+    if (has) {
+        // force argument: if provided and true, keep → return true
+        if (args.len >= 2 and !args[1].isUndefined()) {
+            if (args[1].isTruthy()) return JsValue.initBool(true);
+        }
+        // Remove attribute
+        _ = dom_b.lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
+        setDomDirty();
+        return JsValue.initBool(false);
+    } else {
+        // force argument: if provided and false, don't add → return false
+        if (args.len >= 2 and !args[1].isUndefined()) {
+            if (!args[1].isTruthy()) return JsValue.initBool(false);
+        }
+        // Add attribute with empty value
+        _ = dom_b.lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
+        setDomDirty();
+        return JsValue.initBool(true);
+    }
 }
 
 // ── Element.remove (ChildNode mixin, DOM §4.7) ───────────────────────
@@ -4258,14 +4384,31 @@ fn getTextContent(vm: *VM, node: *lxb.lxb_dom_node_t) JsValue {
 }
 
 fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
-    if (val.isNull()) {
-        // DOM spec: textContent setter — null sets empty string
-        _ = dom_b.lxb_dom_node_text_content_set(node, "", 0);
-    } else {
-        // DOMString conversion: string as-is, undefined→"undefined", number→digits, bool→"true"/"false"
+    const nt = nodeType(node);
+    // DOM §4.4: for Element/DocumentFragment, setting textContent:
+    // 1. Remove all children
+    // 2. If value is non-empty string, create and append a Text node
+    if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT or nt == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+        // Remove all children first
+        while (nodeFirstChild(node)) |child| {
+            dom_b.lxb_dom_node_remove(child);
+        }
+        if (val.isNull()) return; // null → just remove children, no text node
+
         var buf: [64]u8 = undefined;
         const s = VM.formatValue(vm.pool, val, &buf);
-        _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        if (s.len > 0) {
+            _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        }
+    } else {
+        // CharacterData nodes: set data directly
+        if (val.isNull()) {
+            _ = dom_b.lxb_dom_node_text_content_set(node, "", 0);
+        } else {
+            var buf: [64]u8 = undefined;
+            const s = VM.formatValue(vm.pool, val, &buf);
+            _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        }
     }
 }
 
