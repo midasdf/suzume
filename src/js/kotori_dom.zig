@@ -2027,6 +2027,51 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
         return JsValue.initBool(true);
     }
 
+    // DOM §2.7: standalone EventTarget.dispatchEvent — no DOM node, dispatch from g_listeners.
+    if (this.isObject()) {
+        const this_obj = this.asJsObject();
+        if (this_obj.obj_type != .dom_node) {
+            const et_sid = vm.pool.intern("_et_ptr") catch return JsValue.initBool(false);
+            if (this_obj.getProperty(et_sid)) |ptr_val| {
+                if (ptr_val.isNumber()) {
+                    const target_addr: usize = @intFromFloat(ptr_val.toNumber());
+                    if (target_addr != 0) {
+                        var type_str_et: []const u8 = "event";
+                        if (args[0].isString()) {
+                            type_str_et = vm.pool.get(args[0].asStringId()) orelse "event";
+                        } else if (args[0].isObject()) {
+                            const t_sid = vm.pool.intern("type") catch return JsValue.initBool(false);
+                            if (args[0].asJsObject().getProperty(t_sid)) |tv| {
+                                if (tv.isString()) type_str_et = vm.pool.get(tv.asStringId()) orelse "event";
+                            }
+                        }
+                        const ev_obj_et: *JsObject = if (args[0].isObject())
+                            args[0].asJsObject()
+                        else
+                            vm.createObj(.{}) catch return JsValue.initBool(false);
+                        // Set target/currentTarget on event
+                        const tgt_sid = vm.pool.intern("target") catch null;
+                        const ct_sid = vm.pool.intern("currentTarget") catch null;
+                        if (tgt_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
+                        if (ct_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
+                        for (g_listeners.items) |entry| {
+                            if (@intFromPtr(entry.node_ptr) != target_addr) continue;
+                            if (!std.mem.eql(u8, entry.event_type, type_str_et)) continue;
+                            _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj_et), &.{JsValue.initObject(ev_obj_et)}) catch {};
+                            // Check stopImmediatePropagation
+                            if (vm.pool.intern("_stopImmediate") catch null) |si_sid| {
+                                if (ev_obj_et.getProperty(si_sid)) |sv| {
+                                    if (sv.isTruthy()) break;
+                                }
+                            }
+                        }
+                        return JsValue.initBool(true);
+                    }
+                }
+            }
+        }
+    }
+
     const target = getThisNode(this) orelse return JsValue.initBool(false);
 
     // Parse event: accept either a string type or an object with { type, composed, bubbles }
@@ -2328,10 +2373,22 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
     doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
     const nn_sid = try vm.pool.intern("nodeName");
     doc_obj.setProperty(vm.allocator, nn_sid, JsValue.initString(try vm.pool.intern("#document"))) catch {};
-    const url_sid = try vm.pool.intern("URL");
-    doc_obj.setProperty(vm.allocator, url_sid, JsValue.initString(try vm.pool.intern("about:blank"))) catch {};
-    const ct_sid = try vm.pool.intern("contentType");
-    doc_obj.setProperty(vm.allocator, ct_sid, JsValue.initString(try vm.pool.intern("application/xml"))) catch {};
+    const ctor_meta2 = .{
+        .{ "URL", "about:blank" },
+        .{ "documentURI", "about:blank" },
+        .{ "compatMode", "CSS1Compat" },
+        .{ "characterSet", "UTF-8" },
+        .{ "charset", "UTF-8" },
+        .{ "inputEncoding", "UTF-8" },
+        .{ "contentType", "application/xml" },
+    };
+    inline for (ctor_meta2) |pair| {
+        const sid2 = vm.pool.intern(pair[0]) catch break;
+        const val_sid2 = vm.pool.intern(pair[1]) catch break;
+        doc_obj.setProperty(vm.allocator, sid2, JsValue.initString(val_sid2)) catch {};
+    }
+    const ctor_loc_sid = try vm.pool.intern("location");
+    doc_obj.setProperty(vm.allocator, ctor_loc_sid, JsValue.null_val) catch {};
     vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement) catch {};
     vm.registerNativeMethod(doc_obj, "createElementNS", &nativeCreateElementNS) catch {};
     vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
@@ -3041,6 +3098,8 @@ fn nativeHasAttributes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerro
 
 fn nativeRemove(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
     const node = getThisNode(this) orelse return JsValue.undefined_val;
+    // DOM §4.7 ChildNode.remove(): if node has no parent, do nothing.
+    if (nodeParent(node) == null) return JsValue.undefined_val;
     dom_b.lxb_dom_node_remove(node);
     setDomDirty();
     return JsValue.undefined_val;
@@ -3169,6 +3228,8 @@ fn nativeReplaceChildren(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 fn nativeBefore(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const node = getThisNode(this) orelse return JsValue.undefined_val;
+    // DOM §4.7: if this node has no parent, return (no-op).
+    if (nodeParent(node) == null) return JsValue.undefined_val;
     const doc = g_document orelse return JsValue.undefined_val;
     for (args) |arg| {
         const new_node: *lxb.lxb_dom_node_t = blk: {
@@ -3386,6 +3447,10 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []c
     cdt_fn2.data = .{ .native_fn = &nativeImplementationCreateDocumentType };
     const cdt_sid2 = vm.pool.intern("createDocumentType") catch return doc_val;
     impl_obj.setProperty(vm.allocator, cdt_sid2, JsValue.initObject(cdt_fn2)) catch {};
+    const cd_fn3 = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    cd_fn3.data = .{ .native_fn = &nativeImplementationCreateDocument };
+    const cd_sid3 = vm.pool.intern("createDocument") catch return doc_val;
+    impl_obj.setProperty(vm.allocator, cd_sid3, JsValue.initObject(cd_fn3)) catch {};
     const impl_sid = vm.pool.intern("implementation") catch return doc_val;
     doc_obj.setProperty(vm.allocator, impl_sid, JsValue.initObject(impl_obj)) catch {};
 
@@ -3419,19 +3484,45 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     const nn_sid = try vm.pool.intern("nodeName");
     doc_obj.setProperty(vm.allocator, nn_sid, JsValue.initString(try vm.pool.intern("#document"))) catch {};
 
+    // Determine contentType based on namespace (DOM spec)
+    const ns_str: ?[]const u8 = blk: {
+        if (args.len > 0 and args[0].isString()) {
+            const s = vm.pool.get(args[0].asStringId()) orelse break :blk null;
+            if (s.len == 0) break :blk null;
+            break :blk s;
+        }
+        break :blk null;
+    };
+    const content_type: []const u8 = if (ns_str) |ns| ct: {
+        if (std.mem.eql(u8, ns, "http://www.w3.org/1999/xhtml"))
+            break :ct "application/xhtml+xml"
+        else if (std.mem.eql(u8, ns, "http://www.w3.org/2000/svg"))
+            break :ct "image/svg+xml"
+        else
+            break :ct "application/xml";
+    } else "application/xml";
+
     // Metadata
     const meta = .{
         .{ "URL", "about:blank" },
         .{ "documentURI", "about:blank" },
         .{ "compatMode", "CSS1Compat" },
         .{ "characterSet", "UTF-8" },
-        .{ "contentType", "application/xml" },
+        .{ "charset", "UTF-8" },
+        .{ "inputEncoding", "UTF-8" },
     };
     inline for (meta) |pair| {
         const sid = vm.pool.intern(pair[0]) catch break;
         const val_sid = vm.pool.intern(pair[1]) catch break;
         doc_obj.setProperty(vm.allocator, sid, JsValue.initString(val_sid)) catch {};
     }
+    // contentType depends on namespace
+    const ct_sid2 = try vm.pool.intern("contentType");
+    doc_obj.setProperty(vm.allocator, ct_sid2, JsValue.initString(try vm.pool.intern(content_type))) catch {};
+
+    // location = null (no browsing context)
+    const cd_loc_sid = try vm.pool.intern("location");
+    doc_obj.setProperty(vm.allocator, cd_loc_sid, JsValue.null_val) catch {};
 
     // Register DOM methods
     vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement) catch {};
@@ -3442,28 +3533,43 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
     vm.registerNativeMethod(doc_obj, "removeChild", &nativeRemoveChild) catch {};
     vm.registerNativeMethod(doc_obj, "insertBefore", &nativeInsertBefore) catch {};
+    vm.registerNativeMethod(doc_obj, "replaceChild", &nativeReplaceChild) catch {};
+    vm.registerNativeMethod(doc_obj, "hasChildNodes", &nativeHasChildNodes) catch {};
+    vm.registerNativeMethod(doc_obj, "cloneNode", &nativeCloneNode) catch {};
+    vm.registerNativeMethod(doc_obj, "contains", &nativeContains) catch {};
+    vm.registerNativeMethod(doc_obj, "getElementById", &nativeGetElementById) catch {};
+    vm.registerNativeMethod(doc_obj, "getElementsByTagName", &nativeGetElementsByTagName) catch {};
+    vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName) catch {};
+    vm.registerNativeMethod(doc_obj, "querySelector", &nativeQuerySelector) catch {};
+    vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeQuerySelectorAll) catch {};
 
-    // If doctype provided (arg[2]), prepend it
+    // implementation object for chained calls
+    const cd_impl = vm.createObj(.{}) catch return doc_val;
+    const cd_hf = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    cd_hf.data = .{ .native_fn = &nativeImplementationHasFeature };
+    cd_impl.setProperty(vm.allocator, vm.pool.intern("hasFeature") catch return doc_val, JsValue.initObject(cd_hf)) catch {};
+    const cd_chd = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    cd_chd.data = .{ .native_fn = &nativeImplementationCreateHTMLDocument };
+    cd_impl.setProperty(vm.allocator, vm.pool.intern("createHTMLDocument") catch return doc_val, JsValue.initObject(cd_chd)) catch {};
+    const cd_cdt = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    cd_cdt.data = .{ .native_fn = &nativeImplementationCreateDocumentType };
+    cd_impl.setProperty(vm.allocator, vm.pool.intern("createDocumentType") catch return doc_val, JsValue.initObject(cd_cdt)) catch {};
+    const cd_cd = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
+    cd_cd.data = .{ .native_fn = &nativeImplementationCreateDocument };
+    cd_impl.setProperty(vm.allocator, vm.pool.intern("createDocument") catch return doc_val, JsValue.initObject(cd_cd)) catch {};
+    doc_obj.setProperty(vm.allocator, vm.pool.intern("implementation") catch return doc_val, JsValue.initObject(cd_impl)) catch {};
+
+    // If doctype provided (arg[2]), set ownerDocument on it
     if (args.len >= 3 and args[2].isObject()) {
-        // doctype is a JS DocumentType object — store reference
-        const dt_sid = try vm.pool.intern("doctype");
-        doc_obj.setProperty(vm.allocator, dt_sid, args[2]) catch {};
+        const od_sid2 = try vm.pool.intern("ownerDocument");
+        const dt_obj2 = args[2].asJsObject();
+        dt_obj2.setProperty(vm.allocator, od_sid2, doc_val) catch {};
     }
 
     // If qualifiedName is non-empty (arg[1]), create root element
     if (args.len >= 2 and args[1].isString()) {
         const qn = vm.pool.get(args[1].asStringId()) orelse "";
         if (qn.len > 0) {
-            // Get namespace (arg[0])
-            const ns_str: ?[]const u8 = blk: {
-                if (args.len > 0 and args[0].isString()) {
-                    const s = vm.pool.get(args[0].asStringId()) orelse break :blk null;
-                    if (s.len == 0) break :blk null;
-                    break :blk s;
-                }
-                break :blk null;
-            };
-            _ = ns_str;
             // Create root element using lexbor
             const elem = dom_b.lxb_dom_document_create_element(new_doc, qn.ptr, qn.len, null) orelse return doc_val;
             const elem_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
@@ -3520,6 +3626,18 @@ fn nativeImplementationCreateDocumentType(ctx: *anyopaque, _: JsValue, args: []c
     const cn_arr = try vm.createObj(.{ .obj_type = .array });
     cn_arr.data = .{ .array = .empty };
     obj.setProperty(vm.allocator, cn_sid, JsValue.initObject(cn_arr)) catch {};
+
+    // nodeValue = null, textContent = null (DOM spec: DocumentType returns null)
+    const nv_sid = try vm.pool.intern("nodeValue");
+    obj.setProperty(vm.allocator, nv_sid, JsValue.null_val) catch {};
+    const tc_sid = try vm.pool.intern("textContent");
+    obj.setProperty(vm.allocator, tc_sid, JsValue.null_val) catch {};
+
+    // firstChild/lastChild = null (DocumentType has no children)
+    const fc_sid = try vm.pool.intern("firstChild");
+    obj.setProperty(vm.allocator, fc_sid, JsValue.null_val) catch {};
+    const lc_sid = try vm.pool.intern("lastChild");
+    obj.setProperty(vm.allocator, lc_sid, JsValue.null_val) catch {};
 
     // parentNode/parentElement/previousSibling/nextSibling = null
     const pn_sid = try vm.pool.intern("parentNode");
