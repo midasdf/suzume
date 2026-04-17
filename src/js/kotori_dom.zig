@@ -352,6 +352,7 @@ var g_text_proto: ?*JsObject = null;
 var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
+var g_xml_doc_proto: ?*JsObject = null;
 
 /// Node wrapper cache: maps lexbor DOM node pointer → JsObject wrapper.
 /// Ensures `===` identity for the same DOM node (WebIDL §3.1 object identity).
@@ -744,6 +745,16 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.globals.put(vm.allocator, try vm.pool.intern("Document"), JsValue.initObject(doc_ctor));
     try vm.globals.put(vm.allocator, try vm.pool.intern("HTMLDocument"), JsValue.initObject(elem_ctor));
 
+    // XMLDocument constructor + prototype (DOM §4.5)
+    // XMLDocument extends Document — prototype inherits from Node.prototype
+    const xml_doc_proto = try vm.createObj(.{});
+    xml_doc_proto.prototype = np; // Document.prototype → Node.prototype
+    g_xml_doc_proto = xml_doc_proto;
+    const xml_doc_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    xml_doc_ctor.data = .{ .native_fn = &nativeDocumentConstructor };
+    xml_doc_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(xml_doc_proto)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("XMLDocument"), JsValue.initObject(xml_doc_ctor));
+
     // DocumentType constructor + prototype
     const dt_ctor = try vm.createObj(.{ .obj_type = .native_function });
     dt_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
@@ -779,6 +790,72 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     cev_ctor_obj.data = .{ .native_fn = &nativeCustomEventConstructor };
     cev_ctor_obj.setProperty(vm.allocator, proto_sid, JsValue.initObject(cev_proto)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("CustomEvent"), JsValue.initObject(cev_ctor_obj));
+
+    // ── Event interface hierarchy (DOM §5.1 + UI Events + HTML) ──
+    // UIEvent.prototype → Event.prototype (UI Events §3.2)
+    const ui_proto = try vm.createObj(.{});
+    ui_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "UIEvent", ui_proto, proto_sid);
+
+    // MouseEvent.prototype → UIEvent.prototype (UI Events §3.3)
+    const mouse_proto = try vm.createObj(.{});
+    mouse_proto.prototype = ui_proto;
+    try registerEventCtor(vm, "MouseEvent", mouse_proto, proto_sid);
+
+    // KeyboardEvent.prototype → UIEvent.prototype (UI Events §3.5)
+    const kb_proto = try vm.createObj(.{});
+    kb_proto.prototype = ui_proto;
+    try registerEventCtor(vm, "KeyboardEvent", kb_proto, proto_sid);
+
+    // FocusEvent.prototype → UIEvent.prototype (UI Events §3.4)
+    const focus_proto = try vm.createObj(.{});
+    focus_proto.prototype = ui_proto;
+    try registerEventCtor(vm, "FocusEvent", focus_proto, proto_sid);
+
+    // CompositionEvent.prototype → UIEvent.prototype (UI Events §3.6)
+    const comp_proto = try vm.createObj(.{});
+    comp_proto.prototype = ui_proto;
+    try registerEventCtor(vm, "CompositionEvent", comp_proto, proto_sid);
+
+    // TextEvent.prototype → UIEvent.prototype (legacy, DOM §5.1)
+    const text_ev_proto = try vm.createObj(.{});
+    text_ev_proto.prototype = ui_proto;
+    try registerEventCtor(vm, "TextEvent", text_ev_proto, proto_sid);
+
+    // DragEvent.prototype → MouseEvent.prototype (HTML §6.11.5)
+    const drag_proto = try vm.createObj(.{});
+    drag_proto.prototype = mouse_proto;
+    try registerEventCtor(vm, "DragEvent", drag_proto, proto_sid);
+
+    // MessageEvent.prototype → Event.prototype (HTML §9.2.3)
+    const msg_proto = try vm.createObj(.{});
+    msg_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "MessageEvent", msg_proto, proto_sid);
+
+    // HashChangeEvent.prototype → Event.prototype (HTML §8.8.2)
+    const hash_proto = try vm.createObj(.{});
+    hash_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "HashChangeEvent", hash_proto, proto_sid);
+
+    // StorageEvent.prototype → Event.prototype (HTML §12.2.3)
+    const storage_proto = try vm.createObj(.{});
+    storage_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "StorageEvent", storage_proto, proto_sid);
+
+    // BeforeUnloadEvent.prototype → Event.prototype (HTML §8.1.5.3)
+    const bu_proto = try vm.createObj(.{});
+    bu_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "BeforeUnloadEvent", bu_proto, proto_sid);
+
+    // DeviceMotionEvent.prototype → Event.prototype (DeviceOrientation §4.1)
+    const dm_proto = try vm.createObj(.{});
+    dm_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "DeviceMotionEvent", dm_proto, proto_sid);
+
+    // DeviceOrientationEvent.prototype → Event.prototype (DeviceOrientation §4.2)
+    const do_proto = try vm.createObj(.{});
+    do_proto.prototype = ev_proto;
+    try registerEventCtor(vm, "DeviceOrientationEvent", do_proto, proto_sid);
 
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
@@ -1085,6 +1162,9 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // document.implementation — DOM §7.1: DOMImplementation object
     if (eql(name, "implementation") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
         const impl_obj = vm.createObj(.{}) catch return null;
+        // Store owning document reference for createDocumentType/createDocument
+        const od_sid = vm.pool.intern("_ownerDoc") catch return null;
+        impl_obj.setProperty(vm.allocator, od_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
         // hasFeature always returns true per DOM Living Standard §7.1
         const hf_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
         hf_fn.data = .{ .native_fn = &nativeImplementationHasFeature };
@@ -1562,9 +1642,55 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
     const tag = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+
+    // DOM §4.5: For XML documents, createElement preserves case (no HTML lowercasing).
+    // lexbor always lowercases for HTML, so we create a JS-only element for XML docs.
+    if (this.isObject()) {
+        const this_obj = this.asJsObject();
+        if (vm.pool.intern("_isXmlDoc") catch null) |xml_sid| {
+            if (this_obj.getProperty(xml_sid)) |xv| {
+                if (xv.isBool() and xv.asBool()) {
+                    return createJsOnlyElement(vm, tag, null);
+                }
+            }
+        }
+    }
+
     const doc = getDocFromThis(this) orelse return JsValue.null_val;
     const elem = dom_b.lxb_dom_document_create_element(doc, tag.ptr, tag.len, null) orelse return JsValue.null_val;
     return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
+}
+
+/// Create a JS-only Element object (no lexbor node) for XML documents.
+/// Preserves tag name case exactly as given.
+fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8) !JsValue {
+    const obj = try vm.createObj(.{});
+    if (vm.element_proto) |ep| obj.prototype = ep;
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(1));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("localName"), JsValue.initString(try vm.pool.intern(local_name)));
+    // tagName = uppercase for HTML namespace, preserves case for XML
+    const tag_upper = if (ns_uri != null and std.mem.eql(u8, ns_uri.?, "http://www.w3.org/1999/xhtml")) blk: {
+        var buf: [256]u8 = undefined;
+        const len = @min(local_name.len, buf.len);
+        for (0..len) |i| buf[i] = std.ascii.toUpper(local_name[i]);
+        break :blk try vm.pool.intern(buf[0..len]);
+    } else try vm.pool.intern(local_name);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("tagName"), JsValue.initString(tag_upper));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(tag_upper));
+    if (ns_uri) |ns| {
+        try obj.setProperty(vm.allocator, try vm.pool.intern("namespaceURI"), JsValue.initString(try vm.pool.intern(ns)));
+    } else {
+        try obj.setProperty(vm.allocator, try vm.pool.intern("namespaceURI"), JsValue.null_val);
+    }
+    try obj.setProperty(vm.allocator, try vm.pool.intern("prefix"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initObject(try vm.createObj(.{ .obj_type = .array })));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("lastChild"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("previousSibling"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nextSibling"), JsValue.null_val);
+    return JsValue.initObject(obj);
 }
 
 /// Map W3C namespace URI string to lexbor namespace ID (reverse of nsIdToUri).
@@ -1851,32 +1977,73 @@ fn nativeImportNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror
     return wrapNode(vm, cloned) orelse JsValue.null_val;
 }
 
-// ── document.createEvent (DOM §4.1 legacy) ──────────────────────────
+// ── Helper: register an event interface constructor + prototype ──────
+
+fn registerEventCtor(vm: *VM, name: []const u8, proto: *JsObject, proto_sid: StringId) !void {
+    const ctor = try vm.createObj(.{ .obj_type = .native_function });
+    ctor.data = .{ .native_fn = &nativeEventConstructor };
+    ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(proto)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern(name), JsValue.initObject(ctor));
+}
+
+// ── document.createEvent (DOM §5.1 legacy factory) ──────────────────
+
+/// DOM §5.1: Resolve a case-insensitive interface string to the canonical
+/// constructor name. Returns null for unsupported interfaces.
+fn resolveCreateEventInterface(input: []const u8) ?[]const u8 {
+    // DOM §5.1 table of legacy event interface aliases (case-insensitive)
+    const aliases = [_]struct { alias: []const u8, ctor: []const u8 }{
+        .{ .alias = "beforeunloadevent", .ctor = "BeforeUnloadEvent" },
+        .{ .alias = "compositionevent", .ctor = "CompositionEvent" },
+        .{ .alias = "customevent", .ctor = "CustomEvent" },
+        .{ .alias = "devicemotionevent", .ctor = "DeviceMotionEvent" },
+        .{ .alias = "deviceorientationevent", .ctor = "DeviceOrientationEvent" },
+        .{ .alias = "dragevent", .ctor = "DragEvent" },
+        .{ .alias = "event", .ctor = "Event" },
+        .{ .alias = "events", .ctor = "Event" },
+        .{ .alias = "focusevent", .ctor = "FocusEvent" },
+        .{ .alias = "hashchangeevent", .ctor = "HashChangeEvent" },
+        .{ .alias = "htmlevents", .ctor = "Event" },
+        .{ .alias = "keyboardevent", .ctor = "KeyboardEvent" },
+        .{ .alias = "messageevent", .ctor = "MessageEvent" },
+        .{ .alias = "mouseevent", .ctor = "MouseEvent" },
+        .{ .alias = "mouseevents", .ctor = "MouseEvent" },
+        .{ .alias = "storageevent", .ctor = "StorageEvent" },
+        .{ .alias = "svgevents", .ctor = "Event" },
+        .{ .alias = "textevent", .ctor = "TextEvent" },
+        .{ .alias = "uievent", .ctor = "UIEvent" },
+        .{ .alias = "uievents", .ctor = "UIEvent" },
+    };
+    for (&aliases) |*entry| {
+        if (std.ascii.eqlIgnoreCase(input, entry.alias)) return entry.ctor;
+    }
+    return null;
+}
 
 fn nativeCreateEvent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    // createEvent(interface) → returns an uninitialised Event of the given interface.
-    // Per spec, supported interfaces: "Event", "Events", "CustomEvent",
-    // "MouseEvent", "MouseEvents", "UIEvent", "UIEvents", etc.
-    // We delegate to the appropriate constructor with zero args.
-    var iface: []const u8 = "Event";
-    if (args.len > 0 and args[0].isString()) {
-        iface = vm.pool.get(args[0].asStringId()) orelse "Event";
+    if (args.len == 0 or !args[0].isString()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
+        return JsValue.undefined_val;
     }
-    // Normalise legacy plural aliases
-    const is_custom = std.mem.eql(u8, iface, "CustomEvent");
-    // Construct the event object via the registered constructor.
-    const ctor_name = if (is_custom) "CustomEvent" else "Event";
+    const input = vm.pool.get(args[0].asStringId()) orelse "";
+    const ctor_name = resolveCreateEventInterface(input) orelse {
+        // DOM §5.1: throw "NotSupportedError" DOMException for unsupported interfaces
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
+        return JsValue.undefined_val;
+    };
+    // Look up the constructor in globals
     const ctor_sid = try vm.pool.intern(ctor_name);
     const ctor_val = vm.globals.get(ctor_sid) orelse return JsValue.null_val;
     if (!ctor_val.isObject()) return JsValue.null_val;
     const ctor = ctor_val.asJsObject();
-    if (ctor.obj_type != .native_function) return JsValue.null_val;
-    const native = ctor.data.native_fn;
-    // Call with empty args → creates uninitialised event
+    // Create uninitialised event via Event constructor (empty args)
     const empty_args: []const JsValue = &.{};
-    const result = try native(@ptrCast(vm), JsValue.undefined_val, empty_args);
-    // Set prototype from constructor
+    const result = if (ctor.obj_type == .native_function)
+        try ctor.data.native_fn(@ptrCast(vm), JsValue.undefined_val, empty_args)
+    else
+        try nativeEventConstructor(@ptrCast(vm), JsValue.undefined_val, empty_args);
+    // Set prototype from the target constructor (not Event)
     if (result.isObject()) {
         const result_obj = result.asJsObject();
         const p_sid = try vm.pool.intern("prototype");
@@ -3386,7 +3553,30 @@ fn createDOMExceptionObj(vm: *VM, err_name: []const u8) !JsValue {
     if (vm.error_proto) |ep| err.prototype = ep;
     try err.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern(err_name)));
     try err.setProperty(vm.allocator, try vm.pool.intern("message"), JsValue.initString(try vm.pool.intern(err_name)));
-    const code: f64 = if (std.mem.eql(u8, err_name, "IndexSizeError")) 1 else if (std.mem.eql(u8, err_name, "NotFoundError")) 8 else if (std.mem.eql(u8, err_name, "HierarchyRequestError")) 3 else 0;
+    // DOM §2.7: Legacy error code mapping (WebIDL §2.8.1)
+    const code: f64 = if (std.mem.eql(u8, err_name, "IndexSizeError")) 1
+        else if (std.mem.eql(u8, err_name, "HierarchyRequestError")) 3
+        else if (std.mem.eql(u8, err_name, "WrongDocumentError")) 4
+        else if (std.mem.eql(u8, err_name, "InvalidCharacterError")) 5
+        else if (std.mem.eql(u8, err_name, "NoModificationAllowedError")) 7
+        else if (std.mem.eql(u8, err_name, "NotFoundError")) 8
+        else if (std.mem.eql(u8, err_name, "NotSupportedError")) 9
+        else if (std.mem.eql(u8, err_name, "InUseAttributeError")) 10
+        else if (std.mem.eql(u8, err_name, "InvalidStateError")) 11
+        else if (std.mem.eql(u8, err_name, "SyntaxError")) 12
+        else if (std.mem.eql(u8, err_name, "InvalidModificationError")) 13
+        else if (std.mem.eql(u8, err_name, "NamespaceError")) 14
+        else if (std.mem.eql(u8, err_name, "InvalidAccessError")) 15
+        else if (std.mem.eql(u8, err_name, "TypeMismatchError")) 17
+        else if (std.mem.eql(u8, err_name, "SecurityError")) 18
+        else if (std.mem.eql(u8, err_name, "NetworkError")) 19
+        else if (std.mem.eql(u8, err_name, "AbortError")) 20
+        else if (std.mem.eql(u8, err_name, "URLMismatchError")) 21
+        else if (std.mem.eql(u8, err_name, "QuotaExceededError")) 22
+        else if (std.mem.eql(u8, err_name, "TimeoutError")) 23
+        else if (std.mem.eql(u8, err_name, "InvalidNodeTypeError")) 24
+        else if (std.mem.eql(u8, err_name, "DataCloneError")) 25
+        else 0;
     try err.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initNumber(code));
     // Set constructor to DOMException
     const de_sid = try vm.pool.intern("DOMException");
@@ -4156,6 +4346,8 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []c
 
     // implementation (self-referential for chained calls)
     const impl_obj = vm.createObj(.{}) catch return doc_val;
+    // Store owning document reference for createDocumentType
+    impl_obj.setProperty(vm.allocator, vm.pool.intern("_ownerDoc") catch return doc_val, doc_val) catch {};
     const hf_fn = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
     hf_fn.data = .{ .native_fn = &nativeImplementationHasFeature };
     const hf_sid = vm.pool.intern("hasFeature") catch return doc_val;
@@ -4180,31 +4372,28 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []c
 
 /// DOM §7.1: DOMImplementation.createDocument(namespace, qualifiedName, doctype)
 /// Creates a new XML document. If qualifiedName is non-empty, appends a root element.
+/// Uses a pure JS object (NOT lexbor dom_node) to avoid property interception
+/// that would read from the empty lexbor DOM tree.
 fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
 
-    // Create empty document (no HTML parsing — this is an XML document)
-    const new_doc = dom_b.lxb_html_document_create() orelse return JsValue.null_val;
-
-    // Store to prevent deallocation
-    if (created_doc_count < created_docs.len) {
-        created_docs[created_doc_count] = new_doc;
-        created_doc_count += 1;
-    }
-
-    // Wrap document node
-    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_doc));
-    const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
-    doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
-    doc_obj.prototype = g_node_proto;
-    nodeCachePut(vm.allocator, doc_node, doc_obj);
+    // Create pure JS document object (no lexbor backing — XML document)
+    const doc_obj = try vm.createObj(.{});
+    // DOM §4.5: createDocument returns an XMLDocument
+    doc_obj.prototype = g_xml_doc_proto orelse g_node_proto;
     const doc_val = JsValue.initObject(doc_obj);
+
+    // Mark as XML document (createElement should NOT lowercase tag names)
+    const xml_flag_sid = try vm.pool.intern("_isXmlDoc");
+    doc_obj.setProperty(vm.allocator, xml_flag_sid, JsValue.initBool(true)) catch {};
 
     // nodeType = 9, nodeName = "#document"
     const nt_sid = try vm.pool.intern("nodeType");
     doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
     const nn_sid = try vm.pool.intern("nodeName");
     doc_obj.setProperty(vm.allocator, nn_sid, JsValue.initString(try vm.pool.intern("#document"))) catch {};
+    // nodeValue = null (DOM spec: Document returns null)
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.null_val) catch {};
 
     // Determine contentType based on namespace (DOM spec)
     const ns_str: ?[]const u8 = blk: {
@@ -4269,6 +4458,7 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
 
     // implementation object for chained calls
     const cd_impl = vm.createObj(.{}) catch return doc_val;
+    cd_impl.setProperty(vm.allocator, vm.pool.intern("_ownerDoc") catch return doc_val, doc_val) catch {};
     const cd_hf = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
     cd_hf.data = .{ .native_fn = &nativeImplementationHasFeature };
     cd_impl.setProperty(vm.allocator, vm.pool.intern("hasFeature") catch return doc_val, JsValue.initObject(cd_hf)) catch {};
@@ -4290,23 +4480,85 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
         dt_obj2.setProperty(vm.allocator, od_sid2, doc_val) catch {};
     }
 
+    // Track created children for childNodes
+    var has_doctype = false;
+    var doc_element: ?JsValue = null;
+
+    // If doctype provided (arg[2]), set it on doc and mark as child
+    if (args.len >= 3 and args[2].isObject()) {
+        const dt_sid2 = try vm.pool.intern("doctype");
+        doc_obj.setProperty(vm.allocator, dt_sid2, args[2]) catch {};
+        has_doctype = true;
+    } else {
+        const dt_sid2 = try vm.pool.intern("doctype");
+        doc_obj.setProperty(vm.allocator, dt_sid2, JsValue.null_val) catch {};
+    }
+
     // If qualifiedName is non-empty (arg[1]), create root element
-    if (args.len >= 2 and args[1].isString()) {
-        const qn = vm.pool.get(args[1].asStringId()) orelse "";
-        if (qn.len > 0) {
-            // Create root element using lexbor
-            const elem = dom_b.lxb_dom_document_create_element(new_doc, qn.ptr, qn.len, null) orelse return doc_val;
-            const elem_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-            dom_b.lxb_dom_node_insert_child(doc_node, elem_node);
+    // DOM: qualifiedName is [LegacyNullToEmptyString] DOMString
+    // null → "", undefined → "undefined", other → toString
+    const qn: []const u8 = blk: {
+        if (args.len < 2) break :blk "";
+        if (args[1].isNull()) break :blk "";
+        if (args[1].isString()) break :blk vm.pool.get(args[1].asStringId()) orelse "";
+        // undefined → "undefined", bool → "true"/"false", number → string
+        if (args[1].isUndefined()) break :blk "undefined";
+        break :blk "";
+    };
+    if (qn.len > 0) {
+        // DOM §7.1 step 5: Create element with namespace and qualifiedName
+        var prefix: ?[]const u8 = null;
+        var local_name: []const u8 = qn;
+        if (std.mem.indexOfScalar(u8, qn, ':')) |colon_pos| {
+            prefix = qn[0..colon_pos];
+            local_name = qn[colon_pos + 1 ..];
+        }
+        // Create JS-only element (XML document — preserve case)
+        const elem_val = try createJsOnlyElement(vm, local_name, ns_str);
+        if (elem_val.isObject()) {
+            const elem_obj = elem_val.asJsObject();
+            if (prefix) |p| {
+                elem_obj.setProperty(vm.allocator, try vm.pool.intern("prefix"), JsValue.initString(try vm.pool.intern(p))) catch {};
+                elem_obj.setProperty(vm.allocator, try vm.pool.intern("tagName"), JsValue.initString(try vm.pool.intern(qn))) catch {};
+                elem_obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(try vm.pool.intern(qn))) catch {};
+            }
+            elem_obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), doc_val) catch {};
+            doc_element = elem_val;
         }
     }
+
+    // Set documentElement
+    const de_sid = try vm.pool.intern("documentElement");
+    doc_obj.setProperty(vm.allocator, de_sid, doc_element orelse JsValue.null_val) catch {};
+
+    // Build childNodes array directly from tracked values
+    const cn_sid3 = try vm.pool.intern("childNodes");
+    const cn_arr = try vm.createObj(.{ .obj_type = .array });
+    // Build items slice manually to avoid union field access issues
+    const child_count: usize = @as(usize, if (has_doctype) @as(usize, 1) else 0) + @as(usize, if (doc_element != null) @as(usize, 1) else 0);
+    if (child_count > 0) {
+        const items = try vm.allocator.alloc(JsValue, child_count);
+        var idx: usize = 0;
+        if (has_doctype and args.len >= 3) {
+            items[idx] = args[2];
+            idx += 1;
+        }
+        if (doc_element) |de| {
+            items[idx] = de;
+            idx += 1;
+        }
+        cn_arr.data = .{ .array = .{ .items = items, .capacity = child_count } };
+    } else {
+        cn_arr.data = .{ .array = .empty };
+    }
+    doc_obj.setProperty(vm.allocator, cn_sid3, JsValue.initObject(cn_arr)) catch {};
 
     return doc_val;
 }
 
 /// DOM §7.1: DOMImplementation.createDocumentType(qualifiedName, publicId, systemId)
 /// Returns a new DocumentType node with the given name, publicId, and systemId.
-fn nativeImplementationCreateDocumentType(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeImplementationCreateDocumentType(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len < 3) return JsValue.null_val;
 
@@ -4340,10 +4592,20 @@ fn nativeImplementationCreateDocumentType(ctx: *anyopaque, _: JsValue, args: []c
     const sid_sid = try vm.pool.intern("systemId");
     obj.setProperty(vm.allocator, sid_sid, JsValue.initString(try vm.pool.intern(system_id))) catch {};
 
-    // ownerDocument = document
+    // ownerDocument = the document associated with this implementation (DOM §7.1)
     const od_sid = try vm.pool.intern("ownerDocument");
-    const doc_sid = try vm.pool.intern("document");
-    obj.setProperty(vm.allocator, od_sid, vm.globals.get(doc_sid) orelse JsValue.null_val) catch {};
+    const owner_doc: JsValue = blk: {
+        // Read _ownerDoc from the implementation object (this)
+        if (this.isObject()) {
+            const impl = this.asJsObject();
+            if (impl.getProperty(try vm.pool.intern("_ownerDoc"))) |doc_val| {
+                if (doc_val.isObject()) break :blk doc_val;
+            }
+        }
+        // Fallback: global document
+        break :blk vm.globals.get(try vm.pool.intern("document")) orelse JsValue.null_val;
+    };
+    obj.setProperty(vm.allocator, od_sid, owner_doc) catch {};
 
     // childNodes (empty NodeList-like)
     const cn_sid = try vm.pool.intern("childNodes");
