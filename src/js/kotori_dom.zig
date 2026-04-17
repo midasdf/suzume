@@ -544,6 +544,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment);
     try vm.registerNativeMethod(doc_obj, "adoptNode", &nativeAdoptNode);
     try vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode);
+    try vm.registerNativeMethod(doc_obj, "createEvent", &nativeCreateEvent);
+    try vm.registerNativeMethod(doc_obj, "createProcessingInstruction", &nativeCreateProcessingInstruction);
 
     // document.readyState — needed by testharness.js for completion detection
     const rs_sid = try vm.pool.intern("readyState");
@@ -625,6 +627,16 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     comment_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_comment_proto.?)) catch {};
     const comment_id = try vm.pool.intern("Comment");
     try vm.globals.put(vm.allocator, comment_id, JsValue.initObject(comment_ctor));
+
+    // ── Function constructor global (for instanceof Function checks in testharness.js) ──
+    // vm.function_proto is already created during VM init; expose it as Function.prototype
+    // so that `fn instanceof Function` works (instanceof walks .prototype chain).
+    const func_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    func_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    if (vm.function_proto) |fp| {
+        func_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(fp)) catch {};
+    }
+    try vm.globals.put(vm.allocator, try vm.pool.intern("Function"), JsValue.initObject(func_ctor));
 
     // ── Element / HTMLElement constructor globals (for instanceof + WPT) ──
     const elem_ctor = try vm.createObj(.{ .obj_type = .native_function });
@@ -1786,6 +1798,83 @@ fn nativeImportNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror
     return wrapNode(vm, cloned) orelse JsValue.null_val;
 }
 
+// ── document.createEvent (DOM §4.1 legacy) ──────────────────────────
+
+fn nativeCreateEvent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    // createEvent(interface) → returns an uninitialised Event of the given interface.
+    // Per spec, supported interfaces: "Event", "Events", "CustomEvent",
+    // "MouseEvent", "MouseEvents", "UIEvent", "UIEvents", etc.
+    // We delegate to the appropriate constructor with zero args.
+    var iface: []const u8 = "Event";
+    if (args.len > 0 and args[0].isString()) {
+        iface = vm.pool.get(args[0].asStringId()) orelse "Event";
+    }
+    // Normalise legacy plural aliases
+    const is_custom = std.mem.eql(u8, iface, "CustomEvent");
+    // Construct the event object via the registered constructor.
+    const ctor_name = if (is_custom) "CustomEvent" else "Event";
+    const ctor_sid = try vm.pool.intern(ctor_name);
+    const ctor_val = vm.globals.get(ctor_sid) orelse return JsValue.null_val;
+    if (!ctor_val.isObject()) return JsValue.null_val;
+    const ctor = ctor_val.asJsObject();
+    if (ctor.obj_type != .native_function) return JsValue.null_val;
+    const native = ctor.data.native_fn;
+    // Call with empty args → creates uninitialised event
+    const empty_args: []const JsValue = &.{};
+    const result = try native(@ptrCast(vm), JsValue.undefined_val, empty_args);
+    // Set prototype from constructor
+    if (result.isObject()) {
+        const result_obj = result.asJsObject();
+        const p_sid = try vm.pool.intern("prototype");
+        if (ctor.getProperty(p_sid)) |proto_val| {
+            if (proto_val.isObject()) {
+                result_obj.prototype = proto_val.asJsObject();
+            }
+        }
+    }
+    return result;
+}
+
+// ── document.createProcessingInstruction (DOM §4.1) ─────────────────
+
+fn nativeCreateProcessingInstruction(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) {
+        return error.TypeError;
+    }
+    const target_str = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    const data_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    // DOM spec: target must be a valid XML Name.
+    if (target_str.len == 0) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
+        return JsValue.undefined_val;
+    }
+    // DOM spec: data must not contain "?>".
+    if (std.mem.indexOf(u8, data_str, "?>") != null) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
+        return JsValue.undefined_val;
+    }
+    // Create a JS-only ProcessingInstruction object (nodeType 7)
+    const obj = try vm.createObj(.{});
+    if (g_node_proto) |np| obj.prototype = np;
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(7));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(try vm.pool.intern(target_str)));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.initString(try vm.pool.intern(target_str)));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("data"), JsValue.initString(try vm.pool.intern(data_str)));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.initString(try vm.pool.intern(data_str)));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.initString(try vm.pool.intern(data_str)));
+    try obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("parentElement"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("previousSibling"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("nextSibling"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("lastChild"), JsValue.null_val);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initNumber(0)); // placeholder
+    return JsValue.initObject(obj);
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // Element native methods (on prototype)
 // ══════════════════════════════════════════════════════════════════════
@@ -2484,6 +2573,8 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
     vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
     vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment) catch {};
     vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment) catch {};
+    vm.registerNativeMethod(doc_obj, "createEvent", &nativeCreateEvent) catch {};
+    vm.registerNativeMethod(doc_obj, "createProcessingInstruction", &nativeCreateProcessingInstruction) catch {};
     vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
     return JsValue.initObject(doc_obj);
 }
@@ -3794,6 +3885,8 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []c
     vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
     vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment) catch {};
     vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment) catch {};
+    vm.registerNativeMethod(doc_obj, "createEvent", &nativeCreateEvent) catch {};
+    vm.registerNativeMethod(doc_obj, "createProcessingInstruction", &nativeCreateProcessingInstruction) catch {};
     vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
     vm.registerNativeMethod(doc_obj, "removeChild", &nativeRemoveChild) catch {};
     vm.registerNativeMethod(doc_obj, "insertBefore", &nativeInsertBefore) catch {};
@@ -3904,6 +3997,8 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     vm.registerNativeMethod(doc_obj, "createTextNode", &nativeCreateTextNode) catch {};
     vm.registerNativeMethod(doc_obj, "createComment", &nativeCreateComment) catch {};
     vm.registerNativeMethod(doc_obj, "createDocumentFragment", &nativeCreateDocumentFragment) catch {};
+    vm.registerNativeMethod(doc_obj, "createEvent", &nativeCreateEvent) catch {};
+    vm.registerNativeMethod(doc_obj, "createProcessingInstruction", &nativeCreateProcessingInstruction) catch {};
     vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
     vm.registerNativeMethod(doc_obj, "removeChild", &nativeRemoveChild) catch {};
     vm.registerNativeMethod(doc_obj, "insertBefore", &nativeInsertBefore) catch {};

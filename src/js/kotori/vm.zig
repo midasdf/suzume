@@ -423,7 +423,16 @@ pub const VM = struct {
                     }
                     const target_proto = target_proto_val.?.asJsObject();
                     if (lhs.isObject()) {
-                        var cur: ?*JsObject = lhs.asJsObject().prototype;
+                        const lhs_obj = lhs.asJsObject();
+                        // For function objects without an explicit prototype, use
+                        // function_proto as the implicit prototype so that
+                        // `fn instanceof Function` works (matching property lookup
+                        // behavior at lines 973-974).
+                        var cur: ?*JsObject = lhs_obj.prototype orelse
+                            if ((lhs_obj.obj_type == .function or lhs_obj.obj_type == .native_function) and self.function_proto != null)
+                            self.function_proto.?
+                        else
+                            null;
                         var found = false;
                         while (cur) |p| {
                             if (p == target_proto) {
