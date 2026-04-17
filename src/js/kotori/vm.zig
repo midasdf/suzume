@@ -103,6 +103,7 @@ pub const VM = struct {
         is_interval: bool,
         fired: bool = false,
         cancelled: bool = false,
+        fire_at_ms: i64 = 0,
     };
 
     pub const MicrotaskEntry = union(enum) {
@@ -4310,6 +4311,7 @@ pub const VM = struct {
             .callback = callback,
             .delay_ms = delay,
             .is_interval = is_interval,
+            .fire_at_ms = kio.nowMs() + @as(i64, delay),
         });
         return JsValue.initNumber(@floatFromInt(id));
     }
@@ -4327,13 +4329,12 @@ pub const VM = struct {
         return JsValue.undefined_val;
     }
 
-    /// Fire all pending timers once. Called from the browser event loop.
-    /// For simplicity, all timers fire immediately when runPendingTimers is called
-    /// (delay is tracked but not enforced by kotori — the caller controls timing).
+    /// Fire pending timers whose scheduled time has arrived. Called from the browser event loop.
+    /// delay_ms is now enforced: a timer only fires when kio.nowMs() >= fire_at_ms.
     pub fn runPendingTimers(self: *VM) !bool {
         if (self.timers.items.len == 0) return false;
+        const now = kio.nowMs();
         var fired_any = false;
-        // Process timers (copy to avoid issues with modification during iteration)
         var i: usize = 0;
         while (i < self.timers.items.len) {
             var entry = &self.timers.items[i];
@@ -4343,6 +4344,11 @@ pub const VM = struct {
             }
             if (entry.fired and !entry.is_interval) {
                 _ = self.timers.swapRemove(i);
+                continue;
+            }
+            // Respect delay: skip timers that are not yet due
+            if (now < entry.fire_at_ms) {
+                i += 1;
                 continue;
             }
             // Fire the callback
@@ -4357,6 +4363,7 @@ pub const VM = struct {
                 }
                 // Reset interval for next round
                 self.timers.items[i].fired = false;
+                self.timers.items[i].fire_at_ms = kio.nowMs() + @as(i64, self.timers.items[i].delay_ms);
             }
             i += 1;
         }
