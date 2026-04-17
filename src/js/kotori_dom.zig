@@ -338,6 +338,8 @@ pub const EventListener = struct {
     event_type: []const u8, // owned copy
     callback: JsValue, // function object ref
     capture: bool,
+    once: bool = false,
+    passive: bool = false,
 };
 
 var g_listeners: std.ArrayListUnmanaged(EventListener) = .empty;
@@ -349,6 +351,7 @@ var g_chardata_proto: ?*JsObject = null;
 var g_text_proto: ?*JsObject = null;
 var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
+var g_event_proto: ?*JsObject = null;
 
 /// Map lexbor namespace IDs to W3C namespace URI strings.
 fn nsIdToUri(ns_id: usize) ?[]const u8 {
@@ -445,6 +448,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(np, "isEqualNode", &nativeIsEqualNode);
     try vm.registerNativeMethod(np, "getRootNode", &nativeGetRootNode);
     try vm.registerNativeMethod(np, "addEventListener", &nativeAddEventListener);
+    try vm.registerNativeMethod(np, "removeEventListener", &nativeRemoveEventListener);
     try vm.registerNativeMethod(np, "dispatchEvent", &nativeDispatchEvent);
     try vm.registerNativeMethod(np, "cloneNode", &nativeCloneNode);
     try vm.registerNativeMethod(np, "isSameNode", &nativeIsSameNode);
@@ -627,7 +631,15 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     elem_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
     elem_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ep)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("Element"), JsValue.initObject(elem_ctor));
-    try vm.globals.put(vm.allocator, try vm.pool.intern("EventTarget"), JsValue.initObject(node_ctor));
+    // EventTarget constructor (DOM 2.7 -- standalone new EventTarget())
+    const et_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    et_ctor.data = .{ .native_fn = &nativeEventTargetConstructor };
+    const et_proto = try vm.createObj(.{});
+    try vm.registerNativeMethod(et_proto, "addEventListener", &nativeAddEventListener);
+    try vm.registerNativeMethod(et_proto, "removeEventListener", &nativeRemoveEventListener);
+    try vm.registerNativeMethod(et_proto, "dispatchEvent", &nativeDispatchEvent);
+    et_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(et_proto)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("EventTarget"), JsValue.initObject(et_ctor));
 
     const html_elem_val = JsValue.initObject(ep);
     const html_names = [_][]const u8{
@@ -678,6 +690,36 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     dt_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
     dt_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_doctype_proto.?)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("DocumentType"), JsValue.initObject(dt_ctor));
+
+    // Event constructor (DOM 2.5)
+    const ev_proto = try vm.createObj(.{});
+    g_event_proto = ev_proto;
+    try vm.registerNativeMethod(ev_proto, "stopPropagation", &nativeStopPropagation);
+    try vm.registerNativeMethod(ev_proto, "stopImmediatePropagation", &nativeStopImmediatePropagation);
+    try vm.registerNativeMethod(ev_proto, "preventDefault", &nativePreventDefault);
+    try vm.registerNativeMethod(ev_proto, "initEvent", &nativeInitEvent);
+    try vm.registerNativeMethod(ev_proto, "composedPath", &nativeComposedPath);
+    try ev_proto.setProperty(vm.allocator, try vm.pool.intern("NONE"), JsValue.initNumber(0));
+    try ev_proto.setProperty(vm.allocator, try vm.pool.intern("CAPTURING_PHASE"), JsValue.initNumber(1));
+    try ev_proto.setProperty(vm.allocator, try vm.pool.intern("AT_TARGET"), JsValue.initNumber(2));
+    try ev_proto.setProperty(vm.allocator, try vm.pool.intern("BUBBLING_PHASE"), JsValue.initNumber(3));
+    const ev_ctor_obj = try vm.createObj(.{ .obj_type = .native_function });
+    ev_ctor_obj.data = .{ .native_fn = &nativeEventConstructor };
+    ev_ctor_obj.setProperty(vm.allocator, proto_sid, JsValue.initObject(ev_proto)) catch {};
+    ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("NONE"), JsValue.initNumber(0)) catch {};
+    ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("CAPTURING_PHASE"), JsValue.initNumber(1)) catch {};
+    ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("AT_TARGET"), JsValue.initNumber(2)) catch {};
+    ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("BUBBLING_PHASE"), JsValue.initNumber(3)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("Event"), JsValue.initObject(ev_ctor_obj));
+
+    // CustomEvent constructor (DOM 2.5)
+    const cev_proto = try vm.createObj(.{});
+    cev_proto.prototype = ev_proto;
+    try vm.registerNativeMethod(cev_proto, "initCustomEvent", &nativeInitCustomEvent);
+    const cev_ctor_obj = try vm.createObj(.{ .obj_type = .native_function });
+    cev_ctor_obj.data = .{ .native_fn = &nativeCustomEventConstructor };
+    cev_ctor_obj.setProperty(vm.allocator, proto_sid, JsValue.initObject(cev_proto)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("CustomEvent"), JsValue.initObject(cev_ctor_obj));
 
     // ── Property interception ──
     vm.dom_get_prop = &domGetProp;
@@ -1854,18 +1896,8 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     const callback = args[1];
     if (!callback.isObject()) return JsValue.undefined_val;
 
-    // Resolve the target node pointer.
-    // HTML §8.1.3.1: window.addEventListener routes to the Window object.
-    // We use g_window_sentinel as a stable identity for window-level listeners
-    // so they can be matched in dispatchEvent without a DOM node reference.
-    const node_ptr: *anyopaque = blk: {
-        if (this.isObject() and this.asJsObject().obj_type == .window_proxy) {
-            // Window listener — use sentinel instead of a DOM node pointer.
-            break :blk @ptrCast(&g_window_sentinel);
-        }
-        const n = getThisNode(this) orelse return JsValue.undefined_val;
-        break :blk @ptrCast(n);
-    };
+    // Resolve the target node pointer (DOM node, window, or standalone EventTarget).
+    const node_ptr: *anyopaque = resolveEventTarget(vm, this) orelse return JsValue.undefined_val;
 
     const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
 
@@ -1873,13 +1905,34 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     const owned = try g_alloc.alloc(u8, event_type.len);
     @memcpy(owned, event_type);
 
-    const capture = if (args.len > 2 and args[2].isBool()) args[2].asBool() else false;
+    // Parse options: boolean (capture) or object {capture, once, passive, signal}
+    var capture = false;
+    var once = false;
+    var passive = false;
+    if (args.len > 2) {
+        if (args[2].isBool()) {
+            capture = args[2].asBool();
+        } else if (args[2].isObject()) {
+            const opts = args[2].asJsObject();
+            if (vm.pool.intern("capture") catch null) |sid| {
+                if (opts.getProperty(sid)) |v| capture = v.isTruthy();
+            }
+            if (vm.pool.intern("once") catch null) |sid| {
+                if (opts.getProperty(sid)) |v| once = v.isTruthy();
+            }
+            if (vm.pool.intern("passive") catch null) |sid| {
+                if (opts.getProperty(sid)) |v| passive = v.isTruthy();
+            }
+        }
+    }
 
     try g_listeners.append(g_alloc, .{
         .node_ptr = node_ptr,
         .event_type = owned,
         .callback = callback,
         .capture = capture,
+        .once = once,
+        .passive = passive,
     });
     return JsValue.undefined_val;
 }
@@ -2028,10 +2081,23 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
         else
             vm.createObj(.{}) catch return JsValue.initBool(false);
         const sentinel_ptr = @intFromPtr(&g_window_sentinel);
-        for (g_listeners.items) |entry| {
-            if (@intFromPtr(entry.node_ptr) != sentinel_ptr) continue;
-            if (!std.mem.eql(u8, entry.event_type, type_str)) continue;
+        var wi: usize = 0;
+        while (wi < g_listeners.items.len) {
+            const entry = g_listeners.items[wi];
+            if (@intFromPtr(entry.node_ptr) != sentinel_ptr or
+                !std.mem.eql(u8, entry.event_type, type_str))
+            {
+                wi += 1;
+                continue;
+            }
+            const is_once = entry.once;
             _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
+            if (is_once) {
+                g_alloc.free(g_listeners.items[wi].event_type);
+                _ = g_listeners.orderedRemove(wi);
+            } else {
+                wi += 1;
+            }
         }
         return JsValue.initBool(true);
     }
@@ -2063,10 +2129,25 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
                         const ct_sid = vm.pool.intern("currentTarget") catch null;
                         if (tgt_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
                         if (ct_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
-                        for (g_listeners.items) |entry| {
-                            if (@intFromPtr(entry.node_ptr) != target_addr) continue;
-                            if (!std.mem.eql(u8, entry.event_type, type_str_et)) continue;
+                        // Iterate with index to support once-removal during dispatch
+                        var li: usize = 0;
+                        while (li < g_listeners.items.len) {
+                            const entry = g_listeners.items[li];
+                            if (@intFromPtr(entry.node_ptr) != target_addr or
+                                !std.mem.eql(u8, entry.event_type, type_str_et))
+                            {
+                                li += 1;
+                                continue;
+                            }
+                            const is_once = entry.once;
                             _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj_et), &.{JsValue.initObject(ev_obj_et)}) catch {};
+                            // Remove once-listeners after invocation
+                            if (is_once) {
+                                g_alloc.free(g_listeners.items[li].event_type);
+                                _ = g_listeners.orderedRemove(li);
+                            } else {
+                                li += 1;
+                            }
                             // Check stopImmediatePropagation
                             if (vm.pool.intern("_stopImmediate") catch null) |si_sid| {
                                 if (ev_obj_et.getProperty(si_sid)) |sv| {
@@ -2673,7 +2754,18 @@ fn nativeRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsVal
     if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
     const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const callback = args[1];
-    const capture = if (args.len > 2 and args[2].isBool()) args[2].asBool() else false;
+    // Parse capture: boolean or object {capture}
+    var capture = false;
+    if (args.len > 2) {
+        if (args[2].isBool()) {
+            capture = args[2].asBool();
+        } else if (args[2].isObject()) {
+            const opts = args[2].asJsObject();
+            if (vm.pool.intern("capture") catch null) |sid| {
+                if (opts.getProperty(sid)) |v| capture = v.isTruthy();
+            }
+        }
+    }
 
     const target_ptr = resolveEventTarget(vm, this) orelse return JsValue.undefined_val;
     const target_addr = @intFromPtr(target_ptr);
