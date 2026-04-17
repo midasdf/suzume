@@ -1570,14 +1570,25 @@ pub const VM = struct {
                     const base = self.sp - arg_count;
 
                     var rest_args_saved2: ?[]JsValue = null;
-                    if (func.bytecode.has_rest and arg_count > 0) {
-                        const rest_start: u16 = func.param_count - 1;
-                        if (arg_count > rest_start) {
-                            const count = arg_count - rest_start;
-                            const saved = self.allocator.alloc(JsValue, count) catch null;
-                            if (saved) |s| {
-                                @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
-                                rest_args_saved2 = s;
+                    var all_args_saved2: ?[]JsValue = null;
+                    if (arg_count > 0) {
+                        // Save ALL args for the `arguments` object (ES2023 §10.4.4).
+                        // Must be captured before truncation so arguments.length reflects
+                        // the actual call arity, not func.param_count.
+                        const saved_all = self.allocator.alloc(JsValue, arg_count) catch null;
+                        if (saved_all) |s| {
+                            @memcpy(s, self.stack[base .. base + arg_count]);
+                            all_args_saved2 = s;
+                        }
+                        if (func.bytecode.has_rest) {
+                            const rest_start: u16 = func.param_count - 1;
+                            if (arg_count > rest_start) {
+                                const count = arg_count - rest_start;
+                                const saved = self.allocator.alloc(JsValue, count) catch null;
+                                if (saved) |s| {
+                                    @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
+                                    rest_args_saved2 = s;
+                                }
                             }
                         }
                     }
@@ -1615,6 +1626,7 @@ pub const VM = struct {
                         .async_promise = async_p,
                         .arg_count = arg_count,
                         .rest_args = rest_args_saved2,
+                        .all_args = all_args_saved2,
                     };
                     self.frame_count += 1;
                 },
@@ -1674,14 +1686,23 @@ pub const VM = struct {
                     const base = self.sp - arg_count;
 
                     var rest_args_saved3: ?[]JsValue = null;
-                    if (func.bytecode.has_rest and arg_count > 0) {
-                        const rest_start: u16 = func.param_count - 1;
-                        if (arg_count > rest_start) {
-                            const count = arg_count - rest_start;
-                            const saved = self.allocator.alloc(JsValue, count) catch null;
-                            if (saved) |s| {
-                                @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
-                                rest_args_saved3 = s;
+                    var all_args_saved3: ?[]JsValue = null;
+                    if (arg_count > 0) {
+                        // Save ALL args for the `arguments` object (ES2023 §10.4.4).
+                        const saved_all = self.allocator.alloc(JsValue, arg_count) catch null;
+                        if (saved_all) |s| {
+                            @memcpy(s, self.stack[base .. base + arg_count]);
+                            all_args_saved3 = s;
+                        }
+                        if (func.bytecode.has_rest) {
+                            const rest_start: u16 = func.param_count - 1;
+                            if (arg_count > rest_start) {
+                                const count = arg_count - rest_start;
+                                const saved = self.allocator.alloc(JsValue, count) catch null;
+                                if (saved) |s| {
+                                    @memcpy(s, self.stack[base + rest_start .. base + arg_count]);
+                                    rest_args_saved3 = s;
+                                }
                             }
                         }
                     }
@@ -1715,6 +1736,7 @@ pub const VM = struct {
                         .this_val = this_val,
                         .is_construct = true,
                         .rest_args = rest_args_saved3,
+                        .all_args = all_args_saved3,
                         .arg_count = arg_count,
                     };
                     self.frame_count += 1;
@@ -3852,6 +3874,16 @@ pub const VM = struct {
             }
         }
 
+        // Save ALL args for the `arguments` object (ES2023 §10.4.4).
+        var all_args_cjf: ?[]JsValue = null;
+        if (args.len > 0) {
+            const saved_all = self.allocator.alloc(JsValue, args.len) catch null;
+            if (saved_all) |s| {
+                @memcpy(s, args);
+                all_args_cjf = s;
+            }
+        }
+
         const uv_array = self.getClosureUpvalues(obj);
         self.ensureFrameCapacity();
         self.frames[self.frame_count] = .{
@@ -3862,6 +3894,7 @@ pub const VM = struct {
             .this_val = this_val,
             .arg_count = @intCast(@min(args.len, std.math.maxInt(u16))),
             .rest_args = rest_args_cjf,
+            .all_args = all_args_cjf,
         };
         self.frame_count += 1;
 
