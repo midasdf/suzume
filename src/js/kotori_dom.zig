@@ -353,6 +353,22 @@ var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 
+/// Node wrapper cache: maps lexbor DOM node pointer → JsObject wrapper.
+/// Ensures `===` identity for the same DOM node (WebIDL §3.1 object identity).
+var g_node_cache: std.AutoHashMapUnmanaged(usize, *JsObject) = .{};
+
+fn nodeCacheGet(node: *lxb.lxb_dom_node_t) ?*JsObject {
+    return g_node_cache.get(@intFromPtr(node));
+}
+
+fn nodeCachePut(allocator: std.mem.Allocator, node: *lxb.lxb_dom_node_t, obj: *JsObject) void {
+    g_node_cache.put(allocator, @intFromPtr(node), obj) catch {};
+}
+
+fn nodeCacheRemove(node: *lxb.lxb_dom_node_t) void {
+    _ = g_node_cache.remove(@intFromPtr(node));
+}
+
 /// Map lexbor namespace IDs to W3C namespace URI strings.
 fn nsIdToUri(ns_id: usize) ?[]const u8 {
     return switch (ns_id) {
@@ -531,6 +547,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
     doc_obj.data = .{ .dom_node = document_ptr };
     doc_obj.prototype = ep;
+    // Cache document wrapper for === identity (WebIDL §3.1)
+    nodeCachePut(vm.allocator, @ptrCast(@alignCast(document_ptr)), doc_obj);
     try vm.registerNativeMethod(doc_obj, "getElementById", &nativeGetElementById);
     try vm.registerNativeMethod(doc_obj, "querySelector", &nativeDocQuerySelector);
     try vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeDocQuerySelectorAll);
@@ -606,6 +624,34 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     node_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(np)) catch {};
     const node_id = try vm.pool.intern("Node");
     try vm.globals.put(vm.allocator, node_id, JsValue.initObject(node_ctor));
+
+    // WebIDL §3.6.1: Constants must be on BOTH interface object (constructor) AND prototype
+    // Node type constants
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("ELEMENT_NODE"), JsValue.initNumber(1));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("ATTRIBUTE_NODE"), JsValue.initNumber(2));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("TEXT_NODE"), JsValue.initNumber(3));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("CDATA_SECTION_NODE"), JsValue.initNumber(4));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("ENTITY_REFERENCE_NODE"), JsValue.initNumber(5));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("ENTITY_NODE"), JsValue.initNumber(6));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("PROCESSING_INSTRUCTION_NODE"), JsValue.initNumber(7));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("COMMENT_NODE"), JsValue.initNumber(8));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_NODE"), JsValue.initNumber(9));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_TYPE_NODE"), JsValue.initNumber(10));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_FRAGMENT_NODE"), JsValue.initNumber(11));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("NOTATION_NODE"), JsValue.initNumber(12));
+    // Document position constants
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_DISCONNECTED"), JsValue.initNumber(1));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_PRECEDING"), JsValue.initNumber(2));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_FOLLOWING"), JsValue.initNumber(4));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_CONTAINS"), JsValue.initNumber(8));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_CONTAINED_BY"), JsValue.initNumber(16));
+    try node_ctor.setProperty(vm.allocator, try vm.pool.intern("DOCUMENT_POSITION_IMPLEMENTATION_SPECIFIC"), JsValue.initNumber(32));
+
+    // Also add missing legacy constants to prototype (ATTRIBUTE_NODE, ENTITY_*, NOTATION_NODE)
+    try np.setProperty(vm.allocator, try vm.pool.intern("ATTRIBUTE_NODE"), JsValue.initNumber(2));
+    try np.setProperty(vm.allocator, try vm.pool.intern("ENTITY_REFERENCE_NODE"), JsValue.initNumber(5));
+    try np.setProperty(vm.allocator, try vm.pool.intern("ENTITY_NODE"), JsValue.initNumber(6));
+    try np.setProperty(vm.allocator, try vm.pool.intern("NOTATION_NODE"), JsValue.initNumber(12));
 
     // CharacterData constructor + prototype
     const cd_ctor = try vm.createObj(.{ .obj_type = .native_function });
@@ -800,6 +846,12 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, node, "id");
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
+
+    // Element.attributes (DOM §4.9 — NamedNodeMap)
+    if (eql(name, "attributes")) {
+        if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
+        return buildAttributesMap(vm, @ptrCast(node));
+    }
 
     // Element namespace properties (DOM §4.9)
     if (eql(name, "namespaceURI")) {
@@ -2915,6 +2967,10 @@ fn toUint32(n: f64) usize {
 }
 
 fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
+    // Check cache first — ensures === identity (WebIDL §3.1)
+    if (nodeCacheGet(node)) |cached| {
+        return JsValue.initObject(cached);
+    }
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
     obj.data = .{ .dom_node = @ptrCast(node) };
     // Assign prototype based on node type (DOM spec prototype chain)
@@ -2926,6 +2982,7 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
         lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
         else => g_node_proto,
     };
+    nodeCachePut(vm.allocator, node, obj);
     return JsValue.initObject(obj);
 }
 
@@ -2956,6 +3013,55 @@ fn setAttrFromVal(vm: *VM, node: *lxb.lxb_dom_node_t, attr_name: []const u8, val
         if (vm.pool.get(val.asStringId())) |s|
             _ = dom_b.lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, s.ptr, s.len);
     }
+}
+
+/// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).
+/// Returns an array-like object with .length, indexed access, .getNamedItem(), .item().
+fn buildAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
+    const map_obj = vm.createObj(.{}) catch return null;
+    var count: u32 = 0;
+
+    // Iterate lexbor attributes
+    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (attr) |a| {
+        var attr_qn_len: usize = 0;
+        const attr_qn = dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len);
+        if (attr_qn) |qn| {
+            const qn_str = qn[0..attr_qn_len];
+            // Create Attr-like object
+            const attr_obj = vm.createObj(.{}) catch continue;
+            const name_sid = vm.pool.intern(qn_str) catch continue;
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("name") catch continue, JsValue.initString(name_sid)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("localName") catch continue, JsValue.initString(name_sid)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeName") catch continue, JsValue.initString(name_sid)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeType") catch continue, JsValue.initNumber(2)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("specified") catch continue, JsValue.initBool(true)) catch {};
+            // Value
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
+            const val_sid = if (val_ptr) |vp|
+                vm.pool.intern(vp[0..val_len]) catch continue
+            else
+                vm.pool.intern("") catch continue;
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("value") catch continue, JsValue.initString(val_sid)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch continue, JsValue.initString(val_sid)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch continue, JsValue.initString(val_sid)) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch continue, JsValue.null_val) catch {};
+            attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch continue, JsValue.null_val) catch {};
+            // Indexed access
+            var idx_buf: [8]u8 = undefined;
+            const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{count}) catch continue;
+            const idx_sid = vm.pool.intern(idx_str) catch continue;
+            map_obj.setProperty(vm.allocator, idx_sid, JsValue.initObject(attr_obj)) catch {};
+            // Named access
+            map_obj.setProperty(vm.allocator, name_sid, JsValue.initObject(attr_obj)) catch {};
+            count += 1;
+        }
+        attr = @ptrCast(@alignCast(a.node.next));
+    }
+
+    map_obj.setProperty(vm.allocator, vm.pool.intern("length") catch return null, JsValue.initNumber(@floatFromInt(count))) catch {};
+    return JsValue.initObject(map_obj);
 }
 
 fn tagNameUpper(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
@@ -3367,8 +3473,11 @@ fn nativeIsSameNode(_: *anyopaque, this: JsValue, args: []const JsValue) anyerro
 // ── Node.contains (DOM §4.4) ─────────────────────────────────────────
 
 fn nativeContains(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-    const ancestor = getThisNode(this) orelse return JsValue.initBool(false);
     if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) return JsValue.initBool(false);
+    // JS-only nodes: same object identity → contains(self) is true
+    if (this.isObject() and args[0].isObject() and this.asJsObject() == args[0].asJsObject())
+        return JsValue.initBool(true);
+    const ancestor = getThisNode(this) orelse return JsValue.initBool(false);
     const target = getArgNode(args[0]) orelse return JsValue.initBool(false);
     var cur: ?*lxb.lxb_dom_node_t = target;
     while (cur) |c| {
@@ -3388,13 +3497,31 @@ fn nativeCompareDocumentPosition(_: *anyopaque, this: JsValue, args: []const JsV
     const CONTAINED_BY: f64 = 0x10;
     const IMPLEMENTATION_SPECIFIC: f64 = 0x20;
 
-    const self_node = getThisNode(this) orelse return JsValue.initNumber(0);
     if (args.len == 0 or args[0].isNull() or args[0].isUndefined())
         return JsValue.initNumber(0);
-    const other_node = getArgNode(args[0]) orelse return JsValue.initNumber(0);
 
-    // Step 1: same node → 0
-    if (self_node == other_node) return JsValue.initNumber(0);
+    // Handle JS-only nodes (e.g., ProcessingInstruction, DocumentType without lexbor backing)
+    const self_node = getThisNode(this);
+    const other_node = getArgNode(args[0]);
+
+    // Same JS object → 0
+    if (this.isObject() and args[0].isObject() and this.asJsObject() == args[0].asJsObject())
+        return JsValue.initNumber(0);
+
+    // If either node lacks lexbor backing (JS-only node), they're in different trees → DISCONNECTED
+    if (self_node == null or other_node == null) {
+        const order: f64 = if (this.bits < args[0].bits)
+            FOLLOWING
+        else
+            PRECEDING;
+        return JsValue.initNumber(DISCONNECTED + IMPLEMENTATION_SPECIFIC + order);
+    }
+
+    const sn = self_node.?;
+    const on = other_node.?;
+
+    // Step 1: same DOM node → 0
+    if (sn == on) return JsValue.initNumber(0);
 
     // Build ancestor chains for self and other (root first)
     // We use a fixed-size stack buffer; depth >512 is pathological
@@ -3404,14 +3531,14 @@ fn nativeCompareDocumentPosition(_: *anyopaque, this: JsValue, args: []const JsV
     var self_len: usize = 0;
     var other_len: usize = 0;
 
-    var cur: ?*lxb.lxb_dom_node_t = self_node;
+    var cur: ?*lxb.lxb_dom_node_t = sn;
     while (cur) |n| : (cur = nodeParent(n)) {
         if (self_len < MAX_DEPTH) {
             self_chain[self_len] = n;
             self_len += 1;
         }
     }
-    cur = other_node;
+    cur = on;
     while (cur) |n| : (cur = nodeParent(n)) {
         if (other_len < MAX_DEPTH) {
             other_chain[other_len] = n;
@@ -3420,14 +3547,14 @@ fn nativeCompareDocumentPosition(_: *anyopaque, this: JsValue, args: []const JsV
     }
 
     // Chains are leaf→root; reverse to get root→leaf
-    // self_chain[0] is self_node, self_chain[self_len-1] is tree root
+    // self_chain[0] is sn, self_chain[self_len-1] is tree root
     const self_root = self_chain[self_len - 1];
     const other_root = other_chain[other_len - 1];
 
     // Step 2: disconnected trees
     if (self_root != other_root) {
         // Implementation-specific ordering by pointer value
-        const order: f64 = if (@intFromPtr(self_node) < @intFromPtr(other_node))
+        const order: f64 = if (@intFromPtr(sn) < @intFromPtr(on))
             FOLLOWING
         else
             PRECEDING;
@@ -3849,6 +3976,7 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []c
     const doc_obj = vm.createObj(.{ .obj_type = .dom_node }) catch return JsValue.null_val;
     doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
     doc_obj.prototype = g_node_proto;
+    nodeCachePut(vm.allocator, doc_node, doc_obj);
     const doc_val = JsValue.initObject(doc_obj);
 
     // nodeType = 9 (DOCUMENT_NODE)
@@ -3943,6 +4071,7 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
     doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
     doc_obj.prototype = g_node_proto;
+    nodeCachePut(vm.allocator, doc_node, doc_obj);
     const doc_val = JsValue.initObject(doc_obj);
 
     // nodeType = 9, nodeName = "#document"

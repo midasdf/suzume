@@ -2557,6 +2557,10 @@ pub const VM = struct {
         const is_finite_id = try self.pool.intern("isFinite");
         try self.globals.put(self.allocator, is_finite_id, JsValue.initObject(is_finite_obj));
 
+        // ── eval ──
+        const eval_obj = try self.createNativeFn(&nativeEval);
+        try self.globals.put(self.allocator, try self.pool.intern("eval"), JsValue.initObject(eval_obj));
+
         // ── URI encoding/decoding ──
         const encode_uri_obj = try self.createNativeFn(&nativeEncodeURI);
         try self.globals.put(self.allocator, try self.pool.intern("encodeURI"), JsValue.initObject(encode_uri_obj));
@@ -7382,6 +7386,59 @@ pub const VM = struct {
         const s = std.mem.trim(u8, vm.pool.get(args[0].asStringId()) orelse return JsValue.nan_val, " \t\n\r");
         const n = std.fmt.parseFloat(f64, s) catch return JsValue.nan_val;
         return JsValue.initNumber(n);
+    }
+
+    // ── eval() — ECMA-262 §19.2.1 ──────────────────────────────────────
+    fn nativeEval(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        if (args.len == 0) return JsValue.undefined_val;
+        const arg = args[0];
+        // Step 1: If argument is not a string, return it as-is
+        if (!arg.isString()) return arg;
+
+        const self: *VM = @ptrCast(@alignCast(ctx));
+        const source = self.pool.get(arg.asStringId()) orelse return JsValue.undefined_val;
+        if (source.len == 0) return JsValue.undefined_val;
+
+        // Step 2: Compile the source string
+        var compiler = Compiler.initWithPool(self.allocator, source, self.pool);
+        const eval_bc = compiler.compile() catch {
+            // Parse error → throw SyntaxError
+            compiler.deinit();
+            self.pending_throw = try self.createErrorObj("SyntaxError");
+            return JsValue.undefined_val;
+        };
+        // Note: do NOT call compiler.deinit() here — it would free the bytecode
+        // constants. The eval_bc owns a separate copy of code+constants from compile().
+        // We only deinit the parser side. compiler.deinit() frees self.current.bc
+        // which is the compiler's internal state, not the returned eval_bc.
+        compiler.deinit();
+
+        // Step 3: Execute in the current VM context (globals are shared)
+        const saved_frame_count = self.frame_count;
+        const saved_sp = self.sp;
+        self.ensureFrameCapacity();
+        self.frames[self.frame_count] = .{
+            .bc = &eval_bc,
+            .ip = 0,
+            .base_sp = self.sp,
+            .upvalues = &.{},
+        };
+        self.frame_count += 1;
+        // Reserve stack slots for locals
+        var li: u16 = 0;
+        while (li < eval_bc.local_count) : (li += 1) {
+            self.push(JsValue.undefined_val);
+        }
+
+        // Step 4: Run and get completion value
+        const result = self.run(saved_frame_count) catch |err| {
+            self.frame_count = saved_frame_count;
+            self.sp = saved_sp;
+            return err;
+        };
+        self.frame_count = saved_frame_count;
+        self.sp = saved_sp;
+        return result;
     }
 
     fn nativeIsNaN(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
