@@ -68,6 +68,13 @@ pub const KotoriRuntime = struct {
         // (kept as source-of-truth there; sync changes between the two).
         _ = self.eval(range_polyfill_js);
 
+        // DOM §7.1 DOMTokenList (Element.classList): install a live token list
+        // wrapping the element's `class` attribute. Minimal scoped polyfill:
+        // no Proxy (avoids `>>> 0` panics in kotori toInt32 on NaN inputs) and
+        // no indexed `classList[i]` access — instead a cached wrapper object
+        // with methods that re-read `class` live, plus length/value getters.
+        _ = self.eval(class_list_polyfill_js);
+
         return self;
     }
 
@@ -744,6 +751,264 @@ pub const KotoriRuntime = struct {
         \\      return r;
         \\    });
         \\  }
+        \\})();
+    ;
+
+    /// DOM §7.1 DOMTokenList polyfill for kotori (Element.classList).
+    ///
+    /// The polyfill installs `Element.prototype.classList` as a getter that
+    /// returns a cached per-element wrapper object. The wrapper implements the
+    /// DOMTokenList interface methods (`.add`, `.remove`, `.contains`,
+    /// `.toggle`, `.replace`, `.item`, `.supports`, `.toString`, `.forEach`)
+    /// plus live `length` and `value` accessors. Every read re-parses the
+    /// element's `class` attribute, so mutations via `setAttribute`,
+    /// `removeAttribute`, or `.className =` are reflected immediately.
+    ///
+    /// Spec references (WHATWG DOM):
+    ///  - §7.1 DOMTokenList interface (add/remove/toggle/replace/contains/item)
+    ///  - §7.1 token validation: empty → SyntaxError,
+    ///    ASCII whitespace in a token → InvalidCharacterError
+    ///  - §7.1 `.supports()` for a DOMTokenList with no supported-tokens list
+    ///    (the `class` attribute has none) must throw TypeError
+    ///  - §4.9 ordered set parser: tokens separated by ASCII whitespace
+    ///    (U+0009, U+000A, U+000C, U+000D, U+0020); duplicates collapsed
+    ///  - WebIDL [SameObject]: `element.classList` returns the same object
+    ///    on every access (cached via WeakMap)
+    ///  - WebIDL [PutForwards=value]: assigning `element.classList = "..."`
+    ///    forwards to `element.classList.value = "..."`, i.e. sets `class`.
+    ///
+    /// Known limitations (deliberate, for minimal-diff safety):
+    ///  - No Proxy wrapper → indexed access `classList[0]` returns `undefined`
+    ///    (a small number of WPT subtests exercise this; they stay failing).
+    ///    kotori's narrow `toInt32` panics on `>>> 0` of non-integer floats,
+    ///    which makes a spec-faithful Proxy/ToUint32 implementation unsafe.
+    ///  - No `Symbol.iterator`; the WPT classList suite does not rely on it.
+    const class_list_polyfill_js =
+        \\(function(){
+        \\  if (typeof Element==='undefined' || !Element.prototype) return;
+        \\  /* ASCII whitespace per DOM §2.3 / §4.9 ordered-set parser. */
+        \\  var WS_RE = /[\x09\x0A\x0C\x0D\x20]+/;
+        \\  var HAS_WS_RE = /[\x09\x0A\x0C\x0D\x20]/;
+        \\  function parseOrderedSet(s){
+        \\    if (s==null || s==='') return [];
+        \\    var raw = String(s).split(WS_RE);
+        \\    var seen = {}, out = [];
+        \\    for (var i=0;i<raw.length;i++){
+        \\      var t = raw[i];
+        \\      if (t==='') continue;
+        \\      /* ':' prefix so keys like "constructor"/"toString" don't collide
+        \\       * with Object.prototype properties when used as map keys. */
+        \\      var k = ':'+t;
+        \\      if (seen[k]) continue;
+        \\      seen[k] = 1;
+        \\      out.push(t);
+        \\    }
+        \\    return out;
+        \\  }
+        \\  function serializeOrderedSet(arr){
+        \\    var seen = {}, out = [];
+        \\    for (var i=0;i<arr.length;i++){
+        \\      var t = String(arr[i]);
+        \\      var k = ':'+t;
+        \\      if (seen[k]) continue;
+        \\      seen[k] = 1;
+        \\      out.push(t);
+        \\    }
+        \\    return out.join(' ');
+        \\  }
+        \\  /* DOM §7.1 validation: throw DOMException per spec codes. */
+        \\  function validateToken(t){
+        \\    if (t==='') throw new DOMException("The token provided must not be empty.","SyntaxError");
+        \\    if (HAS_WS_RE.test(t)) throw new DOMException("The token provided ('"+t+"') contains HTML space characters, which are not valid in tokens.","InvalidCharacterError");
+        \\  }
+        \\  function getTokens(el){
+        \\    if (!el) return [];
+        \\    var cl = el.getAttribute('class');
+        \\    return parseOrderedSet(cl);
+        \\  }
+        \\  function writeTokens(el, toks){
+        \\    el.setAttribute('class', serializeOrderedSet(toks));
+        \\  }
+        \\  /* Safe integer coercion — avoids `>>> 0`, which panics in kotori
+        \\   * when the operand becomes NaN or Infinity via toInt32. Returns
+        \\   * -1 for negative / non-finite / fractional — callers treat -1 as
+        \\   * "out of range" (item() returns null). */
+        \\  function toIntIndex(v){
+        \\    if (v===undefined || v===null) return -1;
+        \\    var n = Number(v);
+        \\    if (n !== n) return -1;            /* NaN */
+        \\    if (n === Infinity || n === -Infinity) return -1;
+        \\    if (n < 0) return -1;
+        \\    n = Math.floor(n);
+        \\    if (n > 2147483647) return -1;
+        \\    return n;
+        \\  }
+        \\
+        \\  /* DOMTokenList constructor — WebIDL [Exposed] with no constructor,
+        \\   * so user-code `new DOMTokenList()` must throw. It exists primarily
+        \\   * so `classList instanceof DOMTokenList` returns true. */
+        \\  function DOMTokenList(){
+        \\    throw new TypeError("Illegal constructor");
+        \\  }
+        \\  var DTLP = DOMTokenList.prototype;
+        \\  DTLP.constructor = DOMTokenList;
+        \\  try { DTLP[Symbol.toStringTag] = 'DOMTokenList'; } catch(e) {}
+        \\
+        \\  /* Methods. `this` is the wrapper object with a non-enumerable
+        \\   * `_el` reference to the owning element. */
+        \\  DTLP.item = function(idx){
+        \\    /* DOM §7.1 item(index): if index is out of range, return null. */
+        \\    var n = toIntIndex(idx);
+        \\    if (n < 0) return null;
+        \\    var toks = getTokens(this._el);
+        \\    if (n >= toks.length) return null;
+        \\    return toks[n];
+        \\  };
+        \\  DTLP.contains = function(token){
+        \\    /* DOM §7.1 contains() runs no validation per current spec. */
+        \\    var t = String(token);
+        \\    var toks = getTokens(this._el);
+        \\    for (var i=0;i<toks.length;i++) if (toks[i]===t) return true;
+        \\    return false;
+        \\  };
+        \\  DTLP.add = function(){
+        \\    /* DOM §7.1 add(...tokens): validate every argument first, then
+        \\     * apply (i.e. validation failures leave state untouched). */
+        \\    var args = [];
+        \\    for (var i=0;i<arguments.length;i++){
+        \\      args.push(String(arguments[i]));
+        \\      validateToken(args[i]);
+        \\    }
+        \\    var toks = getTokens(this._el);
+        \\    var seen = {};
+        \\    for (var j=0;j<toks.length;j++) seen[':'+toks[j]] = 1;
+        \\    var changed = false;
+        \\    for (var k=0;k<args.length;k++){
+        \\      var key = ':'+args[k];
+        \\      if (!seen[key]) { seen[key] = 1; toks.push(args[k]); changed = true; }
+        \\    }
+        \\    /* Per spec "update steps" run only if the set changed OR the
+        \\     * attribute is absent (and we need to materialize it). */
+        \\    if (changed || this._el.getAttribute('class')==null) {
+        \\      writeTokens(this._el, toks);
+        \\    }
+        \\  };
+        \\  DTLP.remove = function(){
+        \\    var args = [];
+        \\    for (var i=0;i<arguments.length;i++){
+        \\      args.push(String(arguments[i]));
+        \\      validateToken(args[i]);
+        \\    }
+        \\    var toks = getTokens(this._el);
+        \\    var drop = {};
+        \\    for (var k=0;k<args.length;k++) drop[':'+args[k]] = 1;
+        \\    var out = [];
+        \\    for (var j=0;j<toks.length;j++){
+        \\      if (drop[':'+toks[j]]) continue;
+        \\      out.push(toks[j]);
+        \\    }
+        \\    /* DOM §7.1 remove() always normalizes the attribute when present. */
+        \\    if (this._el.getAttribute('class')!=null) {
+        \\      writeTokens(this._el, out);
+        \\    }
+        \\  };
+        \\  DTLP.toggle = function(token, force){
+        \\    var t = String(token);
+        \\    validateToken(t);
+        \\    var toks = getTokens(this._el);
+        \\    var idx = -1;
+        \\    for (var i=0;i<toks.length;i++) if (toks[i]===t) { idx = i; break; }
+        \\    var hasForce = (arguments.length >= 2);
+        \\    if (idx !== -1) {
+        \\      if (!hasForce || !force) {
+        \\        toks.splice(idx,1);
+        \\        writeTokens(this._el, toks);
+        \\        return false;
+        \\      }
+        \\      return true;
+        \\    }
+        \\    if (hasForce && !force) return false;
+        \\    toks.push(t);
+        \\    writeTokens(this._el, toks);
+        \\    return true;
+        \\  };
+        \\  DTLP.replace = function(token, newToken){
+        \\    /* DOM §7.1 replace(token, newToken): validate BOTH in argument order. */
+        \\    var t = String(token), nt = String(newToken);
+        \\    validateToken(t);
+        \\    validateToken(nt);
+        \\    var toks = getTokens(this._el);
+        \\    var idx = -1;
+        \\    for (var i=0;i<toks.length;i++) if (toks[i]===t) { idx = i; break; }
+        \\    if (idx === -1) return false;
+        \\    toks[idx] = nt;
+        \\    /* serializeOrderedSet collapses duplicates introduced by the replace. */
+        \\    writeTokens(this._el, toks);
+        \\    return true;
+        \\  };
+        \\  DTLP.supports = function(){
+        \\    /* DOM §7.1: classList is bound to `class`, which has no supported
+        \\     * tokens list, so supports() must throw TypeError. */
+        \\    throw new TypeError("DOMTokenList has no supported tokens for the 'class' attribute.");
+        \\  };
+        \\  DTLP.toString = function(){
+        \\    /* DOM §7.1 stringifier: return `class` attribute value verbatim
+        \\     * (NOT the ordered-set serialization). */
+        \\    if (!this._el) return '';
+        \\    var v = this._el.getAttribute('class');
+        \\    return v==null ? '' : v;
+        \\  };
+        \\  DTLP.forEach = function(cb, thisArg){
+        \\    var toks = getTokens(this._el);
+        \\    for (var i=0;i<toks.length;i++) cb.call(thisArg, toks[i], i, this);
+        \\  };
+        \\
+        \\  /* Live length / value accessors — re-read the attribute on every get. */
+        \\  Object.defineProperty(DTLP, 'length', {
+        \\    get: function(){ return getTokens(this._el).length; },
+        \\    configurable: true, enumerable: true
+        \\  });
+        \\  Object.defineProperty(DTLP, 'value', {
+        \\    get: function(){
+        \\      if (!this._el) return '';
+        \\      var v = this._el.getAttribute('class');
+        \\      return v==null ? '' : v;
+        \\    },
+        \\    set: function(v){ this._el.setAttribute('class', String(v)); },
+        \\    configurable: true, enumerable: true
+        \\  });
+        \\
+        \\  globalThis.DOMTokenList = DOMTokenList;
+        \\
+        \\  /* WebIDL [SameObject]: every read of element.classList returns the
+        \\   * identical wrapper object. Store on the element itself via a
+        \\   * non-enumerable property rather than a WeakMap (WeakMap support
+        \\   * in kotori may be incomplete). */
+        \\  function getWrapper(el){
+        \\    var w = el.__clsl;
+        \\    if (w) return w;
+        \\    w = Object.create(DTLP);
+        \\    /* Stash the element pointer on a writable-false slot so user code
+        \\     * cannot replace it. */
+        \\    try {
+        \\      Object.defineProperty(w, '_el', {value: el, writable:false, enumerable:false, configurable:false});
+        \\    } catch(e) {
+        \\      w._el = el;
+        \\    }
+        \\    try {
+        \\      Object.defineProperty(el, '__clsl', {value: w, writable:false, enumerable:false, configurable:false});
+        \\    } catch(e) {
+        \\      el.__clsl = w;
+        \\    }
+        \\    return w;
+        \\  }
+        \\
+        \\  Object.defineProperty(Element.prototype, 'classList', {
+        \\    get: function(){ return getWrapper(this); },
+        \\    /* WebIDL [PutForwards=value]: setter forwards to .value. */
+        \\    set: function(v){ this.setAttribute('class', String(v)); },
+        \\    configurable: true, enumerable: true
+        \\  });
         \\})();
     ;
 
