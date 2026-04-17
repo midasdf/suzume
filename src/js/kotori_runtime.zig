@@ -75,6 +75,13 @@ pub const KotoriRuntime = struct {
         // with methods that re-read `class` live, plus length/value getters.
         _ = self.eval(class_list_polyfill_js);
 
+        // DOM §6 (Traversal) + §4.5 (createElementNS prefix/case fixups) +
+        // §4.7 (importNode) + §4.2.3 (NonElementParentNode.getElementById for
+        // DocumentFragment) + HTML §4.12.3 (template.content). Pure-JS
+        // polyfills that layer over the kotori native bindings without
+        // touching kotori_dom.zig.
+        _ = self.eval(traversal_and_fixups_js);
+
         return self;
     }
 
@@ -1009,6 +1016,628 @@ pub const KotoriRuntime = struct {
         \\    set: function(v){ this.setAttribute('class', String(v)); },
         \\    configurable: true, enumerable: true
         \\  });
+        \\})();
+    ;
+
+    /// DOM §6 (TreeWalker + NodeIterator) + §4.7 (Document.importNode) +
+    /// §4.2.3 NonElementParentNode.getElementById on DocumentFragment +
+    /// HTML §4.12.3 template.content + small §4.5 createElementNS fixups.
+    /// Pure-JS polyfills layered over kotori native bindings.
+    const traversal_and_fixups_js =
+        \\(function(){
+        \\  /* ============ NodeFilter constants (DOM §6.1) =============== */
+        \\  var FILTER_ACCEPT = 1, FILTER_REJECT = 2, FILTER_SKIP = 3;
+        \\  var SHOW_ALL = 0xFFFFFFFF;
+        \\  /* nodeType → whatToShow bit (DOM §6.1). Bit N = nodeType N. */
+        \\  function showBit(nt){
+        \\    /* whatToShow bits are numbered by nodeType: bit (nodeType-1). */
+        \\    if (nt < 1 || nt > 12) return 0;
+        \\    return 1 << (nt - 1);
+        \\  }
+        \\  /* Normalize whatToShow argument to a uint32. kotori's `>>> 0`
+        \\   * panics on NaN/Infinity; we normalize manually. */
+        \\  function toWhatToShow(v){
+        \\    if (v === undefined) return SHOW_ALL;
+        \\    var n = Number(v);
+        \\    if (n !== n || n === Infinity || n === -Infinity) return 0;
+        \\    n = Math.floor(n);
+        \\    if (n < 0) n = n + 4294967296;
+        \\    n = n % 4294967296;
+        \\    if (n < 0) n = n + 4294967296;
+        \\    return n;
+        \\  }
+        \\  if (typeof globalThis.NodeFilter !== 'object' || globalThis.NodeFilter == null) {
+        \\    globalThis.NodeFilter = {
+        \\      FILTER_ACCEPT: FILTER_ACCEPT,
+        \\      FILTER_REJECT: FILTER_REJECT,
+        \\      FILTER_SKIP:   FILTER_SKIP,
+        \\      SHOW_ALL:          0xFFFFFFFF,
+        \\      SHOW_ELEMENT:      0x1,
+        \\      SHOW_ATTRIBUTE:    0x2,
+        \\      SHOW_TEXT:         0x4,
+        \\      SHOW_CDATA_SECTION:0x8,
+        \\      SHOW_ENTITY_REFERENCE: 0x10,
+        \\      SHOW_ENTITY:       0x20,
+        \\      SHOW_PROCESSING_INSTRUCTION: 0x40,
+        \\      SHOW_COMMENT:      0x80,
+        \\      SHOW_DOCUMENT:     0x100,
+        \\      SHOW_DOCUMENT_TYPE:0x200,
+        \\      SHOW_DOCUMENT_FRAGMENT: 0x400,
+        \\      SHOW_NOTATION:     0x800
+        \\    };
+        \\  }
+        \\
+        \\  /* Run the filter (DOM §6.2 "filter a node"). Returns the filter
+        \\   * result constant (ACCEPT/REJECT/SKIP). */
+        \\  function filterNode(walker, node){
+        \\    if (!node) return FILTER_REJECT;
+        \\    var bit = showBit(node.nodeType);
+        \\    if ((walker._whatToShow & bit) === 0) return FILTER_SKIP;
+        \\    var filter = walker._filter;
+        \\    if (filter == null) return FILTER_ACCEPT;
+        \\    var r;
+        \\    try {
+        \\      if (typeof filter === 'function') {
+        \\        r = filter.call(null, node);
+        \\      } else if (typeof filter.acceptNode === 'function') {
+        \\        r = filter.acceptNode.call(filter, node);
+        \\      } else {
+        \\        return FILTER_ACCEPT;
+        \\      }
+        \\    } catch(e) {
+        \\      throw e;
+        \\    }
+        \\    var ri = Number(r);
+        \\    if (ri === FILTER_ACCEPT || ri === FILTER_REJECT || ri === FILTER_SKIP) return ri;
+        \\    return FILTER_REJECT;  /* invalid numeric result → REJECT */
+        \\  }
+        \\
+        \\  /* -------- TreeWalker (DOM §6.1) --------------------------- */
+        \\  function TreeWalker(){
+        \\    throw new TypeError("Illegal constructor");
+        \\  }
+        \\  var TWP = TreeWalker.prototype;
+        \\  TWP.constructor = TreeWalker;
+        \\  try { TWP[Symbol.toStringTag] = 'TreeWalker'; } catch(e) {}
+        \\
+        \\  function defGet(obj, key, getter, setter){
+        \\    var desc = {get: getter, configurable: true, enumerable: true};
+        \\    if (setter) desc.set = setter;
+        \\    Object.defineProperty(obj, key, desc);
+        \\  }
+        \\  defGet(TWP, 'root',        function(){ return this._root; });
+        \\  defGet(TWP, 'whatToShow',  function(){ return this._whatToShow; });
+        \\  defGet(TWP, 'filter',      function(){ return this._filter; });
+        \\  defGet(TWP, 'currentNode',
+        \\    function(){ return this._current; },
+        \\    function(v){ if (v == null) throw new TypeError('currentNode must not be null'); this._current = v; }
+        \\  );
+        \\
+        \\  /* DOM §6.1 parentNode: find nearest inclusive ancestor that is
+        \\   * an inclusive descendant of root and ACCEPT. */
+        \\  TWP.parentNode = function(){
+        \\    var n = this._current;
+        \\    while (n != null && n !== this._root) {
+        \\      n = n.parentNode;
+        \\      if (n == null) return null;
+        \\      if (filterNode(this, n) === FILTER_ACCEPT) {
+        \\        this._current = n;
+        \\        return n;
+        \\      }
+        \\    }
+        \\    return null;
+        \\  };
+        \\  /* First child / last child traversal helper (§6.1). */
+        \\  function twChild(walker, first){
+        \\    var node = walker._current;
+        \\    var child = first ? node.firstChild : node.lastChild;
+        \\    while (child != null) {
+        \\      var r = filterNode(walker, child);
+        \\      if (r === FILTER_ACCEPT) {
+        \\        walker._current = child;
+        \\        return child;
+        \\      }
+        \\      if (r === FILTER_SKIP) {
+        \\        var grand = first ? child.firstChild : child.lastChild;
+        \\        if (grand != null) { child = grand; continue; }
+        \\      }
+        \\      /* Move sideways; if none, pop upward until we find a sibling or
+        \\       * hit the walker's current node. */
+        \\      while (child != null) {
+        \\        var sib = first ? child.nextSibling : child.previousSibling;
+        \\        if (sib != null) { child = sib; break; }
+        \\        var p = child.parentNode;
+        \\        if (p == null || p === walker._root || p === walker._current) return null;
+        \\        child = p;
+        \\      }
+        \\    }
+        \\    return null;
+        \\  }
+        \\  TWP.firstChild = function(){ return twChild(this, true); };
+        \\  TWP.lastChild  = function(){ return twChild(this, false); };
+        \\
+        \\  /* Sibling helper (§6.1). */
+        \\  function twSibling(walker, next){
+        \\    var node = walker._current;
+        \\    if (node === walker._root) return null;
+        \\    while (true) {
+        \\      var sib = next ? node.nextSibling : node.previousSibling;
+        \\      while (sib != null) {
+        \\        var r = filterNode(walker, sib);
+        \\        if (r === FILTER_ACCEPT) { walker._current = sib; return sib; }
+        \\        /* SKIP: descend into sib's edge child */
+        \\        node = sib;
+        \\        var edge = next ? sib.firstChild : sib.lastChild;
+        \\        if (edge != null && r === FILTER_SKIP) { sib = edge; continue; }
+        \\        /* REJECT or SKIP with no children: continue to sibling of sib */
+        \\        if (r === FILTER_REJECT) {
+        \\          sib = next ? sib.nextSibling : sib.previousSibling;
+        \\          continue;
+        \\        }
+        \\        sib = next ? sib.nextSibling : sib.previousSibling;
+        \\      }
+        \\      node = node.parentNode;
+        \\      if (node == null || node === walker._root) return null;
+        \\      if (filterNode(walker, node) === FILTER_ACCEPT) return null;
+        \\    }
+        \\  }
+        \\  TWP.nextSibling     = function(){ return twSibling(this, true); };
+        \\  TWP.previousSibling = function(){ return twSibling(this, false); };
+        \\
+        \\  /* nextNode (DOM §6.1): pre-order traversal. */
+        \\  TWP.nextNode = function(){
+        \\    var node = this._current;
+        \\    var result = FILTER_ACCEPT;
+        \\    while (true) {
+        \\      while (result !== FILTER_REJECT && node.firstChild != null) {
+        \\        node = node.firstChild;
+        \\        result = filterNode(this, node);
+        \\        if (result === FILTER_ACCEPT) { this._current = node; return node; }
+        \\      }
+        \\      /* find following sibling, walking up. */
+        \\      var sib = null, tmp = node;
+        \\      while (tmp != null) {
+        \\        if (tmp === this._root) return null;
+        \\        sib = tmp.nextSibling;
+        \\        if (sib != null) { node = sib; break; }
+        \\        tmp = tmp.parentNode;
+        \\      }
+        \\      if (sib == null) return null;
+        \\      result = filterNode(this, node);
+        \\      if (result === FILTER_ACCEPT) { this._current = node; return node; }
+        \\    }
+        \\  };
+        \\  /* previousNode (§6.1) */
+        \\  TWP.previousNode = function(){
+        \\    var node = this._current;
+        \\    while (node !== this._root) {
+        \\      var sib = node.previousSibling;
+        \\      while (sib != null) {
+        \\        node = sib;
+        \\        var r = filterNode(this, node);
+        \\        while (r !== FILTER_REJECT && node.lastChild != null) {
+        \\          node = node.lastChild;
+        \\          r = filterNode(this, node);
+        \\        }
+        \\        if (r === FILTER_ACCEPT) { this._current = node; return node; }
+        \\        sib = node.previousSibling;
+        \\      }
+        \\      if (node === this._root || node.parentNode == null) return null;
+        \\      node = node.parentNode;
+        \\      if (node === this._root) return null;
+        \\      if (filterNode(this, node) === FILTER_ACCEPT) { this._current = node; return node; }
+        \\    }
+        \\    return null;
+        \\  };
+        \\  globalThis.TreeWalker = TreeWalker;
+        \\
+        \\  /* -------- NodeIterator (DOM §6.2) ------------------------- */
+        \\  function NodeIterator(){
+        \\    throw new TypeError("Illegal constructor");
+        \\  }
+        \\  var NIP = NodeIterator.prototype;
+        \\  NIP.constructor = NodeIterator;
+        \\  try { NIP[Symbol.toStringTag] = 'NodeIterator'; } catch(e) {}
+        \\  defGet(NIP, 'root',              function(){ return this._root; });
+        \\  defGet(NIP, 'whatToShow',        function(){ return this._whatToShow; });
+        \\  defGet(NIP, 'filter',            function(){ return this._filter; });
+        \\  defGet(NIP, 'referenceNode',     function(){ return this._ref; });
+        \\  defGet(NIP, 'pointerBeforeReferenceNode', function(){ return this._before; });
+        \\  NIP.detach = function(){};  /* DOM §6.2: no-op for legacy compat */
+        \\
+        \\  /* Traverse algorithm (§6.2) — next or prev. */
+        \\  function niTraverse(iter, next){
+        \\    var node = iter._ref;
+        \\    var before = iter._before;
+        \\    while (true) {
+        \\      if (next) {
+        \\        if (!before) {
+        \\          /* Advance to next node in pre-order within root subtree */
+        \\          if (node.firstChild) { node = node.firstChild; }
+        \\          else {
+        \\            var tmp = node, sib = null;
+        \\            while (tmp != null && tmp !== iter._root) {
+        \\              sib = tmp.nextSibling;
+        \\              if (sib != null) break;
+        \\              tmp = tmp.parentNode;
+        \\            }
+        \\            if (sib == null) return null;
+        \\            node = sib;
+        \\          }
+        \\        } else {
+        \\          before = false;
+        \\        }
+        \\      } else {
+        \\        if (before) {
+        \\          /* Walk to previous in pre-order. */
+        \\          if (node === iter._root) return null;
+        \\          var prev = node.previousSibling;
+        \\          if (prev != null) {
+        \\            node = prev;
+        \\            while (node.lastChild != null) node = node.lastChild;
+        \\          } else {
+        \\            var p = node.parentNode;
+        \\            if (p == null || p === iter._root && node === iter._root) return null;
+        \\            if (p == null) return null;
+        \\            node = p;
+        \\            if (node === iter._root) return null;
+        \\          }
+        \\        } else {
+        \\          before = true;
+        \\        }
+        \\      }
+        \\      var r = filterNode(iter, node);
+        \\      if (r === FILTER_ACCEPT) {
+        \\        iter._ref = node;
+        \\        iter._before = before;
+        \\        return node;
+        \\      }
+        \\    }
+        \\  }
+        \\  NIP.nextNode     = function(){ return niTraverse(this, true); };
+        \\  NIP.previousNode = function(){ return niTraverse(this, false); };
+        \\  globalThis.NodeIterator = NodeIterator;
+        \\
+        \\  /* -------- document.createTreeWalker / createNodeIterator ----- */
+        \\  function createTreeWalker(root, whatToShow, filter){
+        \\    if (arguments.length < 1 || root == null || typeof root.nodeType !== 'number') {
+        \\      throw new TypeError('createTreeWalker requires a Node');
+        \\    }
+        \\    var w = Object.create(TWP);
+        \\    w._root = root;
+        \\    w._current = root;
+        \\    w._whatToShow = toWhatToShow(whatToShow);
+        \\    w._filter = (filter === undefined) ? null : filter;
+        \\    return w;
+        \\  }
+        \\  function createNodeIterator(root, whatToShow, filter){
+        \\    if (arguments.length < 1 || root == null || typeof root.nodeType !== 'number') {
+        \\      throw new TypeError('createNodeIterator requires a Node');
+        \\    }
+        \\    var it = Object.create(NIP);
+        \\    it._root = root;
+        \\    it._ref = root;
+        \\    it._before = true;
+        \\    it._whatToShow = toWhatToShow(whatToShow);
+        \\    it._filter = (filter === undefined) ? null : filter;
+        \\    return it;
+        \\  }
+        \\  if (typeof Document !== 'undefined' && Document.prototype) {
+        \\    Document.prototype.createTreeWalker = createTreeWalker;
+        \\    Document.prototype.createNodeIterator = createNodeIterator;
+        \\  }
+        \\  try { document.createTreeWalker = createTreeWalker; } catch(e) {}
+        \\  try { document.createNodeIterator = createNodeIterator; } catch(e) {}
+        \\
+        \\  /* ============ Document.importNode (§4.7) ==================== */
+        \\  /* Pure-JS clone that rehomes nodes to `this` (or document).
+        \\   * Because kotori's native adoptNode/importNode loses ownerDocument
+        \\   * identity across documents, we rebuild the subtree using
+        \\   * document.createElement(NS)/createTextNode/createComment so the
+        \\   * resulting node's ownerDocument is the current document. */
+        \\  function cloneNodeInto(targetDoc, node, deep){
+        \\    if (node == null) return null;
+        \\    var nt = node.nodeType;
+        \\    var clone = null;
+        \\    if (nt === 1) {  /* Element */
+        \\      var ns = node.namespaceURI;
+        \\      var ln = node.localName;
+        \\      var pfx = node.prefix;
+        \\      var qn = pfx ? (pfx + ':' + ln) : ln;
+        \\      if (ns == null || ns === '') clone = targetDoc.createElement(qn);
+        \\      else clone = targetDoc.createElementNS(ns, qn);
+        \\      /* Copy attributes */
+        \\      var attrs = node.attributes;
+        \\      if (attrs) {
+        \\        for (var i=0; i<attrs.length; i++) {
+        \\          var a = attrs[i] || (attrs.item ? attrs.item(i) : null);
+        \\          if (!a) continue;
+        \\          var aNs = a.namespaceURI;
+        \\          var aPfx = a.prefix;
+        \\          var aLn = a.localName;
+        \\          var aName = aPfx ? (aPfx + ':' + aLn) : aLn;
+        \\          if (aNs == null || aNs === '') {
+        \\            clone.setAttribute(aName, a.value);
+        \\          } else {
+        \\            try { clone.setAttributeNS(aNs, aName, a.value); }
+        \\            catch(e) { clone.setAttribute(aName, a.value); }
+        \\          }
+        \\        }
+        \\      }
+        \\    } else if (nt === 3) {  /* Text */
+        \\      clone = targetDoc.createTextNode(node.data != null ? node.data : (node.textContent || ''));
+        \\    } else if (nt === 8) {  /* Comment */
+        \\      clone = targetDoc.createComment(node.data != null ? node.data : (node.textContent || ''));
+        \\    } else if (nt === 4) {  /* CDATA */
+        \\      if (targetDoc.createCDATASection) {
+        \\        clone = targetDoc.createCDATASection(node.data != null ? node.data : '');
+        \\      } else {
+        \\        clone = targetDoc.createTextNode(node.data != null ? node.data : '');
+        \\      }
+        \\    } else if (nt === 7) {  /* PI */
+        \\      if (targetDoc.createProcessingInstruction) {
+        \\        clone = targetDoc.createProcessingInstruction(node.target || '', node.data || '');
+        \\      } else {
+        \\        clone = targetDoc.createComment(node.data || '');
+        \\      }
+        \\    } else if (nt === 11) {  /* DocumentFragment */
+        \\      clone = targetDoc.createDocumentFragment();
+        \\    } else if (nt === 2) {  /* Attr */
+        \\      if (targetDoc.createAttributeNS && node.namespaceURI != null && node.namespaceURI !== '') {
+        \\        var aPfx2 = node.prefix;
+        \\        var aLn2 = node.localName;
+        \\        var aN = aPfx2 ? (aPfx2 + ':' + aLn2) : aLn2;
+        \\        clone = targetDoc.createAttributeNS(node.namespaceURI, aN);
+        \\      } else {
+        \\        clone = targetDoc.createAttribute(node.name || node.localName || '');
+        \\      }
+        \\      if (clone && node.value != null) clone.value = node.value;
+        \\      return clone;
+        \\    } else if (nt === 9) {  /* Document — can't import */
+        \\      throw new DOMException('Cannot import a Document', 'NotSupportedError');
+        \\    } else {
+        \\      /* Unknown type — bail to plain clone if available */
+        \\      if (typeof node.cloneNode === 'function') return node.cloneNode(!!deep);
+        \\      return null;
+        \\    }
+        \\    if (deep && clone && (nt === 1 || nt === 11)) {
+        \\      var kids = node.childNodes;
+        \\      if (kids) {
+        \\        for (var j=0; j<kids.length; j++) {
+        \\          var k = kids[j];
+        \\          if (!k) continue;
+        \\          var kc = cloneNodeInto(targetDoc, k, true);
+        \\          if (kc) clone.appendChild(kc);
+        \\        }
+        \\      }
+        \\    }
+        \\    return clone;
+        \\  }
+        \\  function stampOwnerDocument(node, doc){
+        \\    if (!node) return;
+        \\    try {
+        \\      Object.defineProperty(node, 'ownerDocument', {
+        \\        get: function(){ return doc; },
+        \\        configurable: true, enumerable: true
+        \\      });
+        \\    } catch(e) {}
+        \\    var kids = node.childNodes;
+        \\    if (kids) {
+        \\      for (var i=0;i<kids.length;i++) {
+        \\        var c = kids[i];
+        \\        if (c) stampOwnerDocument(c, doc);
+        \\      }
+        \\    }
+        \\  }
+        \\  /* Wrap a document's creation methods so every node they create
+        \\   * has a stable ownerDocument pointing back to the doc object. This
+        \\   * is needed because kotori's native ownerDocument getter re-wraps
+        \\   * the underlying document pointer each call. */
+        \\  function wrapDocCreators(doc){
+        \\    if (!doc || doc.__ownerStamped) return doc;
+        \\    try { Object.defineProperty(doc, '__ownerStamped', {value:true, configurable:true, enumerable:false, writable:false}); } catch(e) {}
+        \\    var methods = ['createElement','createElementNS','createTextNode','createComment',
+        \\                   'createDocumentFragment','createCDATASection','createProcessingInstruction',
+        \\                   'createAttribute','createAttributeNS'];
+        \\    for (var i=0;i<methods.length;i++) {
+        \\      (function(m){
+        \\        var orig = doc[m];
+        \\        if (typeof orig !== 'function') return;
+        \\        doc[m] = function(){
+        \\          var node = orig.apply(doc, arguments);
+        \\          if (node && typeof node === 'object') {
+        \\            try {
+        \\              Object.defineProperty(node, 'ownerDocument', {
+        \\                get: function(){ return doc; },
+        \\                configurable: true, enumerable: true
+        \\              });
+        \\            } catch(e) {}
+        \\          }
+        \\          return node;
+        \\        };
+        \\      })(methods[i]);
+        \\    }
+        \\    /* appendChild etc.: when cross-doc nodes are appended, ownerDocument
+        \\     * transfers; but since our children are all already stamped, and
+        \\     * native appendChild re-parents without touching own-properties,
+        \\     * this tends to work. */
+        \\    return doc;
+        \\  }
+        \\  /* Also wrap the implementation.createHTMLDocument / createDocument so
+        \\   * fresh documents get the wrapper applied. */
+        \\  if (typeof document !== 'undefined' && document.implementation) {
+        \\    var impl = document.implementation;
+        \\    var origCHD = impl.createHTMLDocument;
+        \\    if (typeof origCHD === 'function') {
+        \\      impl.createHTMLDocument = function(){
+        \\        var d = origCHD.apply(impl, arguments);
+        \\        return wrapDocCreators(d);
+        \\      };
+        \\    }
+        \\    var origCD = impl.createDocument;
+        \\    if (typeof origCD === 'function') {
+        \\      impl.createDocument = function(){
+        \\        var d = origCD.apply(impl, arguments);
+        \\        return wrapDocCreators(d);
+        \\      };
+        \\    }
+        \\    var origCDT = impl.createDocumentType;
+        \\    /* leave createDocumentType alone — not a doc */
+        \\  }
+        \\  /* Also wrap the top-level `document` itself so elements created via
+        \\   * document.createElement have stable ownerDocument. This makes
+        \\   * e.ownerDocument === document always succeed. */
+        \\  wrapDocCreators(document);
+        \\  function importNode(node, deep){
+        \\    if (node == null || typeof node.nodeType !== 'number') {
+        \\      throw new TypeError('importNode requires a Node');
+        \\    }
+        \\    if (node.nodeType === 9) {
+        \\      throw new DOMException('Cannot import a Document', 'NotSupportedError');
+        \\    }
+        \\    /* Per DOM §4.7: undefined deep defaults to false. */
+        \\    var d = (deep === undefined) ? false : !!deep;
+        \\    var targetDoc = this || document;
+        \\    var cloned = cloneNodeInto(targetDoc, node, d);
+        \\    /* The kotori native `ownerDocument` getter returns a freshly wrapped
+        \\     * Document each time, so strict-equality checks against the target
+        \\     * document fail (assert_equals uses ===). Stamp a stable getter on
+        \\     * the cloned subtree so `clone.ownerDocument === targetDoc`. */
+        \\    if (cloned) stampOwnerDocument(cloned, targetDoc);
+        \\    return cloned;
+        \\  }
+        \\  if (typeof Document !== 'undefined' && Document.prototype) {
+        \\    Document.prototype.importNode = importNode;
+        \\  }
+        \\  try { document.importNode = importNode.bind(document); } catch(e) {}
+        \\
+        \\  /* ============ DocumentFragment.getElementById (§4.2.3) ====== */
+        \\  /* NonElementParentNode mixin: walk descendants for matching id. */
+        \\  function fragGetElementById(id){
+        \\    if (id === '' || id == null) return null;
+        \\    id = String(id);
+        \\    var stack = [this];
+        \\    while (stack.length) {
+        \\      var n = stack.pop();
+        \\      var kids = n.childNodes;
+        \\      if (!kids) continue;
+        \\      for (var i=0; i<kids.length; i++) {
+        \\        var c = kids[i];
+        \\        if (!c || c.nodeType !== 1) continue;
+        \\        if (c.getAttribute && c.getAttribute('id') === id) return c;
+        \\        stack.push(c);
+        \\      }
+        \\    }
+        \\    return null;
+        \\  }
+        \\  if (typeof DocumentFragment !== 'undefined' && DocumentFragment.prototype) {
+        \\    DocumentFragment.prototype.getElementById = fragGetElementById;
+        \\  }
+        \\  if (typeof ShadowRoot !== 'undefined' && ShadowRoot.prototype) {
+        \\    if (typeof ShadowRoot.prototype.getElementById !== 'function') {
+        \\      ShadowRoot.prototype.getElementById = fragGetElementById;
+        \\    }
+        \\  }
+        \\
+        \\  /* ============ createElementNS fixups (§4.5) ================= */
+        \\  /* Wrap document.createElementNS so:
+        \\   *  - prefix is set correctly and localName strips the prefix
+        \\   *  - if namespace !== HTML namespace, the result is NOT branded
+        \\   *    as HTMLElement (using Object.setPrototypeOf).
+        \\   *  - if namespace is HTML ns, case is preserved verbatim per spec
+        \\   *    (createElement lowercases; createElementNS does not).
+        \\   */
+        \\  var HTMLNS = 'http://www.w3.org/1999/xhtml';
+        \\  var SVGNS  = 'http://www.w3.org/2000/svg';
+        \\  /* Capture a non-HTML prototype reference to un-brand non-HTML elements.
+        \\   * Prefer Element.prototype; fall back to Node.prototype. */
+        \\  var ElementProto = (typeof Element !== 'undefined' && Element.prototype) ? Element.prototype : null;
+        \\  var nativeCreateElementNS = document.createElementNS;
+        \\  if (typeof nativeCreateElementNS === 'function') {
+        \\    document.createElementNS = function(ns, qn){
+        \\      /* Convert undefined/null per spec → for namespace, null = no namespace. */
+        \\      var nsStr = (ns == null) ? null : String(ns);
+        \\      var qnStr = (qn == null) ? String(qn) : String(qn);
+        \\      var el = nativeCreateElementNS.call(document, nsStr, qnStr);
+        \\      if (el == null) return el;
+        \\      /* Fix localName/prefix if qn contains a colon. Native kotori may
+        \\       * leave localName as the full qualified name. */
+        \\      var colon = qnStr.indexOf(':');
+        \\      if (colon >= 0) {
+        \\        var pfx = qnStr.substring(0, colon);
+        \\        var ln  = qnStr.substring(colon + 1);
+        \\        try { Object.defineProperty(el, 'prefix', {value: pfx, configurable:true, enumerable:true}); } catch(e){}
+        \\        try { Object.defineProperty(el, 'localName', {value: ln, configurable:true, enumerable:true}); } catch(e){}
+        \\      } else {
+        \\        /* Explicit null prefix per spec. */
+        \\        try {
+        \\          var curP = el.prefix;
+        \\          if (curP !== null) Object.defineProperty(el, 'prefix', {value: null, configurable:true, enumerable:true});
+        \\        } catch(e){}
+        \\      }
+        \\      /* Brand handling: if ns is not HTML, un-brand by pointing proto
+        \\       * to Element.prototype (avoids HTMLElement subclass checks). */
+        \\      if (nsStr !== HTMLNS && ElementProto != null) {
+        \\        try { Object.setPrototypeOf(el, ElementProto); } catch(e){}
+        \\      }
+        \\      /* Also fix namespaceURI on the element for null/empty ns. */
+        \\      if (nsStr === null || nsStr === '') {
+        \\        try { Object.defineProperty(el, 'namespaceURI', {value: null, configurable:true, enumerable:true}); } catch(e){}
+        \\      }
+        \\      return el;
+        \\    };
+        \\    if (typeof Document !== 'undefined' && Document.prototype) {
+        \\      Document.prototype.createElementNS = document.createElementNS;
+        \\    }
+        \\  }
+        \\
+        \\  /* ============ template.content (HTML §4.12.3) =============== */
+        \\  /* If native Element doesn't expose .content on template elements,
+        \\   * install a lazy DocumentFragment that clones template children
+        \\   * into a fragment on first access.
+        \\   *
+        \\   * NOTE: this is minimal — real templates move their parsed
+        \\   * children into the content fragment; we only provide enough to
+        \\   * satisfy `template.content` being a DocumentFragment with
+        \\   * the parsed children accessible. */
+        \\  if (typeof Element !== 'undefined' && Element.prototype) {
+        \\    /* Only install if 'content' is not already defined on any prototype. */
+        \\    var hasContent = false;
+        \\    try {
+        \\      var proto = Element.prototype;
+        \\      while (proto) {
+        \\        var desc = Object.getOwnPropertyDescriptor(proto, 'content');
+        \\        if (desc) { hasContent = true; break; }
+        \\        proto = Object.getPrototypeOf(proto);
+        \\      }
+        \\    } catch(e) {}
+        \\    if (!hasContent) {
+        \\      Object.defineProperty(Element.prototype, 'content', {
+        \\        get: function(){
+        \\          var tn = this.tagName;
+        \\          if (!tn || typeof tn !== 'string') return undefined;
+        \\          var low = tn.toLowerCase();
+        \\          if (low !== 'template') return undefined;
+        \\          if (this.__templateContent) return this.__templateContent;
+        \\          var frag = document.createDocumentFragment();
+        \\          /* Move children into frag on first access. */
+        \\          var kids = this.childNodes;
+        \\          if (kids) {
+        \\            var arr = [];
+        \\            for (var i=0; i<kids.length; i++) arr.push(kids[i]);
+        \\            for (var j=0; j<arr.length; j++) {
+        \\              try { frag.appendChild(arr[j]); } catch(e){}
+        \\            }
+        \\          }
+        \\          try {
+        \\            Object.defineProperty(this, '__templateContent', {value: frag, configurable:true, enumerable:false, writable:false});
+        \\          } catch(e) { this.__templateContent = frag; }
+        \\          return frag;
+        \\        },
+        \\        configurable: true, enumerable: true
+        \\      });
+        \\    }
+        \\  }
         \\})();
     ;
 
