@@ -1749,9 +1749,18 @@ fn nativeImportNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror
 // ══════════════════════════════════════════════════════════════════════
 
 fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-    _ = ctx;
     if (args.len == 0) return JsValue.null_val;
     const parent = getThisNodeOrFragment(this) orelse return JsValue.null_val;
+    // DOM §4.2.2 pre-insert validation: parent must be Document, DocumentFragment, or Element.
+    // CharacterData nodes (Text=3, Comment=8, ProcessingInstruction=7) cannot have children.
+    const nt = nodeType(parent);
+    if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT or
+        nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION)
+    {
+        const vm = VM.vmFromCtx(ctx);
+        vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+        return JsValue.undefined_val;
+    }
     const child = getArgNode(args[0]) orelse return JsValue.null_val;
     dom_b.lxb_dom_node_remove(child);
     dom_b.lxb_dom_node_insert_child(parent, child);
@@ -2414,6 +2423,279 @@ fn nativeCommentConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) 
     return wrapNode(vm, node) orelse JsValue.null_val;
 }
 
+// ======================================================================
+// Event system constructors (DOM 2.5 / 2.7)
+// ======================================================================
+
+/// DOM 2.7: new EventTarget() -- creates a standalone event target.
+/// Uses the JsObject pointer itself as the identity key in g_listeners.
+fn nativeEventTargetConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const obj = try vm.createObj(.{});
+    // Store self-pointer as _et_ptr so addEventListener can identify standalone targets
+    const et_ptr_sid = try vm.pool.intern("_et_ptr");
+    obj.setProperty(vm.allocator, et_ptr_sid, JsValue.initNumber(@floatFromInt(@intFromPtr(obj)))) catch {};
+    return JsValue.initObject(obj);
+}
+
+/// Helper: resolve the event target pointer from `this` for addEventListener/removeEventListener.
+/// Returns the node_ptr used as identity key in g_listeners.
+fn resolveEventTarget(vm: *VM, this: JsValue) ?*anyopaque {
+    if (!this.isObject()) return null;
+    const obj = this.asJsObject();
+    // Window proxy -> sentinel
+    if (obj.obj_type == .window_proxy)
+        return @ptrCast(&g_window_sentinel);
+    // DOM node
+    if (obj.obj_type == .dom_node)
+        return @ptrCast(@alignCast(obj.data.dom_node));
+    // Standalone EventTarget -- use the _et_ptr stored during construction
+    const et_sid = vm.pool.intern("_et_ptr") catch return null;
+    if (obj.getProperty(et_sid)) |ptr_val| {
+        if (ptr_val.isNumber()) {
+            const addr: usize = @intFromFloat(ptr_val.toNumber());
+            if (addr != 0) return @ptrFromInt(addr);
+        }
+    }
+    return null;
+}
+
+/// DOM 2.5: new Event(type, eventInitDict) constructor.
+fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const obj = try vm.createObj(.{});
+
+    // type argument (required by spec but we tolerate missing)
+    var type_str: []const u8 = "";
+    if (args.len > 0 and args[0].isString()) {
+        type_str = vm.pool.get(args[0].asStringId()) orelse "";
+    }
+    const type_sid = try vm.pool.intern("type");
+    obj.setProperty(vm.allocator, type_sid, JsValue.initString(try vm.pool.intern(type_str))) catch {};
+
+    // eventInitDict
+    var bubbles = false;
+    var cancelable = false;
+    var composed = false;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("bubbles") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| bubbles = v.isTruthy();
+        }
+        if (vm.pool.intern("cancelable") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| cancelable = v.isTruthy();
+        }
+        if (vm.pool.intern("composed") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| composed = v.isTruthy();
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("bubbles"), JsValue.initBool(bubbles)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("cancelable"), JsValue.initBool(cancelable)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("composed"), JsValue.initBool(composed)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("defaultPrevented"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_stopImmediate"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("isTrusted"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("eventPhase"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("timeStamp"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("currentTarget"), JsValue.null_val) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("srcElement"), JsValue.null_val) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(true)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_initialized"), JsValue.initBool(true)) catch {};
+    // cancelBubble getter/setter via accessor descriptor
+    const cb_get_fn = try vm.createObj(.{ .obj_type = .native_function });
+    cb_get_fn.data = .{ .native_fn = &nativeCancelBubbleGet };
+    const cb_set_fn = try vm.createObj(.{ .obj_type = .native_function });
+    cb_set_fn.data = .{ .native_fn = &nativeCancelBubbleSet };
+    const cb_sid = try vm.pool.intern("cancelBubble");
+    if (obj.descriptors == null)
+        obj.descriptors = .{};
+    try obj.descriptors.?.put(vm.allocator, cb_sid, .{ .accessor = .{
+        .get = JsValue.initObject(cb_get_fn),
+        .set = JsValue.initObject(cb_set_fn),
+        .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+    } });
+
+    return JsValue.initObject(obj);
+}
+
+/// DOM 2.5: new CustomEvent(type, eventInitDict) constructor.
+fn nativeCustomEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    // Create as Event first, then add detail
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    // detail from eventInitDict
+    var detail = JsValue.null_val;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("detail") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| detail = v;
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("detail"), detail) catch {};
+
+    return ev_val;
+}
+
+/// Event.prototype.stopPropagation
+fn nativeStopPropagation(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (this.isObject()) {
+        const vm = VM.vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(true)) catch {};
+        obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(true)) catch {};
+    }
+    return JsValue.undefined_val;
+}
+
+/// Event.prototype.stopImmediatePropagation
+fn nativeStopImmediatePropagation(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (this.isObject()) {
+        const vm = VM.vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(true)) catch {};
+        obj.setProperty(vm.allocator, try vm.pool.intern("_stopImmediate"), JsValue.initBool(true)) catch {};
+        obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(true)) catch {};
+    }
+    return JsValue.undefined_val;
+}
+
+/// Event.prototype.preventDefault
+fn nativePreventDefault(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (this.isObject()) {
+        const vm = VM.vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        // Check cancelable first
+        if (vm.pool.intern("cancelable") catch null) |sid| {
+            if (obj.getProperty(sid)) |v| {
+                if (!v.isTruthy()) return JsValue.undefined_val;
+            }
+        }
+        obj.setProperty(vm.allocator, try vm.pool.intern("defaultPrevented"), JsValue.initBool(true)) catch {};
+        obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(false)) catch {};
+    }
+    return JsValue.undefined_val;
+}
+
+/// Event.prototype.initEvent(type, bubbles, cancelable) -- legacy
+fn nativeInitEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+
+    // Short-circuit if dispatching
+    if (vm.pool.intern("_dispatching") catch null) |sid| {
+        if (obj.getProperty(sid)) |v| {
+            if (v.isTruthy()) return JsValue.undefined_val;
+        }
+    }
+
+    if (args.len >= 1 and args[0].isString()) {
+        const t = vm.pool.get(args[0].asStringId()) orelse "";
+        obj.setProperty(vm.allocator, try vm.pool.intern("type"), JsValue.initString(try vm.pool.intern(t))) catch {};
+    }
+    const bubbles = if (args.len >= 2) args[1].isTruthy() else false;
+    const cancelable = if (args.len >= 3) args[2].isTruthy() else false;
+    obj.setProperty(vm.allocator, try vm.pool.intern("bubbles"), JsValue.initBool(bubbles)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("cancelable"), JsValue.initBool(cancelable)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("defaultPrevented"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_stopImmediate"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(false)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(true)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("_initialized"), JsValue.initBool(true)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("currentTarget"), JsValue.null_val) catch {};
+    return JsValue.undefined_val;
+}
+
+/// CustomEvent.prototype.initCustomEvent(type, bubbles, cancelable, detail) -- legacy
+fn nativeInitCustomEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+
+    // Short-circuit if dispatching
+    if (vm.pool.intern("_dispatching") catch null) |sid| {
+        if (obj.getProperty(sid)) |v| {
+            if (v.isTruthy()) return JsValue.undefined_val;
+        }
+    }
+
+    // Delegate to initEvent for the first 3 args
+    _ = try nativeInitEvent(ctx, this, args);
+
+    // detail (4th arg)
+    const detail = if (args.len >= 4) args[3] else JsValue.null_val;
+    obj.setProperty(vm.allocator, try vm.pool.intern("detail"), detail) catch {};
+    return JsValue.undefined_val;
+}
+
+/// Event.prototype.composedPath -- stub returning empty array
+fn nativeComposedPath(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const arr = try vm.createObj(.{ .obj_type = .array });
+    return JsValue.initObject(arr);
+}
+
+/// cancelBubble getter
+fn nativeCancelBubbleGet(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (this.isObject()) {
+        const vm = VM.vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        if (vm.pool.intern("_cancelBubble") catch null) |sid| {
+            if (obj.getProperty(sid)) |v| return v;
+        }
+    }
+    return JsValue.initBool(false);
+}
+
+/// cancelBubble setter
+fn nativeCancelBubbleSet(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (this.isObject() and args.len > 0 and args[0].isTruthy()) {
+        const vm = VM.vmFromCtx(ctx);
+        const obj = this.asJsObject();
+        obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(true)) catch {};
+        obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(true)) catch {};
+    }
+    return JsValue.undefined_val;
+}
+
+/// DOM 2.9: removeEventListener -- removes first matching (type, callback, capture) entry.
+/// Works for DOM nodes (via getThisNode) and standalone EventTargets (via _et_ptr).
+fn nativeRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
+    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    const callback = args[1];
+    const capture = if (args.len > 2 and args[2].isBool()) args[2].asBool() else false;
+
+    const target_ptr = resolveEventTarget(vm, this) orelse return JsValue.undefined_val;
+    const target_addr = @intFromPtr(target_ptr);
+
+    var i: usize = 0;
+    while (i < g_listeners.items.len) {
+        const entry = g_listeners.items[i];
+        if (@intFromPtr(entry.node_ptr) == target_addr and
+            std.mem.eql(u8, entry.event_type, event_type) and
+            entry.callback.bits == callback.bits and
+            entry.capture == capture)
+        {
+            g_alloc.free(entry.event_type);
+            _ = g_listeners.orderedRemove(i);
+            return JsValue.undefined_val;
+        }
+        i += 1;
+    }
+    return JsValue.undefined_val;
+}
+
+
 // ══════════════════════════════════════════════════════════════════════
 // Helpers — value extraction
 // ══════════════════════════════════════════════════════════════════════
@@ -2861,7 +3143,7 @@ fn nativeReplaceData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
 fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
-    if (args.len < 2) return JsValue.undefined_val;
+    if (args.len < 2) return error.TypeError;
     const u16len = VM.utf16Len(info.text);
     const offset_cu = toUint32(args[0].toNumber());
     if (offset_cu > u16len) {
