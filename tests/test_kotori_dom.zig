@@ -1627,3 +1627,35 @@ test "el.attributes === el.attributes (identity cache, Layer 1D Task 3)" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 4: liveness — cached map reflects mutations on next read.
+test "NamedNodeMap liveness: length + named access update after setAttribute (Layer 1D Task 4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var m = el.attributes;
+        \\var before = m.length;
+        \\el.setAttribute('id', 'x');
+        \\before === 0 && m.length === 1 && m['id'].value === 'x';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap liveness: length drops after removeAttribute (Layer 1D Task 4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var m = el.attributes;
+        \\var before = m.length;
+        \\el.removeAttribute('id');
+        \\before === 1 && m.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

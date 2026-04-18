@@ -3138,6 +3138,9 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     } else {
         _ = dom_b.lxb_dom_element_set_attribute(elem, n.ptr, n.len, v.ptr, v.len);
     }
+    // DOM §4.9.2 — NamedNodeMap is live. Bump the per-element version so
+    // any cached `el.attributes` map refreshes its snapshot on next read.
+    bumpElemAttrVersion(elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -3165,6 +3168,8 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     } else {
         _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
     }
+    // DOM §4.9.2 NamedNodeMap live-map version bump.
+    bumpElemAttrVersion(elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -3197,6 +3202,8 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         invalidateAttrWrapper(a);
     }
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
+    // DOM §4.9.2 NamedNodeMap live-map version bump.
+    bumpElemAttrVersion(elem);
     return JsValue.undefined_val;
 }
 
@@ -5216,6 +5223,8 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
         // Remove attribute
         _ = dom_b.lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
+        // DOM §4.9.2 NamedNodeMap live-map version bump.
+        bumpElemAttrVersion(elem);
         setDomDirty();
         return JsValue.initBool(false);
     } else {
@@ -5225,6 +5234,8 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
         // Add attribute with empty value
         _ = dom_b.lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
+        // DOM §4.9.2 NamedNodeMap live-map version bump.
+        bumpElemAttrVersion(elem);
         setDomDirty();
         return JsValue.initBool(true);
     }
