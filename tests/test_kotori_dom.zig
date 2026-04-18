@@ -1749,3 +1749,68 @@ test "NamedNodeMap.removeNamedItemNS throws NotFoundError when absent" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 7: setNamedItem + setNamedItemNS.
+test "NamedNodeMap.setNamedItem: append returns null (Layer 1D Task 7)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var a = document.createAttribute('id'); a.value = 'x';
+        \\var prev = el.attributes.setNamedItem(a);
+        \\prev === null && el.attributes.getNamedItem('id').value === 'x';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.setNamedItem: replace returns old Attr, clears its ownerElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'old');
+        \\var oldNode = el.attributes.getNamedItem('id');
+        \\var a = document.createAttribute('id'); a.value = 'new';
+        \\var ret = el.attributes.setNamedItem(a);
+        \\ret === oldNode &&
+        \\oldNode.ownerElement === null &&
+        \\el.attributes.getNamedItem('id').value === 'new';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.setNamedItem: idempotent when same Attr on same element" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.attributes.getNamedItem('id');
+        \\el.attributes.setNamedItem(a) === a;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.setNamedItem: InUseAttributeError for different element's Attr" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var a = document.createElement('div');
+        \\var b = document.createElement('div');
+        \\a.setAttribute('id', 'x');
+        \\var aAttr = a.attributes.getNamedItem('id');
+        \\var threw = false;
+        \\try { b.attributes.setNamedItem(aAttr); }
+        \\catch (e) { threw = e.name === 'InUseAttributeError'; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
