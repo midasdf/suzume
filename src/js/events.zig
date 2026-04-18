@@ -152,6 +152,12 @@ pub fn jsAddEventListener(
     var passive: bool = false;
     var passive_explicit: bool = false;
     var once: bool = false;
+    // Layer 2A — AbortSignal integration (DOM §2.7.1 step 5, §3.1).
+    // If an AbortSignal is supplied, we dup the signal + the abort-hook closure
+    // here so the resulting ListenerRecord can later feed them back to
+    // sig.removeEventListener('abort', handler) on manual removal.
+    var signal_dup: qjs.JSValue = quickjs.JS_UNDEFINED();
+    var abort_handler_dup: qjs.JSValue = quickjs.JS_UNDEFINED();
     if (argc >= 3) {
         if (args[2].tag == qjs.JS_TAG_OBJECT) {
             // Options object: {capture, passive, once}
@@ -181,14 +187,22 @@ pub fn jsAddEventListener(
                 const aborted = qjs.JS_GetPropertyStr(c, sig_val, "aborted");
                 defer qjs.JS_FreeValue(c, aborted);
                 if (qjs.JS_ToBool(c, aborted) > 0) return quickjs.JS_UNDEFINED();
-                // Register abort handler to remove the listener
-                const sig_js = "(function(sig,el,type,cb,cap){sig.addEventListener('abort',function(){el.removeEventListener(type,cb,cap);},{once:true});})";
+                // Register abort handler to remove the listener.
+                // DOM §2.7.1 step 5 + §3.1: the factory returns the inner
+                // handler so we can keep a reference and detach the abort
+                // step later via sig.removeEventListener('abort', h).
+                const sig_js = "(function(sig,el,type,cb,cap){var h=function(){el.removeEventListener(type,cb,cap);};sig.addEventListener('abort',h,{once:true});return h;})";
                 const sig_fn = qjs.JS_Eval(c, sig_js, sig_js.len, "<sig>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(sig_fn)) {
                     var sig_args = [5]qjs.JSValue{ sig_val, this_val, args[0], args[1], quickjs.JS_NewBool(capture) };
-                    const sig_r = qjs.JS_Call(c, sig_fn, quickjs.JS_UNDEFINED(), 5, &sig_args);
-                    qjs.JS_FreeValue(c, sig_r);
+                    const handler = qjs.JS_Call(c, sig_fn, quickjs.JS_UNDEFINED(), 5, &sig_args);
                     qjs.JS_FreeValue(c, sig_fn);
+                    if (!quickjs.JS_IsException(handler)) {
+                        signal_dup = qjs.JS_DupValue(c, sig_val);
+                        abort_handler_dup = handler; // transfer ownership (do not free)
+                    } else {
+                        qjs.JS_FreeValue(c, handler);
+                    }
                 }
             }
         } else {
@@ -229,6 +243,8 @@ pub fn jsAddEventListener(
         .capture = capture,
         .passive = passive,
         .once = once,
+        .signal_ref = signal_dup,
+        .abort_handler_ref = abort_handler_dup,
     };
 
     // Check if this is a window/document object (no opaque node)
@@ -254,8 +270,19 @@ pub fn jsAddEventListener(
                 break :blk (this_val.tag == gl.tag and this_val.u.ptr == gl.u.ptr);
             };
             if (!is_global) {
-                // JS-level node or standalone EventTarget: store listeners on the object
+                // JS-level node or standalone EventTarget: store listeners on the object.
+                // The ListenerRecord is discarded — release the dup'd callback + any
+                // abort-tracking refs so they do not leak. The JS-level path's abort
+                // hook is already installed on the signal via `sig.addEventListener`
+                // above; since we cannot detach it without carrying the handler, leave
+                // the polyfill entry in place (it fires `el.removeEventListener(...)`
+                // which lands in the JS-level remove path at :315+). Free the dup'd
+                // refs now.
                 qjs.JS_FreeValue(c, record.callback);
+                if (!quickjs.JS_IsUndefined(record.signal_ref)) {
+                    qjs.JS_FreeValue(c, record.signal_ref);
+                    qjs.JS_FreeValue(c, record.abort_handler_ref);
+                }
                 const js_code = "(function(el,type,cb,cap,once,pas){var k='__el_'+type+(cap?'\\x00c':'');var a=el[k]||[];for(var i=0;i<a.length;i++)if(a[i].fn===cb)return;a.push({fn:cb,once:once,passive:pas});el[k]=a;})";
                 const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<ael>", qjs.JS_EVAL_TYPE_GLOBAL);
                 if (!quickjs.JS_IsException(fn_val)) {
