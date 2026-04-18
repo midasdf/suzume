@@ -357,6 +357,15 @@ var g_doctype_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 var g_xml_doc_proto: ?*JsObject = null;
 var g_domparser_proto: ?*JsObject = null;
+// HTML/SVG/MathML interface prototypes (spec §3.5). Built in initDomBuiltins
+// BEFORE the bootstrap `doc_obj` wrap so that Task 7's applyInterfaceProto
+// invariant (g_html_protos != null) holds from the first wrapNode call.
+// All frozen post-build per HTML §4 prototype-chain immutability.
+var g_html_element_proto: ?*JsObject = null;
+var g_svg_element_proto: ?*JsObject = null;
+var g_mathml_element_proto: ?*JsObject = null;
+var g_html_protos: ?std.StringHashMap(*JsObject) = null;
+var g_svg_protos: ?std.StringHashMap(*JsObject) = null;
 /// Cached StringId for the `_ownerDoc` slot — avoids `pool.intern` on every
 /// `setNodeOwnerDoc` / `getNodeOwnerDoc` call (hot path: called from every
 /// wrapNode, every creator, and every ownerDocument getter).
@@ -514,12 +523,53 @@ pub fn deinit() void {
     // so we only need to drop the HashMap's own storage here.
     g_attr_wrappers.deinit(g_alloc);
     g_attr_wrappers = .{};
+    // Interface prototype maps (HTML/SVG). Values are JsObjects owned by the
+    // VM arena, so we only drop the HashMap's own storage. Roots (HTMLElement /
+    // SVGElement / MathMLElement prototypes) are likewise arena-owned.
+    if (g_html_protos) |*m| {
+        m.deinit();
+        g_html_protos = null;
+    }
+    if (g_svg_protos) |*m| {
+        m.deinit();
+        g_svg_protos = null;
+    }
+    g_html_element_proto = null;
+    g_svg_element_proto = null;
+    g_mathml_element_proto = null;
     // Shadow DOM tree-scope state is per-Document (DOM §4.8); clear it so
     // freed lxb node pointers reused by the next document don't inherit
     // stale scope ids or impersonate old shadow roots.
     sr.reset();
     g_document = null;
     dom_dirty = false;
+}
+
+// ── Interface prototype accessors (Task 5 / spec §3.5) ──
+// Tests live in a separate compilation unit and cannot read file-scoped
+// `var`s directly. These thin accessors give tests (and Task 7's
+// applyInterfaceProto) a stable public surface.
+
+pub fn getHtmlElementProto() ?*JsObject {
+    return g_html_element_proto;
+}
+
+pub fn getSvgElementProto() ?*JsObject {
+    return g_svg_element_proto;
+}
+
+pub fn getMathMLElementProto() ?*JsObject {
+    return g_mathml_element_proto;
+}
+
+pub fn getHtmlProto(name: []const u8) ?*JsObject {
+    const m = g_html_protos orelse return null;
+    return m.get(name);
+}
+
+pub fn getSvgProto(name: []const u8) ?*JsObject {
+    const m = g_svg_protos orelse return null;
+    return m.get(name);
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -622,6 +672,67 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "scroll", &nativeScroll);
     try vm.registerNativeMethod(ep, "scrollTo", &nativeScrollTo);
     try vm.registerNativeMethod(ep, "scrollBy", &nativeScrollBy);
+
+    // ── HTML/SVG/MathML interface prototype hierarchy (spec §3.5) ──
+    // MUST be built BEFORE the `doc_obj` wrap below so Task 7's
+    // applyInterfaceProto invariant (g_html_protos != null) holds from
+    // the very first wrapNode call.
+    const iface_mod = @import("kotori_html_interfaces.zig");
+
+    // HTMLElement.prototype → Element.prototype
+    g_html_element_proto = try vm.createObj(.{});
+    g_html_element_proto.?.prototype = ep;
+
+    // SVGElement.prototype → Element.prototype
+    g_svg_element_proto = try vm.createObj(.{});
+    g_svg_element_proto.?.prototype = ep;
+
+    // MathMLElement.prototype → Element.prototype
+    g_mathml_element_proto = try vm.createObj(.{});
+    g_mathml_element_proto.?.prototype = ep;
+
+    // Per-subclass HTML prototypes → HTMLElement.prototype
+    var html_map = std.StringHashMap(*JsObject).init(vm.allocator);
+    try html_map.put("HTMLElement", g_html_element_proto.?);
+    for (iface_mod.html_unique_ifaces) |name| {
+        if (std.mem.eql(u8, name, "HTMLElement")) continue; // already inserted
+        const proto = try vm.createObj(.{});
+        proto.prototype = g_html_element_proto.?;
+        try html_map.put(name, proto);
+    }
+    g_html_protos = html_map;
+
+    // Per-subclass SVG prototypes → SVGElement.prototype
+    var svg_map = std.StringHashMap(*JsObject).init(vm.allocator);
+    try svg_map.put("SVGElement", g_svg_element_proto.?);
+    for (iface_mod.svg_unique_ifaces) |name| {
+        if (std.mem.eql(u8, name, "SVGElement")) continue; // already inserted
+        const proto = try vm.createObj(.{});
+        proto.prototype = g_svg_element_proto.?;
+        try svg_map.put(name, proto);
+    }
+    g_svg_protos = svg_map;
+
+    // Freeze all interface prototypes — spec §3.5 point 6 / HTML §4
+    // prototype-chain immutability (spec correctness, not performance).
+    try g_html_element_proto.?.freeze(vm.allocator);
+    {
+        var it = g_html_protos.?.iterator();
+        while (it.next()) |entry| {
+            // HTMLElement root already frozen above; skip to avoid re-freeze.
+            if (entry.value_ptr.* == g_html_element_proto.?) continue;
+            try entry.value_ptr.*.freeze(vm.allocator);
+        }
+    }
+    try g_svg_element_proto.?.freeze(vm.allocator);
+    {
+        var it = g_svg_protos.?.iterator();
+        while (it.next()) |entry| {
+            if (entry.value_ptr.* == g_svg_element_proto.?) continue;
+            try entry.value_ptr.*.freeze(vm.allocator);
+        }
+    }
+    try g_mathml_element_proto.?.freeze(vm.allocator);
 
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });

@@ -1243,3 +1243,32 @@ test "setAttribute overwrites: cache invalidated, value reflects new" {
     const s = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("new", s);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Task 5: Interface prototype hierarchy (spec §3.5)
+// ══════════════════════════════════════════════════════════════════════
+
+test "HTMLDivElement.prototype chains to HTMLElement.prototype chains to Element.prototype" {
+    var ctx = try TestCtx.init("<html><body></body></html>", "null;");
+    defer ctx.deinit();
+    const div_proto = kotori_dom.getHtmlProto("HTMLDivElement") orelse return error.MissingDivProto;
+    const html_element_proto = kotori_dom.getHtmlElementProto() orelse return error.MissingHtmlElementProto;
+    try std.testing.expectEqual(html_element_proto, div_proto.prototype.?);
+    try std.testing.expectEqual(ctx.vm.element_proto.?, html_element_proto.prototype.?);
+}
+
+test "SVGCircleElement.prototype chains to SVGElement.prototype chains to Element.prototype" {
+    var ctx = try TestCtx.init("<html><body></body></html>", "null;");
+    defer ctx.deinit();
+    const circle_proto = kotori_dom.getSvgProto("SVGCircleElement") orelse return error.MissingCircleProto;
+    const svg_element_proto = kotori_dom.getSvgElementProto() orelse return error.MissingSvgElementProto;
+    try std.testing.expectEqual(svg_element_proto, circle_proto.prototype.?);
+    try std.testing.expectEqual(ctx.vm.element_proto.?, svg_element_proto.prototype.?);
+}
+
+test "MathMLElement.prototype chains to Element.prototype" {
+    var ctx = try TestCtx.init("<html><body></body></html>", "null;");
+    defer ctx.deinit();
+    const mathml_element_proto = kotori_dom.getMathMLElementProto() orelse return error.MissingMathMLProto;
+    try std.testing.expectEqual(ctx.vm.element_proto.?, mathml_element_proto.prototype.?);
+}
