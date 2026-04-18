@@ -5021,9 +5021,23 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 
     const has = dom_b.lxb_dom_element_has_attribute(elem, name.ptr, name.len);
 
+    // DOM §4.3.3: Capture old value BEFORE mutation so MutationObservers
+    // observing with attributeOldValue receive the correct prior value.
+    var old_val_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    if (has) {
+        var ov_len: usize = 0;
+        const ov_ptr = dom_b.lxb_dom_element_get_attribute(elem, name.ptr, name.len, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, old_val_buf.len);
+            @memcpy(old_val_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = old_val_buf[0..cl];
+        }
+    }
+
     // Step 3-4: toggle logic
     if (has) {
-        // force argument: if provided and true, keep → return true
+        // force argument: if provided and true, keep → return true (no-op)
         if (args.len >= 2 and !args[1].isUndefined()) {
             if (args[1].isTruthy()) return JsValue.initBool(true);
         }
@@ -5033,15 +5047,17 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
         // Remove attribute
         _ = dom_b.lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
+        recordAttributeMutation(vm, node, name, old_val);
         setDomDirty();
         return JsValue.initBool(false);
     } else {
-        // force argument: if provided and false, don't add → return false
+        // force argument: if provided and false, don't add → return false (no-op)
         if (args.len >= 2 and !args[1].isUndefined()) {
             if (!args[1].isTruthy()) return JsValue.initBool(false);
         }
         // Add attribute with empty value
         _ = dom_b.lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
+        recordAttributeMutation(vm, node, name, null);
         setDomDirty();
         return JsValue.initBool(true);
     }

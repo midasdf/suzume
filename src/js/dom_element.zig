@@ -694,15 +694,34 @@ pub fn elementToggleAttribute(
 
     const has = lxb_dom_element_has_attribute(elem, name.ptr, name.len);
 
+    // DOM §4.3.3: Capture old value BEFORE mutation so MutationObservers
+    // observing with attributeOldValue receive the correct prior value.
+    // lexbor invalidates the pointer returned by get_attribute after any
+    // set/remove, so the bytes must be copied into a stack buffer first.
+    var old_val_buf: [4096]u8 = undefined;
+    var old_val: ?[]const u8 = null;
+    if (has) {
+        var ov_len: usize = 0;
+        const ov_ptr = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &ov_len);
+        if (ov_ptr != null) {
+            const cl = @min(ov_len, old_val_buf.len);
+            @memcpy(old_val_buf[0..cl], ov_ptr.?[0..cl]);
+            old_val = old_val_buf[0..cl];
+        }
+    }
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+
     // If force argument provided
     if (argc >= 2) {
         const force = qjs.JS_ToBool(c, args[1]) > 0;
         if (force and !has) {
             _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
+            events.recordMutationWithOldValue(node, "attributes", null, null, name, null);
             setDomDirty();
             return quickjs.JS_NewBool(true);
         } else if (!force and has) {
             _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
+            events.recordMutationWithOldValue(node, "attributes", null, null, name, old_val);
             setDomDirty();
             return quickjs.JS_NewBool(false);
         }
@@ -711,10 +730,12 @@ pub fn elementToggleAttribute(
 
     if (has) {
         _ = lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
+        events.recordMutationWithOldValue(node, "attributes", null, null, name, old_val);
         setDomDirty();
         return quickjs.JS_NewBool(false);
     } else {
         _ = lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
+        events.recordMutationWithOldValue(node, "attributes", null, null, name, null);
         setDomDirty();
         return quickjs.JS_NewBool(true);
     }
