@@ -1858,3 +1858,47 @@ test "el.attributes[Symbol.iterator] is callable (Layer 1D Task 8)" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 10: Attr.ownerElement end-to-end tracking.
+test "Attr wrapper from el.attributes[0] has correct ownerElement (Layer 1D Task 10)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes[0].ownerElement === el;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "Attr.ownerElement becomes null after removeAttribute (Layer 1D Task 10)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.attributes[0];
+        \\el.removeAttribute('id');
+        \\a.ownerElement === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "Attr.ownerElement becomes null after toggleAttribute removal (Layer 1D Task 10)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('hidden', '');
+        \\var a = el.attributes[0];
+        \\el.toggleAttribute('hidden');
+        \\a.ownerElement === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

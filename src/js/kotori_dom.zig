@@ -3199,6 +3199,12 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     // DOM §4.9.1: invalidate the cached Attr wrapper *before* lexbor frees
     // the attribute struct, otherwise the cache would hold a dangling key.
     if (dom_b.lxb_dom_element_attr_by_name(elem, attr_name.ptr, attr_name.len)) |a| {
+        // DOM §4.9 Attr.ownerElement — "remove an attribute" clears owner.
+        // Must run BEFORE invalidateAttrWrapper so the cached wrapper
+        // (still identified by this attr ptr) gets the update.
+        if (g_attr_wrappers.get(@intFromPtr(a))) |cached_wrap| {
+            setAttrOwnerElement(vm, cached_wrap, JsValue.null_val);
+        }
         invalidateAttrWrapper(a);
     }
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
@@ -4304,6 +4310,35 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch return null, JsValue.initString(val_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.null_val) catch {};
+
+    // DOM §4.9 Attr.ownerElement — when the attr is part of an element's
+    // attribute list, ownerElement is that element. Lexbor exposes this
+    // via `attr.owner` (see `struct lxb_dom_attr` in attr.h). Wrappers
+    // materialised via `el.attributes[i]` / `getNamedItem` must observe
+    // the correct owner so the Task 7 InUseAttributeError check + WPT
+    // `Attr.ownerElement` assertions hold.
+    if (a.owner) |owner_elem| {
+        const owner_node: *lxb.lxb_dom_node_t = @ptrCast(owner_elem);
+        if (wrapNode(vm, owner_node)) |owner_js| {
+            setAttrOwnerElement(vm, attr_obj, owner_js);
+        } else if (g_sid_owner_elem_ptr) |ptr_sid| {
+            // Fallback: record the opaque node pointer so Task 7's check
+            // still succeeds even when wrapNode couldn't materialise a JS
+            // owner.
+            attr_obj.setProperty(
+                vm.allocator,
+                ptr_sid,
+                JsValue.initNumber(@floatFromInt(@intFromPtr(owner_node))),
+            ) catch {};
+            attr_obj.setProperty(
+                vm.allocator,
+                vm.pool.intern("ownerElement") catch ptr_sid,
+                JsValue.null_val,
+            ) catch {};
+        }
+    } else {
+        setAttrOwnerElement(vm, attr_obj, JsValue.null_val);
+    }
 
     g_attr_wrappers.put(vm.allocator, key, attr_obj) catch {};
     return attr_obj;
@@ -5675,6 +5710,12 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
         // DOM §4.9.1: drop the cached Attr wrapper before lexbor frees it.
         if (dom_b.lxb_dom_element_attr_by_name(elem, name.ptr, name.len)) |a| {
+            // DOM §4.9 Attr.ownerElement — "remove an attribute" clears owner.
+            // Must run BEFORE invalidateAttrWrapper so the cached wrapper
+            // (still identified by this attr ptr) gets the update.
+            if (g_attr_wrappers.get(@intFromPtr(a))) |cached_wrap| {
+                setAttrOwnerElement(vm, cached_wrap, JsValue.null_val);
+            }
             invalidateAttrWrapper(a);
         }
         // Remove attribute
