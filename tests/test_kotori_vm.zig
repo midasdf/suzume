@@ -5655,3 +5655,224 @@ test "Object.getOwnPropertyNames no duplicates after freeze" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
 }
+
+// ─── Layer 0A: builtin polish (ECMA-262 §10.2.8/§10.2.9) ──────────
+
+// Gap 1: Native fn .length per §10.2.9 SetFunctionLength
+test "Layer 0A: Array.prototype.forEach.length === 1" {
+    const result = try evalExpr("Array.prototype.forEach.length === 1");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Array.prototype.slice.length === 2" {
+    const result = try evalExpr("Array.prototype.slice.length === 2");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Promise.resolve.length === 1" {
+    const result = try evalExpr("Promise.resolve.length === 1");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Object.defineProperty.length === 3" {
+    const result = try evalExpr("Object.defineProperty.length === 3");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: TypeError.length === 1" {
+    const result = try evalExpr("TypeError.length === 1");
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 2: Native fn .name per §10.2.8 SetFunctionName
+test "Layer 0A: Array.prototype.slice.name === 'slice'" {
+    const result = try evalExpr("Array.prototype.slice.name === 'slice'");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Promise.resolve.name === 'resolve'" {
+    const result = try evalExpr("Promise.resolve.name === 'resolve'");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: TypeError.name === 'TypeError'" {
+    const result = try evalExpr("TypeError.name === 'TypeError'");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Object.defineProperty.name === 'defineProperty'" {
+    const result = try evalExpr("Object.defineProperty.name === 'defineProperty'");
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 1+2 combined: descriptor attributes per §10.2.8/§10.2.9:
+// writable:false, enumerable:false, configurable:true.
+test "Layer 0A: length descriptor has spec-correct attrs" {
+    const result = try evalExpr(
+        \\var d = Object.getOwnPropertyDescriptor(Array.prototype.slice, "length");
+        \\d.writable === false && d.enumerable === false && d.configurable === true && d.value === 2
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: name descriptor has spec-correct attrs" {
+    const result = try evalExpr(
+        \\var d = Object.getOwnPropertyDescriptor(Array.prototype.slice, "name");
+        \\d.writable === false && d.enumerable === false && d.configurable === true && d.value === "slice"
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 4: Array callbacks IsCallable + generic array-like iteration (§23.1.3.*)
+test "Layer 0A: forEach throws TypeError on non-callable" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1,2,3].forEach(42); } catch (e) { caught = (e instanceof TypeError); }
+        \\caught
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: map throws TypeError on missing callback" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1,2,3].map(); } catch (e) { caught = (e instanceof TypeError); }
+        \\caught
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: filter throws TypeError on non-callable" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1,2,3].filter("not a fn"); } catch (e) { caught = (e instanceof TypeError); }
+        \\caught
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: forEach iterates array-like with length" {
+    const result = try evalExpr(
+        \\var seen = [];
+        \\Array.prototype.forEach.call({length: 2, 0: 'a', 1: 'b'}, function(v) { seen.push(v); });
+        \\seen.length === 2 && seen[0] === 'a' && seen[1] === 'b'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: map iterates array-like with length" {
+    const result = try evalExpr(
+        \\var out = Array.prototype.map.call({length: 3, 0: 1, 1: 2, 2: 3}, function(v) { return v * 2; });
+        \\out.length === 3 && out[0] === 2 && out[1] === 4 && out[2] === 6
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: map propagates thisArg" {
+    const result = try evalExpr(
+        \\var obj = {k: 10};
+        \\var out = [1,2,3].map(function(x) { return x + this.k; }, obj);
+        \\out[0] === 11 && out[1] === 12 && out[2] === 13
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: findIndex returns -1 on miss" {
+    const result = try evalExpr("[1,2,3].findIndex(function(x) { return x > 99; }) === -1");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: every returns true on empty array" {
+    const result = try evalExpr("[].every(function(x) { return false; }) === true");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: some returns false on empty array" {
+    const result = try evalExpr("[].some(function(x) { return true; }) === false");
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 3: Error subclass prototype chain (§20.5)
+test "Layer 0A: new TypeError instanceof TypeError" {
+    const result = try evalExpr("new TypeError('x') instanceof TypeError");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: new TypeError instanceof Error" {
+    const result = try evalExpr("new TypeError('x') instanceof Error");
+    try std.testing.expect(result.asBool());
+}
+
+// No-new form of sub-error ctor must also set the correct prototype
+// (§20.5.6.2 — the spec says NewTarget=undefined falls back to "active
+// function object", which in kotori is located via getCallerFuncObj).
+test "Layer 0A: TypeError('x') (no-new) instanceof TypeError" {
+    const result = try evalExpr("TypeError('x') instanceof TypeError");
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5a: Promise.resolve same-constructor (§27.2.1.4 step 1b)
+test "Layer 0A: Promise.resolve(p) === p for own-realm promise" {
+    const result = try evalWithMicrotasks(
+        \\const p = Promise.resolve(42);
+        \\globalThis.__r = Promise.resolve(p) === p;
+    ,
+        "__r",
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5a: thenable adoption is a microtask, not synchronous (§27.2.1.3.2 step 13-14)
+test "Layer 0A: thenable adoption runs after sync frame completes" {
+    const result = try evalWithMicrotasks(
+        \\const log = [];
+        \\Promise.resolve({ then: function(res){ log.push('then'); res(99); } })
+        \\  .then(function(v){ log.push('resolved:' + v); });
+        \\log.push('sync');
+        \\// After microtask drain: ['sync','then','resolved:99']
+        \\globalThis.__r = (log[0] === 'sync' && log[1] === 'then' && log[2] === 'resolved:99');
+    ,
+        "__r",
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5a: thenable resolves with inner value.
+test "Layer 0A: thenable resolves promise with value passed to res()" {
+    const result = try evalWithMicrotasks(
+        \\var captured;
+        \\Promise.resolve({ then: function(res){ res(7); } })
+        \\  .then(function(v){ captured = v; });
+        \\globalThis.__r = captured;
+    ,
+        "__r",
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+
+// Gap 5b: throwing .then getter rejects the promise (§27.2.1.3.2 step 9).
+test "Layer 0A: throwing .then getter rejects outer promise" {
+    const result = try evalWithMicrotasks(
+        \\var caught = false;
+        \\Promise.resolve(Object.defineProperty({}, 'then', {
+        \\  get: function(){ throw new TypeError('boom'); }
+        \\})).catch(function(e){ caught = (e instanceof TypeError); });
+        \\globalThis.__r = caught;
+    ,
+        "__r",
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5b: non-callable .then falls through to fulfill (§27.2.1.3.2 step 11).
+test "Layer 0A: non-callable .then fulfills with resolution itself" {
+    const result = try evalWithMicrotasks(
+        \\var got;
+        \\Promise.resolve({ then: 42 }).then(function(v){ got = (v && v.then); });
+        \\globalThis.__r = got;
+    ,
+        "__r",
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+

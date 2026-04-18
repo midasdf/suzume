@@ -120,6 +120,15 @@ pub const VM = struct {
             value: JsValue,
             is_reject: bool,
         },
+        /// ECMA-262 §27.2.2.1 NewPromiseResolveThenableJob.
+        /// Deferred invocation of `thenable.then(resolve, reject)` enqueued by
+        /// resolvePromise's slow-path. Required so thenable-adoption observes
+        /// spec-correct microtask ordering (see resolvePromise step 12-14).
+        thenable_job: struct {
+            target_promise: *JsObject, // promise to resolve/reject
+            thenable: JsValue, // thisArg for `then`
+            then_fn: JsValue, // the callable `then`
+        },
     };
 
     pub const HttpFetchResult = struct {
@@ -2347,41 +2356,42 @@ pub const VM = struct {
         // ── Array.prototype ──
         self.array_proto = try self.createObj(.{});
         const ap = self.array_proto.?;
-        try self.registerNativeMethod(ap, "push", &nativeArrayPush);
-        try self.registerNativeMethod(ap, "pop", &nativeArrayPop);
-        try self.registerNativeMethod(ap, "shift", &nativeArrayShift);
-        try self.registerNativeMethod(ap, "indexOf", &nativeArrayIndexOf);
-        try self.registerNativeMethod(ap, "includes", &nativeArrayIncludes);
-        try self.registerNativeMethod(ap, "join", &nativeArrayJoin);
-        try self.registerNativeMethod(ap, "reverse", &nativeArrayReverse);
-        try self.registerNativeMethod(ap, "slice", &nativeArraySlice);
-        try self.registerNativeMethod(ap, "concat", &nativeArrayConcat);
-        try self.registerNativeMethod(ap, "forEach", &nativeArrayForEach);
-        try self.registerNativeMethod(ap, "map", &nativeArrayMap);
-        try self.registerNativeMethod(ap, "filter", &nativeArrayFilter);
-        try self.registerNativeMethod(ap, "reduce", &nativeArrayReduce);
-        try self.registerNativeMethod(ap, "reduceRight", &nativeArrayReduceRight);
-        try self.registerNativeMethod(ap, "find", &nativeArrayFind);
-        try self.registerNativeMethod(ap, "findIndex", &nativeArrayFindIndex);
-        try self.registerNativeMethod(ap, "findLast", &nativeArrayFindLast);
-        try self.registerNativeMethod(ap, "findLastIndex", &nativeArrayFindLastIndex);
-        try self.registerNativeMethod(ap, "some", &nativeArraySome);
-        try self.registerNativeMethod(ap, "every", &nativeArrayEvery);
-        try self.registerNativeMethod(ap, "sort", &nativeArraySort);
-        try self.registerNativeMethod(ap, "splice", &nativeArraySplice);
-        try self.registerNativeMethod(ap, "flat", &nativeArrayFlat);
-        try self.registerNativeMethod(ap, "flatMap", &nativeArrayFlatMap);
-        try self.registerNativeMethod(ap, "fill", &nativeArrayFill);
-        try self.registerNativeMethod(ap, "at", &nativeArrayAt);
-        try self.registerNativeMethod(ap, "unshift", &nativeArrayUnshift);
-        try self.registerNativeMethod(ap, "keys", &nativeArrayKeys);
-        try self.registerNativeMethod(ap, "hasOwnProperty", &nativeObjHasOwnProperty);
-        try self.registerNativeMethod(ap, "values", &nativeArrayValues);
-        try self.registerNativeMethod(ap, "entries", &nativeArrayEntries);
-        try self.registerNativeMethod(ap, "toString", &nativeArrayToString);
-        try self.registerNativeMethod(ap, "toSorted", &nativeArrayToSorted);
-        try self.registerNativeMethod(ap, "toReversed", &nativeArrayToReversed);
-        try self.registerNativeMethod(ap, "toSpliced", &nativeArrayToSpliced);
+        // Array.prototype methods — arity per ECMA-262 §23.1.3
+        try self.registerNativeMethodArity(ap, "push", &nativeArrayPush, 1); // §23.1.3.21
+        try self.registerNativeMethodArity(ap, "pop", &nativeArrayPop, 0); // §23.1.3.20
+        try self.registerNativeMethodArity(ap, "shift", &nativeArrayShift, 0); // §23.1.3.25
+        try self.registerNativeMethodArity(ap, "indexOf", &nativeArrayIndexOf, 1); // §23.1.3.15
+        try self.registerNativeMethodArity(ap, "includes", &nativeArrayIncludes, 1); // §23.1.3.14
+        try self.registerNativeMethodArity(ap, "join", &nativeArrayJoin, 1); // §23.1.3.16
+        try self.registerNativeMethodArity(ap, "reverse", &nativeArrayReverse, 0); // §23.1.3.23
+        try self.registerNativeMethodArity(ap, "slice", &nativeArraySlice, 2); // §23.1.3.25
+        try self.registerNativeMethodArity(ap, "concat", &nativeArrayConcat, 1); // §23.1.3.1
+        try self.registerNativeMethodArity(ap, "forEach", &nativeArrayForEach, 1); // §23.1.3.12
+        try self.registerNativeMethodArity(ap, "map", &nativeArrayMap, 1); // §23.1.3.18
+        try self.registerNativeMethodArity(ap, "filter", &nativeArrayFilter, 1); // §23.1.3.8
+        try self.registerNativeMethodArity(ap, "reduce", &nativeArrayReduce, 1); // §23.1.3.22
+        try self.registerNativeMethodArity(ap, "reduceRight", &nativeArrayReduceRight, 1); // §23.1.3.23
+        try self.registerNativeMethodArity(ap, "find", &nativeArrayFind, 1); // §23.1.3.9
+        try self.registerNativeMethodArity(ap, "findIndex", &nativeArrayFindIndex, 1); // §23.1.3.10
+        try self.registerNativeMethodArity(ap, "findLast", &nativeArrayFindLast, 1); // §23.1.3.11
+        try self.registerNativeMethodArity(ap, "findLastIndex", &nativeArrayFindLastIndex, 1); // §23.1.3.12
+        try self.registerNativeMethodArity(ap, "some", &nativeArraySome, 1); // §23.1.3.28
+        try self.registerNativeMethodArity(ap, "every", &nativeArrayEvery, 1); // §23.1.3.7
+        try self.registerNativeMethodArity(ap, "sort", &nativeArraySort, 1); // §23.1.3.27
+        try self.registerNativeMethodArity(ap, "splice", &nativeArraySplice, 2); // §23.1.3.29
+        try self.registerNativeMethodArity(ap, "flat", &nativeArrayFlat, 0); // §23.1.3.11
+        try self.registerNativeMethodArity(ap, "flatMap", &nativeArrayFlatMap, 1); // §23.1.3.12
+        try self.registerNativeMethodArity(ap, "fill", &nativeArrayFill, 1); // §23.1.3.8
+        try self.registerNativeMethodArity(ap, "at", &nativeArrayAt, 1); // §23.1.3.1
+        try self.registerNativeMethodArity(ap, "unshift", &nativeArrayUnshift, 1); // §23.1.3.33
+        try self.registerNativeMethodArity(ap, "keys", &nativeArrayKeys, 0); // §23.1.3.17
+        try self.registerNativeMethodArity(ap, "hasOwnProperty", &nativeObjHasOwnProperty, 1); // §20.1.3.2
+        try self.registerNativeMethodArity(ap, "values", &nativeArrayValues, 0); // §23.1.3.34
+        try self.registerNativeMethodArity(ap, "entries", &nativeArrayEntries, 0); // §23.1.3.6
+        try self.registerNativeMethodArity(ap, "toString", &nativeArrayToString, 0); // §23.1.3.30
+        try self.registerNativeMethodArity(ap, "toSorted", &nativeArrayToSorted, 1); // §23.1.3.31
+        try self.registerNativeMethodArity(ap, "toReversed", &nativeArrayToReversed, 0); // §23.1.3.32
+        try self.registerNativeMethodArity(ap, "toSpliced", &nativeArrayToSpliced, 2); // §23.1.3.33
         // Register Symbol.iterator on array prototype
         if (ap.symbol_props == null) ap.symbol_props = .{};
         const arr_iter_fn = try self.createNativeFn(&nativeArraySymbolIterator);
@@ -2424,7 +2434,8 @@ pub const VM = struct {
 
         // ── String constructor ──
         {
-            const str_ctor = try self.createNativeFn(&nativeStringConstructor);
+            // §22.1.1 String(value) → length 1
+            const str_ctor = try self.createNamedNativeFn("String", &nativeStringConstructor, 1);
             try self.registerNativeMethod(str_ctor, "fromCharCode", &nativeStringFromCharCode);
             try self.registerNativeMethod(str_ctor, "fromCodePoint", &nativeStringFromCodePoint);
             try str_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(sp));
@@ -2442,7 +2453,8 @@ pub const VM = struct {
 
         // ── Number constructor ──
         {
-            const num_ctor = try self.createNativeFn(&nativeNumberConstructor);
+            // §21.1.1 Number(value) → length 1
+            const num_ctor = try self.createNamedNativeFn("Number", &nativeNumberConstructor, 1);
             try self.registerNativeMethod(num_ctor, "isNaN", &nativeNumberIsNaN);
             try self.registerNativeMethod(num_ctor, "isFinite", &nativeNumberIsFinite);
             try self.registerNativeMethod(num_ctor, "isInteger", &nativeNumberIsInteger);
@@ -2463,10 +2475,11 @@ pub const VM = struct {
         // ── Function.prototype ──
         self.function_proto = try self.createObj(.{});
         const fp = self.function_proto.?;
-        try self.registerNativeMethod(fp, "call", &nativeFunctionCall);
-        try self.registerNativeMethod(fp, "apply", &nativeFunctionApply);
-        try self.registerNativeMethod(fp, "bind", &nativeFunctionBind);
-        try self.registerNativeMethod(fp, "toString", &nativeFunctionToString);
+        // Function.prototype — arity per ECMA-262 §20.2.3
+        try self.registerNativeMethodArity(fp, "call", &nativeFunctionCall, 1); // §20.2.3.3
+        try self.registerNativeMethodArity(fp, "apply", &nativeFunctionApply, 2); // §20.2.3.1
+        try self.registerNativeMethodArity(fp, "bind", &nativeFunctionBind, 1); // §20.2.3.2
+        try self.registerNativeMethodArity(fp, "toString", &nativeFunctionToString, 0); // §20.2.3.5
 
         // ── Object.prototype ──
         self.object_proto = try self.createObj(.{});
@@ -2479,28 +2492,29 @@ pub const VM = struct {
 
         // ── Object ──
         const obj_constructor = try self.createObj(.{});
-        try self.registerNativeMethod(obj_constructor, "keys", &nativeObjectKeys);
-        try self.registerNativeMethod(obj_constructor, "values", &nativeObjectValues);
-        try self.registerNativeMethod(obj_constructor, "entries", &nativeObjectEntries);
-        try self.registerNativeMethod(obj_constructor, "assign", &nativeObjectAssign);
-        try self.registerNativeMethod(obj_constructor, "create", &nativeObjectCreate);
-        try self.registerNativeMethod(obj_constructor, "defineProperty", &nativeObjectDefineProperty);
-        try self.registerNativeMethod(obj_constructor, "defineProperties", &nativeObjectDefineProperties);
-        try self.registerNativeMethod(obj_constructor, "setPrototypeOf", &nativeObjectSetPrototypeOf);
-        try self.registerNativeMethod(obj_constructor, "getPrototypeOf", &nativeObjectGetPrototypeOf);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyNames", &nativeObjectGetOwnPropertyNames);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptors", &nativeObjectGetOwnPropertyDescriptors);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertySymbols", &nativeObjectGetOwnPropertySymbols);
-        try self.registerNativeMethod(obj_constructor, "freeze", &nativeObjectFreeze);
-        try self.registerNativeMethod(obj_constructor, "seal", &nativeObjectSeal);
-        try self.registerNativeMethod(obj_constructor, "preventExtensions", &nativeObjectPreventExtensions);
-        try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeObjectIsFrozen);
-        try self.registerNativeMethod(obj_constructor, "isSealed", &nativeObjectIsSealed);
-        try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeObjectIsExtensible);
-        try self.registerNativeMethod(obj_constructor, "is", &nativeObjectIs);
-        try self.registerNativeMethod(obj_constructor, "hasOwn", &nativeObjectHasOwn);
-        try self.registerNativeMethod(obj_constructor, "fromEntries", &nativeObjectFromEntries);
+        // Object static methods — arity per ECMA-262 §20.1.2
+        try self.registerNativeMethodArity(obj_constructor, "keys", &nativeObjectKeys, 1); // §20.1.2.18
+        try self.registerNativeMethodArity(obj_constructor, "values", &nativeObjectValues, 1); // §20.1.2.23
+        try self.registerNativeMethodArity(obj_constructor, "entries", &nativeObjectEntries, 1); // §20.1.2.5
+        try self.registerNativeMethodArity(obj_constructor, "assign", &nativeObjectAssign, 2); // §20.1.2.1
+        try self.registerNativeMethodArity(obj_constructor, "create", &nativeObjectCreate, 2); // §20.1.2.2
+        try self.registerNativeMethodArity(obj_constructor, "defineProperty", &nativeObjectDefineProperty, 3); // §20.1.2.4
+        try self.registerNativeMethodArity(obj_constructor, "defineProperties", &nativeObjectDefineProperties, 2); // §20.1.2.3
+        try self.registerNativeMethodArity(obj_constructor, "setPrototypeOf", &nativeObjectSetPrototypeOf, 2); // §20.1.2.22
+        try self.registerNativeMethodArity(obj_constructor, "getPrototypeOf", &nativeObjectGetPrototypeOf, 1); // §20.1.2.12
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertyNames", &nativeObjectGetOwnPropertyNames, 1); // §20.1.2.10
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor, 2); // §20.1.2.8
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertyDescriptors", &nativeObjectGetOwnPropertyDescriptors, 1); // §20.1.2.9
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertySymbols", &nativeObjectGetOwnPropertySymbols, 1); // §20.1.2.11
+        try self.registerNativeMethodArity(obj_constructor, "freeze", &nativeObjectFreeze, 1); // §20.1.2.6
+        try self.registerNativeMethodArity(obj_constructor, "seal", &nativeObjectSeal, 1); // §20.1.2.20
+        try self.registerNativeMethodArity(obj_constructor, "preventExtensions", &nativeObjectPreventExtensions, 1); // §20.1.2.19
+        try self.registerNativeMethodArity(obj_constructor, "isFrozen", &nativeObjectIsFrozen, 1); // §20.1.2.15
+        try self.registerNativeMethodArity(obj_constructor, "isSealed", &nativeObjectIsSealed, 1); // §20.1.2.16
+        try self.registerNativeMethodArity(obj_constructor, "isExtensible", &nativeObjectIsExtensible, 1); // §20.1.2.14
+        try self.registerNativeMethodArity(obj_constructor, "is", &nativeObjectIs, 2); // §20.1.2.13
+        try self.registerNativeMethodArity(obj_constructor, "hasOwn", &nativeObjectHasOwn, 2); // §20.1.2.13 (ES2022)
+        try self.registerNativeMethodArity(obj_constructor, "fromEntries", &nativeObjectFromEntries, 1); // §20.1.2.7
         try obj_constructor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(op));
         const obj_id = try self.pool.intern("Object");
         try self.globals.put(self.allocator, obj_id, JsValue.initObject(obj_constructor));
@@ -2508,9 +2522,10 @@ pub const VM = struct {
         // ── Array constructor ──
         const arr_constructor = try self.createObj(.{ .obj_type = .native_function });
         arr_constructor.data = .{ .native_fn = &nativeArrayConstructor };
-        try self.registerNativeMethod(arr_constructor, "isArray", &nativeArrayIsArray);
-        try self.registerNativeMethod(arr_constructor, "from", &nativeArrayFrom);
-        try self.registerNativeMethod(arr_constructor, "of", &nativeArrayOf);
+        // Array static methods — arity per ECMA-262 §23.1.2
+        try self.registerNativeMethodArity(arr_constructor, "isArray", &nativeArrayIsArray, 1); // §23.1.2.2
+        try self.registerNativeMethodArity(arr_constructor, "from", &nativeArrayFrom, 1); // §23.1.2.1
+        try self.registerNativeMethodArity(arr_constructor, "of", &nativeArrayOf, 0); // §23.1.2.3
         // Array.prototype accessible from constructor
         const proto_id = try self.pool.intern("prototype");
         try arr_constructor.setProperty(self.allocator, proto_id, JsValue.initObject(ap));
@@ -2518,12 +2533,14 @@ pub const VM = struct {
         try self.globals.put(self.allocator, arr_id, JsValue.initObject(arr_constructor));
 
         // ── Map constructor ──
-        const map_constructor = try self.createNativeFn(&nativeMapConstructor);
+        // §24.1.1 Map([iterable]) → length 0
+        const map_constructor = try self.createNamedNativeFn("Map", &nativeMapConstructor, 0);
         const map_id = try self.pool.intern("Map");
         try self.globals.put(self.allocator, map_id, JsValue.initObject(map_constructor));
 
         // ── Set constructor ──
-        const set_constructor = try self.createNativeFn(&nativeSetConstructor);
+        // §24.2.1 Set([iterable]) → length 0
+        const set_constructor = try self.createNamedNativeFn("Set", &nativeSetConstructor, 0);
         const set_id = try self.pool.intern("Set");
         try self.globals.put(self.allocator, set_id, JsValue.initObject(set_constructor));
 
@@ -2583,51 +2600,51 @@ pub const VM = struct {
         const math_id = try self.pool.intern("Math");
         try self.globals.put(self.allocator, math_id, JsValue.initObject(math_obj));
 
-        // ── Global functions ──
-        const parse_int_obj = try self.createNativeFn(&nativeParseInt);
+        // ── Global functions (§19.2 parseFloat/parseInt/isNaN/isFinite) ──
+        const parse_int_obj = try self.createNamedNativeFn("parseInt", &nativeParseInt, 2);
         const parse_int_id = try self.pool.intern("parseInt");
         try self.globals.put(self.allocator, parse_int_id, JsValue.initObject(parse_int_obj));
 
-        const parse_float_obj = try self.createNativeFn(&nativeParseFloat);
+        const parse_float_obj = try self.createNamedNativeFn("parseFloat", &nativeParseFloat, 1);
         const parse_float_id = try self.pool.intern("parseFloat");
         try self.globals.put(self.allocator, parse_float_id, JsValue.initObject(parse_float_obj));
 
-        const is_nan_obj = try self.createNativeFn(&nativeIsNaN);
+        const is_nan_obj = try self.createNamedNativeFn("isNaN", &nativeIsNaN, 1);
         const is_nan_id = try self.pool.intern("isNaN");
         try self.globals.put(self.allocator, is_nan_id, JsValue.initObject(is_nan_obj));
 
-        const is_finite_obj = try self.createNativeFn(&nativeIsFinite);
+        const is_finite_obj = try self.createNamedNativeFn("isFinite", &nativeIsFinite, 1);
         const is_finite_id = try self.pool.intern("isFinite");
         try self.globals.put(self.allocator, is_finite_id, JsValue.initObject(is_finite_obj));
 
-        // ── eval ──
-        const eval_obj = try self.createNativeFn(&nativeEval);
+        // ── eval (§19.2.1) ──
+        const eval_obj = try self.createNamedNativeFn("eval", &nativeEval, 1);
         try self.globals.put(self.allocator, try self.pool.intern("eval"), JsValue.initObject(eval_obj));
 
-        // ── URI encoding/decoding ──
-        const encode_uri_obj = try self.createNativeFn(&nativeEncodeURI);
+        // ── URI encoding/decoding (§19.2.6) ──
+        const encode_uri_obj = try self.createNamedNativeFn("encodeURI", &nativeEncodeURI, 1);
         try self.globals.put(self.allocator, try self.pool.intern("encodeURI"), JsValue.initObject(encode_uri_obj));
-        const decode_uri_obj = try self.createNativeFn(&nativeDecodeURI);
+        const decode_uri_obj = try self.createNamedNativeFn("decodeURI", &nativeDecodeURI, 1);
         try self.globals.put(self.allocator, try self.pool.intern("decodeURI"), JsValue.initObject(decode_uri_obj));
-        const encode_uric_obj = try self.createNativeFn(&nativeEncodeURIComponent);
+        const encode_uric_obj = try self.createNamedNativeFn("encodeURIComponent", &nativeEncodeURIComponent, 1);
         try self.globals.put(self.allocator, try self.pool.intern("encodeURIComponent"), JsValue.initObject(encode_uric_obj));
-        const decode_uric_obj = try self.createNativeFn(&nativeDecodeURIComponent);
+        const decode_uric_obj = try self.createNamedNativeFn("decodeURIComponent", &nativeDecodeURIComponent, 1);
         try self.globals.put(self.allocator, try self.pool.intern("decodeURIComponent"), JsValue.initObject(decode_uric_obj));
 
-        // ── setTimeout / setInterval / clearTimeout / clearInterval ──
-        const set_timeout_obj = try self.createNativeFn(&nativeSetTimeout);
+        // ── setTimeout / setInterval / clearTimeout / clearInterval (HTML §8.6 timer APIs) ──
+        const set_timeout_obj = try self.createNamedNativeFn("setTimeout", &nativeSetTimeout, 1);
         const set_timeout_id = try self.pool.intern("setTimeout");
         try self.globals.put(self.allocator, set_timeout_id, JsValue.initObject(set_timeout_obj));
 
-        const set_interval_obj = try self.createNativeFn(&nativeSetInterval);
+        const set_interval_obj = try self.createNamedNativeFn("setInterval", &nativeSetInterval, 1);
         const set_interval_id = try self.pool.intern("setInterval");
         try self.globals.put(self.allocator, set_interval_id, JsValue.initObject(set_interval_obj));
 
-        const clear_timeout_obj = try self.createNativeFn(&nativeClearTimer);
+        const clear_timeout_obj = try self.createNamedNativeFn("clearTimeout", &nativeClearTimer, 1);
         const clear_timeout_id = try self.pool.intern("clearTimeout");
         try self.globals.put(self.allocator, clear_timeout_id, JsValue.initObject(clear_timeout_obj));
 
-        const clear_interval_obj = try self.createNativeFn(&nativeClearTimer);
+        const clear_interval_obj = try self.createNamedNativeFn("clearInterval", &nativeClearTimer, 1);
         const clear_interval_id = try self.pool.intern("clearInterval");
         try self.globals.put(self.allocator, clear_interval_id, JsValue.initObject(clear_interval_obj));
 
@@ -2636,27 +2653,36 @@ pub const VM = struct {
             // Promise prototype with then/catch/finally
             const proto = try self.createObj(.{});
             self.promise_proto = proto;
-            try self.registerNativeMethod(proto, "then", &nativePromiseThen);
-            try self.registerNativeMethod(proto, "catch", &nativePromiseCatch);
-            try self.registerNativeMethod(proto, "finally", &nativePromiseFinally);
+            // Promise.prototype — arity per ECMA-262 §27.2.5
+            try self.registerNativeMethodArity(proto, "then", &nativePromiseThen, 2); // §27.2.5.4
+            try self.registerNativeMethodArity(proto, "catch", &nativePromiseCatch, 1); // §27.2.5.1
+            try self.registerNativeMethodArity(proto, "finally", &nativePromiseFinally, 1); // §27.2.5.3
 
-            // Promise constructor
-            const promise_ctor = try self.createNativeFn(&nativePromiseConstructor);
+            // Promise constructor — §27.2.3 Promise(executor) → length 1
+            const promise_ctor = try self.createNamedNativeFn("Promise", &nativePromiseConstructor, 1);
             const promise_id = try self.pool.intern("Promise");
             try self.globals.put(self.allocator, promise_id, JsValue.initObject(promise_ctor));
+            // §27.2.5.2 Promise.prototype.constructor = Promise. Required so the
+            // §27.2.1.4 SameValue(x.constructor, C) fast-path in Promise.resolve
+            // can return the original promise identically.
+            try proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(promise_ctor));
+            // §27.2.3.2 Promise.prototype: initial ctor.prototype property.
+            try promise_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(proto));
 
             // Promise.resolve / Promise.reject (static methods on constructor)
-            try self.registerNativeMethod(promise_ctor, "resolve", &nativePromiseResolve);
-            try self.registerNativeMethod(promise_ctor, "reject", &nativePromiseReject);
-            try self.registerNativeMethod(promise_ctor, "all", &nativePromiseAll);
-            try self.registerNativeMethod(promise_ctor, "race", &nativePromiseRace);
-            try self.registerNativeMethod(promise_ctor, "allSettled", &nativePromiseAllSettled);
-            try self.registerNativeMethod(promise_ctor, "any", &nativePromiseAny);
+            // Promise static methods — arity per ECMA-262 §27.2.4
+            try self.registerNativeMethodArity(promise_ctor, "resolve", &nativePromiseResolve, 1); // §27.2.4.7
+            try self.registerNativeMethodArity(promise_ctor, "reject", &nativePromiseReject, 1); // §27.2.4.6
+            try self.registerNativeMethodArity(promise_ctor, "all", &nativePromiseAll, 1); // §27.2.4.1
+            try self.registerNativeMethodArity(promise_ctor, "race", &nativePromiseRace, 1); // §27.2.4.5
+            try self.registerNativeMethodArity(promise_ctor, "allSettled", &nativePromiseAllSettled, 1); // §27.2.4.2
+            try self.registerNativeMethodArity(promise_ctor, "any", &nativePromiseAny, 1); // §27.2.4.3
         }
 
         // ── fetch ──
         {
-            const fetch_obj = try self.createNativeFn(&nativeFetch);
+            // WHATWG Fetch §5 fetch(input, init) → length 1
+            const fetch_obj = try self.createNamedNativeFn("fetch", &nativeFetch, 1);
             const fetch_id = try self.pool.intern("fetch");
             try self.globals.put(self.allocator, fetch_id, JsValue.initObject(fetch_obj));
         }
@@ -2713,8 +2739,8 @@ pub const VM = struct {
             try self.registerNativeMethod(date_proto, "toLocaleTimeString", &nativeDateToLocaleTimeString);
             try self.registerNativeMethod(date_proto, "toLocaleString", &nativeDateToLocaleString);
             try self.registerNativeMethod(date_proto, "valueOf", &nativeDateValueOf);
-            // Constructor
-            const date_ctor = try self.createNativeFn(&nativeDateConstructor);
+            // Constructor — §21.4.2.1 Date(year, month, date, hours, minutes, seconds, ms) → length 7
+            const date_ctor = try self.createNamedNativeFn("Date", &nativeDateConstructor, 7);
             try date_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(date_proto));
             try self.registerNativeMethod(date_ctor, "now", &nativeDateNow);
             try self.registerNativeMethod(date_ctor, "parse", &nativeDateParse);
@@ -2732,12 +2758,13 @@ pub const VM = struct {
             try error_proto.setProperty(self.allocator, msg_sid, JsValue.initString(try self.pool.intern("")));
             try self.registerNativeMethod(error_proto, "toString", &nativeErrorToString);
 
-            const error_ctor = try self.createNativeFn(&nativeErrorConstructor);
+            // §20.5.1 Error(message, options) → length 1; name "Error" installed
+            // via createNamedNativeFn as {writable:false, enumerable:false,
+            // configurable:true} per §10.2.8.
+            const error_ctor = try self.createNamedNativeFn("Error", &nativeErrorConstructor, 1);
             const ctor_proto_sid = try self.pool.intern("prototype");
             const ctor_sid = try self.pool.intern("constructor");
             try error_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(error_proto));
-            // Function.name for Error constructor
-            try error_ctor.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern("Error")));
             // Error.prototype.constructor = Error
             try error_proto.setProperty(self.allocator, ctor_sid, JsValue.initObject(error_ctor));
             // [[Prototype]] = Function.prototype (for Object.getPrototypeOf)
@@ -2753,10 +2780,11 @@ pub const VM = struct {
                 try sub_proto.setProperty(self.allocator, msg_sid, JsValue.initString(try self.pool.intern("")));
                 try self.registerNativeMethod(sub_proto, "toString", &nativeErrorToString);
 
-                const sub_ctor = try self.createNativeFn(&nativeErrorConstructor);
+                // §20.5.6.2 NativeError(message) → length 1; name set via
+                // createNamedNativeFn so the descriptor has spec attrs
+                // {writable:false, enumerable:false, configurable:true}.
+                const sub_ctor = try self.createNamedNativeFn(err_name, &nativeErrorConstructor, 1);
                 try sub_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(sub_proto));
-                // Function.name for sub-error constructor
-                try sub_ctor.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern(err_name)));
                 // TypeError.prototype.constructor = TypeError
                 try sub_proto.setProperty(self.allocator, ctor_sid, JsValue.initObject(sub_ctor));
                 // [[Prototype]] = Error (so Object.getPrototypeOf(TypeError) === Error)
@@ -2776,9 +2804,10 @@ pub const VM = struct {
             try dom_exc_proto.setProperty(self.allocator, msg_sid_de, JsValue.initString(try self.pool.intern("")));
             try dom_exc_proto.setProperty(self.allocator, code_sid, JsValue.initNumber(0));
             try self.registerNativeMethod(dom_exc_proto, "toString", &nativeErrorToString);
-            const dom_exc_ctor = try self.createNativeFn(&nativeDOMExceptionConstructor);
+            // WebIDL §3.14 DOMException(message, name) → length 2; name set
+            // with spec-correct descriptor via createNamedNativeFn.
+            const dom_exc_ctor = try self.createNamedNativeFn("DOMException", &nativeDOMExceptionConstructor, 2);
             try dom_exc_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(dom_exc_proto));
-            try dom_exc_ctor.setProperty(self.allocator, name_sid_de, JsValue.initString(try self.pool.intern("DOMException")));
             try dom_exc_proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(dom_exc_ctor));
             if (self.function_proto) |fn_p| dom_exc_ctor.prototype = fn_p;
             try self.globals.put(self.allocator, try self.pool.intern("DOMException"), JsValue.initObject(dom_exc_ctor));
@@ -2795,22 +2824,26 @@ pub const VM = struct {
 
         // ── WeakMap / WeakSet ──
         {
-            const wm_ctor = try self.createNativeFn(&nativeWeakMapConstructor);
+            // §24.3.1 WeakMap([iterable]) → length 0
+            const wm_ctor = try self.createNamedNativeFn("WeakMap", &nativeWeakMapConstructor, 0);
             try self.globals.put(self.allocator, try self.pool.intern("WeakMap"), JsValue.initObject(wm_ctor));
-            const ws_ctor = try self.createNativeFn(&nativeWeakSetConstructor);
+            // §24.4.1 WeakSet([iterable]) → length 0
+            const ws_ctor = try self.createNamedNativeFn("WeakSet", &nativeWeakSetConstructor, 0);
             try self.globals.put(self.allocator, try self.pool.intern("WeakSet"), JsValue.initObject(ws_ctor));
         }
 
         // ── ArrayBuffer / Uint8Array ──
         {
-            const ab_ctor = try self.createNativeFn(&nativeArrayBufferConstructor);
+            // §25.1.3 ArrayBuffer(length) → length 1
+            const ab_ctor = try self.createNamedNativeFn("ArrayBuffer", &nativeArrayBufferConstructor, 1);
             try self.globals.put(self.allocator, try self.pool.intern("ArrayBuffer"), JsValue.initObject(ab_ctor));
 
             const u8_proto = try self.createObj(.{});
             try self.registerNativeMethod(u8_proto, "slice", &nativeUint8ArraySlice);
             try self.registerNativeMethod(u8_proto, "set", &nativeUint8ArraySet);
             try self.registerNativeMethod(u8_proto, "subarray", &nativeUint8ArraySlice); // alias
-            const u8_ctor = try self.createNativeFn(&nativeUint8ArrayConstructor);
+            // §23.2 TypedArray(buffer, byteOffset, length) → length 3
+            const u8_ctor = try self.createNamedNativeFn("Uint8Array", &nativeUint8ArrayConstructor, 3);
             try u8_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(u8_proto));
             self.typed_array_proto = u8_proto;
             try self.globals.put(self.allocator, try self.pool.intern("Uint8Array"), JsValue.initObject(u8_ctor));
@@ -2835,27 +2868,31 @@ pub const VM = struct {
 
         // ── structuredClone ──
         {
-            const sc_fn = try self.createNativeFn(&nativeStructuredClone);
+            // HTML §structured-clone structuredClone(value, options) → length 1
+            const sc_fn = try self.createNamedNativeFn("structuredClone", &nativeStructuredClone, 1);
             try self.globals.put(self.allocator, try self.pool.intern("structuredClone"), JsValue.initObject(sc_fn));
         }
 
         // ── atob / btoa ──
         {
-            const atob_fn = try self.createNativeFn(&nativeAtob);
+            // HTML §atob atob(data) / btoa(data) → length 1 each
+            const atob_fn = try self.createNamedNativeFn("atob", &nativeAtob, 1);
             try self.globals.put(self.allocator, try self.pool.intern("atob"), JsValue.initObject(atob_fn));
-            const btoa_fn = try self.createNativeFn(&nativeBtoa);
+            const btoa_fn = try self.createNamedNativeFn("btoa", &nativeBtoa, 1);
             try self.globals.put(self.allocator, try self.pool.intern("btoa"), JsValue.initObject(btoa_fn));
         }
 
         // ── Boolean constructor ──
         {
-            const bool_ctor = try self.createNativeFn(&nativeBooleanConstructor);
+            // §20.3.1 Boolean(value) → length 1
+            const bool_ctor = try self.createNamedNativeFn("Boolean", &nativeBooleanConstructor, 1);
             try self.globals.put(self.allocator, try self.pool.intern("Boolean"), JsValue.initObject(bool_ctor));
         }
 
         // ── WeakRef ──
         {
-            const wr_ctor = try self.createNativeFn(&nativeWeakRefConstructor);
+            // §26.1.1 WeakRef(target) → length 1
+            const wr_ctor = try self.createNamedNativeFn("WeakRef", &nativeWeakRefConstructor, 1);
             try self.globals.put(self.allocator, try self.pool.intern("WeakRef"), JsValue.initObject(wr_ctor));
         }
 
@@ -2868,7 +2905,8 @@ pub const VM = struct {
 
         // ── Symbol ──
         {
-            const symbol_fn = try self.createNativeFn(&nativeSymbolConstructor);
+            // §20.4.1 Symbol([description]) → length 0
+            const symbol_fn = try self.createNamedNativeFn("Symbol", &nativeSymbolConstructor, 0);
             try self.globals.put(self.allocator, try self.pool.intern("Symbol"), JsValue.initObject(symbol_fn));
 
             // Symbol.for, Symbol.keyFor
@@ -2885,7 +2923,8 @@ pub const VM = struct {
 
         // ── Proxy ──
         {
-            const proxy_fn = try self.createNativeFn(&nativeProxyConstructor);
+            // §28.2.1 Proxy(target, handler) → length 2
+            const proxy_fn = try self.createNamedNativeFn("Proxy", &nativeProxyConstructor, 2);
             try self.globals.put(self.allocator, try self.pool.intern("Proxy"), JsValue.initObject(proxy_fn));
             try self.registerNativeMethod(proxy_fn, "revocable", &nativeProxyRevocable);
         }
@@ -2912,12 +2951,58 @@ pub const VM = struct {
         return obj;
     }
 
+    /// Install `length` and `name` own-descriptors per ECMA-262 §10.2.8 /
+    /// §10.2.9. Attrs = { writable:false, enumerable:false, configurable:true }.
+    /// Insertion order is length, then name — keeps `Reflect.ownKeys(fn)
+    /// .slice(0,2) === ["length","name"]` invariant for WebIDL builtin-function-
+    /// properties tests.
+    fn installFnReflection(self: *VM, fn_obj: *JsObject, name: []const u8, length: u16) !void {
+        const len_sid = try self.pool.intern("length");
+        const name_sid = try self.pool.intern("name");
+        const name_str_sid = try self.pool.intern(name);
+        const reflection_attrs = object_mod.PropertyAttrs{
+            .writable = false,
+            .enumerable = false,
+            .configurable = true,
+        };
+        _ = try fn_obj.defineOwnProperty(self.allocator, len_sid, .{
+            .data = .{
+                .value = JsValue.initNumber(@floatFromInt(length)),
+                .attrs = reflection_attrs,
+            },
+        });
+        _ = try fn_obj.defineOwnProperty(self.allocator, name_sid, .{
+            .data = .{
+                .value = JsValue.initString(name_str_sid),
+                .attrs = reflection_attrs,
+            },
+        });
+    }
+
+    /// Legacy helper — installs a native method with default arity 0. New code
+    /// should prefer `registerNativeMethodArity` with the spec-declared arity.
+    /// Retained as a back-compat shim so the ~270 existing call sites continue
+    /// to work; each already-migrated site uses the explicit variant.
     pub fn registerNativeMethod(self: *VM, target: *JsObject, name: []const u8, func: NativeFn) !void {
+        try self.registerNativeMethodArity(target, name, func, 0);
+    }
+
+    /// Spec-correct registration: installs the fn object with `length` and
+    /// `name` own-descriptors (§10.2.8, §10.2.9) then binds it on `target`
+    /// under `name`.
+    pub fn registerNativeMethodArity(
+        self: *VM,
+        target: *JsObject,
+        name: []const u8,
+        func: NativeFn,
+        length: u16,
+    ) !void {
         const fn_obj = try self.allocator.create(JsObject);
         fn_obj.* = .{ .obj_type = .native_function, .data = .{ .native_fn = func } };
         try self.objects.append(self.allocator, fn_obj);
-        const name_id = try self.pool.intern(name);
-        try target.setProperty(self.allocator, name_id, JsValue.initObject(fn_obj));
+        try self.installFnReflection(fn_obj, name, length);
+        const key = try self.pool.intern(name);
+        try target.setProperty(self.allocator, key, JsValue.initObject(fn_obj));
     }
 
     // ── JS-level error throwing (via try_stack, catchable by JS try-catch) ──
@@ -3910,53 +3995,99 @@ pub const VM = struct {
 
     // ── Higher-order array methods ──────────────────────────────────
 
+    /// Array.prototype.forEach — ECMA-262 §23.1.3.15
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
+    /// Steps 1-2: Let O be ? ToObject(this value); len = LengthOfArrayLike(O).
+    /// Step 6b: Has/Get gate iteration on plain array-likes.
     fn nativeArrayForEach(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.15 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            _ = try vm.callJsFunction(callback, thisArg, &cb_args);
+        if (!this.isObject()) return error.TypeError; // ToObject(undefined/null)
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                _ = try vm.callJsFunction(callback, thisArg, &cb_args);
+            }
+            return JsValue.undefined_val;
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                _ = try vm.callJsFunction(callback, thisArg, &cb_args);
+            }
         }
         return JsValue.undefined_val;
     }
 
+    /// Array.prototype.map — ECMA-262 §23.1.3.18
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArrayMap(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.18 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
         const new_arr = try vm.allocator.create(JsObject);
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            try new_arr.data.array.append(vm.allocator, result);
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                try new_arr.data.array.append(vm.allocator, result);
+            }
+            return JsValue.initObject(new_arr);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        // §23.1.3.18 creates a result of length `len` up-front; holes between
+        // become `undefined` in the result per step 8d's HasProperty gate.
+        try new_arr.data.array.resize(vm.allocator, len);
+        for (new_arr.data.array.items) |*slot| slot.* = JsValue.undefined_val;
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                new_arr.data.array.items[k] = try vm.callJsFunction(callback, thisArg, &cb_args);
+            }
         }
         return JsValue.initObject(new_arr);
     }
 
+    /// Array.prototype.filter — ECMA-262 §23.1.3.8
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArrayFilter(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.8 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
         const new_arr = try vm.allocator.create(JsObject);
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) {
-                try new_arr.data.array.append(vm.allocator, item);
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) {
+                    try new_arr.data.array.append(vm.allocator, item);
+                }
+            }
+            return JsValue.initObject(new_arr);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) try new_arr.data.array.append(vm.allocator, kv);
             }
         }
         return JsValue.initObject(new_arr);
@@ -4004,98 +4135,182 @@ pub const VM = struct {
         return acc;
     }
 
+    /// Array.prototype.find — ECMA-262 §23.1.3.9
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFind(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.9 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return item;
+            }
+            return JsValue.undefined_val;
+        }
+        // §23.1.3.9 uses Get (no HasProperty gate), so missing indices are
+        // passed to the callback as `undefined`.
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return item;
+            if (result.isTruthy()) return kv;
         }
         return JsValue.undefined_val;
     }
 
+    /// Array.prototype.findIndex — ECMA-262 §23.1.3.10
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFindIndex(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initNumber(-1);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initNumber(-1);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.10 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            }
+            return JsValue.initNumber(-1);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(k));
         }
         return JsValue.initNumber(-1);
     }
 
+    /// Array.prototype.findLast — ECMA-262 §23.1.3.11
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFindLast(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.11 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        const items = obj.data.array.items;
-        var i: usize = items.len;
-        while (i > 0) {
-            i -= 1;
-            const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            const items = obj.data.array.items;
+            var i: usize = items.len;
+            while (i > 0) {
+                i -= 1;
+                const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return items[i];
+            }
+            return JsValue.undefined_val;
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = len;
+        while (k > 0) {
+            k -= 1;
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return items[i];
+            if (result.isTruthy()) return kv;
         }
         return JsValue.undefined_val;
     }
 
+    /// Array.prototype.findLastIndex — ECMA-262 §23.1.3.12
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFindLastIndex(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initNumber(-1);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initNumber(-1);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.12 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        const items = obj.data.array.items;
-        var i: usize = items.len;
-        while (i > 0) {
-            i -= 1;
-            const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            const items = obj.data.array.items;
+            var i: usize = items.len;
+            while (i > 0) {
+                i -= 1;
+                const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            }
+            return JsValue.initNumber(-1);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = len;
+        while (k > 0) {
+            k -= 1;
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(k));
         }
         return JsValue.initNumber(-1);
     }
 
+    /// Array.prototype.some — ECMA-262 §23.1.3.28
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArraySome(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initBool(false);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.28 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return JsValue.initBool(true);
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initBool(true);
+            }
+            return JsValue.initBool(false);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initBool(true);
+            }
         }
         return JsValue.initBool(false);
     }
 
+    /// Array.prototype.every — ECMA-262 §23.1.3.7
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArrayEvery(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initBool(true);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initBool(true);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.7 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (!result.isTruthy()) return JsValue.initBool(false);
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (!result.isTruthy()) return JsValue.initBool(false);
+            }
+            return JsValue.initBool(true);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (!result.isTruthy()) return JsValue.initBool(false);
+            }
         }
         return JsValue.initBool(true);
     }
@@ -4434,6 +4649,22 @@ pub const VM = struct {
 
     // ── Promise helpers ──────────────────────────────────────────────
 
+    /// ECMA-262 §7.3.1 Get(V, P). Unlike JsObject.getProperty, which returns
+    /// null when encountering an accessor descriptor, this helper invokes the
+    /// getter and returns the result (or undefined if the accessor has no
+    /// getter). Propagates abrupt completions from the getter so callers can
+    /// route them into rejectPromise / pending_throw paths.
+    /// `this_val` is the receiver passed to the getter.
+    fn getPropertyWithAccessors(self: *VM, obj: *JsObject, name: StringId, this_val: JsValue) !?JsValue {
+        if (obj.findAccessorDescriptor(name)) |acc| {
+            if (acc.get.isObject()) {
+                return try self.callJsFunction(acc.get, this_val, &.{});
+            }
+            return JsValue.undefined_val;
+        }
+        return obj.getProperty(name);
+    }
+
     fn createPromiseObj(self: *VM) !*JsObject {
         const obj = try self.allocator.create(JsObject);
         obj.* = .{
@@ -4473,33 +4704,40 @@ pub const VM = struct {
                 }
             }
             // Slow-path: non-promise thenable — any object with a callable .then.
-            // ES2023 §25.4.1.3.2 step 8: "Let then be ? Get(resolution, 'then')."
-            // step 9: "If IsCallable(then) is true, call then with resolve/reject callbacks."
+            // §27.2.1.3.2 step 8: "Let then be Completion(Get(resolution, 'then'))."
+            // step 9: abrupt completion rejects the outer promise.
+            // step 11: IsCallable(thenAction) false → FulfillPromise (fall through).
+            // step 13-14: NewPromiseResolveThenableJob + HostEnqueuePromiseJob.
             const then_id = try self.pool.intern("then");
-            if (val_obj.getProperty(then_id)) |then_val| {
+            // §27.2.1.3.2 step 8: "Let then be Completion(Get(resolution, 'then'))."
+            // step 9: abrupt completion rejects the outer promise with the
+            // thrown value — so this lookup must invoke accessor getters and
+            // route their throws into rejectPromise (Gap 5b).
+            const then_val_opt = self.getPropertyWithAccessors(val_obj, then_id, value) catch |err| {
+                if (err == error.TypeError or err == error.RangeError) {
+                    const reason = self.pending_throw orelse JsValue.undefined_val;
+                    self.pending_throw = null;
+                    return self.rejectPromise(promise, reason);
+                }
+                return err;
+            };
+            if (then_val_opt) |then_val| {
                 if (then_val.isObject()) {
                     const then_obj = then_val.asJsObject();
-                    // ES2023 §7.2.3 IsCallable: obj_type is .function or .native_function.
+                    // §7.2.3 IsCallable: obj_type is .function or .native_function.
                     const is_callable = then_obj.obj_type == .native_function or
                         then_obj.obj_type == .function;
                     if (is_callable) {
-                        // Reuse the existing Promise constructor resolve/reject callback
-                        // infrastructure: createPromiseSetter stores the target promise
-                        // and nativeResolveCb/nativeRejectCb retrieve it via __target.
-                        const resolve_fn = try self.createPromiseSetter(promise, false);
-                        const reject_fn = try self.createPromiseSetter(promise, true);
-                        // Call thenable.then(resolve, reject) — §25.4.1.3.2 step 9.
-                        _ = self.callJsFunction(then_val, value, &.{
-                            JsValue.initObject(resolve_fn),
-                            JsValue.initObject(reject_fn),
-                        }) catch |err| {
-                            // §25.4.1.3.2 step 10: If then threw, reject promise with the error.
-                            // Only catch JS-level errors; propagate OOM and other Zig errors.
-                            if (err == error.TypeError or err == error.RangeError) {
-                                return self.rejectPromise(promise, JsValue.undefined_val);
-                            }
-                            return err;
-                        };
+                        // §27.2.1.3.2 step 13-14: enqueue NewPromiseResolveThenableJob
+                        // rather than invoking `then` synchronously. Preserves the
+                        // §8.4.1 microtask ordering invariants (observable via
+                        // `log.push('sync')` between `Promise.resolve({then})` and
+                        // its downstream `.then`).
+                        try self.microtasks.append(self.allocator, .{ .thenable_job = .{
+                            .target_promise = promise,
+                            .thenable = value,
+                            .then_fn = then_val,
+                        } });
                         return;
                     }
                 }
@@ -4594,6 +4832,30 @@ pub const VM = struct {
                         }
                     }
                 },
+                .thenable_job => |job| {
+                    // §27.2.2.1 NewPromiseResolveThenableJob: create fresh
+                    // resolve/reject closures bound to target_promise and invoke
+                    // `then.call(thenable, resolve, reject)`. Abrupt completion
+                    // rejects the promise per step 1.e.
+                    const resolve_fn = self.createPromiseSetter(job.target_promise, false) catch {
+                        _ = self.rejectPromise(job.target_promise, JsValue.undefined_val) catch {};
+                        continue;
+                    };
+                    const reject_fn = self.createPromiseSetter(job.target_promise, true) catch {
+                        _ = self.rejectPromise(job.target_promise, JsValue.undefined_val) catch {};
+                        continue;
+                    };
+                    _ = self.callJsFunction(job.then_fn, job.thenable, &.{
+                        JsValue.initObject(resolve_fn),
+                        JsValue.initObject(reject_fn),
+                    }) catch |err| {
+                        if (err == error.TypeError or err == error.RangeError) {
+                            const reason = self.pending_throw orelse JsValue.undefined_val;
+                            self.pending_throw = null;
+                            _ = self.rejectPromise(job.target_promise, reason) catch {};
+                        } else return err;
+                    };
+                },
                 .resume_async => |res| {
                     if (res.is_reject) {
                         // Rejection in async function — reject the async promise
@@ -4657,13 +4919,23 @@ pub const VM = struct {
         return promise_val;
     }
 
-    /// Promise.resolve(value)
-    fn nativePromiseResolve(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    /// Promise.resolve(value) — §27.2.4.7 → §27.2.1.4
+    fn nativePromiseResolve(ctx: *anyopaque, this_val: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const value = if (args.len > 0) args[0] else JsValue.undefined_val;
-        // If already a promise, return it
-        if (value.isObject()) {
-            if (value.asJsObject().obj_type == .promise) return value;
+        // §27.2.1.4 step 1: "If IsPromise(x), then
+        //   a. Let xConstructor be ? Get(x, 'constructor').
+        //   b. If SameValue(xConstructor, C), return x."
+        // kotori is single-realm with no Promise subclassing, so identity on
+        // the constructor object is sufficient for SameValue of object values.
+        if (value.isObject() and value.asJsObject().obj_type == .promise) {
+            const ctor_sid = try vm.pool.intern("constructor");
+            const x_ctor = value.asJsObject().getProperty(ctor_sid) orelse JsValue.undefined_val;
+            if (this_val.isObject() and x_ctor.isObject() and
+                @intFromPtr(this_val.asJsObject()) == @intFromPtr(x_ctor.asJsObject()))
+            {
+                return value;
+            }
         }
         const promise = try vm.createPromiseObj();
         try vm.resolvePromise(promise, value);
@@ -7952,10 +8224,25 @@ pub const VM = struct {
         return obj;
     }
 
+    /// Legacy helper — creates a native fn with empty name and length 0.
+    /// New code should prefer `createNamedNativeFn` with a real name and the
+    /// spec-declared arity so fn.length / fn.name read spec-correct values.
     fn createNativeFn(self: *VM, func: NativeFn) !*JsObject {
+        return self.createNamedNativeFn("", func, 0);
+    }
+
+    /// Spec-correct fn creation: installs `length` and `name` own-descriptors
+    /// (§10.2.8, §10.2.9) on the returned fn object.
+    fn createNamedNativeFn(
+        self: *VM,
+        name: []const u8,
+        func: NativeFn,
+        length: u16,
+    ) !*JsObject {
         const fn_obj = try self.allocator.create(JsObject);
         fn_obj.* = .{ .obj_type = .native_function, .data = .{ .native_fn = func } };
         try self.objects.append(self.allocator, fn_obj);
+        try self.installFnReflection(fn_obj, name, length);
         return fn_obj;
     }
 
@@ -7976,6 +8263,48 @@ pub const VM = struct {
         const n = val.toNumber();
         if (std.math.isNan(n) or n < 0) return 0;
         return @intFromFloat(@min(n, 4294967295.0));
+    }
+
+    /// ECMA-262 §7.2.3 IsCallable. Returns true iff `val` is a callable
+    /// object (plain function or native function). Does NOT walk proxies —
+    /// callers that need full spec semantics on proxies must handle that
+    /// explicitly; the Array callback methods below do not.
+    fn isCallable(val: JsValue) bool {
+        if (!val.isObject()) return false;
+        const o = val.asJsObject();
+        return o.obj_type == .function or o.obj_type == .native_function;
+    }
+
+    /// ECMA-262 §7.3.19 LengthOfArrayLike. Reads `.length` and applies
+    /// ToUint32-style coercion (clamped to [0, 2^32-1]). For real arrays we
+    /// shortcut to `items.len` to preserve the fast-path perf characteristics.
+    /// Returns 0 on missing/invalid `.length`.
+    fn lengthOfArrayLike(self: *VM, this_val: JsValue) !u32 {
+        if (!this_val.isObject()) return 0;
+        const obj = this_val.asJsObject();
+        if (obj.obj_type == .array) {
+            const n = obj.data.array.items.len;
+            if (n > std.math.maxInt(u32)) return std.math.maxInt(u32);
+            return @intCast(n);
+        }
+        const len_sid = try self.pool.intern("length");
+        const len_val = obj.getProperty(len_sid) orelse return 0;
+        const n = len_val.toNumber();
+        if (std.math.isNan(n) or n <= 0) return 0;
+        if (n >= 4294967295.0) return 4294967295;
+        return @intFromFloat(n);
+    }
+
+    /// Helper for Array callback methods: read element at integer index `k`
+    /// from an array-like `this`. Returns `null` if the index is absent
+    /// (observable via the `HasProperty` step in §23.1.3.*). The fast-path
+    /// for true arrays is inlined at the call site — this helper is only
+    /// reached when iterating a generic array-like.
+    fn arrayLikeElement(self: *VM, this_obj: *JsObject, k: u32) !?JsValue {
+        var idx_buf: [16]u8 = undefined;
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{d}", .{k});
+        const idx_sid = try self.pool.intern(idx_str);
+        return this_obj.getProperty(idx_sid);
     }
 
     // ── Promise aggregation methods ────────────────────────────────
@@ -8285,6 +8614,8 @@ pub const VM = struct {
     // Helper: find calling native function on the stack.
     // callJsFunction pushes func_val before calling native, so it's at sp-1
     // (since native runs before sp is adjusted). Walk back to find it.
+    // Filters by the "s" sentinel so accessor / promise-setter wrappers
+    // only match their own state blobs (avoids matching unrelated ctors).
     fn getCallerFuncObj(vm: *VM) ?*JsObject {
         const s_id = vm.pool.intern("s") catch return null;
         var i = vm.sp;
@@ -8296,6 +8627,29 @@ pub const VM = struct {
                 if (obj.obj_type == .native_function) {
                     if (obj.getProperty(s_id) != null) return obj;
                 }
+            }
+        }
+        return null;
+    }
+
+    /// ECMA-262 §10.2.8 / §20.5.1.1 step 1: resolve the "active function
+    /// object" — the constructor fn the engine is currently dispatching.
+    /// Unlike getCallerFuncObj this does NOT require the "s" sentinel; it
+    /// returns the topmost native_function on the stack that has a
+    /// "prototype" own/inherited property, which matches every constructor
+    /// installed via createNamedNativeFn. Used by nativeErrorConstructor to
+    /// bind the correct sub-error prototype when called without `new`.
+    fn getCallerCtorObj(vm: *VM) ?*JsObject {
+        const proto_id = vm.pool.intern("prototype") catch return null;
+        var i = vm.sp;
+        while (i > 0) {
+            i -= 1;
+            const val = vm.stack[i];
+            if (!val.isObject()) continue;
+            const obj = val.asJsObject();
+            if (obj.obj_type != .native_function) continue;
+            if (obj.getProperty(proto_id)) |pv| {
+                if (pv.isObject()) return obj;
             }
         }
         return null;
@@ -9153,11 +9507,23 @@ pub const VM = struct {
     fn nativeErrorConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const err_obj = try vm.createObj(.{});
-        // Prototype is set by construct opcode when called with `new`.
-        // When called without `new`, we default to Error.prototype.
-        if (vm.error_proto) |ep| {
-            err_obj.prototype = ep;
+        // §20.5.1.1 / §20.5.6.2 step 1-2: OrdinaryCreateFromConstructor reads
+        // `prototype` from the active function object (the sub-error
+        // constructor that dispatched to us via the shared native_fn
+        // pointer). Without this introspection every sub-error would collapse
+        // to %Error.prototype%, breaking `new TypeError("x") instanceof
+        // TypeError`. For `new` invocations the construct opcode (see the
+        // .construct arm above) re-reads the same prototype property and
+        // overwrites with the identical value — double-set is harmless. For
+        // no-`new` call form (`TypeError("x")`) this is the only assignment.
+        const proto_sid = try vm.pool.intern("prototype");
+        var proto_obj: ?*JsObject = vm.error_proto; // fallback: %Error.prototype%
+        if (getCallerCtorObj(vm)) |fn_obj| {
+            if (fn_obj.getProperty(proto_sid)) |pv| {
+                if (pv.isObject()) proto_obj = pv.asJsObject();
+            }
         }
+        if (proto_obj) |p| err_obj.prototype = p;
         const msg_sid = try vm.pool.intern("message");
         if (args.len > 0 and args[0].isString()) {
             try err_obj.setProperty(vm.allocator, msg_sid, args[0]);
