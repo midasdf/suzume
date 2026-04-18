@@ -1141,3 +1141,89 @@ test "importNode with zero args throws TypeError (DOM §4.5 step 1)" {
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Task 3: Element.attributes — NamedNodeMap (DOM §4.9.1)
+// ══════════════════════════════════════════════════════════════════════
+
+test "el.attributes exposes ALL attributes via indexed access (DOM §4.9.1)" {
+    // Regression guard for the one-line bug where iteration walked the
+    // generic node.next sibling chain instead of the lexbor attr list,
+    // which only ever exposed the first attribute.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\el.setAttribute('c', '3');
+        \\el.attributes.length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isNumber());
+    try std.testing.expectEqual(@as(f64, 3), result.asNumber());
+}
+
+test "el.attributes[2].name is the third attr (DOM §4.9.1)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\el.setAttribute('c', '3');
+        \\el.attributes[2].name;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const name = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("c", name);
+}
+
+test "el.attributes[0] === el.attributes[0] — Attr identity (DOM §4.9.1)" {
+    // WebIDL §3.1 object identity: repeated access to the same Attr must
+    // return the same JS wrapper. Implemented via g_attr_wrappers keyed on
+    // the lexbor attr pointer.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('x', '1');
+        \\el.attributes[0] === el.attributes[0];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "el.attributes is live: removeAttribute drops entry (DOM §4.9.1)" {
+    // NamedNodeMap is live: mutations to the element's attribute list
+    // must be reflected immediately by the next .attributes access.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\var before = el.attributes.length;
+        \\el.removeAttribute('a');
+        \\var after = el.attributes.length;
+        \\[before, after].join(',');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const s = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("2,1", s);
+}
+
+test "el.attributes is live: setAttribute on new name grows length" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var before = el.attributes.length;
+        \\el.setAttribute('a', '1');
+        \\var after = el.attributes.length;
+        \\[before, after].join(',');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const s = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("0,1", s);
+}

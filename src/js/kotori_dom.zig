@@ -250,6 +250,9 @@ const dom_b = struct {
     // Attribute existence / first-attr (used by hasAttribute, hasAttributes)
     pub extern fn lxb_dom_element_has_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) bool;
     pub extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
+    pub extern fn lxb_dom_element_next_attribute_noi(attr: *lxb.lxb_dom_attr_t) ?*anyopaque;
+    // Locate an attribute struct by qualified name (used to look up pointer before remove)
+    pub extern fn lxb_dom_element_attr_by_name(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) ?*lxb.lxb_dom_attr_t;
     // Insert after a reference node (used by insertAdjacentElement "afterend")
     pub extern fn lxb_dom_node_insert_after(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
     // Clone a node (shallow or deep)
@@ -405,6 +408,17 @@ fn nodeCachePut(allocator: std.mem.Allocator, node: *lxb.lxb_dom_node_t, obj: *J
     g_node_cache.put(allocator, @intFromPtr(node), obj) catch {};
 }
 
+/// Attr wrapper cache: maps lexbor attr pointer → JsObject wrapper.
+/// DOM §4.9.1 requires `el.attributes[0] === el.attributes[0]` (Attr identity).
+/// Keyed on the lexbor attr pointer; invalidated on removeAttribute.
+var g_attr_wrappers: std.AutoHashMapUnmanaged(usize, *JsObject) = .{};
+
+/// Drop a cached Attr wrapper (called before lexbor frees the underlying
+/// attribute struct, e.g. from removeAttribute / toggleAttribute-removes).
+fn invalidateAttrWrapper(attr: *lxb.lxb_dom_attr_t) void {
+    _ = g_attr_wrappers.remove(@intFromPtr(attr));
+}
+
 /// DOM §4.4 — write the per-Node owner document slot.
 /// `owner_doc_val` is `JsValue.null_val` for Document nodes themselves.
 /// The slot is named `_ownerDoc` (underscore prefix) to distinguish it from
@@ -496,6 +510,10 @@ pub fn deinit() void {
         m.deinit();
         g_scroll_map = null;
     }
+    // Attr wrapper cache: entries point to JsObjects owned by the VM arena,
+    // so we only need to drop the HashMap's own storage here.
+    g_attr_wrappers.deinit(g_alloc);
+    g_attr_wrappers = .{};
     // Shadow DOM tree-scope state is per-Document (DOM §4.8); clear it so
     // freed lxb node pointers reused by the next document don't inherit
     // stale scope ids or impersonate old shadow roots.
@@ -2913,6 +2931,11 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const attr_name = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    // DOM §4.9.1: invalidate the cached Attr wrapper *before* lexbor frees
+    // the attribute struct, otherwise the cache would hold a dangling key.
+    if (dom_b.lxb_dom_element_attr_by_name(elem, attr_name.ptr, attr_name.len)) |a| {
+        invalidateAttrWrapper(a);
+    }
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
     return JsValue.undefined_val;
 }
@@ -3952,49 +3975,91 @@ fn setAttrFromVal(vm: *VM, node: *lxb.lxb_dom_node_t, attr_name: []const u8, val
     }
 }
 
+/// Get-or-create a cached Attr JS wrapper for a lexbor attr pointer.
+/// DOM §4.9.1 Attr identity: `el.attributes[0] === el.attributes[0]` must hold.
+/// Wrappers are cached globally on the attr pointer and invalidated by
+/// removeAttribute before lexbor frees the underlying struct.
+fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
+    const key = @intFromPtr(a);
+    if (g_attr_wrappers.get(key)) |cached| {
+        // Refresh the value fields in case setAttribute reused the struct.
+        var val_len: usize = 0;
+        const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
+        const val_sid = if (val_ptr) |vp|
+            vm.pool.intern(vp[0..val_len]) catch return cached
+        else
+            vm.pool.intern("") catch return cached;
+        cached.setProperty(vm.allocator, vm.pool.intern("value") catch return cached, JsValue.initString(val_sid)) catch {};
+        cached.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return cached, JsValue.initString(val_sid)) catch {};
+        cached.setProperty(vm.allocator, vm.pool.intern("textContent") catch return cached, JsValue.initString(val_sid)) catch {};
+        return cached;
+    }
+
+    var attr_qn_len: usize = 0;
+    const attr_qn = dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len) orelse return null;
+    const qn_str = attr_qn[0..attr_qn_len];
+
+    const attr_obj = vm.createObj(.{}) catch return null;
+    const name_sid = vm.pool.intern(qn_str) catch return null;
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("name") catch return null, JsValue.initString(name_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("localName") catch return null, JsValue.initString(name_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeName") catch return null, JsValue.initString(name_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeType") catch return null, JsValue.initNumber(2)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("specified") catch return null, JsValue.initBool(true)) catch {};
+    // Value
+    var val_len: usize = 0;
+    const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
+    const val_sid = if (val_ptr) |vp|
+        vm.pool.intern(vp[0..val_len]) catch return null
+    else
+        vm.pool.intern("") catch return null;
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("value") catch return null, JsValue.initString(val_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return null, JsValue.initString(val_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch return null, JsValue.initString(val_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.null_val) catch {};
+
+    g_attr_wrappers.put(vm.allocator, key, attr_obj) catch {};
+    return attr_obj;
+}
+
 /// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).
 /// Returns an array-like object with .length, indexed access, .getNamedItem(), .item().
+/// The map is rebuilt per access so it stays live wrt setAttribute/removeAttribute;
+/// individual Attr wrappers are cached on the lexbor attr pointer for identity.
 fn buildAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
     const map_obj = vm.createObj(.{}) catch return null;
     var count: u32 = 0;
 
-    // Iterate lexbor attributes
+    // Iterate lexbor attributes using the proper attr-list link, not the
+    // generic sibling list (DOM §4.9.1). The previous `a.node.next` walk only
+    // ever exposed the first attribute.
     var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (attr) |a| {
+        const attr_obj = getOrCreateAttrWrapper(vm, a) orelse {
+            attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
+            continue;
+        };
+
+        // Resolve the (possibly refreshed) name for named access.
         var attr_qn_len: usize = 0;
-        const attr_qn = dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len);
-        if (attr_qn) |qn| {
+        if (dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len)) |qn| {
             const qn_str = qn[0..attr_qn_len];
-            // Create Attr-like object
-            const attr_obj = vm.createObj(.{}) catch continue;
-            const name_sid = vm.pool.intern(qn_str) catch continue;
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("name") catch continue, JsValue.initString(name_sid)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("localName") catch continue, JsValue.initString(name_sid)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeName") catch continue, JsValue.initString(name_sid)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeType") catch continue, JsValue.initNumber(2)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("specified") catch continue, JsValue.initBool(true)) catch {};
-            // Value
-            var val_len: usize = 0;
-            const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
-            const val_sid = if (val_ptr) |vp|
-                vm.pool.intern(vp[0..val_len]) catch continue
-            else
-                vm.pool.intern("") catch continue;
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("value") catch continue, JsValue.initString(val_sid)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch continue, JsValue.initString(val_sid)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch continue, JsValue.initString(val_sid)) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch continue, JsValue.null_val) catch {};
-            attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch continue, JsValue.null_val) catch {};
-            // Indexed access
-            var idx_buf: [8]u8 = undefined;
-            const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{count}) catch continue;
-            const idx_sid = vm.pool.intern(idx_str) catch continue;
-            map_obj.setProperty(vm.allocator, idx_sid, JsValue.initObject(attr_obj)) catch {};
-            // Named access
-            map_obj.setProperty(vm.allocator, name_sid, JsValue.initObject(attr_obj)) catch {};
-            count += 1;
+            if (vm.pool.intern(qn_str)) |name_sid| {
+                // Indexed access
+                var idx_buf: [8]u8 = undefined;
+                if (std.fmt.bufPrint(&idx_buf, "{d}", .{count})) |idx_str| {
+                    if (vm.pool.intern(idx_str)) |idx_sid| {
+                        map_obj.setProperty(vm.allocator, idx_sid, JsValue.initObject(attr_obj)) catch {};
+                    } else |_| {}
+                } else |_| {}
+                // Named access
+                map_obj.setProperty(vm.allocator, name_sid, JsValue.initObject(attr_obj)) catch {};
+                count += 1;
+            } else |_| {}
         }
-        attr = @ptrCast(@alignCast(a.node.next));
+
+        attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
     }
 
     map_obj.setProperty(vm.allocator, vm.pool.intern("length") catch return null, JsValue.initNumber(@floatFromInt(count))) catch {};
@@ -4750,6 +4815,10 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         // force argument: if provided and true, keep → return true
         if (args.len >= 2 and !args[1].isUndefined()) {
             if (args[1].isTruthy()) return JsValue.initBool(true);
+        }
+        // DOM §4.9.1: drop the cached Attr wrapper before lexbor frees it.
+        if (dom_b.lxb_dom_element_attr_by_name(elem, name.ptr, name.len)) |a| {
+            invalidateAttrWrapper(a);
         }
         // Remove attribute
         _ = dom_b.lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
