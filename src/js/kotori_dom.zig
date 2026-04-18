@@ -6216,10 +6216,12 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const name_raw = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
 
-    // Step 1: validate Name production (simplified: must be non-empty)
-    if (name_raw.len == 0) {
-        vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
-        return JsValue.undefined_val;
+    // Step 1: validate Name production via Layer 1A's dom_names helper.
+    // Parity with setAttribute / setAttributeNS (1D.1 §QName validation
+    // wiring work-item #1): toggleAttribute('foo bar') must raise
+    // InvalidCharacterError, not silently succeed.
+    if (!dom_names.isValidAttrName(name_raw)) {
+        return queueValidationErr(vm, dom_names.NameValidationError.InvalidCharacter);
     }
 
     // Step 2: lowercase for HTML documents

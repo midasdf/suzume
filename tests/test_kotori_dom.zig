@@ -2123,3 +2123,34 @@ test "removeAttributeNode throws TypeError for non-Attr" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 7: toggleAttribute QName validation ─────────────
+test "toggleAttribute throws InvalidCharacterError on invalid qname" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var caught = false;
+        \\try { el.toggleAttribute('foo bar'); }
+        \\catch (e) { caught = (e.name === 'InvalidCharacterError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "toggleAttribute still throws on empty name" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var caught = false;
+        \\try { el.toggleAttribute(''); }
+        \\catch (e) { caught = (e.name === 'InvalidCharacterError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
