@@ -5810,3 +5810,43 @@ test "Layer 0A: TypeError('x') (no-new) instanceof TypeError" {
     const result = try evalExpr("TypeError('x') instanceof TypeError");
     try std.testing.expect(result.asBool());
 }
+
+// Gap 5a: Promise.resolve same-constructor (§27.2.1.4 step 1b)
+test "Layer 0A: Promise.resolve(p) === p for own-realm promise" {
+    const result = try evalWithMicrotasks(
+        \\const p = Promise.resolve(42);
+        \\globalThis.__r = Promise.resolve(p) === p;
+    ,
+        "__r",
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5a: thenable adoption is a microtask, not synchronous (§27.2.1.3.2 step 13-14)
+test "Layer 0A: thenable adoption runs after sync frame completes" {
+    const result = try evalWithMicrotasks(
+        \\const log = [];
+        \\Promise.resolve({ then: function(res){ log.push('then'); res(99); } })
+        \\  .then(function(v){ log.push('resolved:' + v); });
+        \\log.push('sync');
+        \\// After microtask drain: ['sync','then','resolved:99']
+        \\globalThis.__r = (log[0] === 'sync' && log[1] === 'then' && log[2] === 'resolved:99');
+    ,
+        "__r",
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5a: thenable resolves with inner value.
+test "Layer 0A: thenable resolves promise with value passed to res()" {
+    const result = try evalWithMicrotasks(
+        \\var captured;
+        \\Promise.resolve({ then: function(res){ res(7); } })
+        \\  .then(function(v){ captured = v; });
+        \\globalThis.__r = captured;
+    ,
+        "__r",
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
+}
+

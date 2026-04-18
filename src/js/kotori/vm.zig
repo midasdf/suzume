@@ -120,6 +120,15 @@ pub const VM = struct {
             value: JsValue,
             is_reject: bool,
         },
+        /// ECMA-262 §27.2.2.1 NewPromiseResolveThenableJob.
+        /// Deferred invocation of `thenable.then(resolve, reject)` enqueued by
+        /// resolvePromise's slow-path. Required so thenable-adoption observes
+        /// spec-correct microtask ordering (see resolvePromise step 12-14).
+        thenable_job: struct {
+            target_promise: *JsObject, // promise to resolve/reject
+            thenable: JsValue, // thisArg for `then`
+            then_fn: JsValue, // the callable `then`
+        },
     };
 
     pub const HttpFetchResult = struct {
@@ -2653,6 +2662,12 @@ pub const VM = struct {
             const promise_ctor = try self.createNamedNativeFn("Promise", &nativePromiseConstructor, 1);
             const promise_id = try self.pool.intern("Promise");
             try self.globals.put(self.allocator, promise_id, JsValue.initObject(promise_ctor));
+            // §27.2.5.2 Promise.prototype.constructor = Promise. Required so the
+            // §27.2.1.4 SameValue(x.constructor, C) fast-path in Promise.resolve
+            // can return the original promise identically.
+            try proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(promise_ctor));
+            // §27.2.3.2 Promise.prototype: initial ctor.prototype property.
+            try promise_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(proto));
 
             // Promise.resolve / Promise.reject (static methods on constructor)
             // Promise static methods — arity per ECMA-262 §27.2.4
@@ -4673,33 +4688,28 @@ pub const VM = struct {
                 }
             }
             // Slow-path: non-promise thenable — any object with a callable .then.
-            // ES2023 §25.4.1.3.2 step 8: "Let then be ? Get(resolution, 'then')."
-            // step 9: "If IsCallable(then) is true, call then with resolve/reject callbacks."
+            // §27.2.1.3.2 step 8: "Let then be Completion(Get(resolution, 'then'))."
+            // step 9: abrupt completion rejects the outer promise.
+            // step 11: IsCallable(thenAction) false → FulfillPromise (fall through).
+            // step 13-14: NewPromiseResolveThenableJob + HostEnqueuePromiseJob.
             const then_id = try self.pool.intern("then");
             if (val_obj.getProperty(then_id)) |then_val| {
                 if (then_val.isObject()) {
                     const then_obj = then_val.asJsObject();
-                    // ES2023 §7.2.3 IsCallable: obj_type is .function or .native_function.
+                    // §7.2.3 IsCallable: obj_type is .function or .native_function.
                     const is_callable = then_obj.obj_type == .native_function or
                         then_obj.obj_type == .function;
                     if (is_callable) {
-                        // Reuse the existing Promise constructor resolve/reject callback
-                        // infrastructure: createPromiseSetter stores the target promise
-                        // and nativeResolveCb/nativeRejectCb retrieve it via __target.
-                        const resolve_fn = try self.createPromiseSetter(promise, false);
-                        const reject_fn = try self.createPromiseSetter(promise, true);
-                        // Call thenable.then(resolve, reject) — §25.4.1.3.2 step 9.
-                        _ = self.callJsFunction(then_val, value, &.{
-                            JsValue.initObject(resolve_fn),
-                            JsValue.initObject(reject_fn),
-                        }) catch |err| {
-                            // §25.4.1.3.2 step 10: If then threw, reject promise with the error.
-                            // Only catch JS-level errors; propagate OOM and other Zig errors.
-                            if (err == error.TypeError or err == error.RangeError) {
-                                return self.rejectPromise(promise, JsValue.undefined_val);
-                            }
-                            return err;
-                        };
+                        // §27.2.1.3.2 step 13-14: enqueue NewPromiseResolveThenableJob
+                        // rather than invoking `then` synchronously. Preserves the
+                        // §8.4.1 microtask ordering invariants (observable via
+                        // `log.push('sync')` between `Promise.resolve({then})` and
+                        // its downstream `.then`).
+                        try self.microtasks.append(self.allocator, .{ .thenable_job = .{
+                            .target_promise = promise,
+                            .thenable = value,
+                            .then_fn = then_val,
+                        } });
                         return;
                     }
                 }
@@ -4794,6 +4804,30 @@ pub const VM = struct {
                         }
                     }
                 },
+                .thenable_job => |job| {
+                    // §27.2.2.1 NewPromiseResolveThenableJob: create fresh
+                    // resolve/reject closures bound to target_promise and invoke
+                    // `then.call(thenable, resolve, reject)`. Abrupt completion
+                    // rejects the promise per step 1.e.
+                    const resolve_fn = self.createPromiseSetter(job.target_promise, false) catch {
+                        _ = self.rejectPromise(job.target_promise, JsValue.undefined_val) catch {};
+                        continue;
+                    };
+                    const reject_fn = self.createPromiseSetter(job.target_promise, true) catch {
+                        _ = self.rejectPromise(job.target_promise, JsValue.undefined_val) catch {};
+                        continue;
+                    };
+                    _ = self.callJsFunction(job.then_fn, job.thenable, &.{
+                        JsValue.initObject(resolve_fn),
+                        JsValue.initObject(reject_fn),
+                    }) catch |err| {
+                        if (err == error.TypeError or err == error.RangeError) {
+                            const reason = self.pending_throw orelse JsValue.undefined_val;
+                            self.pending_throw = null;
+                            _ = self.rejectPromise(job.target_promise, reason) catch {};
+                        } else return err;
+                    };
+                },
                 .resume_async => |res| {
                     if (res.is_reject) {
                         // Rejection in async function — reject the async promise
@@ -4857,13 +4891,23 @@ pub const VM = struct {
         return promise_val;
     }
 
-    /// Promise.resolve(value)
-    fn nativePromiseResolve(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    /// Promise.resolve(value) — §27.2.4.7 → §27.2.1.4
+    fn nativePromiseResolve(ctx: *anyopaque, this_val: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const value = if (args.len > 0) args[0] else JsValue.undefined_val;
-        // If already a promise, return it
-        if (value.isObject()) {
-            if (value.asJsObject().obj_type == .promise) return value;
+        // §27.2.1.4 step 1: "If IsPromise(x), then
+        //   a. Let xConstructor be ? Get(x, 'constructor').
+        //   b. If SameValue(xConstructor, C), return x."
+        // kotori is single-realm with no Promise subclassing, so identity on
+        // the constructor object is sufficient for SameValue of object values.
+        if (value.isObject() and value.asJsObject().obj_type == .promise) {
+            const ctor_sid = try vm.pool.intern("constructor");
+            const x_ctor = value.asJsObject().getProperty(ctor_sid) orelse JsValue.undefined_val;
+            if (this_val.isObject() and x_ctor.isObject() and
+                @intFromPtr(this_val.asJsObject()) == @intFromPtr(x_ctor.asJsObject()))
+            {
+                return value;
+            }
         }
         const promise = try vm.createPromiseObj();
         try vm.resolvePromise(promise, value);
