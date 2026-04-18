@@ -1814,3 +1814,47 @@ test "NamedNodeMap.setNamedItem: InUseAttributeError for different element's Att
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 8: @@iterator on NamedNodeMap.prototype.
+test "for..of el.attributes yields Attr nodes in index order (Layer 1D Task 8)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\var names = [];
+        \\for (var at of el.attributes) names.push(at.name);
+        \\names.length === 2 && names[0] === 'a' && names[1] === 'b';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "[...el.attributes] has correct length (Layer 1D Task 8)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\el.setAttribute('c', '3');
+        \\[...el.attributes].length === 3;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "el.attributes[Symbol.iterator] is callable (Layer 1D Task 8)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\typeof el.attributes[Symbol.iterator] === 'function';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

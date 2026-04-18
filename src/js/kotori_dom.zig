@@ -4331,6 +4331,16 @@ fn initNamedNodeMapMethods(vm: *VM, proto: *JsObject) !void {
     // Task 7: insertion methods — shared native per WebIDL legacy rule.
     try vm.registerNativeMethod(proto, "setNamedItem", &nativeNnmSetNamedItem);
     try vm.registerNativeMethod(proto, "setNamedItemNS", &nativeNnmSetNamedItem);
+    // Task 8: @@iterator — enables for..of and spread. Reuses the
+    // array-iterator pattern at vm.zig:2385-2388.
+    if (proto.symbol_props == null) proto.symbol_props = .{};
+    const iter_fn = try vm.createObj(.{ .obj_type = .native_function });
+    iter_fn.data = .{ .native_fn = &nativeNnmSymbolIterator };
+    try proto.symbol_props.?.put(
+        vm.allocator,
+        VM.SYMBOL_ITERATOR,
+        JsValue.initObject(iter_fn),
+    );
 }
 
 /// DOM §4.9.1 step 1 — for an HTML-namespace element inside an HTML
@@ -4713,6 +4723,62 @@ fn nativeNnmSetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 
     // Step 7: return old or null.
     return if (old_obj_opt) |oo| JsValue.initObject(oo) else JsValue.null_val;
+}
+
+/// DOM §4.9.2 @@iterator — spec §3.6.1 "indexed getter + iterable" install.
+/// Returns a new iterator object whose `.next()` walks the element's live
+/// attribute list in declaration order. Re-reads the lexbor list from head
+/// on every `next()` so live mutations (setAttribute during iteration)
+/// are reflected, matching the live-NamedNodeMap contract.
+fn nativeNnmSymbolIterator(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const iter = try vm.createObj(.{ .obj_type = .iterator });
+    iter.data = .{ .iterator_data = .{ .source = this } };
+    try vm.registerNativeMethod(iter, "next", &nativeNnmIteratorNext);
+    return JsValue.initObject(iter);
+}
+
+/// Iterator protocol `.next()` for NamedNodeMap. Uses the shared
+/// iterator_data.index cursor (0-based). Returns
+/// `{value: Attr, done: false}` while items remain, else
+/// `{value: undefined, done: true}`. Walks the lexbor list from head
+/// each call (O(n) per step) — acceptable for typical attribute counts
+/// (<10) and correct under live mutation.
+fn nativeNnmIteratorNext(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return iterResultDone(vm);
+    const iter = this.asJsObject();
+    if (iter.obj_type != .iterator) return iterResultDone(vm);
+    const data = &iter.data.iterator_data;
+    const elem = nnmElem(data.source) orelse return iterResultDone(vm);
+    const target_idx = data.index;
+    var j: u32 = 0;
+    var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (a) |attr| : (j += 1) {
+        if (j == target_idx) {
+            const obj = getOrCreateAttrWrapper(vm, attr) orelse return iterResultDone(vm);
+            data.index = target_idx + 1;
+            return iterResultValue(vm, JsValue.initObject(obj));
+        }
+        a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+    }
+    return iterResultDone(vm);
+}
+
+/// Shared iterator-result helpers for NamedNodeMap's @@iterator. Local
+/// to kotori_dom because vm.zig's createIterResult is not pub.
+fn iterResultDone(vm: *VM) anyerror!JsValue {
+    const r = try vm.createObj(.{});
+    try r.setProperty(vm.allocator, try vm.pool.intern("value"), JsValue.undefined_val);
+    try r.setProperty(vm.allocator, try vm.pool.intern("done"), JsValue.initBool(true));
+    return JsValue.initObject(r);
+}
+
+fn iterResultValue(vm: *VM, val: JsValue) anyerror!JsValue {
+    const r = try vm.createObj(.{});
+    try r.setProperty(vm.allocator, try vm.pool.intern("value"), val);
+    try r.setProperty(vm.allocator, try vm.pool.intern("done"), JsValue.initBool(false));
+    return JsValue.initObject(r);
 }
 
 /// DOM §4.9.2 — build `NamedNodeMap.prototype` and expose `globalThis.NamedNodeMap`.
