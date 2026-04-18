@@ -1902,3 +1902,291 @@ test "Attr.ownerElement becomes null after toggleAttribute removal (Layer 1D Tas
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 1: getAttributeNode / getAttributeNodeNS ────────
+test "getAttributeNode returns same object as attributes[0]" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes[0] === el.getAttributeNode('id');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "getAttributeNode returns null on miss" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\document.createElement('div').getAttributeNode('missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "getAttributeNodeNS coerces empty string ns to null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.getAttributeNodeNS('', 'id') !== null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 2: hasAttributeNS / getAttributeNS ──────────────
+test "hasAttributeNS returns true for matching null-ns attribute" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttributeNS(null, 'id', 'x');
+        \\el.hasAttributeNS(null, 'id') && !el.hasAttributeNS(null, 'missing');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "getAttributeNS returns value string, null when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttributeNS(null, 'id', 'x');
+        \\el.getAttributeNS(null, 'id') === 'x' &&
+        \\el.getAttributeNS(null, 'missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "hasAttributeNS and getAttributeNS coerce empty-string ns to null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.hasAttributeNS('', 'id') && el.getAttributeNS('', 'id') === 'x';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 3: removeAttributeNS ─────────────────────────────
+test "removeAttributeNS silent no-op when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.removeAttributeNS(null, 'missing');
+        \\el.attributes.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "removeAttributeNS removes matching attr and clears ownerElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttributeNS(null, 'id', 'x');
+        \\var a = el.getAttributeNodeNS(null, 'id');
+        \\el.removeAttributeNS(null, 'id');
+        \\a.ownerElement === null && el.hasAttribute('id') === false;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 4: Attr wrapper identity + backing-ptr slot ──────
+test "Attr wrapper preserves identity across multiple getAttributeNode calls" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a1 = el.getAttributeNode('id');
+        \\var a2 = el.getAttributeNode('id');
+        \\a1 === a2 && a1 === el.attributes[0];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 5: setAttributeNode / setAttributeNodeNS ─────────
+test "setAttributeNode returns null when appending new attr" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var a = document.createAttribute('id'); a.value = 'x';
+        \\var prev = el.setAttributeNode(a);
+        \\prev === null && el.getAttribute('id') === 'x' && a.ownerElement === el;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "setAttributeNode returns old Attr when replacing" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'old');
+        \\var oldNode = el.getAttributeNode('id');
+        \\var a = document.createAttribute('id'); a.value = 'new';
+        \\var ret = el.setAttributeNode(a);
+        \\ret === oldNode && oldNode.ownerElement === null &&
+        \\el.getAttribute('id') === 'new';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "setAttributeNode throws InUseAttributeError" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var a = document.createElement('div');
+        \\var b = document.createElement('div');
+        \\a.setAttribute('id', 'x');
+        \\var aAttr = a.getAttributeNode('id');
+        \\var caught = false;
+        \\try { b.setAttributeNode(aAttr); }
+        \\catch (e) { caught = (e.name === 'InUseAttributeError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 6: removeAttributeNode ──────────────────────────
+test "removeAttributeNode returns the Attr and clears ownerElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.getAttributeNode('id');
+        \\var r = el.removeAttributeNode(a);
+        \\r === a && a.ownerElement === null && el.attributes.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "removeAttributeNode throws NotFoundError when Attr is not in list" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var orphan = document.createAttribute('id');
+        \\var caught = false;
+        \\try { el.removeAttributeNode(orphan); }
+        \\catch (e) { caught = (e.name === 'NotFoundError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "removeAttributeNode throws TypeError for non-Attr" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var caught = false;
+        \\try { el.removeAttributeNode({}); }
+        \\catch (e) { caught = (e.name === 'TypeError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 7: toggleAttribute QName validation ─────────────
+test "toggleAttribute throws InvalidCharacterError on invalid qname" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var caught = false;
+        \\try { el.toggleAttribute('foo bar'); }
+        \\catch (e) { caught = (e.name === 'InvalidCharacterError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "toggleAttribute still throws on empty name" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var caught = false;
+        \\try { el.toggleAttribute(''); }
+        \\catch (e) { caught = (e.name === 'InvalidCharacterError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// ── Layer 1D.1 Task 8: refreshAttributesMap stale-key sweep ─────────
+test "attributes map index properties shrink correctly after removeAttribute" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\var m = el.attributes;
+        \\var touch = m[1];
+        \\el.removeAttribute('a');
+        \\var m2 = el.attributes;
+        \\m2[1] === undefined && m2.length === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "attributes map named properties sweep removed qnames" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var m = el.attributes;
+        \\var touch = m.id;
+        \\el.removeAttribute('id');
+        \\var m2 = el.attributes;
+        \\m2.id === undefined;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
