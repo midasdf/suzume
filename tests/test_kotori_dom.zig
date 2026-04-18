@@ -1272,3 +1272,69 @@ test "MathMLElement.prototype chains to Element.prototype" {
     const mathml_element_proto = kotori_dom.getMathMLElementProto() orelse return error.MissingMathMLProto;
     try std.testing.expectEqual(ctx.vm.element_proto.?, mathml_element_proto.prototype.?);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Task 7: applyInterfaceProto — 4-wrapper-site interface dispatch
+// (DOM §4.5.3 + HTML §4 + SVG2 §4 + MathML Core §2)
+// ══════════════════════════════════════════════════════════════════════
+
+test "createElement('div') has HTMLDivElement prototype" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\[el instanceof HTMLDivElement,
+        \\ el instanceof HTMLElement,
+        \\ el instanceof Element]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+    try std.testing.expect(items[2].isBool() and items[2].asBool());
+}
+
+test "createElement('div') is NOT instance of HTMLAnchorElement (shared-proto bug gone)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el instanceof HTMLAnchorElement
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(!result.asBool());
+}
+
+test "createElementNS(SVG_NS, 'circle') is SVGCircleElement, not HTMLElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        \\[c instanceof SVGCircleElement, c instanceof HTMLElement]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    try std.testing.expect(items[1].isBool() and !items[1].asBool());
+}
+
+test "createElementNS with HTML NS and uppercase → HTMLUnknownElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElementNS('http://www.w3.org/1999/xhtml', 'DIV');
+        \\el instanceof HTMLUnknownElement
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

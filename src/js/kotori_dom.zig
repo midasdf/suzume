@@ -445,6 +445,44 @@ pub fn getNodeOwnerDoc(_: *VM, obj: *JsObject) JsValue {
     return obj.getProperty(sid) orelse JsValue.null_val;
 }
 
+/// DOM §4.5.3 + HTML §4 + SVG2 §4 + MathML Core §2 — assign the correct
+/// interface prototype and owner-document slot to a newly-created element
+/// wrapper in one call.
+///
+/// `namespace` is the W3C namespace URI of the element (null for
+/// null-namespace elements, which map to the generic `Element` prototype).
+/// `local_name` is the element's local name (HTML NS requires lowercase
+/// for known-tag dispatch; see kotori_html_interfaces.resolveInterface).
+///
+/// Spec §3.6 init-order invariant: this must only be called after
+/// initInterfaceProtos has populated g_html_protos (asserted below).
+fn applyInterfaceProto(
+    vm: *VM,
+    obj: *JsObject,
+    namespace: ?[]const u8,
+    local_name: []const u8,
+    owner_doc: JsValue,
+) void {
+    const iface_mod = @import("kotori_html_interfaces.zig");
+    std.debug.assert(g_html_protos != null); // init-order invariant (spec §3.6)
+    setNodeOwnerDoc(vm, obj, owner_doc);
+    const iface_name = iface_mod.resolveInterface(namespace, local_name);
+    if (getHtmlProto(iface_name)) |p| {
+        obj.prototype = p;
+        return;
+    }
+    if (getSvgProto(iface_name)) |p| {
+        obj.prototype = p;
+        return;
+    }
+    if (std.mem.eql(u8, iface_name, "MathMLElement")) {
+        obj.prototype = g_mathml_element_proto.?;
+        return;
+    }
+    // "Element" fallback for null-namespace / unknown-namespace elements.
+    obj.prototype = vm.element_proto.?;
+}
+
 fn nodeCacheRemove(node: *lxb.lxb_dom_node_t) void {
     _ = g_node_cache.remove(@intFromPtr(node));
 }
@@ -1899,7 +1937,10 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
 /// must always have an owner per DOM §4.5).
 fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8, owner_doc: JsValue) !JsValue {
     const obj = try vm.createObj(.{});
-    if (vm.element_proto) |ep| obj.prototype = ep;
+    // DOM §4.5.3 — dispatch to the correct HTML/SVG/MathML interface
+    // prototype and write the `_ownerDoc` slot in one call. Supersedes the
+    // previous shared `vm.element_proto` assignment.
+    applyInterfaceProto(vm, obj, ns_uri, local_name, owner_doc);
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(1));
     try obj.setProperty(vm.allocator, try vm.pool.intern("localName"), JsValue.initString(try vm.pool.intern(local_name)));
     // tagName = uppercase for HTML namespace, preserves case for XML
@@ -1917,9 +1958,7 @@ fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8, own
         try obj.setProperty(vm.allocator, try vm.pool.intern("namespaceURI"), JsValue.null_val);
     }
     try obj.setProperty(vm.allocator, try vm.pool.intern("prefix"), JsValue.null_val);
-    // DOM §4.4 — owner document stored in the `_ownerDoc` slot, read by the
-    // ownerDocument getter in domNodeGetProp.
-    setNodeOwnerDoc(vm, obj, owner_doc);
+    // _ownerDoc slot is written by applyInterfaceProto above.
     try obj.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initObject(try vm.createObj(.{ .obj_type = .array })));
     try obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
@@ -3584,7 +3623,6 @@ fn nativeScrollBy(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerro
 fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
     obj.data = .{ .dom_node = @ptrCast(root_sr.fragment) };
-    obj.prototype = vm.element_proto;
     // Mark as shadow root for JS detection.
     const is_sr_sid = vm.pool.intern("__isShadowRoot") catch return JsValue.initObject(obj);
     obj.setProperty(vm.allocator, is_sr_sid, JsValue.initBool(true)) catch {};
@@ -3606,7 +3644,12 @@ fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
         if (!host_val.isObject()) break :blk JsValue.null_val;
         break :blk getNodeOwnerDoc(vm, host_val.asJsObject());
     };
-    setNodeOwnerDoc(vm, obj, host_owner);
+    // DOM §4.5.3 — ShadowRoot has no per-interface prototype in HTML/SVG/MathML,
+    // so route through applyInterfaceProto with null namespace + empty
+    // local name. resolveInterface returns "Element", giving us
+    // `vm.element_proto` (the previous behaviour) plus a single-call
+    // _ownerDoc slot write.
+    applyInterfaceProto(vm, obj, null, "", host_owner);
     return JsValue.initObject(obj);
 }
 
@@ -4022,21 +4065,13 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
     }
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
     obj.data = .{ .dom_node = @ptrCast(node) };
-    // Assign prototype based on node type (DOM spec prototype chain)
-    obj.prototype = switch (nodeType(node)) {
-        lxb.LXB_DOM_NODE_TYPE_ELEMENT => vm.element_proto,
-        lxb.LXB_DOM_NODE_TYPE_TEXT => g_text_proto,
-        lxb.LXB_DOM_NODE_TYPE_COMMENT => g_comment_proto,
-        lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE => g_doctype_proto,
-        lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
-        else => g_node_proto,
-    };
+    const nt = nodeType(node);
     // DOM §4.4 — resolve the owner document from lexbor. The lexbor struct
     // populates `node->owner_document` even for detached nodes
     // (confirmed by existing readers at src/js/dom_node.zig:2332).
     // Document nodes themselves have `ownerDocument === null`.
     const owner_doc_val: JsValue = blk: {
-        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) break :blk JsValue.null_val;
+        if (nt == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) break :blk JsValue.null_val;
         const od_c = node.owner_document;
         if (od_c == null) break :blk JsValue.null_val;
         const od_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(od_c));
@@ -4058,7 +4093,30 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
         nodeCachePut(vm.allocator, od_node, doc_wrap);
         break :blk JsValue.initObject(doc_wrap);
     };
-    setNodeOwnerDoc(vm, obj, owner_doc_val);
+    // Assign prototype based on node type (DOM spec prototype chain).
+    // For elements, dispatch to the correct HTML/SVG/MathML interface via
+    // applyInterfaceProto (DOM §4.5.3); otherwise use the per-node-type
+    // prototype and write the owner-doc slot directly.
+    if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        // Resolve namespace URI + local name from lexbor for interface dispatch.
+        // lexbor stores the namespace as a small integer ID on the node; the
+        // module-local helper nsIdToUri maps it to the canonical W3C URI.
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        const ns_slice: ?[]const u8 = nsIdToUri(elem.node.ns);
+        var ln_len: usize = 0;
+        const ln_raw = dom_b.lxb_dom_element_local_name(elem, &ln_len);
+        const ln_slice: []const u8 = if (ln_raw) |p| p[0..ln_len] else "";
+        applyInterfaceProto(vm, obj, ns_slice, ln_slice, owner_doc_val);
+    } else {
+        obj.prototype = switch (nt) {
+            lxb.LXB_DOM_NODE_TYPE_TEXT => g_text_proto,
+            lxb.LXB_DOM_NODE_TYPE_COMMENT => g_comment_proto,
+            lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE => g_doctype_proto,
+            lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
+            else => g_node_proto,
+        };
+        setNodeOwnerDoc(vm, obj, owner_doc_val);
+    }
     nodeCachePut(vm.allocator, node, obj);
     return JsValue.initObject(obj);
 }
@@ -4614,9 +4672,14 @@ fn cloneNodeImpl(
     deep: bool,
 ) ?JsValue {
     const cloned = dom_b.lxb_dom_node_clone(src_node, deep) orelse return null;
+    // DOM §4.5.3 — wrapNode reads the cloned node's (ns, local_name) from
+    // lexbor and dispatches the correct HTML/SVG/MathML interface prototype
+    // via applyInterfaceProto. lexbor's lxb_dom_node_clone preserves both
+    // fields on the clone, so the correct interface prototype is attached
+    // automatically without any extra work here.
     const wrapped_val = wrapNode(vm, cloned) orelse return null;
     if (owner_doc_override) |owner| {
-        // Override slot on the root clone.
+        // Override slot on the root clone (preserving the dispatched proto).
         if (wrapped_val.isObject()) {
             setNodeOwnerDoc(vm, wrapped_val.asJsObject(), owner);
         }
