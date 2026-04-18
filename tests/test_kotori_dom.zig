@@ -1704,3 +1704,48 @@ test "NamedNodeMap.getNamedItemNS: empty ns coerces to null" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 6: removeNamedItem + removeNamedItemNS.
+test "NamedNodeMap.removeNamedItem returns removed Attr (Layer 1D Task 6)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.attributes.removeNamedItem('id');
+        \\a.value === 'x' && a.ownerElement === null && el.attributes.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.removeNamedItem throws NotFoundError when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var threw = false;
+        \\try { el.attributes.removeNamedItem('missing'); }
+        \\catch (e) { threw = e.name === 'NotFoundError'; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.removeNamedItemNS throws NotFoundError when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var threw = false;
+        \\try { el.attributes.removeNamedItemNS(null, 'missing'); }
+        \\catch (e) { threw = e.name === 'NotFoundError'; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

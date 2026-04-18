@@ -4325,6 +4325,9 @@ fn initNamedNodeMapMethods(vm: *VM, proto: *JsObject) !void {
     try vm.registerNativeMethod(proto, "item", &nativeNnmItem);
     try vm.registerNativeMethod(proto, "getNamedItem", &nativeNnmGetNamedItem);
     try vm.registerNativeMethod(proto, "getNamedItemNS", &nativeNnmGetNamedItemNS);
+    // Task 6: removal methods (NotFoundError on absent).
+    try vm.registerNativeMethod(proto, "removeNamedItem", &nativeNnmRemoveNamedItem);
+    try vm.registerNativeMethod(proto, "removeNamedItemNS", &nativeNnmRemoveNamedItemNS);
 }
 
 /// DOM §4.9.1 step 1 — for an HTML-namespace element inside an HTML
@@ -4435,6 +4438,122 @@ fn nativeNnmGetNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsValue
     const a = lookupAttrByNsLocal(elem, ns_slice, local) orelse return JsValue.null_val;
     const obj = getOrCreateAttrWrapper(vm, a) orelse return JsValue.null_val;
     return JsValue.initObject(obj);
+}
+
+/// Write Attr.ownerElement (JS-visible own property) plus the hidden
+/// `__ownerElemPtr` slot holding the backing node-pointer as an opaque
+/// integer. Native methods consult the hidden slot for cheap ownership
+/// checks (e.g. setNamedItem's InUseAttributeError test) without
+/// re-crossing the JS boundary.
+///
+/// Passing `JsValue.null_val` (or undefined) clears both sides.
+fn setAttrOwnerElement(vm: *VM, attr_obj: *JsObject, owner: JsValue) void {
+    const oe_sid = vm.pool.intern("ownerElement") catch return;
+    attr_obj.setProperty(vm.allocator, oe_sid, owner) catch {};
+    const ptr_sid = g_sid_owner_elem_ptr orelse return;
+    if (owner.isNull() or owner.isUndefined()) {
+        attr_obj.setProperty(vm.allocator, ptr_sid, JsValue.null_val) catch {};
+        return;
+    }
+    if (!owner.isObject()) return;
+    const owner_obj = owner.asJsObject();
+    const node = getThisNode(JsValue.initObject(owner_obj)) orelse return;
+    attr_obj.setProperty(
+        vm.allocator,
+        ptr_sid,
+        JsValue.initNumber(@floatFromInt(@intFromPtr(node))),
+    ) catch {};
+}
+
+/// DOM §4.9.2 removeNamedItem(qualifiedName) — delegates to §4.9.1
+/// "remove an attribute by name". Throws NotFoundError when the
+/// qualified name doesn't resolve on the live attribute list.
+fn nativeNnmRemoveNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
+    const elem = nnmElem(this) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const qn_raw = vm.pool.get(args[0].asStringId()) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    var lower_buf: [256]u8 = undefined;
+    const qn: []const u8 = blk: {
+        if (!elementInHtmlDoc(vm, elem)) break :blk qn_raw;
+        if (qn_raw.len > lower_buf.len) break :blk qn_raw;
+        for (qn_raw, 0..) |c, i| lower_buf[i] = std.ascii.toLower(c);
+        break :blk lower_buf[0..qn_raw.len];
+    };
+    const lxb_attr_opaque = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const lxb_attr: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(lxb_attr_opaque));
+    // Fetch (or materialise) the wrapper before invalidation so we can
+    // return it to the caller.
+    const attr_obj_opt = getOrCreateAttrWrapper(vm, lxb_attr);
+    // §4.9.1 "remove an attribute": clear ownerElement on the removed
+    // Attr BEFORE lexbor frees the struct.
+    if (attr_obj_opt) |o| setAttrOwnerElement(vm, o, JsValue.null_val);
+    // Drop cache entry first; post-remove the lxb pointer may be
+    // reassigned by lexbor internals.
+    invalidateAttrWrapper(lxb_attr);
+    _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
+    bumpElemAttrVersion(elem);
+    return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
+}
+
+/// DOM §4.9.2 removeNamedItemNS(namespace, localName) — delegates to
+/// §4.9.1 "remove an attribute by namespace and local name". Throws
+/// NotFoundError when the (ns, localName) pair doesn't resolve.
+fn nativeNnmRemoveNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
+    const elem = nnmElem(this) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const ns_arg = args[0];
+    const ns_slice: ?[]const u8 = if (ns_arg.isNull() or ns_arg.isUndefined()) null else blk: {
+        if (!ns_arg.isString()) break :blk null;
+        const s = vm.pool.get(ns_arg.asStringId()) orelse break :blk null;
+        if (s.len == 0) break :blk null;
+        break :blk s;
+    };
+    if (!args[1].isString()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
+    const local = vm.pool.get(args[1].asStringId()) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const lxb_attr = lookupAttrByNsLocal(elem, ns_slice, local) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    // Resolve the qualifiedName from the live attr so lexbor's name-keyed
+    // removal reaches the same record we just found.
+    var qn_len: usize = 0;
+    const qn_ptr = dom_b.lxb_dom_attr_qualified_name(@ptrCast(lxb_attr), &qn_len) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const qn = qn_ptr[0..qn_len];
+    const attr_obj_opt = getOrCreateAttrWrapper(vm, lxb_attr);
+    if (attr_obj_opt) |o| setAttrOwnerElement(vm, o, JsValue.null_val);
+    invalidateAttrWrapper(lxb_attr);
+    _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
+    bumpElemAttrVersion(elem);
+    return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
 }
 
 /// DOM §4.9.2 — build `NamedNodeMap.prototype` and expose `globalThis.NamedNodeMap`.
