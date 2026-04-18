@@ -2026,3 +2026,53 @@ test "Attr wrapper preserves identity across multiple getAttributeNode calls" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 5: setAttributeNode / setAttributeNodeNS ─────────
+test "setAttributeNode returns null when appending new attr" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var a = document.createAttribute('id'); a.value = 'x';
+        \\var prev = el.setAttributeNode(a);
+        \\prev === null && el.getAttribute('id') === 'x' && a.ownerElement === el;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "setAttributeNode returns old Attr when replacing" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'old');
+        \\var oldNode = el.getAttributeNode('id');
+        \\var a = document.createAttribute('id'); a.value = 'new';
+        \\var ret = el.setAttributeNode(a);
+        \\ret === oldNode && oldNode.ownerElement === null &&
+        \\el.getAttribute('id') === 'new';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "setAttributeNode throws InUseAttributeError" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var a = document.createElement('div');
+        \\var b = document.createElement('div');
+        \\a.setAttribute('id', 'x');
+        \\var aAttr = a.getAttributeNode('id');
+        \\var caught = false;
+        \\try { b.setAttributeNode(aAttr); }
+        \\catch (e) { caught = (e.name === 'InUseAttributeError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
