@@ -1245,10 +1245,41 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
 
-    // Element.attributes (DOM §4.9 — NamedNodeMap)
+    // Element.attributes (DOM §4.9.2 — NamedNodeMap, identity-cached).
+    //
+    // Spec note: "Each attributes getter invocation returns the *same*
+    // NamedNodeMap." Cache the map JsObject on the Element wrapper via
+    // the hidden __nnmCache slot; refresh indexed/named own properties
+    // lazily when the per-element attr version counter advances.
     if (eql(name, "attributes")) {
         if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
-        return buildAttributesMap(vm, @ptrCast(node));
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        if (g_sid_nnm_cache) |cache_sid| {
+            if (obj.getProperty(cache_sid)) |cached| {
+                if (cached.isObject()) {
+                    const map = cached.asJsObject();
+                    // Lazy refresh when the element's attribute version
+                    // has advanced past the stamp we recorded at build
+                    // time (see refreshAttributesMap).
+                    if (g_sid_nnm_ver) |ver_sid| {
+                        const cur = g_elem_attr_ver.get(@intFromPtr(elem)) orelse 0;
+                        const stamped_val = map.getProperty(ver_sid) orelse JsValue.initNumber(0);
+                        const stamped_f = stamped_val.toNumber();
+                        const stamped: u64 = if (std.math.isFinite(stamped_f) and stamped_f >= 0)
+                            @intFromFloat(stamped_f)
+                        else
+                            0;
+                        if (stamped != cur) refreshAttributesMap(vm, map, elem);
+                    }
+                    return JsValue.initObject(map);
+                }
+            }
+        }
+        const built = buildAttributesMap(vm, elem) orelse return JsValue.null_val;
+        if (g_sid_nnm_cache) |cache_sid| {
+            obj.setProperty(vm.allocator, cache_sid, built) catch {};
+        }
+        return built;
     }
 
     // Element namespace properties (DOM §4.9)
