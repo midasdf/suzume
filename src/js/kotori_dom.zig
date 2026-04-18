@@ -461,6 +461,11 @@ var g_sid_nnm_elem: ?StringId = null; // "__nnmElem"      usize elem ptr
 var g_sid_nnm_ver: ?StringId = null; // "__nnmVer"        u64 version
 var g_sid_nnm_cache: ?StringId = null; // "__nnmCache"    *JsObject map
 var g_sid_owner_elem_ptr: ?StringId = null; // "__ownerElemPtr" usize node ptr (on Attr)
+/// Layer 1D.1 Task 4: opaque lxb_dom_attr_t* on the Attr JsObject — allows
+/// setAttributeNode (Task 5) to drop the stale g_attr_wrappers entry and
+/// re-key the new lexbor ptr to the SAME JsObject so identity holds across
+/// cross-element Attr transfers (spec §R1).
+var g_sid_attr_backing_ptr: ?StringId = null; // "__attrBackingPtr"
 
 /// DOM §4.4 — write the per-Node owner document slot.
 /// `owner_doc_val` is `JsValue.null_val` for Document nodes themselves.
@@ -613,6 +618,7 @@ pub fn deinit() void {
     g_sid_nnm_ver = null;
     g_sid_nnm_cache = null;
     g_sid_owner_elem_ptr = null;
+    g_sid_attr_backing_ptr = null;
     // Interface prototype maps (HTML/SVG). Values are JsObjects owned by the
     // VM arena, so we only drop the HashMap's own storage. Roots (HTMLElement /
     // SVGElement / MathMLElement prototypes) are likewise arena-owned.
@@ -4206,6 +4212,8 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
         cached.setProperty(vm.allocator, vm.pool.intern("value") catch return cached, JsValue.initString(val_sid)) catch {};
         cached.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return cached, JsValue.initString(val_sid)) catch {};
         cached.setProperty(vm.allocator, vm.pool.intern("textContent") catch return cached, JsValue.initString(val_sid)) catch {};
+        // Layer 1D.1 Task 4: keep backing-ptr current (idempotent).
+        setAttrBackingPtr(vm, cached, key);
         return cached;
     }
 
@@ -4263,6 +4271,9 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     }
 
     g_attr_wrappers.put(vm.allocator, key, attr_obj) catch {};
+    // Layer 1D.1 Task 4: stash the lexbor attr ptr on the JsObject so
+    // setAttributeNode (Task 5) can re-key across element transfers.
+    setAttrBackingPtr(vm, attr_obj, key);
     return attr_obj;
 }
 
@@ -4408,6 +4419,29 @@ fn nativeNnmGetNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsValue
     const a = lookupAttrByNsLocal(elem, ns_slice, local) orelse return JsValue.null_val;
     const obj = getOrCreateAttrWrapper(vm, a) orelse return JsValue.null_val;
     return JsValue.initObject(obj);
+}
+
+/// Layer 1D.1 Task 4: read the lexbor attr pointer stashed on the Attr
+/// JsObject via setAttrBackingPtr. Returns null if the slot is missing,
+/// null, undefined, or zero.
+fn getAttrBackingPtr(attr_obj: *JsObject) ?usize {
+    const sid = g_sid_attr_backing_ptr orelse return null;
+    const v = attr_obj.getProperty(sid) orelse return null;
+    if (v.isNull() or v.isUndefined()) return null;
+    const f = v.toNumber();
+    if (!std.math.isFinite(f) or f <= 0.0) return null;
+    return @intFromFloat(f);
+}
+
+/// Layer 1D.1 Task 4: stash the lexbor attr pointer on the Attr JsObject
+/// so setAttributeNode (Task 5) can drop the stale g_attr_wrappers entry
+/// and re-key the new lexbor ptr -> same JsObject (spec §R1 — wrapper
+/// identity across element boundaries). `ptr == 0` clears the slot.
+fn setAttrBackingPtr(vm: *VM, attr_obj: *JsObject, ptr: usize) void {
+    const sid = g_sid_attr_backing_ptr orelse return;
+    const v = if (ptr == 0) JsValue.null_val
+              else JsValue.initNumber(@floatFromInt(ptr));
+    attr_obj.setProperty(vm.allocator, sid, v) catch {};
 }
 
 /// Write Attr.ownerElement (JS-visible own property) plus the hidden
@@ -4948,6 +4982,9 @@ fn initNamedNodeMapProto(vm: *VM) !void {
     g_sid_nnm_ver = try vm.pool.intern("__nnmVer");
     g_sid_nnm_cache = try vm.pool.intern("__nnmCache");
     g_sid_owner_elem_ptr = try vm.pool.intern("__ownerElemPtr");
+    // Layer 1D.1 Task 4: backing-ptr slot for Attr wrapper identity under
+    // setAttributeNode transfer (spec §R1).
+    g_sid_attr_backing_ptr = try vm.pool.intern("__attrBackingPtr");
 
     // NamedNodeMap.prototype — inherits from Object.prototype by default.
     const proto = try vm.createObj(.{});

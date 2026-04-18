@@ -2010,3 +2010,19 @@ test "removeAttributeNS removes matching attr and clears ownerElement" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 4: Attr wrapper identity + backing-ptr slot ──────
+test "Attr wrapper preserves identity across multiple getAttributeNode calls" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a1 = el.getAttributeNode('id');
+        \\var a2 = el.getAttributeNode('id');
+        \\a1 === a2 && a1 === el.attributes[0];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
