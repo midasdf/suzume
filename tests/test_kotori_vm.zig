@@ -5791,3 +5791,22 @@ test "Layer 0A: some returns false on empty array" {
     const result = try evalExpr("[].some(function(x) { return true; }) === false");
     try std.testing.expect(result.asBool());
 }
+
+// Gap 3: Error subclass prototype chain (§20.5)
+test "Layer 0A: new TypeError instanceof TypeError" {
+    const result = try evalExpr("new TypeError('x') instanceof TypeError");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: new TypeError instanceof Error" {
+    const result = try evalExpr("new TypeError('x') instanceof Error");
+    try std.testing.expect(result.asBool());
+}
+
+// No-new form of sub-error ctor must also set the correct prototype
+// (§20.5.6.2 — the spec says NewTarget=undefined falls back to "active
+// function object", which in kotori is located via getCallerFuncObj).
+test "Layer 0A: TypeError('x') (no-new) instanceof TypeError" {
+    const result = try evalExpr("TypeError('x') instanceof TypeError");
+    try std.testing.expect(result.asBool());
+}

@@ -8542,6 +8542,8 @@ pub const VM = struct {
     // Helper: find calling native function on the stack.
     // callJsFunction pushes func_val before calling native, so it's at sp-1
     // (since native runs before sp is adjusted). Walk back to find it.
+    // Filters by the "s" sentinel so accessor / promise-setter wrappers
+    // only match their own state blobs (avoids matching unrelated ctors).
     fn getCallerFuncObj(vm: *VM) ?*JsObject {
         const s_id = vm.pool.intern("s") catch return null;
         var i = vm.sp;
@@ -8553,6 +8555,29 @@ pub const VM = struct {
                 if (obj.obj_type == .native_function) {
                     if (obj.getProperty(s_id) != null) return obj;
                 }
+            }
+        }
+        return null;
+    }
+
+    /// ECMA-262 §10.2.8 / §20.5.1.1 step 1: resolve the "active function
+    /// object" — the constructor fn the engine is currently dispatching.
+    /// Unlike getCallerFuncObj this does NOT require the "s" sentinel; it
+    /// returns the topmost native_function on the stack that has a
+    /// "prototype" own/inherited property, which matches every constructor
+    /// installed via createNamedNativeFn. Used by nativeErrorConstructor to
+    /// bind the correct sub-error prototype when called without `new`.
+    fn getCallerCtorObj(vm: *VM) ?*JsObject {
+        const proto_id = vm.pool.intern("prototype") catch return null;
+        var i = vm.sp;
+        while (i > 0) {
+            i -= 1;
+            const val = vm.stack[i];
+            if (!val.isObject()) continue;
+            const obj = val.asJsObject();
+            if (obj.obj_type != .native_function) continue;
+            if (obj.getProperty(proto_id)) |pv| {
+                if (pv.isObject()) return obj;
             }
         }
         return null;
@@ -9410,11 +9435,23 @@ pub const VM = struct {
     fn nativeErrorConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const err_obj = try vm.createObj(.{});
-        // Prototype is set by construct opcode when called with `new`.
-        // When called without `new`, we default to Error.prototype.
-        if (vm.error_proto) |ep| {
-            err_obj.prototype = ep;
+        // §20.5.1.1 / §20.5.6.2 step 1-2: OrdinaryCreateFromConstructor reads
+        // `prototype` from the active function object (the sub-error
+        // constructor that dispatched to us via the shared native_fn
+        // pointer). Without this introspection every sub-error would collapse
+        // to %Error.prototype%, breaking `new TypeError("x") instanceof
+        // TypeError`. For `new` invocations the construct opcode (see the
+        // .construct arm above) re-reads the same prototype property and
+        // overwrites with the identical value — double-set is harmless. For
+        // no-`new` call form (`TypeError("x")`) this is the only assignment.
+        const proto_sid = try vm.pool.intern("prototype");
+        var proto_obj: ?*JsObject = vm.error_proto; // fallback: %Error.prototype%
+        if (getCallerCtorObj(vm)) |fn_obj| {
+            if (fn_obj.getProperty(proto_sid)) |pv| {
+                if (pv.isObject()) proto_obj = pv.asJsObject();
+            }
         }
+        if (proto_obj) |p| err_obj.prototype = p;
         const msg_sid = try vm.pool.intern("message");
         if (args.len > 0 and args[0].isString()) {
             try err_obj.setProperty(vm.allocator, msg_sid, args[0]);
