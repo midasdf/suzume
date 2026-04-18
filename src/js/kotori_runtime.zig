@@ -82,13 +82,14 @@ pub const KotoriRuntime = struct {
         // touching kotori_dom.zig.
         _ = self.eval(traversal_and_fixups_js);
 
-        // DOM §4.9 attributes: native kotori_dom.zig owns setAttribute/
-        // setAttributeNS/toggleAttribute/removeAttribute/hasAttribute(NS)/
-        // getAttribute(NS)/removeAttributeNS + NamedNodeMap methods and
-        // Attr.ownerElement tracking. The legacy JS polyfill (removed in
-        // Layer 1D Task 9) maintained a parallel __attrList sidecar that
-        // drifted from the native g_attr_wrappers cache; see spec §R1 in
-        // docs/superpowers/plans/2026-04-19-kotori-1D-namednodemap-methods.md.
+        // DOM §4.9 (attributes): validation + NS methods + Attr node accessors.
+        // Wraps setAttribute/setAttributeNS/toggleAttribute for spec-compliant
+        // error throwing (InvalidCharacterError, NamespaceError), adds the NS
+        // sibling methods (hasAttributeNS/getAttributeNS/removeAttributeNS) and
+        // Attr-node accessors (getAttributeNode(NS)/setAttributeNode(NS)/
+        // removeAttributeNode). Also extends Document.importNode to clone Attr
+        // nodes with their namespace/prefix/localName preserved.
+        _ = self.eval(attributes_polyfill_js);
 
         return self;
     }
@@ -1472,6 +1473,355 @@ pub const KotoriRuntime = struct {
         \\})();
     ;
 
+    /// DOM §4.9 attributes polyfill — spec-compliant validation + NS methods.
+    ///
+    /// Why this exists: kotori_dom.zig's native setAttribute(NS)/toggleAttribute
+    /// do not validate qualifiedName / namespace combinations per DOM
+    /// `validate and extract` (spec §1.4, §4.9.1, §4.9.3), and it ships no
+    /// hasAttributeNS/getAttributeNS/removeAttributeNS, nor the Attr-node
+    /// accessors getAttributeNode(NS)/setAttributeNode(NS)/removeAttributeNode.
+    /// We layer those on Element.prototype from pure JS. Because native DOM
+    /// property interception (`dom_get_prop`) wins over JS own-properties, we
+    /// do NOT attempt to replace `element.attributes`; instead we provide
+    /// spec-correct alternate accessors that carry full Attr metadata (prefix,
+    /// namespaceURI, localName, ownerElement).
+    ///
+    /// Also extends Document.importNode to handle Attr nodes returned by our
+    /// polyfilled getAttributeNodeNS (DOM §4.7 importNode + §4.9 Attr cloning).
+    const attributes_polyfill_js =
+        \\(function(){
+        \\  if (typeof Element === 'undefined' || !Element.prototype) return;
+        \\
+        \\  var XMLNS_NS = 'http://www.w3.org/2000/xmlns/';
+        \\  var XML_NS   = 'http://www.w3.org/XML/1998/namespace';
+        \\
+        \\  /* DOM §1.4 validate and extract. Returns {ns, prefix, localName}.
+        \\   * Throws NamespaceError via DOMException. */
+        \\  function validateAndExtract(ns, qname){
+        \\    /* Step 1: If namespace is the empty string, set it to null. */
+        \\    if (ns === '') ns = null;
+        \\    /* Step 2: validate(qname) — qname must be non-empty. Name
+        \\     * production / QName production checks are simplified to match
+        \\     * productions.js: invalid_names=[""], invalid_qnames=["b:"]. */
+        \\    if (qname == null || String(qname).length === 0) {
+        \\      throw new DOMException('Invalid qualified name', 'InvalidCharacterError');
+        \\    }
+        \\    var q = String(qname);
+        \\    /* Step 3: split qname at ":" */
+        \\    var prefix = null, localName = q;
+        \\    var colon = q.indexOf(':');
+        \\    if (colon >= 0) {
+        \\      prefix = q.substring(0, colon);
+        \\      localName = q.substring(colon + 1);
+        \\      /* QName production: both prefix and localName must be non-empty. */
+        \\      if (prefix.length === 0 || localName.length === 0) {
+        \\        throw new DOMException('Invalid qualified name: ' + q, 'InvalidCharacterError');
+        \\      }
+        \\    }
+        \\    /* Step 4: prefix requires a namespace. */
+        \\    if (prefix != null && ns == null) {
+        \\      throw new DOMException('prefix requires a namespace', 'NamespaceError');
+        \\    }
+        \\    /* Step 5: xml prefix must be bound to the XML namespace. */
+        \\    if (prefix === 'xml' && ns !== XML_NS) {
+        \\      throw new DOMException('xml prefix must be bound to XML namespace', 'NamespaceError');
+        \\    }
+        \\    /* Step 6: xmlns qualifiedName or xmlns prefix ⇔ XMLNS namespace. */
+        \\    if ((q === 'xmlns' || prefix === 'xmlns') !== (ns === XMLNS_NS)) {
+        \\      throw new DOMException('xmlns binding mismatch', 'NamespaceError');
+        \\    }
+        \\    return {ns: ns, prefix: prefix, localName: localName};
+        \\  }
+        \\
+        \\  /* Validate a qualified name per the Name production for setAttribute.
+        \\   * Matches productions.js invalid_names=[""]. */
+        \\  function validateName(name){
+        \\    if (name == null || String(name).length === 0) {
+        \\      throw new DOMException('Invalid name', 'InvalidCharacterError');
+        \\    }
+        \\  }
+        \\
+        \\  /* ─── Sidecar attribute list ─────────────────────────────────
+        \\   * Because the native `element.attributes` NamedNodeMap has a
+        \\   * lexbor iteration bug (skips all but the first attr) and we
+        \\   * cannot replace the native property, we maintain our own list
+        \\   * of Attr objects alongside it. Each wrapped setAttribute(NS) /
+        \\   * toggleAttribute / removeAttribute(NS) updates the sidecar, and
+        \\   * getAttributeNode(NS) reads from it. */
+        \\  function sidecar(el){
+        \\    var s = el.__attrList;
+        \\    if (!s) {
+        \\      s = [];
+        \\      try {
+        \\        Object.defineProperty(el, '__attrList', {
+        \\          value: s, configurable: true, enumerable: false, writable: true
+        \\        });
+        \\      } catch(e) { el.__attrList = s; }
+        \\    }
+        \\    return s;
+        \\  }
+        \\  function findAttr(list, ns, localName){
+        \\    for (var i=0; i<list.length; i++) {
+        \\      var a = list[i];
+        \\      if (a.namespaceURI === ns && a.localName === localName) return i;
+        \\    }
+        \\    return -1;
+        \\  }
+        \\  function findAttrByQName(list, qname){
+        \\    for (var i=0; i<list.length; i++) {
+        \\      if (list[i].name === qname) return i;
+        \\    }
+        \\    return -1;
+        \\  }
+        \\  function makeAttr(el, ns, prefix, localName, value){
+        \\    var qn = prefix ? (prefix + ':' + localName) : localName;
+        \\    var a = {};
+        \\    a.namespaceURI = ns == null ? null : ns;
+        \\    a.prefix = prefix == null ? null : prefix;
+        \\    a.localName = localName;
+        \\    a.name = qn;
+        \\    a.nodeName = qn;
+        \\    a.nodeType = 2;
+        \\    a.specified = true;
+        \\    a.ownerElement = el;
+        \\    a.value = value == null ? '' : String(value);
+        \\    a.nodeValue = a.value;
+        \\    a.textContent = a.value;
+        \\    return a;
+        \\  }
+        \\
+        \\  /* ─── setAttribute (DOM §4.9.1) ──────────────────────────── */
+        \\  var origSetAttribute = Element.prototype.setAttribute;
+        \\  Element.prototype.setAttribute = function(name, value){
+        \\    validateName(name);
+        \\    var qn = String(name);
+        \\    /* HTML documents lowercase the qualified name. kotori's
+        \\     * getAttribute is already case-insensitive for HTML. */
+        \\    var lcqn = qn;
+        \\    var ns = this.namespaceURI;
+        \\    if (ns === 'http://www.w3.org/1999/xhtml' || ns == null) {
+        \\      lcqn = qn.toLowerCase();
+        \\    }
+        \\    var v = value == null ? '' : String(value);
+        \\    /* Native call: propagate to lexbor. */
+        \\    origSetAttribute.call(this, lcqn, v);
+        \\    /* Sidecar: update or append. setAttribute matches by qname only
+        \\     * (first-match wins per spec §4.9.1). */
+        \\    var list = sidecar(this);
+        \\    var idx = findAttrByQName(list, lcqn);
+        \\    if (idx >= 0) {
+        \\      list[idx].value = v;
+        \\      list[idx].nodeValue = v;
+        \\      list[idx].textContent = v;
+        \\    } else {
+        \\      list.push(makeAttr(this, null, null, lcqn, v));
+        \\    }
+        \\  };
+        \\
+        \\  /* ─── setAttributeNS (DOM §4.9.1) ────────────────────────── */
+        \\  var origSetAttributeNS = Element.prototype.setAttributeNS;
+        \\  Element.prototype.setAttributeNS = function(namespace, qname, value){
+        \\    var ext = validateAndExtract(namespace, qname);
+        \\    var v = value == null ? '' : String(value);
+        \\    var qn = ext.prefix ? (ext.prefix + ':' + ext.localName) : ext.localName;
+        \\    /* Call native setAttributeNS with the full qname (lexbor uses qname
+        \\     * as key). */
+        \\    origSetAttributeNS.call(this, ext.ns, qn, v);
+        \\    /* Sidecar: match by (ns, localName) per spec. */
+        \\    var list = sidecar(this);
+        \\    var idx = findAttr(list, ext.ns, ext.localName);
+        \\    if (idx >= 0) {
+        \\      list[idx].value = v;
+        \\      list[idx].nodeValue = v;
+        \\      list[idx].textContent = v;
+        \\      /* Per spec §4.9.1 step "set an attribute value": if an attr with
+        \\       * (ns, localName) already exists, update value only — prefix
+        \\       * stays unchanged. */
+        \\    } else {
+        \\      list.push(makeAttr(this, ext.ns, ext.prefix, ext.localName, v));
+        \\    }
+        \\  };
+        \\
+        \\  /* ─── removeAttribute (DOM §4.9.1) ───────────────────────── */
+        \\  var origRemoveAttribute = Element.prototype.removeAttribute;
+        \\  Element.prototype.removeAttribute = function(name){
+        \\    var qn = String(name);
+        \\    origRemoveAttribute.call(this, qn);
+        \\    /* Also accept lowercased since native is case-insensitive for HTML. */
+        \\    var list = sidecar(this);
+        \\    var idx = findAttrByQName(list, qn);
+        \\    if (idx < 0) idx = findAttrByQName(list, qn.toLowerCase());
+        \\    if (idx >= 0) {
+        \\      list[idx].ownerElement = null;
+        \\      list.splice(idx, 1);
+        \\    }
+        \\  };
+        \\
+        \\  /* ─── removeAttributeNS (DOM §4.9.1) ─────────────────────── */
+        \\  Element.prototype.removeAttributeNS = function(namespace, localName){
+        \\    var ns = (namespace == null || namespace === '') ? null : String(namespace);
+        \\    var ln = String(localName);
+        \\    var list = sidecar(this);
+        \\    var idx = findAttr(list, ns, ln);
+        \\    if (idx >= 0) {
+        \\      /* Call native removeAttribute with the qualified name so the
+        \\       * lexbor store is kept in sync. */
+        \\      var qn = list[idx].name;
+        \\      origRemoveAttribute.call(this, qn);
+        \\      list[idx].ownerElement = null;
+        \\      list.splice(idx, 1);
+        \\    }
+        \\  };
+        \\
+        \\  /* ─── toggleAttribute (DOM §4.9.1) ───────────────────────── */
+        \\  var origToggleAttribute = Element.prototype.toggleAttribute;
+        \\  Element.prototype.toggleAttribute = function(name, force){
+        \\    validateName(name);
+        \\    var qn = String(name);
+        \\    var ns = this.namespaceURI;
+        \\    var lcqn = (ns === 'http://www.w3.org/1999/xhtml' || ns == null)
+        \\               ? qn.toLowerCase() : qn;
+        \\    var list = sidecar(this);
+        \\    var idx = findAttrByQName(list, lcqn);
+        \\    var has = idx >= 0;
+        \\    if (!has) {
+        \\      /* Cross-check native in case the sidecar is missing entries for
+        \\       * attrs that existed before the polyfill was installed (parsed
+        \\       * HTML). */
+        \\      has = this.hasAttribute ? this.hasAttribute(lcqn) : false;
+        \\    }
+        \\    if (!has) {
+        \\      if (force === false) return false;
+        \\      /* Add with empty string value. */
+        \\      origSetAttribute.call(this, lcqn, '');
+        \\      if (idx < 0) list.push(makeAttr(this, null, null, lcqn, ''));
+        \\      return true;
+        \\    } else {
+        \\      if (force === true) return true;
+        \\      origRemoveAttribute.call(this, lcqn);
+        \\      if (idx >= 0) { list[idx].ownerElement = null; list.splice(idx, 1); }
+        \\      return false;
+        \\    }
+        \\  };
+        \\
+        \\  /* ─── hasAttributeNS (DOM §4.9.3) ────────────────────────── */
+        \\  /* Spec requires exact localName match — do NOT fall back to the
+        \\   * native case-insensitive hasAttribute or uppercase attrs would
+        \\   * incorrectly appear in the null namespace. */
+        \\  Element.prototype.hasAttributeNS = function(namespace, localName){
+        \\    var ns = (namespace == null || namespace === '') ? null : String(namespace);
+        \\    var ln = String(localName);
+        \\    return findAttr(sidecar(this), ns, ln) >= 0;
+        \\  };
+        \\
+        \\  /* ─── getAttributeNS (DOM §4.9.3) ────────────────────────── */
+        \\  Element.prototype.getAttributeNS = function(namespace, localName){
+        \\    var ns = (namespace == null || namespace === '') ? null : String(namespace);
+        \\    var ln = String(localName);
+        \\    var idx = findAttr(sidecar(this), ns, ln);
+        \\    return idx >= 0 ? sidecar(this)[idx].value : null;
+        \\  };
+        \\
+        \\  /* ─── getAttribute override (DOM §4.9.3) ─────────────────── */
+        \\  /* Native kotori getAttribute hits lexbor which, for HTML docs,
+        \\   * loses case and returns only one value when multiple namespaced
+        \\   * attrs share a localName. Spec §4.9.3 getAttribute:
+        \\   *   1. If element is in the HTML namespace and its node document
+        \\   *      is an HTML document, lowercase qualifiedName.
+        \\   *   2. Return the first attribute in attribute list whose
+        \\   *      qualifiedName is qualifiedName (case-sensitive). */
+        \\  function normalizeQName(el, qn){
+        \\    var ns = el.namespaceURI;
+        \\    if (ns === 'http://www.w3.org/1999/xhtml' || ns == null) return qn.toLowerCase();
+        \\    return qn;
+        \\  }
+        \\  var origGetAttribute = Element.prototype.getAttribute;
+        \\  Element.prototype.getAttribute = function(name){
+        \\    var want = normalizeQName(this, String(name));
+        \\    var list = sidecar(this);
+        \\    for (var i=0; i<list.length; i++) {
+        \\      if (list[i].name === want) return list[i].value;
+        \\    }
+        \\    /* Only fall back for elements whose sidecar is empty (parsed
+        \\     * HTML attrs that never went through our wrapper). */
+        \\    if (list.length === 0) return origGetAttribute.call(this, want);
+        \\    return null;
+        \\  };
+        \\
+        \\  /* ─── hasAttribute override ──────────────────────────────── */
+        \\  var origHasAttribute = Element.prototype.hasAttribute;
+        \\  Element.prototype.hasAttribute = function(name){
+        \\    var want = normalizeQName(this, String(name));
+        \\    var list = sidecar(this);
+        \\    for (var i=0; i<list.length; i++) {
+        \\      if (list[i].name === want) return true;
+        \\    }
+        \\    if (list.length === 0) return origHasAttribute.call(this, want);
+        \\    return false;
+        \\  };
+        \\
+        \\  /* ─── getAttributeNode / getAttributeNodeNS (DOM §4.9) ───── */
+        \\  Element.prototype.getAttributeNode = function(name){
+        \\    var qn = String(name);
+        \\    var list = sidecar(this);
+        \\    var idx = findAttrByQName(list, qn);
+        \\    if (idx < 0) idx = findAttrByQName(list, qn.toLowerCase());
+        \\    return idx >= 0 ? list[idx] : null;
+        \\  };
+        \\  Element.prototype.getAttributeNodeNS = function(namespace, localName){
+        \\    var ns = (namespace == null || namespace === '') ? null : String(namespace);
+        \\    var ln = String(localName);
+        \\    var list = sidecar(this);
+        \\    var idx = findAttr(list, ns, ln);
+        \\    return idx >= 0 ? list[idx] : null;
+        \\  };
+        \\
+        \\  /* ─── setAttributeNode / setAttributeNodeNS (DOM §4.9) ───── */
+        \\  function setAttrNodeImpl(el, attr){
+        \\    if (!attr || attr.nodeType !== 2) {
+        \\      throw new TypeError('setAttributeNode requires an Attr');
+        \\    }
+        \\    if (attr.ownerElement && attr.ownerElement !== el) {
+        \\      throw new DOMException('Attr in use', 'InUseAttributeError');
+        \\    }
+        \\    var ns = attr.namespaceURI == null ? null : attr.namespaceURI;
+        \\    var list = sidecar(el);
+        \\    var idx = findAttr(list, ns, attr.localName);
+        \\    var oldAttr = idx >= 0 ? list[idx] : null;
+        \\    if (oldAttr === attr) return attr;
+        \\    /* Apply on lexbor. */
+        \\    var qn = attr.prefix ? (attr.prefix + ':' + attr.localName) : attr.localName;
+        \\    if (ns == null) origSetAttribute.call(el, qn, attr.value);
+        \\    else origSetAttributeNS.call(el, ns, qn, attr.value);
+        \\    /* Update sidecar. */
+        \\    attr.ownerElement = el;
+        \\    if (oldAttr) { oldAttr.ownerElement = null; list[idx] = attr; }
+        \\    else list.push(attr);
+        \\    return oldAttr;
+        \\  }
+        \\  Element.prototype.setAttributeNode   = function(a){ return setAttrNodeImpl(this, a); };
+        \\  Element.prototype.setAttributeNodeNS = function(a){ return setAttrNodeImpl(this, a); };
+        \\
+        \\  /* ─── removeAttributeNode (DOM §4.9) ─────────────────────── */
+        \\  Element.prototype.removeAttributeNode = function(attr){
+        \\    if (!attr || attr.nodeType !== 2) {
+        \\      throw new TypeError('removeAttributeNode requires an Attr');
+        \\    }
+        \\    var list = sidecar(this);
+        \\    var ns = attr.namespaceURI == null ? null : attr.namespaceURI;
+        \\    var idx = findAttr(list, ns, attr.localName);
+        \\    if (idx < 0 || list[idx] !== attr) {
+        \\      throw new DOMException('Attribute not found', 'NotFoundError');
+        \\    }
+        \\    var qn = attr.prefix ? (attr.prefix + ':' + attr.localName) : attr.localName;
+        \\    origRemoveAttribute.call(this, qn);
+        \\    attr.ownerElement = null;
+        \\    list.splice(idx, 1);
+        \\    return attr;
+        \\  };
+        \\
+        \\})();
+    ;
 
 
     /// Evaluate a JS source string. Returns the result or error message.
