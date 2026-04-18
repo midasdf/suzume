@@ -29,7 +29,7 @@
   - L2439 DocumentType init — write slot via helper
   - L3383 `wrapShadowRoot` — write slot via helper + proto dispatch
   - L3424 `nativeDocumentConstructor` — write slot via helper
-  - L3796 `wrapNode` — owner resolution via `node->owner_document` + proto dispatch
+  - L3801 `wrapNode` — owner resolution via `node->owner_document` + proto dispatch
   - L3847-L3892 `buildAttributesMap` — L3887 one-line fix + Attr wrapper cache
   - L4305-ish `nativeCloneNode` — P0 verifies exact line; proto dispatch + slot
   - L4901 `createHTMLDocument` — write slot
@@ -69,7 +69,7 @@ cd ~/suzume
 grep -n "createObj(\.{ \.obj_type = \.dom_node" src/js/kotori_dom.zig
 ```
 
-Expected output: 5-10 lines, each a file:line. Compare against the spec §3.1 table (L584, L1742, L2014, L2439, L3383, L3424, L3796, L4305, L4901, L5200, L5247, L5326). Note any new lines not in the spec table. If found, add a row to the local notes before proceeding.
+Expected output: 5-10 lines, each a file:line. Compare against the spec §3.1 table (L584, L1742, L2014, L2439, L3383, L3424, L3801, L4305, L4901, L5200, L5247, L5326). Note any new lines not in the spec table. If found, add a row to the local notes before proceeding.
 
 - [ ] **Step 0.2: Enumerate all `createJsOnlyElement` callers**
 
@@ -301,7 +301,7 @@ After `doc_obj.prototype = g_node_proto;`:
 setNodeOwnerDoc(vm, doc_obj, JsValue.null_val);
 ```
 
-- [ ] **Step 1.11: Migrate L3796 `wrapNode`**
+- [ ] **Step 1.11: Migrate L3801 `wrapNode`**
 
 Locate the existing:
 ```zig
@@ -382,7 +382,7 @@ wrapper/creator sites enumerated in spec §3.1:
 - L2439 DocumentType
 - L3383 wrapShadowRoot
 - L3424 nativeDocumentConstructor
-- L3796 wrapNode (owner resolved via node->owner_document)
+- L3801 wrapNode (owner resolved via node->owner_document)
 - L4305 nativeCloneNode (inherits src ownerDoc)
 - L4901 createHTMLDocument
 - L5200/5247/5326 impl.create* paths
@@ -1466,7 +1466,7 @@ fn applyInterfaceProto(
 }
 ```
 
-- [ ] **Step 7.2: Wire into `wrapNode` at L3796**
+- [ ] **Step 7.2: Wire into `wrapNode` at L3801**
 
 Replace the existing `obj.prototype = switch (nodeType(node)) { ... };` block (from Task 1) with:
 
@@ -1561,7 +1561,7 @@ the correct HTML/SVG/MathML interface via kotori_html_interfaces and
 assigns both the prototype and the _ownerDoc slot in one call.
 
 Wired into all four Node-wrapper creation sites:
-- wrapNode (L3796) — parser/query path; namespace + local_name from lexbor
+- wrapNode (L3801) — parser/query path; namespace + local_name from lexbor
 - createJsOnlyElement (L1742) — XML-doc JS-only path
 - wrapShadowRoot (L3383) — element_proto via null-namespace route
 - cloneNodeImpl (L4305 helper) — preserves ns/local on clones

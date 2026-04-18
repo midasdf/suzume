@@ -68,7 +68,7 @@ Object.prototype
 1. JS call → kotori_dom.zig createElement native (existing)
 2. Tag validation + lowercase (existing, DOM §4.5.3 steps 1-4)
 3. lxb_dom_document_create_element_noi (lexbor)
-4. wrapNode(node) (existing L3796)
+4. wrapNode(node) (existing L3801)
    ├─ nodeCacheGet — return if hit
    ├─ create JsObject
    ├─ NEW: resolve interface via kotori_html_interfaces + assign prototype
@@ -105,7 +105,7 @@ Object.prototype
 - L2439 DocumentType JS init: property.
 - **L3383** `wrapShadowRoot`: no slot; `prototype = element_proto`.
 - **L3424** `nativeDocumentConstructor` (new Document()): no slot; `prototype = g_node_proto`.
-- L3796 `wrapNode` (parser/query path): no slot; prototype switched by nodeType.
+- L3801 `wrapNode` (parser/query path): no slot; prototype switched by nodeType.
 - **L4901** `createHTMLDocument` native: no slot; `prototype = g_node_proto`.
 - L5200 impl.createDocument: property on returned doc's root.
 - L5247 impl.createDocument.createElement path: property.
@@ -130,7 +130,7 @@ Object.prototype
   | DocumentType L2439 | property | slot |
   | `wrapShadowRoot` L3383 | no slot | slot = host element's ownerDocument |
   | `nativeDocumentConstructor` L3424 | no slot | slot = `null_val` (the new Document is itself) |
-  | `wrapNode` L3796 | no slot write | resolve owner via lexbor `node->owner_document` (verified accessible at `dom_node.zig:2332`); write slot before `nodeCachePut` |
+  | `wrapNode` L3801 | no slot write | resolve owner via lexbor `node->owner_document` (verified accessible at `dom_node.zig:2332`); write slot before `nodeCachePut` |
   | `createHTMLDocument` L4901 | no slot | slot = `null_val` (new doc itself); populate child elements' slots to point to it |
   | impl.createDocument L5200/L5247/L5326 | property | slot (owner = the newly created doc; doc itself = `null_val`) |
   | `nativeCloneNode` L4305 (verify line in P0) | current logic TBD | slot = source node's ownerDoc (clone node); `importNode` path overrides to target doc |
