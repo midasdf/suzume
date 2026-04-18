@@ -432,10 +432,20 @@ fn invalidateAttrWrapper(attr: *lxb.lxb_dom_attr_t) void {
 /// `owner_doc_val` is `JsValue.null_val` for Document nodes themselves.
 /// The slot is named `_ownerDoc` (underscore prefix) to distinguish it from
 /// the JS-visible `ownerDocument` property; the getter at domNodeGetProp
-/// reads this slot directly.
+/// reads this slot directly for lexbor-backed `.dom_node` wrappers.
+///
+/// For plain JsObject wrappers (createJsOnlyElement, Attr, DocumentType,
+/// ProcessingInstruction, etc.) `domNodeGetProp` never fires, so the
+/// JS-visible `ownerDocument` property must also be set for script access
+/// (DOM §4.4 Node.ownerDocument getter). `.dom_node` objects get the JS
+/// property too, but `dom_get_prop` intercepts the read before the
+/// prototype walk so the slot-backed getter still wins — keeping the two
+/// paths consistent.
 pub fn setNodeOwnerDoc(vm: *VM, obj: *JsObject, owner_doc_val: JsValue) void {
     const sid = g_sid_owner_doc orelse return;
     obj.setProperty(vm.allocator, sid, owner_doc_val) catch {};
+    const od_sid = vm.pool.intern("ownerDocument") catch return;
+    obj.setProperty(vm.allocator, od_sid, owner_doc_val) catch {};
 }
 
 /// DOM §4.4 — read the per-Node owner document slot.
@@ -738,6 +748,14 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
         proto.prototype = g_html_element_proto.?;
         try html_map.put(name, proto);
     }
+    // Abstract HTML interfaces (e.g. HTMLMediaElement) — HTML §4 superclasses
+    // exposed as globals for WPT / instanceof; prototype chains to
+    // HTMLElement.prototype. No tag resolves to them directly.
+    for (iface_mod.html_abstract_ifaces) |name| {
+        const proto = try vm.createObj(.{});
+        proto.prototype = g_html_element_proto.?;
+        try html_map.put(name, proto);
+    }
     g_html_protos = html_map;
 
     // Per-subclass SVG prototypes → SVGElement.prototype
@@ -943,6 +961,19 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // (shared-proto bug). iface_mod.html_unique_ifaces includes both
     // "HTMLElement" and "HTMLUnknownElement".
     for (iface_mod.html_unique_ifaces) |ename| {
+        const hctor = try vm.createObj(.{ .obj_type = .native_function });
+        hctor.data = .{ .native_fn = &nativeNoOpConstructor };
+        const ctor_proto = getHtmlProto(ename) orelse g_html_element_proto.?;
+        hctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ctor_proto)) catch {};
+        try vm.globals.put(vm.allocator, try vm.pool.intern(ename), JsValue.initObject(hctor));
+    }
+
+    // Abstract HTML interface ctors — HTML §4 superclasses (HTMLMediaElement,
+    // etc.) exposed as globals. Their `.prototype` points at the dedicated
+    // abstract prototype registered above; the abstract proto chains to
+    // HTMLElement.prototype so `instanceof HTMLMediaElement` works on the
+    // concrete subclass instances.
+    for (iface_mod.html_abstract_ifaces) |ename| {
         const hctor = try vm.createObj(.{ .obj_type = .native_function });
         hctor.data = .{ .native_fn = &nativeNoOpConstructor };
         const ctor_proto = getHtmlProto(ename) orelse g_html_element_proto.?;

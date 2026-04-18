@@ -242,6 +242,16 @@ pub const html_unique_ifaces = [_][]const u8{
     "HTMLVideoElement",
 };
 
+/// Abstract HTML interfaces — present as globals for `instanceof` + WPT
+/// surface, but no tag-local-name maps to them (they exist as spec
+/// superclasses shared by several concrete interfaces). Their prototypes
+/// parent to HTMLElement.prototype per HTML §4 interface hierarchy.
+/// Kept separate from `html_unique_ifaces` because they must NOT be
+/// returned by `resolveInterface` (only concrete subclasses are).
+pub const html_abstract_ifaces = [_][]const u8{
+    "HTMLMediaElement", // superclass of HTMLAudioElement + HTMLVideoElement
+};
+
 pub const svg_unique_ifaces = [_][]const u8{
     "SVGCircleElement",       "SVGClipPathElement",       "SVGDefsElement",
     "SVGElement",             "SVGEllipseElement",        "SVGForeignObjectElement",
