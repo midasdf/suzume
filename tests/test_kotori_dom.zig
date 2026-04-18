@@ -1338,3 +1338,219 @@ test "createElementNS with HTML NS and uppercase → HTMLUnknownElement" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Task 8: Spec §6.1 gap-fill — items 2,3,4,5,6,7,8,10,11,12,18
+// ══════════════════════════════════════════════════════════════════════
+
+// §6.1 item 2 — createElement('DIV') lowercases to HTMLDivElement
+test "createElement('DIV') lowercases: instanceof HTMLDivElement, tagName='DIV'" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('DIV');
+        \\[el instanceof HTMLDivElement, el instanceof HTMLElement, el.tagName]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    // instanceof HTMLDivElement
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    // instanceof HTMLElement
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+    // tagName is uppercased 'DIV'
+    const tag = ctx.getResultStr(items[2]) orelse return error.NotAString;
+    try std.testing.expectEqualStrings("DIV", tag);
+}
+
+// §6.1 item 3 — createElement('input') → HTMLInputElement
+test "createElement('input') instanceof HTMLInputElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('input');
+        \\[el instanceof HTMLInputElement, el instanceof HTMLElement, el instanceof Element]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+    try std.testing.expect(items[2].isBool() and items[2].asBool());
+}
+
+// §6.1 item 4 — createElement('xfoo') → HTMLUnknownElement (JS-level)
+test "createElement('xfoo') instanceof HTMLUnknownElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('xfoo');
+        \\[el instanceof HTMLUnknownElement, el instanceof HTMLElement]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+}
+
+// §6.1 item 5 — createElement('foo-bar') → HTMLElement (custom name, JS-level)
+test "createElement('foo-bar') instanceof HTMLElement (custom element name)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('foo-bar');
+        \\[el instanceof HTMLElement, el instanceof HTMLUnknownElement]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+    // instanceof HTMLElement = true
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    // instanceof HTMLUnknownElement = false (valid custom name is HTMLElement, not unknown)
+    try std.testing.expect(items[1].isBool() and !items[1].asBool());
+}
+
+// §6.1 item 6 — createElement('123') throws InvalidCharacterError
+test "createElement('123') throws InvalidCharacterError (digit-leading name)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var threw = false;
+        \\try { document.createElement('123'); } catch(e) {
+        \\  threw = (e.name === 'InvalidCharacterError');
+        \\}
+        \\threw
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// §6.1 item 7 — createElementNS(null, 'div') → Element only, not HTMLDivElement
+test "createElementNS(null, 'div') gives Element, not HTMLDivElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElementNS(null, 'div');
+        \\[el instanceof Element, el instanceof HTMLDivElement]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 2), items.len);
+    // instanceof Element = true
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    // instanceof HTMLDivElement = false (null namespace)
+    try std.testing.expect(items[1].isBool() and !items[1].asBool());
+}
+
+// §6.1 item 8 — createElementNS(HTML_NS, 'div') → HTMLDivElement
+test "createElementNS(HTML_NS, 'div') instanceof HTMLDivElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElementNS('http://www.w3.org/1999/xhtml', 'div');
+        \\[el instanceof HTMLDivElement, el instanceof HTMLElement, el instanceof Element]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+    try std.testing.expect(items[2].isBool() and items[2].asBool());
+}
+
+// §6.1 item 10 — createElementNS(SVG_NS, 'circle') is SVGCircleElement AND SVGElement AND Element
+test "createElementNS(SVG_NS,'circle') instanceof SVGCircleElement, SVGElement, Element" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        \\[c instanceof SVGCircleElement, c instanceof SVGElement, c instanceof Element]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+    try std.testing.expect(items[2].isBool() and items[2].asBool());
+}
+
+// §6.1 item 11 — createElementNS(SVG_NS, 'foo') → SVGElement only (unknown SVG fallback)
+test "createElementNS(SVG_NS,'foo') instanceof SVGElement, not SVGCircleElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElementNS('http://www.w3.org/2000/svg', 'foo');
+        \\[el instanceof SVGElement, el instanceof SVGCircleElement, el instanceof HTMLElement]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    // instanceof SVGElement = true
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    // instanceof SVGCircleElement = false
+    try std.testing.expect(items[1].isBool() and !items[1].asBool());
+    // instanceof HTMLElement = false
+    try std.testing.expect(items[2].isBool() and !items[2].asBool());
+}
+
+// §6.1 item 12 — createElementNS(MATH_NS, 'mi') → MathMLElement (JS-level)
+test "createElementNS(MATH_NS,'mi') instanceof MathMLElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElementNS('http://www.w3.org/1998/Math/MathML', 'mi');
+        \\[el instanceof MathMLElement, el instanceof Element, el instanceof HTMLElement]
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isObject());
+    const arr = result.asJsObject();
+    try std.testing.expect(arr.data == .array);
+    const items = arr.data.array.items;
+    try std.testing.expectEqual(@as(usize, 3), items.len);
+    // instanceof MathMLElement = true
+    try std.testing.expect(items[0].isBool() and items[0].asBool());
+    // instanceof Element = true
+    try std.testing.expect(items[1].isBool() and items[1].asBool());
+    // instanceof HTMLElement = false
+    try std.testing.expect(items[2].isBool() and !items[2].asBool());
+}
+
+// §6.1 item 18 — XMLDocument.createElement('foo').ownerDocument === that XML doc
+test "XMLDocument createElement('foo').ownerDocument === the XML doc (DOM §4.4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var xmlDoc = document.implementation.createDocument(null, '', null);
+        \\var el = xmlDoc.createElement('foo');
+        \\(el.ownerDocument === xmlDoc) && (el.ownerDocument !== document)
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
