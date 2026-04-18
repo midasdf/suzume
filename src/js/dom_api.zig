@@ -4792,9 +4792,18 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createElementNS", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateElementNS, "createElementNS", 2));
     _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createTextNode", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateTextNode, "createTextNode", 1));
     // createAttribute(localName) + createAttributeNS(namespace, qualifiedName)
+    //
+    // Layer 1A Task 5: DOM §4.9.1 validation is now done natively in
+    // `dom_doc.documentCreateAttribute` / `documentCreateAttributeNS`, which
+    // runs `dom_names.isValidName` / `validateAndExtractQjs` and then calls
+    // the JS builders registered on hidden `__buildAttr` / `__buildAttrNS`
+    // slots below to construct the Attr object with full Node-method /
+    // prototype / getter plumbing.
     {
-        const attr_js =
-            \\(function(ns,qn){var a={nodeType:2,name:qn,nodeName:qn,value:'',namespaceURI:ns||null,prefix:null,localName:qn,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};
+        // `__buildAttrNS(namespace, qualifiedName)` — input is already
+        // validated and namespace is null or non-empty string.
+        const build_attr_ns_js =
+            \\(function(ns,qn){var a={nodeType:2,name:qn,nodeName:qn,value:'',namespaceURI:ns,prefix:null,localName:qn,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};
             \\var ci=qn.indexOf(':');if(ci>=0){a.prefix=qn.substring(0,ci);a.localName=qn.substring(ci+1);}
             \\a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};
             \\a.isSameNode=function(o){return this===o;};
@@ -4809,11 +4818,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;
             \\if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
         ;
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_Eval(ctx, attr_js, attr_js.len, "<attrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
-        const create_attr_js =
-            \\(function(name){if(name===undefined)name='undefined';if(name===null)name='null';name=''+name;if(name.length===0)throw new DOMException('The string did not match the expected pattern.','InvalidCharacterError');var ln=name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.cloneNode=function(){var c=document.createAttribute(this.name);c.value=this.value;return c;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "__buildAttrNS", qjs.JS_Eval(ctx, build_attr_ns_js, build_attr_ns_js.len, "<buildAttrNS>", qjs.JS_EVAL_TYPE_GLOBAL));
+
+        // `__buildAttr(localName)` — input is already validated (non-empty,
+        // Name-valid). HTML document lowercasing is done here since the
+        // native validator does not have cheap access to document.contentType;
+        // XML documents (_isXmlDoc=true) preserve case.
+        const build_attr_js =
+            \\(function(name){var ln=(document&&document._isXmlDoc)?name:name.toLowerCase();var a={nodeType:2,name:ln,nodeName:ln,value:'',namespaceURI:null,prefix:null,localName:ln,specified:true,ownerElement:null,ownerDocument:document,childNodes:[]};a.isEqualNode=function(o){if(!o||o.nodeType!==2)return false;return this.namespaceURI===o.namespaceURI&&this.localName===o.localName&&this.value===o.value;};a.isSameNode=function(o){return this===o;};Object.defineProperty(a,'nodeValue',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'textContent',{get:function(){return this.value;},set:function(v){this.value=v===null?'':''+v;},configurable:true,enumerable:true});Object.defineProperty(a,'baseURI',{get:function(){var d=(this.ownerElement?this.ownerElement.ownerDocument:this.ownerDocument)||document;return d.URL||d.documentURI||'';},configurable:true,enumerable:true});a.lookupNamespaceURI=function(p){var oe=this.ownerElement;return oe?oe.lookupNamespaceURI(p):null;};a.lookupPrefix=function(ns){var oe=this.ownerElement;return oe?oe.lookupPrefix(ns):null;};a.isDefaultNamespace=function(ns){var oe=this.ownerElement;return oe?oe.isDefaultNamespace(ns):false;};a.hasChildNodes=function(){return false;};a.contains=function(n){return this===n;};a.isConnected=false;a.getRootNode=function(){return this;};a.cloneNode=function(){var c=document.createAttribute(this.name);c.value=this.value;return c;};a.firstChild=null;a.lastChild=null;a.previousSibling=null;a.nextSibling=null;a.parentNode=null;a.parentElement=null;if(typeof Attr!=='undefined')Object.setPrototypeOf(a,Attr.prototype);return a;})
         ;
-        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_Eval(ctx, create_attr_js, create_attr_js.len, "<attr>", qjs.JS_EVAL_TYPE_GLOBAL));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "__buildAttr", qjs.JS_Eval(ctx, build_attr_js, build_attr_js.len, "<buildAttr>", qjs.JS_EVAL_TYPE_GLOBAL));
+
+        // Public API — native validation first, then delegates to the
+        // `__buildAttr*` closures above.
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttribute", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateAttribute, "createAttribute", 1));
+        _ = qjs.JS_SetPropertyStr(ctx, doc_obj, "createAttributeNS", qjs.JS_NewCFunction(ctx, &dom_doc.documentCreateAttributeNS, "createAttributeNS", 2));
     }
     // Attr constructor for instanceof checks
     {

@@ -1980,6 +1980,98 @@ pub fn documentCreateTextNode(
     return wrapNode(c, text);
 }
 
+// ── createAttribute / createAttributeNS (DOM §4.9.1) ─────────────────
+
+/// Invoke the pre-registered JS builder at `document.__buildAttr` /
+/// `document.__buildAttrNS` (registered once by `registerAttributeBuilders`
+/// in dom_api.zig). Returns the built Attr or JS_EXCEPTION on failure.
+fn invokeAttrBuilder(
+    c: *qjs.JSContext,
+    this_val: qjs.JSValue,
+    slot_name: [*:0]const u8,
+    call_args: []qjs.JSValue,
+) qjs.JSValue {
+    const builder = qjs.JS_GetPropertyStr(c, this_val, slot_name);
+    defer qjs.JS_FreeValue(c, builder);
+    if (quickjs.JS_IsUndefined(builder) or quickjs.JS_IsException(builder)) {
+        return api.throwDOMException(c, "InvalidStateError", "Attr builder not registered");
+    }
+    return qjs.JS_Call(c, builder, this_val, @intCast(call_args.len), call_args.ptr);
+}
+
+/// DOM §4.9.1 — document.createAttribute(localName).
+/// 1. If localName does not match the Name production → InvalidCharacterError.
+/// 2. If this is an HTML document, lowercase localName.
+/// 3. Return a new Attr whose local name is localName.
+pub fn documentCreateAttribute(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 1) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+
+    // WebIDL DOMString coercion: null → "null", undefined → "undefined".
+    const s = jsStringToSlice(c, args[0]) orelse
+        return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+    defer qjs.JS_FreeCString(c, s.ptr);
+    const name = s.ptr[0..s.len];
+
+    // DOM §4.9.1 step 1: XML Name production (':' allowed anywhere).
+    if (!dom_names.isValidName(name))
+        return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+
+    // Delegate to the pre-registered JS closure which handles lowercasing
+    // (HTML doc only) and Attr object construction with full method/prototype
+    // plumbing. Passing the already-validated name avoids re-checks.
+    var call_args = [_]qjs.JSValue{qjs.JS_NewStringLen(c, name.ptr, name.len)};
+    defer qjs.JS_FreeValue(c, call_args[0]);
+    return invokeAttrBuilder(c, this_val, "__buildAttr", &call_args);
+}
+
+/// DOM §4.9.1 — document.createAttributeNS(namespace, qualifiedName).
+/// 1. Run validate-and-extract on (namespace, qualifiedName).
+/// 2. Return a new Attr whose namespace/prefix/localName match.
+pub fn documentCreateAttributeNS(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NULL();
+    if (argc < 2) return quickjs.JS_NULL();
+    const args = argv orelse return quickjs.JS_NULL();
+
+    // DOM §1.5 validate and extract via shared algorithm.
+    const validated = api.validateAndExtractQjs(c, args[0], args[1]) orelse
+        return quickjs.JS_EXCEPTION();
+    defer validated.deinit(c);
+
+    // Pass the original (namespace, qualifiedName) — the JS builder reads
+    // them directly and re-splits on ':' to populate prefix / localName.
+    // Namespace coerced to JS null when it was empty string (WebIDL step 1
+    // already applied by validateAndExtractQjs via the `namespace` slice).
+    const ns_js = if (validated.namespace) |n|
+        qjs.JS_NewStringLen(c, n.ptr, n.len)
+    else
+        quickjs.JS_NULL();
+    const qn = validated.local_name; // placeholder — see below for full qn.
+    _ = qn;
+    // Rebuild qualifiedName from prefix:local for the JS closure. The
+    // validated struct tracks them separately; reconstitute the original
+    // qn string from the retained `qn_cstr`.
+    const qn_len = std.mem.len(validated.qn_cstr);
+    const qn_js = qjs.JS_NewStringLen(c, validated.qn_cstr, qn_len);
+    var call_args = [_]qjs.JSValue{ ns_js, qn_js };
+    defer {
+        qjs.JS_FreeValue(c, call_args[0]);
+        qjs.JS_FreeValue(c, call_args[1]);
+    }
+    return invokeAttrBuilder(c, this_val, "__buildAttrNS", &call_args);
+}
+
 pub fn documentGetBody(
     ctx: ?*qjs.JSContext,
     _: qjs.JSValue,
