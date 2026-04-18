@@ -5722,3 +5722,72 @@ test "Layer 0A: name descriptor has spec-correct attrs" {
     );
     try std.testing.expect(result.asBool());
 }
+
+// Gap 4: Array callbacks IsCallable + generic array-like iteration (§23.1.3.*)
+test "Layer 0A: forEach throws TypeError on non-callable" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1,2,3].forEach(42); } catch (e) { caught = (e instanceof TypeError); }
+        \\caught
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: map throws TypeError on missing callback" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1,2,3].map(); } catch (e) { caught = (e instanceof TypeError); }
+        \\caught
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: filter throws TypeError on non-callable" {
+    const result = try evalExpr(
+        \\var caught = false;
+        \\try { [1,2,3].filter("not a fn"); } catch (e) { caught = (e instanceof TypeError); }
+        \\caught
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: forEach iterates array-like with length" {
+    const result = try evalExpr(
+        \\var seen = [];
+        \\Array.prototype.forEach.call({length: 2, 0: 'a', 1: 'b'}, function(v) { seen.push(v); });
+        \\seen.length === 2 && seen[0] === 'a' && seen[1] === 'b'
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: map iterates array-like with length" {
+    const result = try evalExpr(
+        \\var out = Array.prototype.map.call({length: 3, 0: 1, 1: 2, 2: 3}, function(v) { return v * 2; });
+        \\out.length === 3 && out[0] === 2 && out[1] === 4 && out[2] === 6
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: map propagates thisArg" {
+    const result = try evalExpr(
+        \\var obj = {k: 10};
+        \\var out = [1,2,3].map(function(x) { return x + this.k; }, obj);
+        \\out[0] === 11 && out[1] === 12 && out[2] === 13
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: findIndex returns -1 on miss" {
+    const result = try evalExpr("[1,2,3].findIndex(function(x) { return x > 99; }) === -1");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: every returns true on empty array" {
+    const result = try evalExpr("[].every(function(x) { return false; }) === true");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: some returns false on empty array" {
+    const result = try evalExpr("[].some(function(x) { return true; }) === false");
+    try std.testing.expect(result.asBool());
+}

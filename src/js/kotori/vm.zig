@@ -3980,53 +3980,99 @@ pub const VM = struct {
 
     // ── Higher-order array methods ──────────────────────────────────
 
+    /// Array.prototype.forEach — ECMA-262 §23.1.3.15
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
+    /// Steps 1-2: Let O be ? ToObject(this value); len = LengthOfArrayLike(O).
+    /// Step 6b: Has/Get gate iteration on plain array-likes.
     fn nativeArrayForEach(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.15 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            _ = try vm.callJsFunction(callback, thisArg, &cb_args);
+        if (!this.isObject()) return error.TypeError; // ToObject(undefined/null)
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                _ = try vm.callJsFunction(callback, thisArg, &cb_args);
+            }
+            return JsValue.undefined_val;
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                _ = try vm.callJsFunction(callback, thisArg, &cb_args);
+            }
         }
         return JsValue.undefined_val;
     }
 
+    /// Array.prototype.map — ECMA-262 §23.1.3.18
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArrayMap(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.18 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
         const new_arr = try vm.allocator.create(JsObject);
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            try new_arr.data.array.append(vm.allocator, result);
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                try new_arr.data.array.append(vm.allocator, result);
+            }
+            return JsValue.initObject(new_arr);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        // §23.1.3.18 creates a result of length `len` up-front; holes between
+        // become `undefined` in the result per step 8d's HasProperty gate.
+        try new_arr.data.array.resize(vm.allocator, len);
+        for (new_arr.data.array.items) |*slot| slot.* = JsValue.undefined_val;
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                new_arr.data.array.items[k] = try vm.callJsFunction(callback, thisArg, &cb_args);
+            }
         }
         return JsValue.initObject(new_arr);
     }
 
+    /// Array.prototype.filter — ECMA-262 §23.1.3.8
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArrayFilter(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.8 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
         const new_arr = try vm.allocator.create(JsObject);
         new_arr.* = .{ .obj_type = .array, .data = .{ .array = .empty }, .prototype = vm.array_proto };
         try vm.objects.append(vm.allocator, new_arr);
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) {
-                try new_arr.data.array.append(vm.allocator, item);
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) {
+                    try new_arr.data.array.append(vm.allocator, item);
+                }
+            }
+            return JsValue.initObject(new_arr);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) try new_arr.data.array.append(vm.allocator, kv);
             }
         }
         return JsValue.initObject(new_arr);
@@ -4074,98 +4120,182 @@ pub const VM = struct {
         return acc;
     }
 
+    /// Array.prototype.find — ECMA-262 §23.1.3.9
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFind(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.9 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return item;
+            }
+            return JsValue.undefined_val;
+        }
+        // §23.1.3.9 uses Get (no HasProperty gate), so missing indices are
+        // passed to the callback as `undefined`.
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return item;
+            if (result.isTruthy()) return kv;
         }
         return JsValue.undefined_val;
     }
 
+    /// Array.prototype.findIndex — ECMA-262 §23.1.3.10
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFindIndex(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initNumber(-1);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initNumber(-1);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.10 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            }
+            return JsValue.initNumber(-1);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(k));
         }
         return JsValue.initNumber(-1);
     }
 
+    /// Array.prototype.findLast — ECMA-262 §23.1.3.11
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFindLast(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.undefined_val;
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.11 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        const items = obj.data.array.items;
-        var i: usize = items.len;
-        while (i > 0) {
-            i -= 1;
-            const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            const items = obj.data.array.items;
+            var i: usize = items.len;
+            while (i > 0) {
+                i -= 1;
+                const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return items[i];
+            }
+            return JsValue.undefined_val;
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = len;
+        while (k > 0) {
+            k -= 1;
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return items[i];
+            if (result.isTruthy()) return kv;
         }
         return JsValue.undefined_val;
     }
 
+    /// Array.prototype.findLastIndex — ECMA-262 §23.1.3.12
+    /// Step 3: If IsCallable(predicate) is false, throw a TypeError.
     fn nativeArrayFindLastIndex(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initNumber(-1);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initNumber(-1);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.12 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        const items = obj.data.array.items;
-        var i: usize = items.len;
-        while (i > 0) {
-            i -= 1;
-            const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            const items = obj.data.array.items;
+            var i: usize = items.len;
+            while (i > 0) {
+                i -= 1;
+                const cb_args = [_]JsValue{ items[i], JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            }
+            return JsValue.initNumber(-1);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = len;
+        while (k > 0) {
+            k -= 1;
+            const kv = (try vm.arrayLikeElement(obj, k)) orelse JsValue.undefined_val;
+            const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
             const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(i));
+            if (result.isTruthy()) return JsValue.initNumber(@floatFromInt(k));
         }
         return JsValue.initNumber(-1);
     }
 
+    /// Array.prototype.some — ECMA-262 §23.1.3.28
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArraySome(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initBool(false);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.28 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (result.isTruthy()) return JsValue.initBool(true);
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initBool(true);
+            }
+            return JsValue.initBool(false);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (result.isTruthy()) return JsValue.initBool(true);
+            }
         }
         return JsValue.initBool(false);
     }
 
+    /// Array.prototype.every — ECMA-262 §23.1.3.7
+    /// Step 3: If IsCallable(callbackFn) is false, throw a TypeError.
     fn nativeArrayEvery(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (!this.isObject() or args.len == 0) return JsValue.initBool(true);
-        const obj = this.asJsObject();
-        if (obj.obj_type != .array) return JsValue.initBool(true);
         const vm = vmFromCtx(ctx);
-        const callback = args[0];
+        const callback = if (args.len > 0) args[0] else JsValue.undefined_val;
+        if (!isCallable(callback)) return error.TypeError; // §23.1.3.7 step 3
         const thisArg = if (args.len > 1) args[1] else JsValue.undefined_val;
-        for (obj.data.array.items, 0..) |item, i| {
-            const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
-            const result = try vm.callJsFunction(callback, thisArg, &cb_args);
-            if (!result.isTruthy()) return JsValue.initBool(false);
+        if (!this.isObject()) return error.TypeError;
+        const obj = this.asJsObject();
+        if (obj.obj_type == .array) {
+            for (obj.data.array.items, 0..) |item, i| {
+                const cb_args = [_]JsValue{ item, JsValue.initNumber(@floatFromInt(i)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (!result.isTruthy()) return JsValue.initBool(false);
+            }
+            return JsValue.initBool(true);
+        }
+        const len = try vm.lengthOfArrayLike(this);
+        var k: u32 = 0;
+        while (k < len) : (k += 1) {
+            if (try vm.arrayLikeElement(obj, k)) |kv| {
+                const cb_args = [_]JsValue{ kv, JsValue.initNumber(@floatFromInt(k)), this };
+                const result = try vm.callJsFunction(callback, thisArg, &cb_args);
+                if (!result.isTruthy()) return JsValue.initBool(false);
+            }
         }
         return JsValue.initBool(true);
     }
@@ -8061,6 +8191,48 @@ pub const VM = struct {
         const n = val.toNumber();
         if (std.math.isNan(n) or n < 0) return 0;
         return @intFromFloat(@min(n, 4294967295.0));
+    }
+
+    /// ECMA-262 §7.2.3 IsCallable. Returns true iff `val` is a callable
+    /// object (plain function or native function). Does NOT walk proxies —
+    /// callers that need full spec semantics on proxies must handle that
+    /// explicitly; the Array callback methods below do not.
+    fn isCallable(val: JsValue) bool {
+        if (!val.isObject()) return false;
+        const o = val.asJsObject();
+        return o.obj_type == .function or o.obj_type == .native_function;
+    }
+
+    /// ECMA-262 §7.3.19 LengthOfArrayLike. Reads `.length` and applies
+    /// ToUint32-style coercion (clamped to [0, 2^32-1]). For real arrays we
+    /// shortcut to `items.len` to preserve the fast-path perf characteristics.
+    /// Returns 0 on missing/invalid `.length`.
+    fn lengthOfArrayLike(self: *VM, this_val: JsValue) !u32 {
+        if (!this_val.isObject()) return 0;
+        const obj = this_val.asJsObject();
+        if (obj.obj_type == .array) {
+            const n = obj.data.array.items.len;
+            if (n > std.math.maxInt(u32)) return std.math.maxInt(u32);
+            return @intCast(n);
+        }
+        const len_sid = try self.pool.intern("length");
+        const len_val = obj.getProperty(len_sid) orelse return 0;
+        const n = len_val.toNumber();
+        if (std.math.isNan(n) or n <= 0) return 0;
+        if (n >= 4294967295.0) return 4294967295;
+        return @intFromFloat(n);
+    }
+
+    /// Helper for Array callback methods: read element at integer index `k`
+    /// from an array-like `this`. Returns `null` if the index is absent
+    /// (observable via the `HasProperty` step in §23.1.3.*). The fast-path
+    /// for true arrays is inlined at the call site — this helper is only
+    /// reached when iterating a generic array-like.
+    fn arrayLikeElement(self: *VM, this_obj: *JsObject, k: u32) !?JsValue {
+        var idx_buf: [16]u8 = undefined;
+        const idx_str = try std.fmt.bufPrint(&idx_buf, "{d}", .{k});
+        const idx_sid = try self.pool.intern(idx_str);
+        return this_obj.getProperty(idx_sid);
     }
 
     // ── Promise aggregation methods ────────────────────────────────
