@@ -12,6 +12,9 @@
 
 const std = @import("std");
 
+// ── Shared Name/QName validation (DOM §1.5) ────────────────────────
+const dom_names = @import("dom_names");
+
 // ── Kotori engine types (via module alias, set in build.zig) ────────
 const kotori = @import("kotori");
 
@@ -1923,8 +1926,11 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     if (args.len == 0) return JsValue.null_val;
     // DOM §4.5 step 1: coerce argument to DOMString (null → "null", undefined → "undefined").
     const tag_raw = argToString(vm, args[0]);
-    // DOM §4.5 step 2: if localName does not match Name production → InvalidCharacterError.
-    if (tag_raw.len == 0 or !isValidQName(tag_raw)) {
+    // DOM §4.5.1 step 2: if localName does not match the **Name** production
+    // → InvalidCharacterError. Per Document-createElement.html:48-53, ':',
+    // ':foo', 'f:oo', 'foo:', 'f:o:o', 'f::oo' are all VALID — Name allows
+    // ':' anywhere, unlike QName.
+    if (!dom_names.isValidName(tag_raw)) {
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
         return JsValue.null_val;
     }
@@ -1959,9 +1965,14 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     }
 
     // HTML document path — namespace is HTML. lexbor tags are lowercased.
+    // If lexbor rejects a Name-valid but QName-invalid tag (e.g. leading
+    // ':', trailing ':', or repeated colons), fall back to a JS-only
+    // element so DOM §4.5.1 still produces a usable Element node.
     const doc = getDocFromThis(this) orelse return JsValue.null_val;
-    const elem = dom_b.lxb_dom_document_create_element(doc, tag_raw.ptr, tag_raw.len, null) orelse return JsValue.null_val;
-    return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
+    if (dom_b.lxb_dom_document_create_element(doc, tag_raw.ptr, tag_raw.len, null)) |elem| {
+        return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
+    }
+    return createJsOnlyElement(vm, tag_raw, HTML_NS_URI, this);
 }
 
 /// Create a JS-only Element object (no lexbor node) for XML documents.
@@ -2023,131 +2034,10 @@ const XML_NS_URI: []const u8 = "http://www.w3.org/XML/1998/namespace";
 const XMLNS_NS_URI: []const u8 = "http://www.w3.org/2000/xmlns/";
 const HTML_NS_URI: []const u8 = "http://www.w3.org/1999/xhtml";
 
-/// Bytes that browsers reject *anywhere* in an XML Name: ASCII whitespace
-/// and ASCII control bytes. Everything else is tolerated in the middle of a
-/// Name — per WPT `createElementNS_tests`, chars like `<`, `>`, `}`, `^`,
-/// `@`, `"`, `'`, `\` are all accepted when they're not the first char.
-fn isHardInvalidNameChar(ch: u8) bool {
-    return switch (ch) {
-        ' ', '\t', '\n', '\r', 0x0B, 0x0C, 0x00...0x08, 0x0E...0x1F, 0x7F => true,
-        else => false,
-    };
-}
-
-/// Bytes that cannot START a Name / NCName per the lenient browser rules.
-/// Covers hard-invalid chars, ASCII digits, '-', '.', and the punctuation
-/// browsers still refuse at the first position: `<`, `>`, `}`, `^`, `*`,
-/// `+`, `,`, `/`, `=`, `(`, `)`, `[`, `]`, `{`, `|`, `;`, `\`, `'`, `"`,
-/// `` ` ``, `~`, `!`, `?`, `#`, `$`, `%`, `&`, `@`, `:`.
-fn isInvalidNameStartChar(ch: u8) bool {
-    if (isHardInvalidNameChar(ch)) return true;
-    return switch (ch) {
-        '0'...'9', '-', '.', ':' => true,
-        '<', '>', '}', '^', '*', '+', ',', '/', '=', '(', ')', '[', ']', '{', '|', ';', '\\', '\'', '"', '`', '~', '!', '?', '#', '$', '%', '&', '@' => true,
-        else => false,
-    };
-}
-
-/// DOM §1.5 / XML §2.3 — validate QName production with lenient-browser
-/// semantics matched to WPT `createElementNS_tests.js`.
-///
-/// Rules distilled from the fixture:
-///   * Empty → invalid
-///   * Whitespace / ASCII control bytes anywhere → invalid
-///   * If prefixed (contains ':'): both prefix and localName must be
-///     non-empty, and each must start with a NameStartChar. After the
-///     start char, chars are lenient (`<`, `}`, `^`, etc. are accepted).
-///   * If unprefixed: first char must be a NameStartChar; the rest is
-///     lenient but must not contain hard-invalid chars. The final char
-///     also cannot be `>` (matches `"foo>"` being INVALID_CHARACTER_ERR
-///     when null namespace).
-fn isValidQName(name: []const u8) bool {
-    if (name.len == 0) return false;
-    // Hard-invalid bytes anywhere → reject.
-    for (name) |ch| {
-        if (isHardInvalidNameChar(ch)) return false;
-    }
-    if (std.mem.indexOfScalar(u8, name, ':')) |cp| {
-        const prefix = name[0..cp];
-        const local = name[cp + 1 ..];
-        if (prefix.len == 0 or local.len == 0) return false; // :foo / foo: bad
-        // Prefix start is lenient (WPT: "0:a" is accepted). Only the first
-        // char of the localName must be a valid NameStartChar.
-        // "prefix::local" is accepted per WPT — first char after colon may be ':'.
-        if (local[0] != ':' and isInvalidNameStartChar(local[0])) return false;
-        return true;
-    }
-    // Unprefixed: first char must be a NameStartChar.
-    if (isInvalidNameStartChar(name[0])) return false;
-    // Trailing '>' → invalid (matches `"foo>"` case in createElementNS_tests).
-    if (name[name.len - 1] == '>') return false;
-    return true;
-}
-
-/// Outcome of DOM §1.5 "validate and extract" algorithm. Either a success
-/// triple (namespace, prefix, localName) or an error kind the caller turns
-/// into the appropriate DOMException.
-const NameValidationError = error{ InvalidCharacter, NamespaceMismatch };
-
-const ValidatedName = struct {
-    namespace: ?[]const u8,
-    prefix: ?[]const u8,
-    local_name: []const u8,
-};
-
-/// DOM §1.5 "validate and extract" algorithm.
-/// Implements steps from the DOM spec:
-///   1. Empty/invalid QName → InvalidCharacterError
-///   2. If namespace is empty string, treat as null
-///   3. If prefix is non-null and namespace is null → NamespaceError
-///   4. If prefix is "xml" and namespace is not XML namespace → NamespaceError
-///   5. If qname or prefix is "xmlns" and namespace is not XMLNS namespace → NamespaceError
-///   6. If namespace is XMLNS namespace and neither qname nor prefix is "xmlns" → NamespaceError
-fn validateAndExtract(qn: []const u8, ns_in: ?[]const u8) NameValidationError!ValidatedName {
-    // Step 1: empty or invalid QName → InvalidCharacterError.
-    if (qn.len == 0) return error.InvalidCharacter;
-    if (!isValidQName(qn)) return error.InvalidCharacter;
-
-    // Step 2: "" namespace → null.
-    const namespace: ?[]const u8 = if (ns_in) |ns| (if (ns.len == 0) null else ns) else null;
-
-    // Extract prefix/local (first colon wins).
-    var prefix: ?[]const u8 = null;
-    var local: []const u8 = qn;
-    if (std.mem.indexOfScalar(u8, qn, ':')) |cp| {
-        prefix = qn[0..cp];
-        local = qn[cp + 1 ..];
-    }
-
-    // Step 3: prefix requires a non-null namespace.
-    if (prefix != null and namespace == null) return error.NamespaceMismatch;
-
-    // Step 4: xml prefix requires XML namespace.
-    if (prefix != null and std.mem.eql(u8, prefix.?, "xml")) {
-        if (namespace == null or !std.mem.eql(u8, namespace.?, XML_NS_URI))
-            return error.NamespaceMismatch;
-    }
-
-    // Step 5: xmlns qname or prefix requires XMLNS namespace.
-    const qn_is_xmlns = std.mem.eql(u8, qn, "xmlns");
-    const prefix_is_xmlns = prefix != null and std.mem.eql(u8, prefix.?, "xmlns");
-    if (qn_is_xmlns or prefix_is_xmlns) {
-        if (namespace == null or !std.mem.eql(u8, namespace.?, XMLNS_NS_URI))
-            return error.NamespaceMismatch;
-    }
-
-    // Step 6: XMLNS namespace requires qname or prefix to be xmlns.
-    if (namespace != null and std.mem.eql(u8, namespace.?, XMLNS_NS_URI)) {
-        if (!qn_is_xmlns and !prefix_is_xmlns)
-            return error.NamespaceMismatch;
-    }
-
-    return .{ .namespace = namespace, .prefix = prefix, .local_name = local };
-}
-
 /// Map a validation error to a DOMException and queue it on vm.pending_throw.
 /// Returns JsValue.null_val for convenience so callers can `return queueValidationErr(...)`.
-fn queueValidationErr(vm: *VM, err: NameValidationError) anyerror!JsValue {
+/// Name/QName/validate-and-extract definitions live in `src/js/dom_names.zig`.
+fn queueValidationErr(vm: *VM, err: dom_names.NameValidationError) anyerror!JsValue {
     vm.pending_throw = switch (err) {
         error.InvalidCharacter => try createDOMExceptionObj(vm, "InvalidCharacterError"),
         error.NamespaceMismatch => try createDOMExceptionObj(vm, "NamespaceError"),
@@ -2172,7 +2062,7 @@ fn nativeCreateElementNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     const qn = argToString(vm, args[1]);
 
     // DOM §1.5 validate and extract: throws InvalidCharacterError or NamespaceError.
-    const v = validateAndExtract(qn, ns_in) catch |err| {
+    const v = dom_names.validateAndExtract(qn, ns_in) catch |err| {
         return try queueValidationErr(vm, err);
     };
     const prefix = v.prefix;
@@ -2360,7 +2250,7 @@ fn nativeCreateAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue
     };
     const qn = argToString(vm, args[1]);
 
-    const v = validateAndExtract(qn, ns_in) catch |err| {
+    const v = dom_names.validateAndExtract(qn, ns_in) catch |err| {
         return try queueValidationErr(vm, err);
     };
     return try createAttrObject(vm, this, qn, v.local_name, v.prefix, v.namespace);
@@ -3053,6 +2943,15 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
+    // DOM §4.9.2 step 1: if qualifiedName does not match the Name production
+    // → InvalidCharacterError. Use the permissive attr-name grammar that
+    // matches WPT productions.js `valid_names` (lenient: only empty +
+    // hard-invalid bytes reject). Lexbor stores the qualified name
+    // verbatim downstream; only the JS-visible validation step tightens.
+    if (!dom_names.isValidAttrName(n)) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
+        return JsValue.undefined_val;
+    }
     // DOM §4.9.1: if an Attr wrapper is cached for the pre-existing attr struct,
     // invalidate it before lexbor potentially reallocates the struct on overwrite.
     if (dom_b.lxb_dom_element_attr_by_name(elem, n.ptr, n.len)) |pre_existing| {
@@ -3081,6 +2980,17 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const qn = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[1]);
     const v = if (args[2].isString()) vm.pool.get(args[2].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[2]);
+    // DOM §4.9.3 step 1: run "validate and extract" on (namespace, qn).
+    // Errors map to InvalidCharacterError / NamespaceError via the shared
+    // queueValidationErr bridge. Lexbor stores the qualified name verbatim
+    // (passed as `qn` below); only the validation step tightens here.
+    const ns_in: ?[]const u8 = blk: {
+        if (args[0].isNull() or args[0].isUndefined()) break :blk null;
+        break :blk if (args[0].isString()) vm.pool.get(args[0].asStringId()) orelse null else argToString(vm, args[0]);
+    };
+    _ = dom_names.validateAndExtract(qn, ns_in) catch |err| {
+        return try queueValidationErr(vm, err);
+    };
     // DOM §4.9.1: invalidate cached Attr wrapper before lexbor may reallocate on overwrite.
     if (dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len)) |pre_existing| {
         invalidateAttrWrapper(pre_existing);
@@ -5666,7 +5576,7 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
         break :blk argToString(vm, args[1]);
     };
     if (qn_for_validate.len > 0) {
-        _ = validateAndExtract(qn_for_validate, ns_for_validate) catch |err| {
+        _ = dom_names.validateAndExtract(qn_for_validate, ns_for_validate) catch |err| {
             return try queueValidationErr(vm, err);
         };
     }
