@@ -5655,3 +5655,70 @@ test "Object.getOwnPropertyNames no duplicates after freeze" {
     );
     try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
 }
+
+// ─── Layer 0A: builtin polish (ECMA-262 §10.2.8/§10.2.9) ──────────
+
+// Gap 1: Native fn .length per §10.2.9 SetFunctionLength
+test "Layer 0A: Array.prototype.forEach.length === 1" {
+    const result = try evalExpr("Array.prototype.forEach.length === 1");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Array.prototype.slice.length === 2" {
+    const result = try evalExpr("Array.prototype.slice.length === 2");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Promise.resolve.length === 1" {
+    const result = try evalExpr("Promise.resolve.length === 1");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Object.defineProperty.length === 3" {
+    const result = try evalExpr("Object.defineProperty.length === 3");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: TypeError.length === 1" {
+    const result = try evalExpr("TypeError.length === 1");
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 2: Native fn .name per §10.2.8 SetFunctionName
+test "Layer 0A: Array.prototype.slice.name === 'slice'" {
+    const result = try evalExpr("Array.prototype.slice.name === 'slice'");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Promise.resolve.name === 'resolve'" {
+    const result = try evalExpr("Promise.resolve.name === 'resolve'");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: TypeError.name === 'TypeError'" {
+    const result = try evalExpr("TypeError.name === 'TypeError'");
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: Object.defineProperty.name === 'defineProperty'" {
+    const result = try evalExpr("Object.defineProperty.name === 'defineProperty'");
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 1+2 combined: descriptor attributes per §10.2.8/§10.2.9:
+// writable:false, enumerable:false, configurable:true.
+test "Layer 0A: length descriptor has spec-correct attrs" {
+    const result = try evalExpr(
+        \\var d = Object.getOwnPropertyDescriptor(Array.prototype.slice, "length");
+        \\d.writable === false && d.enumerable === false && d.configurable === true && d.value === 2
+    );
+    try std.testing.expect(result.asBool());
+}
+
+test "Layer 0A: name descriptor has spec-correct attrs" {
+    const result = try evalExpr(
+        \\var d = Object.getOwnPropertyDescriptor(Array.prototype.slice, "name");
+        \\d.writable === false && d.enumerable === false && d.configurable === true && d.value === "slice"
+    );
+    try std.testing.expect(result.asBool());
+}

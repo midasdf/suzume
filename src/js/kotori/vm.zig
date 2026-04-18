@@ -2347,41 +2347,42 @@ pub const VM = struct {
         // ── Array.prototype ──
         self.array_proto = try self.createObj(.{});
         const ap = self.array_proto.?;
-        try self.registerNativeMethod(ap, "push", &nativeArrayPush);
-        try self.registerNativeMethod(ap, "pop", &nativeArrayPop);
-        try self.registerNativeMethod(ap, "shift", &nativeArrayShift);
-        try self.registerNativeMethod(ap, "indexOf", &nativeArrayIndexOf);
-        try self.registerNativeMethod(ap, "includes", &nativeArrayIncludes);
-        try self.registerNativeMethod(ap, "join", &nativeArrayJoin);
-        try self.registerNativeMethod(ap, "reverse", &nativeArrayReverse);
-        try self.registerNativeMethod(ap, "slice", &nativeArraySlice);
-        try self.registerNativeMethod(ap, "concat", &nativeArrayConcat);
-        try self.registerNativeMethod(ap, "forEach", &nativeArrayForEach);
-        try self.registerNativeMethod(ap, "map", &nativeArrayMap);
-        try self.registerNativeMethod(ap, "filter", &nativeArrayFilter);
-        try self.registerNativeMethod(ap, "reduce", &nativeArrayReduce);
-        try self.registerNativeMethod(ap, "reduceRight", &nativeArrayReduceRight);
-        try self.registerNativeMethod(ap, "find", &nativeArrayFind);
-        try self.registerNativeMethod(ap, "findIndex", &nativeArrayFindIndex);
-        try self.registerNativeMethod(ap, "findLast", &nativeArrayFindLast);
-        try self.registerNativeMethod(ap, "findLastIndex", &nativeArrayFindLastIndex);
-        try self.registerNativeMethod(ap, "some", &nativeArraySome);
-        try self.registerNativeMethod(ap, "every", &nativeArrayEvery);
-        try self.registerNativeMethod(ap, "sort", &nativeArraySort);
-        try self.registerNativeMethod(ap, "splice", &nativeArraySplice);
-        try self.registerNativeMethod(ap, "flat", &nativeArrayFlat);
-        try self.registerNativeMethod(ap, "flatMap", &nativeArrayFlatMap);
-        try self.registerNativeMethod(ap, "fill", &nativeArrayFill);
-        try self.registerNativeMethod(ap, "at", &nativeArrayAt);
-        try self.registerNativeMethod(ap, "unshift", &nativeArrayUnshift);
-        try self.registerNativeMethod(ap, "keys", &nativeArrayKeys);
-        try self.registerNativeMethod(ap, "hasOwnProperty", &nativeObjHasOwnProperty);
-        try self.registerNativeMethod(ap, "values", &nativeArrayValues);
-        try self.registerNativeMethod(ap, "entries", &nativeArrayEntries);
-        try self.registerNativeMethod(ap, "toString", &nativeArrayToString);
-        try self.registerNativeMethod(ap, "toSorted", &nativeArrayToSorted);
-        try self.registerNativeMethod(ap, "toReversed", &nativeArrayToReversed);
-        try self.registerNativeMethod(ap, "toSpliced", &nativeArrayToSpliced);
+        // Array.prototype methods — arity per ECMA-262 §23.1.3
+        try self.registerNativeMethodArity(ap, "push", &nativeArrayPush, 1); // §23.1.3.21
+        try self.registerNativeMethodArity(ap, "pop", &nativeArrayPop, 0); // §23.1.3.20
+        try self.registerNativeMethodArity(ap, "shift", &nativeArrayShift, 0); // §23.1.3.25
+        try self.registerNativeMethodArity(ap, "indexOf", &nativeArrayIndexOf, 1); // §23.1.3.15
+        try self.registerNativeMethodArity(ap, "includes", &nativeArrayIncludes, 1); // §23.1.3.14
+        try self.registerNativeMethodArity(ap, "join", &nativeArrayJoin, 1); // §23.1.3.16
+        try self.registerNativeMethodArity(ap, "reverse", &nativeArrayReverse, 0); // §23.1.3.23
+        try self.registerNativeMethodArity(ap, "slice", &nativeArraySlice, 2); // §23.1.3.25
+        try self.registerNativeMethodArity(ap, "concat", &nativeArrayConcat, 1); // §23.1.3.1
+        try self.registerNativeMethodArity(ap, "forEach", &nativeArrayForEach, 1); // §23.1.3.12
+        try self.registerNativeMethodArity(ap, "map", &nativeArrayMap, 1); // §23.1.3.18
+        try self.registerNativeMethodArity(ap, "filter", &nativeArrayFilter, 1); // §23.1.3.8
+        try self.registerNativeMethodArity(ap, "reduce", &nativeArrayReduce, 1); // §23.1.3.22
+        try self.registerNativeMethodArity(ap, "reduceRight", &nativeArrayReduceRight, 1); // §23.1.3.23
+        try self.registerNativeMethodArity(ap, "find", &nativeArrayFind, 1); // §23.1.3.9
+        try self.registerNativeMethodArity(ap, "findIndex", &nativeArrayFindIndex, 1); // §23.1.3.10
+        try self.registerNativeMethodArity(ap, "findLast", &nativeArrayFindLast, 1); // §23.1.3.11
+        try self.registerNativeMethodArity(ap, "findLastIndex", &nativeArrayFindLastIndex, 1); // §23.1.3.12
+        try self.registerNativeMethodArity(ap, "some", &nativeArraySome, 1); // §23.1.3.28
+        try self.registerNativeMethodArity(ap, "every", &nativeArrayEvery, 1); // §23.1.3.7
+        try self.registerNativeMethodArity(ap, "sort", &nativeArraySort, 1); // §23.1.3.27
+        try self.registerNativeMethodArity(ap, "splice", &nativeArraySplice, 2); // §23.1.3.29
+        try self.registerNativeMethodArity(ap, "flat", &nativeArrayFlat, 0); // §23.1.3.11
+        try self.registerNativeMethodArity(ap, "flatMap", &nativeArrayFlatMap, 1); // §23.1.3.12
+        try self.registerNativeMethodArity(ap, "fill", &nativeArrayFill, 1); // §23.1.3.8
+        try self.registerNativeMethodArity(ap, "at", &nativeArrayAt, 1); // §23.1.3.1
+        try self.registerNativeMethodArity(ap, "unshift", &nativeArrayUnshift, 1); // §23.1.3.33
+        try self.registerNativeMethodArity(ap, "keys", &nativeArrayKeys, 0); // §23.1.3.17
+        try self.registerNativeMethodArity(ap, "hasOwnProperty", &nativeObjHasOwnProperty, 1); // §20.1.3.2
+        try self.registerNativeMethodArity(ap, "values", &nativeArrayValues, 0); // §23.1.3.34
+        try self.registerNativeMethodArity(ap, "entries", &nativeArrayEntries, 0); // §23.1.3.6
+        try self.registerNativeMethodArity(ap, "toString", &nativeArrayToString, 0); // §23.1.3.30
+        try self.registerNativeMethodArity(ap, "toSorted", &nativeArrayToSorted, 1); // §23.1.3.31
+        try self.registerNativeMethodArity(ap, "toReversed", &nativeArrayToReversed, 0); // §23.1.3.32
+        try self.registerNativeMethodArity(ap, "toSpliced", &nativeArrayToSpliced, 2); // §23.1.3.33
         // Register Symbol.iterator on array prototype
         if (ap.symbol_props == null) ap.symbol_props = .{};
         const arr_iter_fn = try self.createNativeFn(&nativeArraySymbolIterator);
@@ -2424,7 +2425,8 @@ pub const VM = struct {
 
         // ── String constructor ──
         {
-            const str_ctor = try self.createNativeFn(&nativeStringConstructor);
+            // §22.1.1 String(value) → length 1
+            const str_ctor = try self.createNamedNativeFn("String", &nativeStringConstructor, 1);
             try self.registerNativeMethod(str_ctor, "fromCharCode", &nativeStringFromCharCode);
             try self.registerNativeMethod(str_ctor, "fromCodePoint", &nativeStringFromCodePoint);
             try str_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(sp));
@@ -2442,7 +2444,8 @@ pub const VM = struct {
 
         // ── Number constructor ──
         {
-            const num_ctor = try self.createNativeFn(&nativeNumberConstructor);
+            // §21.1.1 Number(value) → length 1
+            const num_ctor = try self.createNamedNativeFn("Number", &nativeNumberConstructor, 1);
             try self.registerNativeMethod(num_ctor, "isNaN", &nativeNumberIsNaN);
             try self.registerNativeMethod(num_ctor, "isFinite", &nativeNumberIsFinite);
             try self.registerNativeMethod(num_ctor, "isInteger", &nativeNumberIsInteger);
@@ -2463,10 +2466,11 @@ pub const VM = struct {
         // ── Function.prototype ──
         self.function_proto = try self.createObj(.{});
         const fp = self.function_proto.?;
-        try self.registerNativeMethod(fp, "call", &nativeFunctionCall);
-        try self.registerNativeMethod(fp, "apply", &nativeFunctionApply);
-        try self.registerNativeMethod(fp, "bind", &nativeFunctionBind);
-        try self.registerNativeMethod(fp, "toString", &nativeFunctionToString);
+        // Function.prototype — arity per ECMA-262 §20.2.3
+        try self.registerNativeMethodArity(fp, "call", &nativeFunctionCall, 1); // §20.2.3.3
+        try self.registerNativeMethodArity(fp, "apply", &nativeFunctionApply, 2); // §20.2.3.1
+        try self.registerNativeMethodArity(fp, "bind", &nativeFunctionBind, 1); // §20.2.3.2
+        try self.registerNativeMethodArity(fp, "toString", &nativeFunctionToString, 0); // §20.2.3.5
 
         // ── Object.prototype ──
         self.object_proto = try self.createObj(.{});
@@ -2479,28 +2483,29 @@ pub const VM = struct {
 
         // ── Object ──
         const obj_constructor = try self.createObj(.{});
-        try self.registerNativeMethod(obj_constructor, "keys", &nativeObjectKeys);
-        try self.registerNativeMethod(obj_constructor, "values", &nativeObjectValues);
-        try self.registerNativeMethod(obj_constructor, "entries", &nativeObjectEntries);
-        try self.registerNativeMethod(obj_constructor, "assign", &nativeObjectAssign);
-        try self.registerNativeMethod(obj_constructor, "create", &nativeObjectCreate);
-        try self.registerNativeMethod(obj_constructor, "defineProperty", &nativeObjectDefineProperty);
-        try self.registerNativeMethod(obj_constructor, "defineProperties", &nativeObjectDefineProperties);
-        try self.registerNativeMethod(obj_constructor, "setPrototypeOf", &nativeObjectSetPrototypeOf);
-        try self.registerNativeMethod(obj_constructor, "getPrototypeOf", &nativeObjectGetPrototypeOf);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyNames", &nativeObjectGetOwnPropertyNames);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertyDescriptors", &nativeObjectGetOwnPropertyDescriptors);
-        try self.registerNativeMethod(obj_constructor, "getOwnPropertySymbols", &nativeObjectGetOwnPropertySymbols);
-        try self.registerNativeMethod(obj_constructor, "freeze", &nativeObjectFreeze);
-        try self.registerNativeMethod(obj_constructor, "seal", &nativeObjectSeal);
-        try self.registerNativeMethod(obj_constructor, "preventExtensions", &nativeObjectPreventExtensions);
-        try self.registerNativeMethod(obj_constructor, "isFrozen", &nativeObjectIsFrozen);
-        try self.registerNativeMethod(obj_constructor, "isSealed", &nativeObjectIsSealed);
-        try self.registerNativeMethod(obj_constructor, "isExtensible", &nativeObjectIsExtensible);
-        try self.registerNativeMethod(obj_constructor, "is", &nativeObjectIs);
-        try self.registerNativeMethod(obj_constructor, "hasOwn", &nativeObjectHasOwn);
-        try self.registerNativeMethod(obj_constructor, "fromEntries", &nativeObjectFromEntries);
+        // Object static methods — arity per ECMA-262 §20.1.2
+        try self.registerNativeMethodArity(obj_constructor, "keys", &nativeObjectKeys, 1); // §20.1.2.18
+        try self.registerNativeMethodArity(obj_constructor, "values", &nativeObjectValues, 1); // §20.1.2.23
+        try self.registerNativeMethodArity(obj_constructor, "entries", &nativeObjectEntries, 1); // §20.1.2.5
+        try self.registerNativeMethodArity(obj_constructor, "assign", &nativeObjectAssign, 2); // §20.1.2.1
+        try self.registerNativeMethodArity(obj_constructor, "create", &nativeObjectCreate, 2); // §20.1.2.2
+        try self.registerNativeMethodArity(obj_constructor, "defineProperty", &nativeObjectDefineProperty, 3); // §20.1.2.4
+        try self.registerNativeMethodArity(obj_constructor, "defineProperties", &nativeObjectDefineProperties, 2); // §20.1.2.3
+        try self.registerNativeMethodArity(obj_constructor, "setPrototypeOf", &nativeObjectSetPrototypeOf, 2); // §20.1.2.22
+        try self.registerNativeMethodArity(obj_constructor, "getPrototypeOf", &nativeObjectGetPrototypeOf, 1); // §20.1.2.12
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertyNames", &nativeObjectGetOwnPropertyNames, 1); // §20.1.2.10
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertyDescriptor", &nativeObjectGetOwnPropertyDescriptor, 2); // §20.1.2.8
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertyDescriptors", &nativeObjectGetOwnPropertyDescriptors, 1); // §20.1.2.9
+        try self.registerNativeMethodArity(obj_constructor, "getOwnPropertySymbols", &nativeObjectGetOwnPropertySymbols, 1); // §20.1.2.11
+        try self.registerNativeMethodArity(obj_constructor, "freeze", &nativeObjectFreeze, 1); // §20.1.2.6
+        try self.registerNativeMethodArity(obj_constructor, "seal", &nativeObjectSeal, 1); // §20.1.2.20
+        try self.registerNativeMethodArity(obj_constructor, "preventExtensions", &nativeObjectPreventExtensions, 1); // §20.1.2.19
+        try self.registerNativeMethodArity(obj_constructor, "isFrozen", &nativeObjectIsFrozen, 1); // §20.1.2.15
+        try self.registerNativeMethodArity(obj_constructor, "isSealed", &nativeObjectIsSealed, 1); // §20.1.2.16
+        try self.registerNativeMethodArity(obj_constructor, "isExtensible", &nativeObjectIsExtensible, 1); // §20.1.2.14
+        try self.registerNativeMethodArity(obj_constructor, "is", &nativeObjectIs, 2); // §20.1.2.13
+        try self.registerNativeMethodArity(obj_constructor, "hasOwn", &nativeObjectHasOwn, 2); // §20.1.2.13 (ES2022)
+        try self.registerNativeMethodArity(obj_constructor, "fromEntries", &nativeObjectFromEntries, 1); // §20.1.2.7
         try obj_constructor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(op));
         const obj_id = try self.pool.intern("Object");
         try self.globals.put(self.allocator, obj_id, JsValue.initObject(obj_constructor));
@@ -2508,9 +2513,10 @@ pub const VM = struct {
         // ── Array constructor ──
         const arr_constructor = try self.createObj(.{ .obj_type = .native_function });
         arr_constructor.data = .{ .native_fn = &nativeArrayConstructor };
-        try self.registerNativeMethod(arr_constructor, "isArray", &nativeArrayIsArray);
-        try self.registerNativeMethod(arr_constructor, "from", &nativeArrayFrom);
-        try self.registerNativeMethod(arr_constructor, "of", &nativeArrayOf);
+        // Array static methods — arity per ECMA-262 §23.1.2
+        try self.registerNativeMethodArity(arr_constructor, "isArray", &nativeArrayIsArray, 1); // §23.1.2.2
+        try self.registerNativeMethodArity(arr_constructor, "from", &nativeArrayFrom, 1); // §23.1.2.1
+        try self.registerNativeMethodArity(arr_constructor, "of", &nativeArrayOf, 0); // §23.1.2.3
         // Array.prototype accessible from constructor
         const proto_id = try self.pool.intern("prototype");
         try arr_constructor.setProperty(self.allocator, proto_id, JsValue.initObject(ap));
@@ -2518,12 +2524,14 @@ pub const VM = struct {
         try self.globals.put(self.allocator, arr_id, JsValue.initObject(arr_constructor));
 
         // ── Map constructor ──
-        const map_constructor = try self.createNativeFn(&nativeMapConstructor);
+        // §24.1.1 Map([iterable]) → length 0
+        const map_constructor = try self.createNamedNativeFn("Map", &nativeMapConstructor, 0);
         const map_id = try self.pool.intern("Map");
         try self.globals.put(self.allocator, map_id, JsValue.initObject(map_constructor));
 
         // ── Set constructor ──
-        const set_constructor = try self.createNativeFn(&nativeSetConstructor);
+        // §24.2.1 Set([iterable]) → length 0
+        const set_constructor = try self.createNamedNativeFn("Set", &nativeSetConstructor, 0);
         const set_id = try self.pool.intern("Set");
         try self.globals.put(self.allocator, set_id, JsValue.initObject(set_constructor));
 
@@ -2583,51 +2591,51 @@ pub const VM = struct {
         const math_id = try self.pool.intern("Math");
         try self.globals.put(self.allocator, math_id, JsValue.initObject(math_obj));
 
-        // ── Global functions ──
-        const parse_int_obj = try self.createNativeFn(&nativeParseInt);
+        // ── Global functions (§19.2 parseFloat/parseInt/isNaN/isFinite) ──
+        const parse_int_obj = try self.createNamedNativeFn("parseInt", &nativeParseInt, 2);
         const parse_int_id = try self.pool.intern("parseInt");
         try self.globals.put(self.allocator, parse_int_id, JsValue.initObject(parse_int_obj));
 
-        const parse_float_obj = try self.createNativeFn(&nativeParseFloat);
+        const parse_float_obj = try self.createNamedNativeFn("parseFloat", &nativeParseFloat, 1);
         const parse_float_id = try self.pool.intern("parseFloat");
         try self.globals.put(self.allocator, parse_float_id, JsValue.initObject(parse_float_obj));
 
-        const is_nan_obj = try self.createNativeFn(&nativeIsNaN);
+        const is_nan_obj = try self.createNamedNativeFn("isNaN", &nativeIsNaN, 1);
         const is_nan_id = try self.pool.intern("isNaN");
         try self.globals.put(self.allocator, is_nan_id, JsValue.initObject(is_nan_obj));
 
-        const is_finite_obj = try self.createNativeFn(&nativeIsFinite);
+        const is_finite_obj = try self.createNamedNativeFn("isFinite", &nativeIsFinite, 1);
         const is_finite_id = try self.pool.intern("isFinite");
         try self.globals.put(self.allocator, is_finite_id, JsValue.initObject(is_finite_obj));
 
-        // ── eval ──
-        const eval_obj = try self.createNativeFn(&nativeEval);
+        // ── eval (§19.2.1) ──
+        const eval_obj = try self.createNamedNativeFn("eval", &nativeEval, 1);
         try self.globals.put(self.allocator, try self.pool.intern("eval"), JsValue.initObject(eval_obj));
 
-        // ── URI encoding/decoding ──
-        const encode_uri_obj = try self.createNativeFn(&nativeEncodeURI);
+        // ── URI encoding/decoding (§19.2.6) ──
+        const encode_uri_obj = try self.createNamedNativeFn("encodeURI", &nativeEncodeURI, 1);
         try self.globals.put(self.allocator, try self.pool.intern("encodeURI"), JsValue.initObject(encode_uri_obj));
-        const decode_uri_obj = try self.createNativeFn(&nativeDecodeURI);
+        const decode_uri_obj = try self.createNamedNativeFn("decodeURI", &nativeDecodeURI, 1);
         try self.globals.put(self.allocator, try self.pool.intern("decodeURI"), JsValue.initObject(decode_uri_obj));
-        const encode_uric_obj = try self.createNativeFn(&nativeEncodeURIComponent);
+        const encode_uric_obj = try self.createNamedNativeFn("encodeURIComponent", &nativeEncodeURIComponent, 1);
         try self.globals.put(self.allocator, try self.pool.intern("encodeURIComponent"), JsValue.initObject(encode_uric_obj));
-        const decode_uric_obj = try self.createNativeFn(&nativeDecodeURIComponent);
+        const decode_uric_obj = try self.createNamedNativeFn("decodeURIComponent", &nativeDecodeURIComponent, 1);
         try self.globals.put(self.allocator, try self.pool.intern("decodeURIComponent"), JsValue.initObject(decode_uric_obj));
 
-        // ── setTimeout / setInterval / clearTimeout / clearInterval ──
-        const set_timeout_obj = try self.createNativeFn(&nativeSetTimeout);
+        // ── setTimeout / setInterval / clearTimeout / clearInterval (HTML §8.6 timer APIs) ──
+        const set_timeout_obj = try self.createNamedNativeFn("setTimeout", &nativeSetTimeout, 1);
         const set_timeout_id = try self.pool.intern("setTimeout");
         try self.globals.put(self.allocator, set_timeout_id, JsValue.initObject(set_timeout_obj));
 
-        const set_interval_obj = try self.createNativeFn(&nativeSetInterval);
+        const set_interval_obj = try self.createNamedNativeFn("setInterval", &nativeSetInterval, 1);
         const set_interval_id = try self.pool.intern("setInterval");
         try self.globals.put(self.allocator, set_interval_id, JsValue.initObject(set_interval_obj));
 
-        const clear_timeout_obj = try self.createNativeFn(&nativeClearTimer);
+        const clear_timeout_obj = try self.createNamedNativeFn("clearTimeout", &nativeClearTimer, 1);
         const clear_timeout_id = try self.pool.intern("clearTimeout");
         try self.globals.put(self.allocator, clear_timeout_id, JsValue.initObject(clear_timeout_obj));
 
-        const clear_interval_obj = try self.createNativeFn(&nativeClearTimer);
+        const clear_interval_obj = try self.createNamedNativeFn("clearInterval", &nativeClearTimer, 1);
         const clear_interval_id = try self.pool.intern("clearInterval");
         try self.globals.put(self.allocator, clear_interval_id, JsValue.initObject(clear_interval_obj));
 
@@ -2636,27 +2644,30 @@ pub const VM = struct {
             // Promise prototype with then/catch/finally
             const proto = try self.createObj(.{});
             self.promise_proto = proto;
-            try self.registerNativeMethod(proto, "then", &nativePromiseThen);
-            try self.registerNativeMethod(proto, "catch", &nativePromiseCatch);
-            try self.registerNativeMethod(proto, "finally", &nativePromiseFinally);
+            // Promise.prototype — arity per ECMA-262 §27.2.5
+            try self.registerNativeMethodArity(proto, "then", &nativePromiseThen, 2); // §27.2.5.4
+            try self.registerNativeMethodArity(proto, "catch", &nativePromiseCatch, 1); // §27.2.5.1
+            try self.registerNativeMethodArity(proto, "finally", &nativePromiseFinally, 1); // §27.2.5.3
 
-            // Promise constructor
-            const promise_ctor = try self.createNativeFn(&nativePromiseConstructor);
+            // Promise constructor — §27.2.3 Promise(executor) → length 1
+            const promise_ctor = try self.createNamedNativeFn("Promise", &nativePromiseConstructor, 1);
             const promise_id = try self.pool.intern("Promise");
             try self.globals.put(self.allocator, promise_id, JsValue.initObject(promise_ctor));
 
             // Promise.resolve / Promise.reject (static methods on constructor)
-            try self.registerNativeMethod(promise_ctor, "resolve", &nativePromiseResolve);
-            try self.registerNativeMethod(promise_ctor, "reject", &nativePromiseReject);
-            try self.registerNativeMethod(promise_ctor, "all", &nativePromiseAll);
-            try self.registerNativeMethod(promise_ctor, "race", &nativePromiseRace);
-            try self.registerNativeMethod(promise_ctor, "allSettled", &nativePromiseAllSettled);
-            try self.registerNativeMethod(promise_ctor, "any", &nativePromiseAny);
+            // Promise static methods — arity per ECMA-262 §27.2.4
+            try self.registerNativeMethodArity(promise_ctor, "resolve", &nativePromiseResolve, 1); // §27.2.4.7
+            try self.registerNativeMethodArity(promise_ctor, "reject", &nativePromiseReject, 1); // §27.2.4.6
+            try self.registerNativeMethodArity(promise_ctor, "all", &nativePromiseAll, 1); // §27.2.4.1
+            try self.registerNativeMethodArity(promise_ctor, "race", &nativePromiseRace, 1); // §27.2.4.5
+            try self.registerNativeMethodArity(promise_ctor, "allSettled", &nativePromiseAllSettled, 1); // §27.2.4.2
+            try self.registerNativeMethodArity(promise_ctor, "any", &nativePromiseAny, 1); // §27.2.4.3
         }
 
         // ── fetch ──
         {
-            const fetch_obj = try self.createNativeFn(&nativeFetch);
+            // WHATWG Fetch §5 fetch(input, init) → length 1
+            const fetch_obj = try self.createNamedNativeFn("fetch", &nativeFetch, 1);
             const fetch_id = try self.pool.intern("fetch");
             try self.globals.put(self.allocator, fetch_id, JsValue.initObject(fetch_obj));
         }
@@ -2713,8 +2724,8 @@ pub const VM = struct {
             try self.registerNativeMethod(date_proto, "toLocaleTimeString", &nativeDateToLocaleTimeString);
             try self.registerNativeMethod(date_proto, "toLocaleString", &nativeDateToLocaleString);
             try self.registerNativeMethod(date_proto, "valueOf", &nativeDateValueOf);
-            // Constructor
-            const date_ctor = try self.createNativeFn(&nativeDateConstructor);
+            // Constructor — §21.4.2.1 Date(year, month, date, hours, minutes, seconds, ms) → length 7
+            const date_ctor = try self.createNamedNativeFn("Date", &nativeDateConstructor, 7);
             try date_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(date_proto));
             try self.registerNativeMethod(date_ctor, "now", &nativeDateNow);
             try self.registerNativeMethod(date_ctor, "parse", &nativeDateParse);
@@ -2732,12 +2743,13 @@ pub const VM = struct {
             try error_proto.setProperty(self.allocator, msg_sid, JsValue.initString(try self.pool.intern("")));
             try self.registerNativeMethod(error_proto, "toString", &nativeErrorToString);
 
-            const error_ctor = try self.createNativeFn(&nativeErrorConstructor);
+            // §20.5.1 Error(message, options) → length 1; name "Error" installed
+            // via createNamedNativeFn as {writable:false, enumerable:false,
+            // configurable:true} per §10.2.8.
+            const error_ctor = try self.createNamedNativeFn("Error", &nativeErrorConstructor, 1);
             const ctor_proto_sid = try self.pool.intern("prototype");
             const ctor_sid = try self.pool.intern("constructor");
             try error_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(error_proto));
-            // Function.name for Error constructor
-            try error_ctor.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern("Error")));
             // Error.prototype.constructor = Error
             try error_proto.setProperty(self.allocator, ctor_sid, JsValue.initObject(error_ctor));
             // [[Prototype]] = Function.prototype (for Object.getPrototypeOf)
@@ -2753,10 +2765,11 @@ pub const VM = struct {
                 try sub_proto.setProperty(self.allocator, msg_sid, JsValue.initString(try self.pool.intern("")));
                 try self.registerNativeMethod(sub_proto, "toString", &nativeErrorToString);
 
-                const sub_ctor = try self.createNativeFn(&nativeErrorConstructor);
+                // §20.5.6.2 NativeError(message) → length 1; name set via
+                // createNamedNativeFn so the descriptor has spec attrs
+                // {writable:false, enumerable:false, configurable:true}.
+                const sub_ctor = try self.createNamedNativeFn(err_name, &nativeErrorConstructor, 1);
                 try sub_ctor.setProperty(self.allocator, ctor_proto_sid, JsValue.initObject(sub_proto));
-                // Function.name for sub-error constructor
-                try sub_ctor.setProperty(self.allocator, name_sid, JsValue.initString(try self.pool.intern(err_name)));
                 // TypeError.prototype.constructor = TypeError
                 try sub_proto.setProperty(self.allocator, ctor_sid, JsValue.initObject(sub_ctor));
                 // [[Prototype]] = Error (so Object.getPrototypeOf(TypeError) === Error)
@@ -2776,9 +2789,10 @@ pub const VM = struct {
             try dom_exc_proto.setProperty(self.allocator, msg_sid_de, JsValue.initString(try self.pool.intern("")));
             try dom_exc_proto.setProperty(self.allocator, code_sid, JsValue.initNumber(0));
             try self.registerNativeMethod(dom_exc_proto, "toString", &nativeErrorToString);
-            const dom_exc_ctor = try self.createNativeFn(&nativeDOMExceptionConstructor);
+            // WebIDL §3.14 DOMException(message, name) → length 2; name set
+            // with spec-correct descriptor via createNamedNativeFn.
+            const dom_exc_ctor = try self.createNamedNativeFn("DOMException", &nativeDOMExceptionConstructor, 2);
             try dom_exc_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(dom_exc_proto));
-            try dom_exc_ctor.setProperty(self.allocator, name_sid_de, JsValue.initString(try self.pool.intern("DOMException")));
             try dom_exc_proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(dom_exc_ctor));
             if (self.function_proto) |fn_p| dom_exc_ctor.prototype = fn_p;
             try self.globals.put(self.allocator, try self.pool.intern("DOMException"), JsValue.initObject(dom_exc_ctor));
@@ -2795,22 +2809,26 @@ pub const VM = struct {
 
         // ── WeakMap / WeakSet ──
         {
-            const wm_ctor = try self.createNativeFn(&nativeWeakMapConstructor);
+            // §24.3.1 WeakMap([iterable]) → length 0
+            const wm_ctor = try self.createNamedNativeFn("WeakMap", &nativeWeakMapConstructor, 0);
             try self.globals.put(self.allocator, try self.pool.intern("WeakMap"), JsValue.initObject(wm_ctor));
-            const ws_ctor = try self.createNativeFn(&nativeWeakSetConstructor);
+            // §24.4.1 WeakSet([iterable]) → length 0
+            const ws_ctor = try self.createNamedNativeFn("WeakSet", &nativeWeakSetConstructor, 0);
             try self.globals.put(self.allocator, try self.pool.intern("WeakSet"), JsValue.initObject(ws_ctor));
         }
 
         // ── ArrayBuffer / Uint8Array ──
         {
-            const ab_ctor = try self.createNativeFn(&nativeArrayBufferConstructor);
+            // §25.1.3 ArrayBuffer(length) → length 1
+            const ab_ctor = try self.createNamedNativeFn("ArrayBuffer", &nativeArrayBufferConstructor, 1);
             try self.globals.put(self.allocator, try self.pool.intern("ArrayBuffer"), JsValue.initObject(ab_ctor));
 
             const u8_proto = try self.createObj(.{});
             try self.registerNativeMethod(u8_proto, "slice", &nativeUint8ArraySlice);
             try self.registerNativeMethod(u8_proto, "set", &nativeUint8ArraySet);
             try self.registerNativeMethod(u8_proto, "subarray", &nativeUint8ArraySlice); // alias
-            const u8_ctor = try self.createNativeFn(&nativeUint8ArrayConstructor);
+            // §23.2 TypedArray(buffer, byteOffset, length) → length 3
+            const u8_ctor = try self.createNamedNativeFn("Uint8Array", &nativeUint8ArrayConstructor, 3);
             try u8_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(u8_proto));
             self.typed_array_proto = u8_proto;
             try self.globals.put(self.allocator, try self.pool.intern("Uint8Array"), JsValue.initObject(u8_ctor));
@@ -2835,27 +2853,31 @@ pub const VM = struct {
 
         // ── structuredClone ──
         {
-            const sc_fn = try self.createNativeFn(&nativeStructuredClone);
+            // HTML §structured-clone structuredClone(value, options) → length 1
+            const sc_fn = try self.createNamedNativeFn("structuredClone", &nativeStructuredClone, 1);
             try self.globals.put(self.allocator, try self.pool.intern("structuredClone"), JsValue.initObject(sc_fn));
         }
 
         // ── atob / btoa ──
         {
-            const atob_fn = try self.createNativeFn(&nativeAtob);
+            // HTML §atob atob(data) / btoa(data) → length 1 each
+            const atob_fn = try self.createNamedNativeFn("atob", &nativeAtob, 1);
             try self.globals.put(self.allocator, try self.pool.intern("atob"), JsValue.initObject(atob_fn));
-            const btoa_fn = try self.createNativeFn(&nativeBtoa);
+            const btoa_fn = try self.createNamedNativeFn("btoa", &nativeBtoa, 1);
             try self.globals.put(self.allocator, try self.pool.intern("btoa"), JsValue.initObject(btoa_fn));
         }
 
         // ── Boolean constructor ──
         {
-            const bool_ctor = try self.createNativeFn(&nativeBooleanConstructor);
+            // §20.3.1 Boolean(value) → length 1
+            const bool_ctor = try self.createNamedNativeFn("Boolean", &nativeBooleanConstructor, 1);
             try self.globals.put(self.allocator, try self.pool.intern("Boolean"), JsValue.initObject(bool_ctor));
         }
 
         // ── WeakRef ──
         {
-            const wr_ctor = try self.createNativeFn(&nativeWeakRefConstructor);
+            // §26.1.1 WeakRef(target) → length 1
+            const wr_ctor = try self.createNamedNativeFn("WeakRef", &nativeWeakRefConstructor, 1);
             try self.globals.put(self.allocator, try self.pool.intern("WeakRef"), JsValue.initObject(wr_ctor));
         }
 
@@ -2868,7 +2890,8 @@ pub const VM = struct {
 
         // ── Symbol ──
         {
-            const symbol_fn = try self.createNativeFn(&nativeSymbolConstructor);
+            // §20.4.1 Symbol([description]) → length 0
+            const symbol_fn = try self.createNamedNativeFn("Symbol", &nativeSymbolConstructor, 0);
             try self.globals.put(self.allocator, try self.pool.intern("Symbol"), JsValue.initObject(symbol_fn));
 
             // Symbol.for, Symbol.keyFor
@@ -2885,7 +2908,8 @@ pub const VM = struct {
 
         // ── Proxy ──
         {
-            const proxy_fn = try self.createNativeFn(&nativeProxyConstructor);
+            // §28.2.1 Proxy(target, handler) → length 2
+            const proxy_fn = try self.createNamedNativeFn("Proxy", &nativeProxyConstructor, 2);
             try self.globals.put(self.allocator, try self.pool.intern("Proxy"), JsValue.initObject(proxy_fn));
             try self.registerNativeMethod(proxy_fn, "revocable", &nativeProxyRevocable);
         }
@@ -2912,12 +2936,58 @@ pub const VM = struct {
         return obj;
     }
 
+    /// Install `length` and `name` own-descriptors per ECMA-262 §10.2.8 /
+    /// §10.2.9. Attrs = { writable:false, enumerable:false, configurable:true }.
+    /// Insertion order is length, then name — keeps `Reflect.ownKeys(fn)
+    /// .slice(0,2) === ["length","name"]` invariant for WebIDL builtin-function-
+    /// properties tests.
+    fn installFnReflection(self: *VM, fn_obj: *JsObject, name: []const u8, length: u16) !void {
+        const len_sid = try self.pool.intern("length");
+        const name_sid = try self.pool.intern("name");
+        const name_str_sid = try self.pool.intern(name);
+        const reflection_attrs = object_mod.PropertyAttrs{
+            .writable = false,
+            .enumerable = false,
+            .configurable = true,
+        };
+        _ = try fn_obj.defineOwnProperty(self.allocator, len_sid, .{
+            .data = .{
+                .value = JsValue.initNumber(@floatFromInt(length)),
+                .attrs = reflection_attrs,
+            },
+        });
+        _ = try fn_obj.defineOwnProperty(self.allocator, name_sid, .{
+            .data = .{
+                .value = JsValue.initString(name_str_sid),
+                .attrs = reflection_attrs,
+            },
+        });
+    }
+
+    /// Legacy helper — installs a native method with default arity 0. New code
+    /// should prefer `registerNativeMethodArity` with the spec-declared arity.
+    /// Retained as a back-compat shim so the ~270 existing call sites continue
+    /// to work; each already-migrated site uses the explicit variant.
     pub fn registerNativeMethod(self: *VM, target: *JsObject, name: []const u8, func: NativeFn) !void {
+        try self.registerNativeMethodArity(target, name, func, 0);
+    }
+
+    /// Spec-correct registration: installs the fn object with `length` and
+    /// `name` own-descriptors (§10.2.8, §10.2.9) then binds it on `target`
+    /// under `name`.
+    pub fn registerNativeMethodArity(
+        self: *VM,
+        target: *JsObject,
+        name: []const u8,
+        func: NativeFn,
+        length: u16,
+    ) !void {
         const fn_obj = try self.allocator.create(JsObject);
         fn_obj.* = .{ .obj_type = .native_function, .data = .{ .native_fn = func } };
         try self.objects.append(self.allocator, fn_obj);
-        const name_id = try self.pool.intern(name);
-        try target.setProperty(self.allocator, name_id, JsValue.initObject(fn_obj));
+        try self.installFnReflection(fn_obj, name, length);
+        const key = try self.pool.intern(name);
+        try target.setProperty(self.allocator, key, JsValue.initObject(fn_obj));
     }
 
     // ── JS-level error throwing (via try_stack, catchable by JS try-catch) ──
@@ -7952,10 +8022,25 @@ pub const VM = struct {
         return obj;
     }
 
+    /// Legacy helper — creates a native fn with empty name and length 0.
+    /// New code should prefer `createNamedNativeFn` with a real name and the
+    /// spec-declared arity so fn.length / fn.name read spec-correct values.
     fn createNativeFn(self: *VM, func: NativeFn) !*JsObject {
+        return self.createNamedNativeFn("", func, 0);
+    }
+
+    /// Spec-correct fn creation: installs `length` and `name` own-descriptors
+    /// (§10.2.8, §10.2.9) on the returned fn object.
+    fn createNamedNativeFn(
+        self: *VM,
+        name: []const u8,
+        func: NativeFn,
+        length: u16,
+    ) !*JsObject {
         const fn_obj = try self.allocator.create(JsObject);
         fn_obj.* = .{ .obj_type = .native_function, .data = .{ .native_fn = func } };
         try self.objects.append(self.allocator, fn_obj);
+        try self.installFnReflection(fn_obj, name, length);
         return fn_obj;
     }
 
