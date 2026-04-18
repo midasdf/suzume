@@ -21,21 +21,23 @@ Layer 0: kotori JS engine (ECMA-262 correctness)
 
 ## Measurement Baseline
 
-| Area | Baseline (2026-04-16) | Post-session-#7 (est) | Target |
+**Fresh measurement 2026-04-19** against HEAD `beb7a4b` binary (kotori engine, TIMEOUT=90, jobs=4):
+
+| Area | Baseline (2026-04-16) | **Fresh (2026-04-19)** | Target |
 |------|-----------------------|------------------------|--------|
-| dom/nodes | 2.8% (118/4183) | ~71-75% | **100%** |
-| dom/events | 6.0% (20/334) | ~90% | **100%** |
-| css/css-values | 12.2% (570/4677) | ~12-15% | **100%** |
-| css/selectors | 6.7% (176/2629) | ~6-85%* | **100%** |
-| css/cssom | 16.4% (93/566) | ~16-25% | **100%** |
-| css/css-box | 19.1% (127/665) | ~19-97%* | **100%** |
-| css/css-display | 13.5% (48/355) | ~13-68%* | **100%** |
-| css/css-color | 1.3% (70/5348) | ~1-5% | **100%** |
-| html/dom | 13.4% (943/7013) | ~13-15% | **100%** |
+| dom/nodes | 2.8% (118/4183) | **68.2% (5367/7869)** | **100%** |
+| dom/events | 6.0% (20/334) | **27.8% (70/252)** | **100%** |
+| html/dom | 13.4% (943/7013) | **22.4% (235/1048)** | **100%** |
+| css/cssom | 16.4% (93/566) | **19.9% (135/677)** | **100%** |
+| css/css-values | 12.2% (570/4677) | *unmeasured (2026-04-19)* | **100%** |
+| css/selectors | 6.7% (176/2629) | *unmeasured (2026-04-19)* | **100%** |
+| css/css-box | 19.1% (127/665) | *unmeasured (2026-04-19)* | **100%** |
+| css/css-display | 13.5% (48/355) | *unmeasured (2026-04-19)* | **100%** |
+| css/css-color | 1.3% (70/5348) | *unmeasured (2026-04-19)* | **100%** |
 
-*starred areas have conflicting prior measurements — need fresh run with latest binary.
+Gap to 100% in measured areas: ~2502 dom/nodes + ~182 dom/events + ~813 html/dom + ~542 css/cssom = **~4039 subtests in these 4 areas alone**. Remaining css/* + other areas bring total ~15,000 subtests gap estimate unchanged.
 
-The baseline above uses `tests/wpt/baseline_results.txt` dated 2026-04-16 — i.e., *before* the large kotori jumps. Fresh measurement with the current `zig-out/bin/suzume` binary is in progress; the spec will be updated with the new numbers before implementation starts.
+Note: dom/nodes total subtests grew 4183→7869 between 2026-04-16 and 2026-04-19 — previously-erroring tests now enumerate their subtests after kotori timer/eval/common.js fixes. Pass rate delta (2.8%→68.2%) understates gain; absolute subtests +5249.
 
 ---
 
