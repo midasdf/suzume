@@ -1818,10 +1818,25 @@ fn normalizeNodeWithMutations(node: *lxb.lxb_dom_node_t) void {
                 var merge_buf: [16384]u8 = undefined;
                 const total = cur_len + next_len;
                 if (total <= merge_buf.len and cur_ptr != null) {
+                    // DOM §4.4.2 "normalize" step 3.1-3.3: each concatenation
+                    // is BOTH a childList mutation (removal of the merged
+                    // sibling from `node`) AND a characterData mutation on
+                    // the surviving text node (its `data` changes from e.g.
+                    // "foo" to "foobar"). Snapshot pre-merge text before
+                    // text_content_set invalidates the lexbor pointer.
+                    var old_cur_buf: [4096]u8 = undefined;
+                    const oc_len = @min(cur_len, old_cur_buf.len);
+                    @memcpy(old_cur_buf[0..oc_len], cur_ptr.?[0..oc_len]);
+                    const old_cur = old_cur_buf[0..oc_len];
+
                     @memcpy(merge_buf[0..cur_len], cur_ptr.?[0..cur_len]);
                     @memcpy(merge_buf[cur_len..][0..next_len], next_ptr.?[0..next_len]);
                     _ = lxb_dom_node_text_content_set(ch, &merge_buf, total);
                     text_len = total;
+
+                    // characterData record on the surviving text node.
+                    events.recordMutationWithOldValue(ch, "characterData", null, null, null, old_cur);
+
                     const prev_s: ?*lxb.lxb_dom_node_t = next.prev;
                     lxb_dom_node_remove(next);
                     events.recordMutationChildList(node, null, next, prev_s, after);

@@ -4993,14 +4993,15 @@ fn nativeReplaceChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
 
 // ── Node.normalize (DOM §4.4) ────────────────────────────────────────
 
-fn nativeNormalize(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+fn nativeNormalize(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
     const node = getThisNode(this) orelse return JsValue.undefined_val;
-    normalizeChildren(node);
+    normalizeChildren(vm, node);
     setDomDirty();
     return JsValue.undefined_val;
 }
 
-fn normalizeChildren(node: *lxb.lxb_dom_node_t) void {
+fn normalizeChildren(vm: *VM, node: *lxb.lxb_dom_node_t) void {
     var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
     var prev_text: ?*lxb.lxb_dom_node_t = null;
     while (ch) |c| {
@@ -5009,25 +5010,64 @@ fn normalizeChildren(node: *lxb.lxb_dom_node_t) void {
             var len: usize = 0;
             _ = dom_b.lxb_dom_node_text_content(c, &len);
             if (len == 0) {
-                // Remove empty text node
+                // Remove empty text node. Capture siblings for MO
+                // childList record (DOM §4.4.2 step 3.2). Do NOT destroy —
+                // JS may still hold references via MutationRecord.
+                const prev_s = c.prev;
+                const next_s = c.next;
                 dom_b.lxb_dom_node_remove(c);
-                _ = dom_b.lxb_dom_node_destroy(c);
+                if (g_mo_list.items.len > 0) {
+                    const c_wrapped = wrapNode(vm, c) orelse JsValue.null_val;
+                    const prev_w = if (prev_s) |p| wrapNode(vm, p) orelse JsValue.null_val else JsValue.null_val;
+                    const next_w = if (next_s) |n| wrapNode(vm, n) orelse JsValue.null_val else JsValue.null_val;
+                    recordChildListMutation(vm, node, null, c_wrapped, prev_w, next_w);
+                }
                 ch = next;
                 continue;
             }
             if (prev_text) |pt| {
-                // Merge c into prev_text
+                // DOM §4.4.2 step 3.1-3.3: each concatenation is BOTH a
+                // characterData mutation on `pt` (data grows) AND a
+                // childList mutation (removal of `c`). Snapshot old data
+                // before text_content_set invalidates the lexbor pointer.
                 var pt_len: usize = 0;
                 var c_len: usize = 0;
                 const pt_ptr = dom_b.lxb_dom_node_text_content(pt, &pt_len);
                 const c_ptr = dom_b.lxb_dom_node_text_content(c, &c_len);
+
+                var old_pt_buf: [4096]u8 = undefined;
+                var old_pt_heap: ?[]u8 = null;
+                defer if (old_pt_heap) |h| vm.allocator.free(h);
+                const old_pt: []const u8 = blk: {
+                    if (pt_ptr == null) break :blk &[_]u8{};
+                    if (pt_len <= old_pt_buf.len) {
+                        @memcpy(old_pt_buf[0..pt_len], pt_ptr.?[0..pt_len]);
+                        break :blk old_pt_buf[0..pt_len];
+                    }
+                    const h = vm.allocator.alloc(u8, pt_len) catch break :blk &[_]u8{};
+                    old_pt_heap = h;
+                    @memcpy(h, pt_ptr.?[0..pt_len]);
+                    break :blk h;
+                };
+
                 var buf: std.ArrayListUnmanaged(u8) = .empty;
                 defer buf.deinit(g_alloc);
                 if (pt_ptr) |p| buf.appendSlice(g_alloc, p[0..pt_len]) catch {};
                 if (c_ptr) |p| buf.appendSlice(g_alloc, p[0..c_len]) catch {};
                 _ = dom_b.lxb_dom_node_text_content_set(pt, buf.items.ptr, buf.items.len);
+
+                // Capture siblings BEFORE removal for the childList record.
+                const prev_s = c.prev;
+                const next_s = c.next;
                 dom_b.lxb_dom_node_remove(c);
-                _ = dom_b.lxb_dom_node_destroy(c);
+
+                if (g_mo_list.items.len > 0) {
+                    recordCharDataMutation(vm, pt, old_pt);
+                    const c_wrapped = wrapNode(vm, c) orelse JsValue.null_val;
+                    const prev_w = if (prev_s) |p| wrapNode(vm, p) orelse JsValue.null_val else JsValue.null_val;
+                    const next_w = if (next_s) |n| wrapNode(vm, n) orelse JsValue.null_val else JsValue.null_val;
+                    recordChildListMutation(vm, node, null, c_wrapped, prev_w, next_w);
+                }
                 ch = next;
                 continue;
             }
@@ -5035,7 +5075,7 @@ fn normalizeChildren(node: *lxb.lxb_dom_node_t) void {
         } else {
             prev_text = null;
             // Recurse into element children
-            normalizeChildren(c);
+            normalizeChildren(vm, c);
         }
         ch = next;
     }
