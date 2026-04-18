@@ -4649,6 +4649,22 @@ pub const VM = struct {
 
     // ── Promise helpers ──────────────────────────────────────────────
 
+    /// ECMA-262 §7.3.1 Get(V, P). Unlike JsObject.getProperty, which returns
+    /// null when encountering an accessor descriptor, this helper invokes the
+    /// getter and returns the result (or undefined if the accessor has no
+    /// getter). Propagates abrupt completions from the getter so callers can
+    /// route them into rejectPromise / pending_throw paths.
+    /// `this_val` is the receiver passed to the getter.
+    fn getPropertyWithAccessors(self: *VM, obj: *JsObject, name: StringId, this_val: JsValue) !?JsValue {
+        if (obj.findAccessorDescriptor(name)) |acc| {
+            if (acc.get.isObject()) {
+                return try self.callJsFunction(acc.get, this_val, &.{});
+            }
+            return JsValue.undefined_val;
+        }
+        return obj.getProperty(name);
+    }
+
     fn createPromiseObj(self: *VM) !*JsObject {
         const obj = try self.allocator.create(JsObject);
         obj.* = .{
@@ -4693,7 +4709,19 @@ pub const VM = struct {
             // step 11: IsCallable(thenAction) false → FulfillPromise (fall through).
             // step 13-14: NewPromiseResolveThenableJob + HostEnqueuePromiseJob.
             const then_id = try self.pool.intern("then");
-            if (val_obj.getProperty(then_id)) |then_val| {
+            // §27.2.1.3.2 step 8: "Let then be Completion(Get(resolution, 'then'))."
+            // step 9: abrupt completion rejects the outer promise with the
+            // thrown value — so this lookup must invoke accessor getters and
+            // route their throws into rejectPromise (Gap 5b).
+            const then_val_opt = self.getPropertyWithAccessors(val_obj, then_id, value) catch |err| {
+                if (err == error.TypeError or err == error.RangeError) {
+                    const reason = self.pending_throw orelse JsValue.undefined_val;
+                    self.pending_throw = null;
+                    return self.rejectPromise(promise, reason);
+                }
+                return err;
+            };
+            if (then_val_opt) |then_val| {
                 if (then_val.isObject()) {
                     const then_obj = then_val.asJsObject();
                     // §7.2.3 IsCallable: obj_type is .function or .native_function.

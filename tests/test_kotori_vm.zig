@@ -5850,3 +5850,29 @@ test "Layer 0A: thenable resolves promise with value passed to res()" {
     try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
 }
 
+// Gap 5b: throwing .then getter rejects the promise (§27.2.1.3.2 step 9).
+test "Layer 0A: throwing .then getter rejects outer promise" {
+    const result = try evalWithMicrotasks(
+        \\var caught = false;
+        \\Promise.resolve(Object.defineProperty({}, 'then', {
+        \\  get: function(){ throw new TypeError('boom'); }
+        \\})).catch(function(e){ caught = (e instanceof TypeError); });
+        \\globalThis.__r = caught;
+    ,
+        "__r",
+    );
+    try std.testing.expect(result.asBool());
+}
+
+// Gap 5b: non-callable .then falls through to fulfill (§27.2.1.3.2 step 11).
+test "Layer 0A: non-callable .then fulfills with resolution itself" {
+    const result = try evalWithMicrotasks(
+        \\var got;
+        \\Promise.resolve({ then: 42 }).then(function(v){ got = (v && v.then); });
+        \\globalThis.__r = got;
+    ,
+        "__r",
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
