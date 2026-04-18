@@ -1046,3 +1046,24 @@ test "cloneNode() preserves ownerDocument (DOM §4.4.1)" {
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
+
+test "cloneNode sets slot from lexbor clone's owner_document (Option A verification)" {
+    // Verifies that wrapNode alone — without any post-hoc setNodeOwnerDoc
+    // override — produces the correct ownerDocument on the clone.
+    // If lxb_dom_node_clone preserves owner_document (which it does for
+    // same-document clones), the _ownerDoc slot comes from wrapNode's
+    // lexbor read path rather than an explicit write after the fact.
+    var ctx = try TestCtx.init(
+        "<html><body><p id=\"src\"><span>text</span></p></body></html>",
+        \\var src = document.getElementById("src");
+        \\var clone = src.cloneNode(true);
+        \\// Both shallow and deep clone must report the same document.
+        \\var shallow = src.cloneNode(false);
+        \\clone.ownerDocument === document &&
+        \\  clone.ownerDocument === src.ownerDocument &&
+        \\  shallow.ownerDocument === document;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}

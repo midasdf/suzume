@@ -354,6 +354,10 @@ var g_doctype_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 var g_xml_doc_proto: ?*JsObject = null;
 var g_domparser_proto: ?*JsObject = null;
+/// Cached StringId for the `_ownerDoc` slot — avoids `pool.intern` on every
+/// `setNodeOwnerDoc` / `getNodeOwnerDoc` call (hot path: called from every
+/// wrapNode, every creator, and every ownerDocument getter).
+var g_sid_owner_doc: ?StringId = null;
 
 // ── MutationObserver storage (DOM §4.3) ─────────────────────────────
 
@@ -407,14 +411,14 @@ fn nodeCachePut(allocator: std.mem.Allocator, node: *lxb.lxb_dom_node_t, obj: *J
 /// the JS-visible `ownerDocument` property; the getter at domNodeGetProp
 /// reads this slot directly.
 pub fn setNodeOwnerDoc(vm: *VM, obj: *JsObject, owner_doc_val: JsValue) void {
-    const sid = vm.pool.intern("_ownerDoc") catch return;
+    const sid = g_sid_owner_doc orelse return;
     obj.setProperty(vm.allocator, sid, owner_doc_val) catch {};
 }
 
 /// DOM §4.4 — read the per-Node owner document slot.
 /// Returns `JsValue.null_val` if the slot was never written.
-pub fn getNodeOwnerDoc(vm: *VM, obj: *JsObject) JsValue {
-    const sid = vm.pool.intern("_ownerDoc") catch return JsValue.null_val;
+pub fn getNodeOwnerDoc(_: *VM, obj: *JsObject) JsValue {
+    const sid = g_sid_owner_doc orelse return JsValue.null_val;
     return obj.getProperty(sid) orelse JsValue.null_val;
 }
 
@@ -507,6 +511,10 @@ pub fn deinit() void {
 pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     g_alloc = vm.allocator;
     g_document = document_ptr;
+
+    // Cache the `_ownerDoc` StringId once so set/getNodeOwnerDoc avoid
+    // pool.intern on every call (hot path — called from every wrapNode).
+    g_sid_owner_doc = try vm.pool.intern("_ownerDoc");
 
     // ── Node.prototype (base for all DOM nodes) ──
     g_node_proto = try vm.createObj(.{});
@@ -3428,11 +3436,15 @@ fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
     const mode_val = JsValue.initString(vm.pool.intern(mode_str) catch return JsValue.initObject(obj));
     obj.setProperty(vm.allocator, mode_sid, mode_val) catch {};
     // DOM §4.8 — the shadow root's ownerDocument equals the host element's
-    // ownerDocument. Derive by wrapping the host (lazy-caches in nodeCache)
-    // and reading its `_ownerDoc` slot. Shadow DOM is Non-goal per spec §1;
-    // fall back to null if the host wrap fails.
+    // ownerDocument. Guard against re-entrant wrapShadowRoot: look up the
+    // host in the node cache first. If already cached, read _ownerDoc
+    // directly without re-entering wrapNode. If not cached, lazy-wrap
+    // just the host (safe: host is an Element, never a ShadowRoot itself).
     const host_node: *lxb.lxb_dom_node_t = @ptrCast(root_sr.host);
     const host_owner: JsValue = blk: {
+        if (nodeCacheGet(host_node)) |cached_host| {
+            break :blk getNodeOwnerDoc(vm, cached_host);
+        }
         const host_val = wrapNode(vm, host_node) orelse break :blk JsValue.null_val;
         if (!host_val.isObject()) break :blk JsValue.null_val;
         break :blk getNodeOwnerDoc(vm, host_val.asJsObject());
@@ -4389,18 +4401,12 @@ fn nativeCloneNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
     // deep defaults to false per spec
     const deep = if (args.len > 0 and args[0].isBool()) args[0].asBool() else false;
     const cloned = dom_b.lxb_dom_node_clone(node, deep) orelse return JsValue.null_val;
-    const clone_val = wrapNode(vm, cloned) orelse return JsValue.null_val;
-    // DOM §4.4.1 "clone a node" step 3 — the clone's ownerDocument is the
-    // same as the source's unless an override is supplied (importNode does
-    // that via its own wrapper in Task 2). `wrapNode` normally derives the
-    // owner from lexbor's `node->owner_document`, but lxb_dom_node_clone
-    // returns an interior clone whose owner-document field we don't
-    // assume about here — propagate from the source wrapper explicitly.
-    if (this.isObject() and clone_val.isObject()) {
-        const src_owner = getNodeOwnerDoc(vm, this.asJsObject());
-        setNodeOwnerDoc(vm, clone_val.asJsObject(), src_owner);
-    }
-    return clone_val;
+    // DOM §4.4.1 "clone a node" step 3 — lexbor's lxb_dom_node_clone
+    // preserves owner_document on the cloned node. wrapNode reads it via
+    // the lexbor owner_document field, so the slot is set correctly without
+    // any post-hoc override. (Verified by test "cloneNode sets slot from
+    // lexbor clone's owner_document" in tests/test_kotori_dom.zig.)
+    return wrapNode(vm, cloned) orelse JsValue.null_val;
 }
 
 // ── Node.isSameNode (DOM §4.4) ───────────────────────────────────────
