@@ -898,39 +898,36 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     et_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(et_proto)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("EventTarget"), JsValue.initObject(et_ctor));
 
-    const html_elem_val = JsValue.initObject(ep);
-    const html_names = [_][]const u8{
-        "HTMLElement",             "HTMLAnchorElement",        "HTMLAreaElement",
-        "HTMLAudioElement",        "HTMLBaseElement",          "HTMLBodyElement",
-        "HTMLBRElement",           "HTMLButtonElement",        "HTMLCanvasElement",
-        "HTMLDataElement",         "HTMLDataListElement",      "HTMLDetailsElement",
-        "HTMLDialogElement",       "HTMLDivElement",           "HTMLDListElement",
-        "HTMLEmbedElement",        "HTMLFieldSetElement",      "HTMLFontElement",
-        "HTMLFormElement",         "HTMLFrameElement",         "HTMLFrameSetElement",
-        "HTMLHeadElement",         "HTMLHeadingElement",       "HTMLHRElement",
-        "HTMLHtmlElement",         "HTMLIFrameElement",        "HTMLImageElement",
-        "HTMLInputElement",        "HTMLLabelElement",         "HTMLLegendElement",
-        "HTMLLIElement",           "HTMLLinkElement",          "HTMLMapElement",
-        "HTMLMarqueeElement",      "HTMLMediaElement",         "HTMLMenuElement",
-        "HTMLMetaElement",         "HTMLMeterElement",         "HTMLModElement",
-        "HTMLObjectElement",       "HTMLOListElement",         "HTMLOptGroupElement",
-        "HTMLOptionElement",       "HTMLOutputElement",        "HTMLParagraphElement",
-        "HTMLParamElement",        "HTMLPictureElement",       "HTMLPreElement",
-        "HTMLProgressElement",     "HTMLQuoteElement",         "HTMLScriptElement",
-        "HTMLSelectElement",       "HTMLSlotElement",          "HTMLSourceElement",
-        "HTMLSpanElement",         "HTMLStyleElement",         "HTMLTableElement",
-        "HTMLTableCaptionElement", "HTMLTableCellElement",     "HTMLTableColElement",
-        "HTMLTableRowElement",     "HTMLTableSectionElement",  "HTMLTemplateElement",
-        "HTMLTextAreaElement",     "HTMLTimeElement",          "HTMLTitleElement",
-        "HTMLTrackElement",        "HTMLUListElement",         "HTMLVideoElement",
-        "HTMLUnknownElement",      "HTMLDirectoryElement",
-    };
-    for (html_names) |ename| {
+    // HTML ctors — spec §3.7: each HTMLXxxElement ctor's `.prototype` MUST be
+    // the per-interface prototype from g_html_protos, not the shared
+    // Element.prototype. Previously all 67 ctors shared `ep`, which made
+    // `div instanceof HTMLAnchorElement === true` hold by accident
+    // (shared-proto bug). iface_mod.html_unique_ifaces includes both
+    // "HTMLElement" and "HTMLUnknownElement".
+    for (iface_mod.html_unique_ifaces) |ename| {
         const hctor = try vm.createObj(.{ .obj_type = .native_function });
         hctor.data = .{ .native_fn = &nativeNoOpConstructor };
-        hctor.setProperty(vm.allocator, proto_sid, html_elem_val) catch {};
+        const ctor_proto = getHtmlProto(ename) orelse g_html_element_proto.?;
+        hctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ctor_proto)) catch {};
         try vm.globals.put(vm.allocator, try vm.pool.intern(ename), JsValue.initObject(hctor));
     }
+
+    // SVG ctors — spec §3.7. Each SVGXxxElement ctor gets its per-interface
+    // prototype from g_svg_protos; SVGElement itself gets g_svg_element_proto.
+    for (iface_mod.svg_unique_ifaces) |ename| {
+        const sctor = try vm.createObj(.{ .obj_type = .native_function });
+        sctor.data = .{ .native_fn = &nativeNoOpConstructor };
+        const ctor_proto = getSvgProto(ename) orelse g_svg_element_proto.?;
+        sctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ctor_proto)) catch {};
+        try vm.globals.put(vm.allocator, try vm.pool.intern(ename), JsValue.initObject(sctor));
+    }
+
+    // MathMLElement ctor — spec §3.7, MathML Core §2 has no per-tag
+    // subclasses, so only the single MathMLElement ctor is registered.
+    const mctor = try vm.createObj(.{ .obj_type = .native_function });
+    mctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    mctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_mathml_element_proto.?)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("MathMLElement"), JsValue.initObject(mctor));
 
     const df_ctor = try vm.createObj(.{ .obj_type = .native_function });
     df_ctor.data = .{ .native_fn = &nativeDocumentFragmentConstructor };
