@@ -4580,11 +4580,28 @@ fn nativeAppendData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const info = getCharData(vm, this) orelse return JsValue.undefined_val;
     if (args.len == 0) return error.TypeError;
     const append_str = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else if (args[0].isNull()) "null" else if (args[0].isUndefined()) "undefined" else "";
+    // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
+    // Stack buffer with heap spill for values > 4 KiB (pattern: dom_element.zig:795-808).
+    var old_stack_buf: [4096]u8 = undefined;
+    var old_heap: ?[]u8 = null;
+    defer if (old_heap) |h| g_alloc.free(h);
+    const old_value: []const u8 = blk: {
+        if (info.text.len <= old_stack_buf.len) {
+            @memcpy(old_stack_buf[0..info.text.len], info.text);
+            break :blk old_stack_buf[0..info.text.len];
+        } else {
+            const h = g_alloc.alloc(u8, info.text.len) catch break :blk "";
+            old_heap = h;
+            @memcpy(h, info.text);
+            break :blk h;
+        }
+    };
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
     buf.appendSlice(g_alloc, info.text) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, append_str) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    recordCharDataMutation(vm, info.node, old_value);
     return JsValue.undefined_val;
 }
 
@@ -4604,11 +4621,27 @@ fn nativeDeleteData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     // Convert UTF-16 indices to byte offsets
     const byte_start = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
     const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
+    // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
+    var old_stack_buf: [4096]u8 = undefined;
+    var old_heap: ?[]u8 = null;
+    defer if (old_heap) |h| g_alloc.free(h);
+    const old_value: []const u8 = blk: {
+        if (info.text.len <= old_stack_buf.len) {
+            @memcpy(old_stack_buf[0..info.text.len], info.text);
+            break :blk old_stack_buf[0..info.text.len];
+        } else {
+            const h = g_alloc.alloc(u8, info.text.len) catch break :blk "";
+            old_heap = h;
+            @memcpy(h, info.text);
+            break :blk h;
+        }
+    };
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
     buf.appendSlice(g_alloc, info.text[0..byte_start]) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, info.text[byte_end..]) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    recordCharDataMutation(vm, info.node, old_value);
     return JsValue.undefined_val;
 }
 
@@ -4625,12 +4658,28 @@ fn nativeInsertData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     const byte_off = VM.utf16IdxToByteOff(info.text, offset_cu) orelse info.text.len;
     var buf_fmt: [64]u8 = undefined;
     const ins_str = VM.formatValue(vm.pool, args[1], &buf_fmt);
+    // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
+    var old_stack_buf: [4096]u8 = undefined;
+    var old_heap: ?[]u8 = null;
+    defer if (old_heap) |h| g_alloc.free(h);
+    const old_value: []const u8 = blk: {
+        if (info.text.len <= old_stack_buf.len) {
+            @memcpy(old_stack_buf[0..info.text.len], info.text);
+            break :blk old_stack_buf[0..info.text.len];
+        } else {
+            const h = g_alloc.alloc(u8, info.text.len) catch break :blk "";
+            old_heap = h;
+            @memcpy(h, info.text);
+            break :blk h;
+        }
+    };
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
     buf.appendSlice(g_alloc, info.text[0..byte_off]) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, ins_str) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, info.text[byte_off..]) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    recordCharDataMutation(vm, info.node, old_value);
     return JsValue.undefined_val;
 }
 
@@ -4651,12 +4700,28 @@ fn nativeReplaceData(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const byte_end = VM.utf16IdxToByteOff(info.text, offset_cu + count_cu) orelse info.text.len;
     var buf_fmt: [64]u8 = undefined;
     const rep_str = VM.formatValue(vm.pool, args[2], &buf_fmt);
+    // DOM §4.3.3: snapshot old data BEFORE text_content_set invalidates info.text.
+    var old_stack_buf: [4096]u8 = undefined;
+    var old_heap: ?[]u8 = null;
+    defer if (old_heap) |h| g_alloc.free(h);
+    const old_value: []const u8 = blk: {
+        if (info.text.len <= old_stack_buf.len) {
+            @memcpy(old_stack_buf[0..info.text.len], info.text);
+            break :blk old_stack_buf[0..info.text.len];
+        } else {
+            const h = g_alloc.alloc(u8, info.text.len) catch break :blk "";
+            old_heap = h;
+            @memcpy(h, info.text);
+            break :blk h;
+        }
+    };
     var buf: std.ArrayListUnmanaged(u8) = .empty;
     defer buf.deinit(g_alloc);
     buf.appendSlice(g_alloc, info.text[0..byte_start]) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, rep_str) catch return JsValue.undefined_val;
     buf.appendSlice(g_alloc, info.text[byte_end..]) catch return JsValue.undefined_val;
     _ = dom_b.lxb_dom_node_text_content_set(info.node, buf.items.ptr, buf.items.len);
+    recordCharDataMutation(vm, info.node, old_value);
     return JsValue.undefined_val;
 }
 
