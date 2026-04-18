@@ -1826,14 +1826,19 @@ pub fn documentCreateElement(
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
 
-    // Validate element name. Task 4 will switch this to
-    // `dom_names.isValidName` per DOM §4.5.1 (Name production allows ':'
-    // anywhere). For Task 3 we preserve the old over-rejecting behaviour
-    // via `dom_names.isValidQName`.
+    // DOM §4.5.1 step 1: validate against XML **Name** production (allows
+    // ':' anywhere). Previously used `isValidQName`, which over-rejected
+    // colonated tags (':foo', 'f:oo', 'foo:', 'f:o:o', 'f::oo') that
+    // Document-createElement.html:48-53 asserts as VALID.
     const tag = s.ptr[0..s.len];
-    if (tag.len == 0 or !dom_names.isValidQName(tag))
+    if (!dom_names.isValidName(tag))
         return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
+    // If lexbor rejects a Name-valid but QName-invalid tag (e.g. leading
+    // ':'), fall back to a null return — DOM §4.5.1 still requires a
+    // usable Element, but QuickJS's older path never had a JS-only
+    // fallback. Returning null here matches prior behaviour on any
+    // lexbor failure and preserves non-regression on the QuickJS side.
     const doc = api.getDocument(c) orelse return quickjs.JS_NULL();
     const elem = lxb_dom_document_create_element(doc, s.ptr, s.len, null) orelse return quickjs.JS_NULL();
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
