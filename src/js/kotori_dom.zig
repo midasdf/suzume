@@ -460,6 +460,14 @@ fn bumpElemAttrVersion(elem: *lxb.lxb_dom_element_t) void {
 var g_sid_nnm_elem: ?StringId = null; // "__nnmElem"      usize elem ptr
 var g_sid_nnm_ver: ?StringId = null; // "__nnmVer"        u64 version
 var g_sid_nnm_cache: ?StringId = null; // "__nnmCache"    *JsObject map
+// Layer 1D.1 Task 8: stale-key sweep tracking slots on the map JS object.
+// `__nnmMaxIdx` records the high-water indexed-key count from the previous
+// refresh; surplus numeric keys [count..prev_max) are deleted on the next
+// refresh. `__nnmNames` is an inner JsObject acting as a set whose own
+// properties are the qualified-name StringIds present in the previous
+// snapshot; any name not re-observed this pass is deleted from the map.
+var g_sid_nnm_max_idx: ?StringId = null; // "__nnmMaxIdx" u32 prev count
+var g_sid_nnm_names: ?StringId = null; // "__nnmNames"    *JsObject name-set
 var g_sid_owner_elem_ptr: ?StringId = null; // "__ownerElemPtr" usize node ptr (on Attr)
 /// Layer 1D.1 Task 4: opaque lxb_dom_attr_t* on the Attr JsObject — allows
 /// setAttributeNode (Task 5) to drop the stale g_attr_wrappers entry and
@@ -617,6 +625,8 @@ pub fn deinit() void {
     g_sid_nnm_elem = null;
     g_sid_nnm_ver = null;
     g_sid_nnm_cache = null;
+    g_sid_nnm_max_idx = null;
+    g_sid_nnm_names = null;
     g_sid_owner_elem_ptr = null;
     g_sid_attr_backing_ptr = null;
     // Interface prototype maps (HTML/SVG). Values are JsObjects owned by the
@@ -5253,6 +5263,9 @@ fn initNamedNodeMapProto(vm: *VM) !void {
     g_sid_nnm_elem = try vm.pool.intern("__nnmElem");
     g_sid_nnm_ver = try vm.pool.intern("__nnmVer");
     g_sid_nnm_cache = try vm.pool.intern("__nnmCache");
+    // Layer 1D.1 Task 8: stale-key sweep tracking.
+    g_sid_nnm_max_idx = try vm.pool.intern("__nnmMaxIdx");
+    g_sid_nnm_names = try vm.pool.intern("__nnmNames");
     g_sid_owner_elem_ptr = try vm.pool.intern("__ownerElemPtr");
     // Layer 1D.1 Task 4: backing-ptr slot for Attr wrapper identity under
     // setAttributeNode transfer (spec §R1).
@@ -5310,11 +5323,37 @@ fn refreshAttributesMap(vm: *VM, map_obj: *JsObject, elem: *lxb.lxb_dom_element_
         map_obj.setProperty(vm.allocator, sid, JsValue.initNumber(@floatFromInt(cur_ver))) catch {};
     }
 
-    // Note: stale indexed entries from a longer previous snapshot remain
-    // as own properties. Writing the new `length` caps observable
-    // iteration, and the caller's lookups go through named properties or
-    // `item()`. A future task can sweep stale keys when shrink cases are
-    // measured in WPT.
+    // Layer 1D.1 Task 8: read previous high-water mark of indexed keys so
+    // shrink cases (el.attributes[oldN-1] after removeAttribute) return
+    // undefined rather than a stale Attr wrapper.
+    const prev_max: u32 = blk: {
+        if (g_sid_nnm_max_idx) |sid| {
+            if (map_obj.getProperty(sid)) |v| {
+                if (!v.isNull() and !v.isUndefined()) {
+                    const f = v.toNumber();
+                    if (std.math.isFinite(f) and f >= 0.0)
+                        break :blk @intFromFloat(f);
+                }
+            }
+        }
+        break :blk 0;
+    };
+
+    // Read the previous ghost-list of qname StringIds so named-key ghost
+    // lookups (el.attributes.oldName after removeAttribute) return
+    // undefined. Own properties on prev_names act as a set.
+    const prev_names: ?*JsObject = blk: {
+        if (g_sid_nnm_names) |sid| {
+            if (map_obj.getProperty(sid)) |v| {
+                if (v.isObject()) break :blk v.asJsObject();
+            }
+        }
+        break :blk null;
+    };
+
+    // Build a fresh names set for THIS pass.
+    const new_names: ?*JsObject = vm.createObj(.{}) catch null;
+
     var count: u32 = 0;
     var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (attr) |a| {
@@ -5333,11 +5372,54 @@ fn refreshAttributesMap(vm: *VM, map_obj: *JsObject, elem: *lxb.lxb_dom_element_
                     } else |_| {}
                 } else |_| {}
                 map_obj.setProperty(vm.allocator, name_sid, JsValue.initObject(attr_obj)) catch {};
+                // Record this qname in the new ghost-list.
+                if (new_names) |nn| {
+                    nn.setProperty(vm.allocator, name_sid, JsValue.initBool(true)) catch {};
+                }
                 count += 1;
             } else |_| {}
         }
         attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
     }
+
+    // Layer 1D.1 Task 8: sweep stale indexed keys [count .. prev_max).
+    if (prev_max > count) {
+        var i: u32 = count;
+        while (i < prev_max) : (i += 1) {
+            var idx_buf: [16]u8 = undefined;
+            if (std.fmt.bufPrint(&idx_buf, "{d}", .{i})) |idx_str| {
+                if (vm.pool.intern(idx_str)) |idx_sid| {
+                    _ = map_obj.ordinaryDelete(vm.allocator, idx_sid);
+                } else |_| {}
+            } else |_| {}
+        }
+    }
+
+    // Sweep stale NAMED keys: any qname StringId in prev_names but not in
+    // new_names is a ghost from the previous snapshot and must be deleted.
+    if (prev_names) |pn| {
+        const keys = pn.properties.keys();
+        for (keys) |key_sid| {
+            const still_present = if (new_names) |nn|
+                nn.properties.contains(key_sid)
+            else
+                false;
+            if (!still_present) {
+                _ = map_obj.ordinaryDelete(vm.allocator, key_sid);
+            }
+        }
+    }
+
+    // Store the new high-water mark + ghost-list for the next cycle.
+    if (g_sid_nnm_max_idx) |sid| {
+        map_obj.setProperty(vm.allocator, sid, JsValue.initNumber(@floatFromInt(count))) catch {};
+    }
+    if (g_sid_nnm_names) |sid| {
+        if (new_names) |nn| {
+            map_obj.setProperty(vm.allocator, sid, JsValue.initObject(nn)) catch {};
+        }
+    }
+
     if (vm.pool.intern("length")) |len_sid| {
         map_obj.setProperty(vm.allocator, len_sid, JsValue.initNumber(@floatFromInt(count))) catch {};
     } else |_| {}

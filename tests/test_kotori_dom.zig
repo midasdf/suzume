@@ -2154,3 +2154,39 @@ test "toggleAttribute still throws on empty name" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 8: refreshAttributesMap stale-key sweep ─────────
+test "attributes map index properties shrink correctly after removeAttribute" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\var m = el.attributes;
+        \\var touch = m[1];
+        \\el.removeAttribute('a');
+        \\var m2 = el.attributes;
+        \\m2[1] === undefined && m2.length === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "attributes map named properties sweep removed qnames" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var m = el.attributes;
+        \\var touch = m.id;
+        \\el.removeAttribute('id');
+        \\var m2 = el.attributes;
+        \\m2.id === undefined;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
