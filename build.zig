@@ -545,6 +545,19 @@ pub fn build(b: *std.Build) void {
     test_dom_token_list_step.dependOn(&run_dom_token_list_tests.step);
     test_step.dependOn(&run_dom_token_list_tests.step);
 
+    // ── dom_names (Name / QName / validate-and-extract) tests ──
+    // Pure-Zig unit tests for DOM §1.5 algorithm and Name/QName productions.
+    const dom_names_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/dom_names.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const dom_names_tests = b.addTest(.{ .root_module = dom_names_mod });
+    const run_dom_names_tests = b.addRunArtifact(dom_names_tests);
+    const test_dom_names_step = b.step("test-dom-names", "Run DOM §1.5 Name/QName tests");
+    test_dom_names_step.dependOn(&run_dom_names_tests.step);
+    test_step.dependOn(&run_dom_names_tests.step);
+
     // ── DOM + Style integration test ────────────────────────────
     // Run via: zig build run -- --test-dom
     const run_test_dom = b.addRunArtifact(exe);
