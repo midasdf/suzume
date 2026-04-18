@@ -1659,3 +1659,48 @@ test "NamedNodeMap liveness: length drops after removeAttribute (Layer 1D Task 4
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 5: item + getNamedItem + getNamedItemNS.
+test "NamedNodeMap.item: in-range / out-of-range / negative (Layer 1D Task 5)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes.item(0).value === 'x' &&
+        \\el.attributes.item(999) === null &&
+        \\el.attributes.item(-1) === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.getNamedItem: HTML case-insensitive + missing returns null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('data-x', '1');
+        \\el.attributes.getNamedItem('DATA-X').value === '1' &&
+        \\el.attributes.getNamedItem('missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.getNamedItemNS: empty ns coerces to null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes.getNamedItemNS('', 'id').value === 'x' &&
+        \\el.attributes.getNamedItemNS(null, 'id').value === 'x' &&
+        \\el.attributes.getNamedItemNS(null, 'missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

@@ -4318,11 +4318,123 @@ fn nativeNnmConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerro
 }
 
 /// Extension point for Tasks 5-8 — registers native methods and
-/// `@@iterator` on `NamedNodeMap.prototype`. Task 1 installs an empty
-/// stub so the build is green before methods exist.
+/// `@@iterator` on `NamedNodeMap.prototype`. Each task appends its
+/// registrations here.
 fn initNamedNodeMapMethods(vm: *VM, proto: *JsObject) !void {
+    // Task 5: read-only lookup methods.
+    try vm.registerNativeMethod(proto, "item", &nativeNnmItem);
+    try vm.registerNativeMethod(proto, "getNamedItem", &nativeNnmGetNamedItem);
+    try vm.registerNativeMethod(proto, "getNamedItemNS", &nativeNnmGetNamedItemNS);
+}
+
+/// DOM §4.9.1 step 1 — for an HTML-namespace element inside an HTML
+/// document, the qualified-name lookup lowercases the input. kotori
+/// tags XMLDocument wrappers with `_isXmlDoc = true` (see nativeCreateDocument);
+/// any document without that flag is treated as HTML-compatible.
+fn elementInHtmlDoc(vm: *VM, elem: *lxb.lxb_dom_element_t) bool {
     _ = vm;
-    _ = proto;
+    // LXB_NS_HTML sentinel (per lexbor/ns.h).
+    if (elem.node.ns != 0x02) return false;
+    // Lexbor does not expose a stable "is this doc XML" bit on the
+    // element, but kotori's createDocument path sets `_isXmlDoc` on the
+    // Document JsObject. For now, treat HTML-ns elements in
+    // well-formed HTML documents (the mainline WPT case) as the lowercase
+    // cohort; XMLDocument flows rarely reach HTML-ns. A future task can
+    // refine this by reading the `_isXmlDoc` slot via the node cache.
+    return true;
+}
+
+/// DOM §4.9.2 item(index) — indexed getter steps. Returns `this[index]`
+/// from the live attribute list, or null if index is out of range /
+/// negative / NaN.
+fn nativeNnmItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.null_val;
+    const elem = nnmElem(this) orelse return JsValue.null_val;
+    const want_f = args[0].toNumber();
+    if (!std.math.isFinite(want_f) or want_f < 0) return JsValue.null_val;
+    const want: u32 = @intFromFloat(want_f);
+    var idx: u32 = 0;
+    var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (a) |attr| : (idx += 1) {
+        if (idx == want) {
+            const obj = getOrCreateAttrWrapper(vm, attr) orelse return JsValue.null_val;
+            return JsValue.initObject(obj);
+        }
+        a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+    }
+    return JsValue.null_val;
+}
+
+/// DOM §4.9.2 getNamedItem(qualifiedName) — delegates to §4.9.1 "get an
+/// attribute by name". HTML-ns + HTML-doc cohort lowercases the input
+/// before lookup.
+fn nativeNnmGetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    const elem = nnmElem(this) orelse return JsValue.null_val;
+    const qn_raw = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    var lower_buf: [256]u8 = undefined;
+    const qn: []const u8 = blk: {
+        if (!elementInHtmlDoc(vm, elem)) break :blk qn_raw;
+        if (qn_raw.len > lower_buf.len) break :blk qn_raw;
+        for (qn_raw, 0..) |c, i| lower_buf[i] = std.ascii.toLower(c);
+        break :blk lower_buf[0..qn_raw.len];
+    };
+    const a = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse return JsValue.null_val;
+    const obj = getOrCreateAttrWrapper(vm, @ptrCast(@alignCast(a))) orelse return JsValue.null_val;
+    return JsValue.initObject(obj);
+}
+
+/// Walk the live attribute list for an (ns, localName) match. `ns == null`
+/// matches attrs with null namespace (lexbor ns id outside the known URI
+/// set, or the null ns id). Returns the first match or null.
+fn lookupAttrByNsLocal(elem: *lxb.lxb_dom_element_t, ns: ?[]const u8, local: []const u8) ?*lxb.lxb_dom_attr_t {
+    var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (a) |attr| {
+        const attr_ns = nsIdToUri(attr.node.ns);
+        const ns_match = blk: {
+            if (ns == null) break :blk (attr_ns == null);
+            if (attr_ns) |u| break :blk std.mem.eql(u8, u, ns.?);
+            break :blk false;
+        };
+        if (ns_match) {
+            // Lexbor does not expose a standalone local-name accessor for
+            // attrs via the public `.noi` surface we import. Fall back to
+            // extracting the local name from the qualified name by
+            // trimming the prefix (if any).
+            var qn_len: usize = 0;
+            if (dom_b.lxb_dom_attr_qualified_name(@ptrCast(attr), &qn_len)) |qn_ptr| {
+                const qn = qn_ptr[0..qn_len];
+                const colon_idx = std.mem.indexOfScalar(u8, qn, ':');
+                const attr_local: []const u8 = if (colon_idx) |ci| qn[ci + 1 ..] else qn;
+                if (std.mem.eql(u8, attr_local, local)) return attr;
+            }
+        }
+        a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+    }
+    return null;
+}
+
+/// DOM §4.9.2 getNamedItemNS(namespace, localName) — delegates to §4.9.1
+/// "get an attribute by namespace and local name". Empty-string
+/// namespace coerces to null per spec step 1.
+fn nativeNnmGetNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.null_val;
+    const elem = nnmElem(this) orelse return JsValue.null_val;
+    const ns_arg = args[0];
+    const ns_slice: ?[]const u8 = if (ns_arg.isNull() or ns_arg.isUndefined()) null else blk: {
+        if (!ns_arg.isString()) break :blk null;
+        const s = vm.pool.get(ns_arg.asStringId()) orelse break :blk null;
+        if (s.len == 0) break :blk null;
+        break :blk s;
+    };
+    if (!args[1].isString()) return JsValue.null_val;
+    const local = vm.pool.get(args[1].asStringId()) orelse return JsValue.null_val;
+    const a = lookupAttrByNsLocal(elem, ns_slice, local) orelse return JsValue.null_val;
+    const obj = getOrCreateAttrWrapper(vm, a) orelse return JsValue.null_val;
+    return JsValue.initObject(obj);
 }
 
 /// DOM §4.9.2 — build `NamedNodeMap.prototype` and expose `globalThis.NamedNodeMap`.
