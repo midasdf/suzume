@@ -1,6 +1,6 @@
 # kotori HTML/SVG/MathML Interface Dispatch + Native DOM Fixes — Design Spec
 
-**Date**: 2026-04-18 (revised after critic review)
+**Date**: 2026-04-18 (revision 3, post cross-check)
 **Scope**: dom/nodes 68.2% → ~77% via `createElement` / `createElementNS` interface prototype dispatch (HTML + minimal SVG/MathML), per-node `ownerDocument` slot (DOM §4.4), live `NamedNodeMap` with attr identity (DOM §4.9.1), and `buildAttributesMap` lexbor iteration fix.
 **Parent roadmap**: `docs/superpowers/specs/2026-04-17-kotori-suzume-wpt-100-roadmap.md` — Layer 1 (dom/nodes algorithms) sub-project.
 **Approach**: Spec-driven (WHATWG DOM §4.5.3, §4.4, §4.9.1; HTML §4; SVG2 §4; MathML Core §2; WebIDL §3.7). No test-hacks.
@@ -14,13 +14,14 @@ Implement `createElement` / `createElementNS` so that elements receive the corre
 ### Success Criteria (all required)
 
 1. **Individual WPT files (fresh measurement, TIMEOUT=30, `--jobs 4`)**:
-   - `dom/nodes/Document-createElement.html` — **100%** (baseline 9/147)
-   - `dom/nodes/Document-createElementNS.html` — **≥ 95%** (596 subtests; last 5% gate allowed for exotic SVG/MathML edge cases deferred)
+   - `dom/nodes/Document-createElement.html` — **100%** (baseline 9/147; P0 remeasures and records exact baseline)
+   - `dom/nodes/Document-createElementNS.html` — **≥ 95%** of 596 subtests (P0 records baseline pass/fail; the ≥95% gate applies only if the deferred 5% maps cleanly to "MathML per-tag interfaces" or "advanced SVG subclass methods" per Non-goals §1). If deferred-what remaining failures touch HTMLElement or HTMLUnknownElement paths, gate escalates to 100%.
    - `dom/nodes/attributes.html` — **100%** (baseline 32 fails resolved)
    - `dom/nodes/importNode.html` — **100%** (baseline 4 fails resolved)
+   - Layer 1 of the WPT 100% roadmap closes with the above gates met; the deferred 5% of createElementNS is accepted as Layer 1 exit, to be picked up by the SVG/MathML subclass follow-up spec.
 2. **WHATWG DOM §4.5.3** — all 8 algorithm steps honored; HTML dispatch only when namespace = `http://www.w3.org/1999/xhtml`.
 3. **HTML §4** — every element in the HTML Element interfaces table mapped via prototype chain.
-4. **SVG2 §4 + MathML Core §2** — minimum dispatch for core SVG (~20 tags) and MathML (~10 tags) elements so that `createElementNS(SVG_NS, "circle") instanceof SVGElement` succeeds.
+4. **SVG2 §4 + MathML Core §2** — minimum dispatch for core SVG (~20 tags with per-tag interface map) and MathML (single `MathMLElement` fallback for all MathML elements, no per-tag map) so that `createElementNS(SVG_NS, "circle") instanceof SVGCircleElement` and `createElementNS(MATH_NS, "mi") instanceof MathMLElement` succeed.
 5. **No regression**: Node-contains 1482/1482, compareDocumentPosition 1444/1444, dom/events 70/252, zig build test — all maintained.
 6. **Shared-proto regression audit**: before P3 commit, diff WPT results with the `HTMLAnchorElement.prototype === HTMLDivElement.prototype` bug fix gated, confirm no net subtest loss.
 
@@ -96,11 +97,16 @@ Object.prototype
 
 ### 3.1 `_ownerDoc` internal slot + full wrapper audit — DOM §4.4
 
-**Reality check** (verified against `kotori_dom.zig` HEAD = `da2b99a`):
+**Reality check** (verified against `kotori_dom.zig` HEAD = `ccc7800`):
 - L1115-1116 getter: returns `globalThis.document` → wrong for every cross-doc case.
+- **L584** bootstrap `doc_obj` wrap (main document): no slot; `prototype = ep`. Cached first.
 - L1762 `createJsOnlyElement`: writes `ownerDocument` = **`JsValue.null_val`** as an ordinary property. The globalThis.document in §1115 masks this null today; removing the mask without writing the slot regresses XML-doc elements.
 - L2051 inside Attr builder: property, not slot.
 - L2439 DocumentType JS init: property.
+- **L3383** `wrapShadowRoot`: no slot; `prototype = element_proto`.
+- **L3424** `nativeDocumentConstructor` (new Document()): no slot; `prototype = g_node_proto`.
+- L3796 `wrapNode` (parser/query path): no slot; prototype switched by nodeType.
+- **L4901** `createHTMLDocument` native: no slot; `prototype = g_node_proto`.
 - L5200 impl.createDocument: property on returned doc's root.
 - L5247 impl.createDocument.createElement path: property.
 - L5326 impl.createDocumentType: property.
@@ -114,31 +120,48 @@ Object.prototype
   fn getNodeOwnerDoc(vm: *VM, obj: *JsObject) JsValue; // returns null_val for Document
   ```
 - **Getter rewrite** (L1115): reads `_ownerDoc` via `getNodeOwnerDoc`; returns it directly — no globalThis fallback.
-- **All wrapper/creator call sites must write the slot**:
+- **All wrapper/creator call sites must write the slot** (P0 `grep obj_type = .dom_node` will re-verify exhaustiveness):
 
   | Site (file:line) | Current state | Required change |
   |---|---|---|
-  | `createJsOnlyElement` L1742 | writes `null_val` property (masked) | write `_ownerDoc` via helper; arg `owner_doc: *JsObject` now required |
-  | `wrapNode` L3796 | no slot write | resolve owner via lexbor `node.owner_document` or cache parent; write slot before `nodeCachePut` |
-  | Attr builder ~L2014 | property | slot write with ownerDoc from Attr's owning element |
+  | bootstrap doc wrap L584 | no slot, prototype=ep | slot = `null_val` (Document itself); fix prototype to g_node_proto for Document semantics |
+  | `createJsOnlyElement` L1742 | writes `null_val` property (masked) | write `_ownerDoc` slot via helper; arg `owner_doc: JsValue` now required |
+  | Attr builder ~L2014 (L2051) | property | slot write with ownerDoc from Attr's owning element |
   | DocumentType L2439 | property | slot |
-  | impl.createDocument L5200/L5247/L5326 | property | slot (owner = the newly created doc) |
-  | `cloneNode` (located at runtime audit in P1) | whatever | slot = target doc per DOM §4.5 "clone a node" |
-  | `importNode` native L2323 | property (verified in P0 audit) | slot = target doc (recursive) |
+  | `wrapShadowRoot` L3383 | no slot | slot = host element's ownerDocument |
+  | `nativeDocumentConstructor` L3424 | no slot | slot = `null_val` (the new Document is itself) |
+  | `wrapNode` L3796 | no slot write | resolve owner via lexbor `node->owner_document` (verified accessible at `dom_node.zig:2332`); write slot before `nodeCachePut` |
+  | `createHTMLDocument` L4901 | no slot | slot = `null_val` (new doc itself); populate child elements' slots to point to it |
+  | impl.createDocument L5200/L5247/L5326 | property | slot (owner = the newly created doc; doc itself = `null_val`) |
+  | `nativeCloneNode` L4305 (verify line in P0) | current logic TBD | slot = source node's ownerDoc (clone node); `importNode` path overrides to target doc |
+  | `nativeImportNode` ~L2323 (verify line in P0) | property | slot = target doc; recursive on children |
 
-- **`wrapNode` owner-doc resolution**: lexbor provides `node->owner_document`. Cast to `*lxb_dom_document_t`, find its cached JS wrapper in `g_node_cache`, fall back to lazy-wrap the document. If the document node is not yet cached (first entry), wrap it first, then element. Document.ownerDocument = null per DOM §4.4 — handle before slot write.
+- **Detached-node owner resolution in `wrapNode`**: lexbor's `node->owner_document` points to the creating document even for detached nodes (nodes allocated via `lxb_dom_document_create_element_noi` but not yet appended). This is confirmed by existing code at `dom_node.zig:2332` which already reads `cur.owner_document` successfully. P0 adds a unit test fixture that calls `createElement` then checks `wrapNode` owner resolution *before* any appendChild. If lexbor returns null for some edge case, fall back to a per-call `owner_doc` parameter on `wrapNode` — require every call site to pass it. No imaginary `vm.current_document`; no globalThis.document re-injection.
 
 **Removed**: the L1115 globalThis.document fallback.
 
-### 3.2 `importNode` JS polyfill removal + native rewrite — DOM §4.5
+### 3.2 JS-level ownerDocument infrastructure removal — DOM §4.4 / §4.5
 
-**Current state**: `kotori_runtime.zig` L1500-1521 installs a JS-level `Document.prototype.importNode` polyfill that clones and calls a JS helper `stampOwnerDocument`. With `_ownerDoc` slot in place, the polyfill is obsolete and actively harmful (it overrides native dispatch).
+**Current state** — `kotori_runtime.zig` contains three coupled pieces of JS polyfill code that together implement ownerDocument on top of the native getter's globalThis.document bug:
+- **L1425-1440 `stampOwnerDocument`**: recursively installs instance-level `Object.defineProperty(node, 'ownerDocument', {get:...})` on a node subtree.
+- **L1441-L1474 `wrapDocCreators`**: monkey-patches `createElement/createElementNS/createTextNode/createComment/createDocumentFragment/createCDATASection/createProcessingInstruction/createAttribute/createAttributeNS` on a doc so each return value gets its `ownerDocument` stamped.
+- **L1477-L1495** impl wrapper: wraps `document.implementation.createHTMLDocument` and `createDocument` so freshly-created documents go through `wrapDocCreators`.
+- **L1499**: `wrapDocCreators(document)` on load to apply to the main document.
+- **L1500-L1521**: `importNode` polyfill that calls `cloneNodeInto` + `stampOwnerDocument`.
 
-**Action**:
-- Delete L1500-1521 from `kotori_runtime.zig` (the `function importNode(node, deep){ ... }` block, the `Document.prototype.importNode = importNode` assignment, and the `document.importNode.bind` line).
-- Also delete the `stampOwnerDocument` helper if it's only called from here (grep and confirm before delete).
-- Keep `wrapDocCreators` and `cloneNodeInto` — they serve other purposes.
-- The native `nativeImportNode` (existing at ~L2323 of `kotori_dom.zig`) becomes the sole path. Rewrite it to do "clone a node" (DOM §4.4.1) recursively, passing `target_doc` as owner for every cloned node.
+**Critical interaction**: `wrapDocCreators` installs instance-level accessor properties. Per ECMA-262 [[Get]] semantics, an own property on the instance wins over any prototype-level getter — including the rewritten native `_ownerDoc` getter from P1a. **Leaving `wrapDocCreators` in place silently defeats P1a.** Every WPT test reaching elements through `document.createElement(...)` sees the stale JS closure, not the `_ownerDoc` slot.
+
+**Action** — **remove all five pieces** in a single atomic commit (P1b):
+1. Delete `stampOwnerDocument` (L1425-L1440).
+2. Delete `wrapDocCreators` (L1441-L1474) and the body's `Object.defineProperty(node, 'ownerDocument', ...)` stamping.
+3. Delete the `impl.createHTMLDocument` / `impl.createDocument` wrapper block (L1477-L1495).
+4. Delete the `wrapDocCreators(document)` bootstrap call (L1499).
+5. Delete the `importNode` JS polyfill (L1500-L1521), `Document.prototype.importNode = importNode`, and `document.importNode.bind`.
+6. Grep-audit: confirm no other caller references `stampOwnerDocument` or `wrapDocCreators` before delete.
+
+**Native replacement**: `nativeImportNode` in `kotori_dom.zig` becomes the sole import path. Rewrite to perform DOM §4.4.1 "clone a node" recursively, calling `setNodeOwnerDoc(clone, target_doc)` on every cloned element in the subtree. Honor `deep` flag per DOM §4.5 (shallow=just the node; deep=subtree).
+
+**Rollback**: if commits 1+2 together cause a hard regression, revert both as a pair — they are co-dependent. §7 commit plan reflects this by sequencing commit 1 (slot infra + creator-site migration) before commit 2 (polyfill removal), so bisect points to the right pair.
 
 ### 3.3 `buildAttributesMap` fix + live NamedNodeMap — DOM §4.9.1
 
@@ -154,15 +177,13 @@ attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
 
 **Design**:
 
-- **Element-level caches** on the Element JsObject:
-  - `_attrMap`: cached NamedNodeMap JsObject (single instance per element); built on first `.attributes` access, reused thereafter.
-  - `_attrWrappers`: `HashMap(*lxb_dom_attr_t → *JsObject)` caching Attr JS wrappers by pointer so `el.attributes[0] === el.attributes[0]`.
+**Committed design** — rebuild-on-access with pointer-keyed Attr cache:
 
-- **Access model**: the cached `_attrMap` exposes `.length` and indexed access via a **custom property getter** (not a snapshot). On every access, it iterates lexbor, syncs the map's enumerable `[0]..[length-1]` indices and named properties, and returns.
-
-- **Simpler fallback if the full live proxy is too much for this spec**: keep NamedNodeMap re-built each access but cache Attr wrappers by pointer, so identity holds within a single microtask session. Rebuild is O(attr_count), which is ≤ 10 for typical elements. **This is the path of least risk; committed in P2b.**
-
-- **Invalidation**: `setAttribute` / `removeAttribute` / `setAttributeNS` / `removeAttributeNS` must invalidate the indexed map (but keep the Attr wrapper cache, since Attr objects survive until lexbor frees them).
+- **Attr wrapper cache on the Element JsObject**: `_attrWrappers: HashMap(*lxb_dom_attr_t → *JsObject)` stores the JS wrapper per lexbor attr pointer. Guarantees `el.attributes[0] === el.attributes[0]` within one session.
+- **NamedNodeMap rebuild per access**: each `.attributes` read allocates a fresh NamedNodeMap JsObject (or reuses a cached one keyed on the Element) and re-populates its `.length` / `[i]` / named entries by iterating lexbor with `next_attribute_noi`. Each Attr entry is looked up in `_attrWrappers` first so identity holds.
+- **Rebuild cost**: O(attr_count). Typical elements have ≤ 10 attrs. Acceptable per §5 risk analysis.
+- **Invalidation**: `setAttribute` / `removeAttribute` / `setAttributeNS` / `removeAttributeNS` drop their entry from `_attrWrappers` (so a stale Attr JS wrapper does not survive a removal-then-same-name-insert cycle pointing to a different lexbor attr struct).
+- **Attr wrapper cache eviction on element free**: the Element JsObject owns `_attrWrappers`; when GC frees the Element, the cache and its entries are freed too. No separate lifecycle.
 
 ### 3.4 `kotori_html_interfaces.zig` — new module
 
@@ -206,7 +227,8 @@ const svg_iface = std.StaticStringMap([]const u8).initComptime(.{
     .{ "text", "SVGTextElement" },
     // ... ~20 core SVG entries from SVG2 §4 index
 });
-// MathML: all elements map to "MathMLElement" in this spec; future spec can add per-element.
+// MathML: NO per-tag map in this spec. `resolveInterface(MATH_NS, *)` → "MathMLElement".
+// Per-tag MathML subclasses (MathMLIdentifierElement etc.) deferred to a future spec.
 ```
 
 **Source of truth**:
@@ -251,9 +273,17 @@ fn applyInterfaceProto(
 ```
 
 **Integration sites** (real call sites verified against code):
-1. `wrapNode` (`kotori_dom.zig:3796`) — replaces the `switch (nodeType(node))` block for ELEMENT nodes. Owner doc derived from `node->owner_document`. **Guard**: `if (g_html_protos == null) use element_proto only` — handles early boot where globalThis.document wrap fires before `initGlobalPrototypes` completes.
+1. `wrapNode` (`kotori_dom.zig:3796`) — replaces the `switch (nodeType(node))` block for ELEMENT nodes. Owner doc derived from `node->owner_document` (see §3.1 detached-node note).
 2. `createJsOnlyElement` (`kotori_dom.zig:1742`) — accepts an extra `owner_doc: JsValue` parameter; every call site updated to pass the creating document. XML doc path.
-3. `nativeCloneNode` / cloneNode native path (located during P1 audit) — target = the original owner doc unless it's an `adoptNode` invocation.
+3. `nativeCloneNode` (`kotori_dom.zig:4305` — verify line in P0) — target = the original owner doc; the `importNode` wrapper overrides to target doc.
+4. `wrapShadowRoot` (`kotori_dom.zig:3383`) — fragment is an element-hosting node; resolve owner from host element.
+
+**Initialization-order invariant** (enforced by code layout in `initGlobalPrototypes`):
+- `g_node_proto` / `g_element_proto` built first (existing code at ~L530-L580).
+- **NEW P3a section: `g_html_element_proto`, `g_svg_element_proto`, `g_mathml_element_proto`, and all subclass protos built here**, BEFORE the bootstrap `doc_obj` wrap at L584.
+- Doc wrap at L584 can now safely reach a populated `g_html_protos`. Document itself uses `g_node_proto` (not an HTML proto) per DOM §4.4.
+- The first user script runs after all of the above. **Assertion**: `std.debug.assert(g_html_protos != null)` at the top of `applyInterfaceProto` catches any regression in init-order.
+- No `if (g_html_protos == null)` runtime guard; the assertion enforces the invariant.
 
 ### 3.7 Shared-proto regression audit (P3 gate)
 
@@ -273,6 +303,7 @@ Before the P3 commit lands:
 | `createElement("div")` HTML doc | HTMLDivElement prototype, ownerDoc = doc | DOM §4.5.3 + HTML §4 |
 | `createElement("DIV")` HTML doc | lowercased → HTMLDivElement | DOM §4.5.3 step 4 |
 | `createElement("foo-bar")` HTML doc | HTMLElement (custom-element-name logic deferred; Non-goal §1) | HTML §4.13 (OOS) |
+| `createElement("abbr")` HTML doc | HTMLElement (not HTMLUnknownElement — abbr is in the known-tag set mapped to generic HTMLElement) | HTML §4 |
 | `createElement("xfoo")` HTML doc | HTMLUnknownElement | HTML §4.0 |
 | `createElement("123")` | throws InvalidCharacterError | DOM §4.5.3 step 1 |
 | `createElementNS(null, "div")` | Element (no interface dispatch) | DOM §4.5.3 step 7 |
@@ -302,8 +333,9 @@ Before the P3 commit lands:
 | NamedNodeMap liveness via per-access rebuild is O(n); pathological tests with 1000+ attrs slow | Low | Harness timeout | Typical elements have ≤10 attrs; benchmark attribute-heavy fixtures during P2b |
 | Deep prototype chain slows VM property lookup | Low | WPT timeout | Zig 0.15.2 VM has no inline-cache (confirmed by absence of `ic` keyword in vm.zig); freezing is only for spec correctness. If measurably slow, add IC in follow-up spec |
 | `g_html_protos` HashMap at init inflates binary size | Low | RPi Zero 2W 5MB budget | ~100 × 200 byte + StringHashMap overhead ≈ 30 KB; well within budget |
-| Lexbor `node->owner_document` null for detached nodes | Medium | `wrapNode` slot write panics or writes null | Use `vm.current_document` as fallback (existing VM field if present; else globalThis.document wrap) |
-| Attr wrapper cache leaks after lexbor frees attr | Medium | UAF | Clear `_attrWrappers` on attribute removal via setAttribute/removeAttribute native hooks |
+| Lexbor `node->owner_document` null for some detached-node corner case | Medium | `wrapNode` writes null owner | P0 adds unit test: `createElement(tag)` then immediate `wrapNode` owner resolution; if null observed, switch `wrapNode` signature to require an explicit `owner_doc` param from all callers (no imaginary VM field, no globalThis fallback) |
+| Attr wrapper cache leaks after lexbor frees attr | Medium | UAF | Clear `_attrWrappers` entry on attribute removal via setAttribute/removeAttribute native hooks; entire cache freed on Element GC |
+| P3c audit discovers legitimate shared-proto regressions requiring method additions to HTMLElement | Medium | P3 scope creep | Reserve 0.5d buffer in P3c budget; if additions exceed ~5 methods, carve out as separate follow-up commit |
 
 ---
 
@@ -332,10 +364,11 @@ Before the P3 commit lands:
 15. doc.createElement('div').ownerDocument === doc
 16. Document.ownerDocument === null
 17. doc2.importNode(doc1.createElement('div'), true).ownerDocument === doc2 (recursive)
+18. new XMLDocument()'s .createElement('foo').ownerDocument === that XML doc (cross-doc slot path)
 [attributes]
-18. el.setAttribute('a','1'); el.setAttribute('b','2'); el.attributes.length === 2 && el.attributes[1].name === 'b'
-19. el.attributes[0] === el.attributes[0] (Attr identity)
-20. el.removeAttribute('a'); el.attributes.length === 1 (liveness)
+19. el.setAttribute('a','1'); el.setAttribute('b','2'); el.attributes.length === 2 && el.attributes[1].name === 'b'
+20. el.attributes[0] === el.attributes[0] (Attr identity)
+21. el.removeAttribute('a'); el.attributes.length === 1 (liveness)
 ```
 
 `zig build test` must be green at every Phase gate.
@@ -378,42 +411,46 @@ Writer agent implements; verifier agent (different context) runs WPT + spec-chec
 
 | Phase | Content | LOC | Time | Deps |
 |---|---|---|---|---|
-| **P0** | Full wrapper-site audit: grep `createObj(.{ .obj_type = .dom_node })` + `createJsOnlyElement` callers + `cloneNode` path; produce exhaustive `_ownerDoc` write-site list | — | 0.5d | — |
-| **P1a** | `setNodeOwnerDoc` helper + getter rewrite + migrate every P0-enumerated site | ~200 | 0.5d | P0 |
-| **P1b** | Remove `importNode` JS polyfill (`kotori_runtime.zig:1500-1521`); rewrite native `nativeImportNode` for recursive clone with target doc | ~150 | 0.5d | P1a |
-| **P1c** | `buildAttributesMap` L3887 fix + Attr wrapper cache + liveness wrapper | ~200 | 0.5d | — (parallel with P1a/P1b) |
-| **P2**  | `kotori_html_interfaces.zig` new module: HTML ~100 + SVG ~20 + MathML 1 entries, `resolveInterface`, namespace constants | ~350 | 1d | — |
-| **P3a** | Build `g_html_element_proto`, `g_svg_element_proto`, `g_mathml_element_proto`, and all subclass prototypes; `g_html_protos`/`g_svg_protos` HashMaps; freeze all | ~300 | 0.5d | P2 |
-| **P3b** | Fix L742 shared-proto bug: each ctor gets its matching prototype | ~50 | 0.25d | P3a |
-| **P3c** | **Shared-proto regression audit** (§3.7): baseline → P3b only → diff → fix/document | — | 0.5d | P3b |
-| **P4**  | `applyInterfaceProto` helper + wire into `wrapNode`, `createJsOnlyElement`, `nativeCloneNode` | ~200 | 0.5d | P1a, P3c |
-| **P5**  | Unit tests (≥18); `zig build test` full green | ~400 | 0.5d | P4 |
+| **P0** | No-code audit gate: (a) grep `createObj(.{ .obj_type = .dom_node })` in kotori_dom.zig — reconcile against §3.1 table; (b) grep `stampOwnerDocument`/`wrapDocCreators` callers in runtime.zig — confirm only the L1425-L1499 block; (c) record WPT baselines for the 4 target files + full dom/nodes; (d) fixture test: lexbor `owner_document` for detached nodes | — | 0.5d | — |
+| **P1a** | `setNodeOwnerDoc`/`getNodeOwnerDoc` helpers + getter rewrite at L1116 + migrate every P0-enumerated wrapper site | ~250 | 0.5d | P0 |
+| **P1b** | Remove `stampOwnerDocument` + `wrapDocCreators` + impl wrappers + `importNode` polyfill (`kotori_runtime.zig:1425-1521`); rewrite native `nativeImportNode` for recursive clone with target doc | ~200 | 0.5d | P1a |
+| **P1c** | `buildAttributesMap` L3887 one-line fix + `_attrWrappers` pointer cache + Attr identity + rebuild-on-access invalidation hooks in setAttribute/removeAttribute natives | ~250 | 0.75d | — (parallel with P1a/P1b) |
+| **P2**  | `kotori_html_interfaces.zig` new module: HTML ~100 + SVG ~20 + MathML single fallback, `resolveInterface`, namespace constants | ~350 | 1d | — |
+| **P3a** | Build `g_html_element_proto`, `g_svg_element_proto`, `g_mathml_element_proto`, and all subclass prototypes BEFORE L584 bootstrap; `g_html_protos`/`g_svg_protos` HashMaps; freeze all | ~300 | 0.5d | P2 |
+| **P3b** | Fix L742 shared-proto bug: each HTMLXxxElement ctor gets its matching prototype (SVG/MathML ctors similarly) | ~75 | 0.25d | P3a |
+| **P3c** | **Shared-proto regression audit** (§3.7): baseline → P3b-only diff → classify (test bug / resolver issue / widen HTMLElement) → fix or document; 0.5d buffer for method additions | — | 0.5d | P3b |
+| **P4**  | `applyInterfaceProto` helper + wire into `wrapNode`, `createJsOnlyElement`, `nativeCloneNode`, `wrapShadowRoot`; init-order `assert` | ~250 | 0.5d | P1a, P3c |
+| **P5**  | Unit tests (≥20, cross-doc scenario included); `zig build test` full green | ~450 | 0.5d | P4 |
 | **P6**  | WPT gate A/B/C/D (verifier agent); 3-run stability check; final commit | — | 0.5d | P5 |
-| **Total** | | **~1,650** | **~5.25d** | |
+| **Total** | | **~2,125** | **~6d** | |
 
-### Commit plan (8 atomic commits)
+### Commit plan (8 atomic commits; P1a+P1b are a co-dependent pair)
 
-1. `fix(kotori): ownerDocument uses per-node _ownerDoc slot across all wrapper sites (DOM §4.4)`
-2. `refactor(kotori): remove JS importNode polyfill; native handles recursive clone with target doc`
-3. `fix(kotori): buildAttributesMap uses lexbor next_attribute + live map + Attr identity cache (DOM §4.9.1)`
+1. `fix(kotori): ownerDocument uses per-node _ownerDoc slot across all wrapper sites (DOM §4.4)` — includes setNodeOwnerDoc helper + getter rewrite + 10 wrapper-site migrations
+2. `refactor(kotori): remove JS ownerDocument stamping (stampOwnerDocument/wrapDocCreators/impl wrappers/importNode polyfill); native handles importNode recursively`
+3. `fix(kotori): buildAttributesMap uses lexbor next_attribute + live rebuild + Attr identity cache (DOM §4.9.1)`
 4. `feat(kotori): add kotori_html_interfaces resolver (HTML §4 + SVG2 §4 + MathML Core §2)`
-5. `feat(kotori): HTMLElement/SVGElement/MathMLElement prototype hierarchy with per-subclass protos`
+5. `feat(kotori): HTMLElement/SVGElement/MathMLElement prototype hierarchy, built before bootstrap doc wrap`
 6. `fix(kotori): wire HTML*/SVG*/MathMLElement ctors to their own prototypes (shared-proto audit: N tests affected — see body)`
-7. `feat(kotori): wrapNode + createJsOnlyElement dispatch interface prototype on creation (DOM §4.5.3)`
+7. `feat(kotori): wrapNode + createJsOnlyElement + wrapShadowRoot + nativeCloneNode dispatch interface prototype (DOM §4.5.3)`
 8. `test(kotori): interface dispatch + ownerDoc + NamedNodeMap WPT coverage`
 
 ---
 
 ## 8. Design Decisions (resolved from open questions)
 
-- **`JsObject.freeze`** — confirmed at `src/js/kotori/object.zig:429`. Used for prototype immutability per HTML §4 spec requirement.
+- **`JsObject.freeze`** — confirmed at `src/js/kotori/object.zig:429`. Used for prototype immutability per HTML §4 spec requirement (not performance).
 - **`wrapNode` vs `wrapExistingNode`** — there is no `wrapExistingNode`. `wrapNode` at `kotori_dom.zig:3796` is the sole JS-wrapper entry for parser-produced and query-result nodes. `applyInterfaceProto` hooks here.
-- **`importNode` native vs JS** — the JS polyfill at `kotori_runtime.zig:1500-1521` currently overrides any native work. §3.2 removes it; only native handles importNode after P1b.
-- **`buildAttributesMap` actual bug** — it is precisely one line: L3887 `attr = @ptrCast(@alignCast(a.node.next));`. The function at L1509-1540 already has the correct pattern; we copy it.
+- **`importNode` native vs JS** — the JS polyfill at `kotori_runtime.zig:1500-1521` overrides any native work. §3.2 removes the polyfill **together with `stampOwnerDocument`, `wrapDocCreators`, and the impl wrappers** (L1425-L1499). After P1b, only native handles `importNode` and nothing stamps instance-level `ownerDocument` accessors.
+- **`buildAttributesMap` actual bug** — precisely one line at L3887: `attr = @ptrCast(@alignCast(a.node.next));`. Fix: use `dom_b.lxb_dom_element_next_attribute_noi(a)`. The correct initialization pattern is visible at L3852 of the same function.
 - **Custom element name fallback** (`foo-bar`) — Non-goal. Current behavior: HTMLElement (registry-less upgrade deferred to custom-element spec).
-- **SVG/MathML dispatch scope** — minimum viable: `SVGElement` + per-tag map for ~20 core SVG, `MathMLElement` single prototype for all MathML (no per-tag). Full SVG interface hierarchy deferred.
-- **`NamedNodeMap` liveness path** — rebuild indices per access with Attr wrapper cache for identity. Full Proxy-based live map deferred if rebuild proves fast enough.
+- **SVG dispatch scope** — `SVGElement` parent + per-tag map for ~20 core SVG tags from SVG2 §4 index; unknown SVG tag → `SVGElement` (no `SVGUnknownElement` per spec).
+- **MathML dispatch scope** — single `MathMLElement` prototype for *all* MathML elements (no per-tag map). Reflected consistently in §1, §3.4, §3.5, §7. Per-tag MathML interfaces deferred.
+- **`NamedNodeMap` liveness path** — rebuild indices per access with Attr wrapper cache for identity. Full Proxy-based live map deferred.
 - **Binary size impact** — estimated 30 KB (~100 HTML + 20 SVG prototype objects + StaticStringMap table). Within RPi Zero 2W 5 MB budget.
+- **Init-order invariant** — `initGlobalPrototypes` builds HTML/SVG/MathML protos (P3a) BEFORE bootstrap `doc_obj` wrap at L584. Enforced by a `std.debug.assert(g_html_protos != null)` at the top of `applyInterfaceProto`.
+- **Lexbor `node->owner_document` for detached nodes** — assumed non-null based on existing code at `dom_node.zig:2332` which reads the field unconditionally; P0 verifies with a fixture. Fallback: add explicit `owner_doc` parameter to `wrapNode` if fixture fails. No `vm.current_document`; no globalThis re-injection.
+- **createElementNS baseline** — P0 records current pass/fail count for `Document-createElementNS.html` so the ≥95% gate is auditable against a real delta.
 
 ---
 
