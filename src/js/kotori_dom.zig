@@ -760,6 +760,9 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // lookup on the element's attribute list; return cached Attr wrapper.
     try vm.registerNativeMethod(ep, "getAttributeNode", &nativeGetAttributeNode);
     try vm.registerNativeMethod(ep, "getAttributeNodeNS", &nativeGetAttributeNodeNS);
+    // DOM §4.9.1 namespace-aware getters (Layer 1D.1 Task 2).
+    try vm.registerNativeMethod(ep, "hasAttributeNS", &nativeHasAttributeNS);
+    try vm.registerNativeMethod(ep, "getAttributeNS", &nativeGetAttributeNS);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
@@ -4630,6 +4633,51 @@ fn nativeGetAttributeNodeNS(ctx: *anyopaque, this: JsValue, args: []const JsValu
     const local = extractStringArg(vm, args[1]) orelse return JsValue.null_val;
     const obj = getAttrByNsLocal(vm, elem, ns, local) orelse return JsValue.null_val;
     return JsValue.initObject(obj);
+}
+
+// ── DOM §4.9.1 Element.prototype.hasAttributeNS / getAttributeNS (Layer 1D.1 Task 2) ──
+
+/// DOM §4.9.1 `hasAttributeNS(namespace, localName)`:
+///   1. If namespace is the empty string, set it to null.
+///   2. Return true iff this has an attr whose ns=namespace and
+///      localName=localName.
+///
+/// Does not throw.
+fn nativeHasAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.initBool(false);
+    const node = getThisNode(this) orelse return JsValue.initBool(false);
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const ns = extractOptionalStringArg(vm, args[0]);
+    const local = extractStringArg(vm, args[1]) orelse return JsValue.initBool(false);
+    return JsValue.initBool(lookupAttrByNsLocal(elem, ns, local) != null);
+}
+
+/// DOM §4.9.1 `getAttributeNS(namespace, localName)`:
+///   1. Let attr = result of "get an attribute by namespace and local name".
+///   2. If attr is null, return null.
+///   3. Return attr's value.
+///
+/// Does not throw.
+fn nativeGetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.null_val;
+    const node = getThisNode(this) orelse return JsValue.null_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const ns = extractOptionalStringArg(vm, args[0]);
+    const local = extractStringArg(vm, args[1]) orelse return JsValue.null_val;
+    const a = lookupAttrByNsLocal(elem, ns, local) orelse return JsValue.null_val;
+    // Read the attribute's value directly from lexbor (no wrapper needed for
+    // a simple string read). Matches the nativeGetAttribute fast path.
+    var val_len: usize = 0;
+    const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
+    if (val_ptr) |vp| {
+        const sid = try vm.pool.intern(vp[0..val_len]);
+        return JsValue.initString(sid);
+    }
+    return JsValue.initString(try vm.pool.intern(""));
 }
 
 /// DOM §4.9.2 setNamedItem / setNamedItemNS — per WebIDL "A legacy

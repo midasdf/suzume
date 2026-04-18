@@ -1940,3 +1940,44 @@ test "getAttributeNodeNS coerces empty string ns to null" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 2: hasAttributeNS / getAttributeNS ──────────────
+test "hasAttributeNS returns true for matching null-ns attribute" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttributeNS(null, 'id', 'x');
+        \\el.hasAttributeNS(null, 'id') && !el.hasAttributeNS(null, 'missing');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "getAttributeNS returns value string, null when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttributeNS(null, 'id', 'x');
+        \\el.getAttributeNS(null, 'id') === 'x' &&
+        \\el.getAttributeNS(null, 'missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "hasAttributeNS and getAttributeNS coerce empty-string ns to null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.hasAttributeNS('', 'id') && el.getAttributeNS('', 'id') === 'x';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
