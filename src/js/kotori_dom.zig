@@ -2360,13 +2360,30 @@ fn nativeAdoptNode(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!Js
 }
 
 /// DOM §4.4: document.importNode(node, deep) — clones a node into this document.
-fn nativeImportNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeImportNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0) return JsValue.null_val;
+    // DOM §4.5 step 1: if node is a Document, throw NotSupportedError.
+    if (args[0].isObject()) {
+        const src_obj = args[0].asJsObject();
+        if (src_obj.obj_type == .dom_node) {
+            const src_node_c: ?*lxb.lxb_dom_node_t = @ptrCast(@alignCast(src_obj.data.dom_node));
+            if (src_node_c) |sn| {
+                if (nodeType(sn) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+                    vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
+                    return JsValue.undefined_val;
+                }
+            }
+        }
+    }
     const node = getArgNode(args[0]) orelse return JsValue.null_val;
     const deep = if (args.len > 1 and args[1].isBool()) args[1].asBool() else false;
-    const cloned = dom_b.lxb_dom_node_clone(node, deep) orelse return JsValue.null_val;
-    return wrapNode(vm, cloned) orelse JsValue.null_val;
+    // DOM §4.5 "import a node" = "clone a node" with `document` set to `this`.
+    // Pass `this` (the target document JS wrapper) as the override so every
+    // cloned node's `_ownerDoc` slot points at `this` rather than at the
+    // source node's owner document (which lexbor copies by default).
+    const owner_override: ?JsValue = if (this.isObject()) this else null;
+    return cloneNodeImpl(vm, node, owner_override, deep) orelse JsValue.null_val;
 }
 
 // ── Helper: register an event interface constructor + prototype ──────
@@ -4395,18 +4412,71 @@ fn nativeSubstringData(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
 
 // ── Node.cloneNode (DOM §4.4) ───────────────────────────────────────
 
+/// DOM §4.4.1 "clone a node" — shared clone helper for `cloneNode` and
+/// `importNode`.
+///
+/// - `src_node`: the lexbor source node to clone.
+/// - `owner_doc_override`: if non-null, the clone and every cloned descendant
+///   has its `_ownerDoc` slot forcibly overwritten with this value (importNode
+///   semantics, DOM §4.5 "node adoption"). If null, the slot written by
+///   `wrapNode` (read from lexbor's `owner_document` field) is kept
+///   (cloneNode semantics, DOM §4.4).
+/// - `deep`: if true, children are cloned alongside. Lexbor's
+///   `lxb_dom_node_clone(_, true)` performs the recursive clone in C, so our
+///   only job here is to walk the already-cloned subtree and rewrite the
+///   `_ownerDoc` slot on every JS wrapper when an override is requested.
+fn cloneNodeImpl(
+    vm: *VM,
+    src_node: *lxb.lxb_dom_node_t,
+    owner_doc_override: ?JsValue,
+    deep: bool,
+) ?JsValue {
+    const cloned = dom_b.lxb_dom_node_clone(src_node, deep) orelse return null;
+    const wrapped_val = wrapNode(vm, cloned) orelse return null;
+    if (owner_doc_override) |owner| {
+        // Override slot on the root clone.
+        if (wrapped_val.isObject()) {
+            setNodeOwnerDoc(vm, wrapped_val.asJsObject(), owner);
+        }
+        // Walk the cloned subtree (lexbor already duplicated children when
+        // deep=true; when deep=false there are no children to visit).
+        if (deep) {
+            var child: ?*lxb.lxb_dom_node_t = nodeFirstChild(cloned);
+            while (child) |c| : (child = nodeNext(c)) {
+                // Recurse with deep=false on each child — lexbor's clone
+                // already built the full subtree; this recursive call only
+                // wraps + rewrites slots on the existing cloned nodes.
+                overrideOwnerDocRecursive(vm, c, owner);
+            }
+        }
+    }
+    return wrapped_val;
+}
+
+/// Walks an already-cloned subtree rooted at `node`, wrapping each node via
+/// `wrapNode` (which populates the cache if needed) and overwriting its
+/// `_ownerDoc` slot with `owner`.
+fn overrideOwnerDocRecursive(vm: *VM, node: *lxb.lxb_dom_node_t, owner: JsValue) void {
+    if (wrapNode(vm, node)) |wrap_val| {
+        if (wrap_val.isObject()) {
+            setNodeOwnerDoc(vm, wrap_val.asJsObject(), owner);
+        }
+    }
+    var child: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+    while (child) |c| : (child = nodeNext(c)) {
+        overrideOwnerDocRecursive(vm, c, owner);
+    }
+}
+
 fn nativeCloneNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm: *VM = @ptrCast(@alignCast(ctx));
     const node = getThisNode(this) orelse return JsValue.null_val;
     // deep defaults to false per spec
     const deep = if (args.len > 0 and args[0].isBool()) args[0].asBool() else false;
-    const cloned = dom_b.lxb_dom_node_clone(node, deep) orelse return JsValue.null_val;
-    // DOM §4.4.1 "clone a node" step 3 — lexbor's lxb_dom_node_clone
-    // preserves owner_document on the cloned node. wrapNode reads it via
-    // the lexbor owner_document field, so the slot is set correctly without
-    // any post-hoc override. (Verified by test "cloneNode sets slot from
-    // lexbor clone's owner_document" in tests/test_kotori_dom.zig.)
-    return wrapNode(vm, cloned) orelse JsValue.null_val;
+    // DOM §4.4.1 "clone a node" — lexbor's lxb_dom_node_clone preserves
+    // owner_document on the cloned node; wrapNode reads it and writes the
+    // `_ownerDoc` slot. No override needed here (same-document clone).
+    return cloneNodeImpl(vm, node, null, deep) orelse JsValue.null_val;
 }
 
 // ── Node.isSameNode (DOM §4.4) ───────────────────────────────────────

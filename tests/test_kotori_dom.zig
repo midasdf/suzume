@@ -1067,3 +1067,47 @@ test "cloneNode sets slot from lexbor clone's owner_document (Option A verificat
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
+
+test "importNode sets target as ownerDocument recursively (deep clone) (DOM §4.5)" {
+    // DOM §4.5 "import a node": the result and every descendant in the
+    // cloned subtree must have the target document (the receiver of the
+    // importNode call) as its ownerDocument — not the source node's
+    // owner document. This exercises cloneNodeImpl's owner_doc_override
+    // path on both the root and children.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var src = document.implementation.createHTMLDocument("src");
+        \\var p = src.createElement("p");
+        \\var span = src.createElement("span");
+        \\p.appendChild(span);
+        \\// Target doc is the outer document (this === document binding).
+        \\var clone = document.importNode(p, true);
+        \\var child = clone.firstChild || (clone.childNodes && clone.childNodes[0]);
+        \\// The clone and its child must report the outer document.
+        \\(clone.ownerDocument === document) &&
+        \\  (clone.ownerDocument !== src) &&
+        \\  (child !== null) &&
+        \\  (child.ownerDocument === document);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "cloneNode preserves source ownerDocument (cross-document) (DOM §4.4.1)" {
+    // In contrast to importNode, cloneNode keeps the source document as
+    // the owner. cloneNodeImpl is called with owner_doc_override=null
+    // so wrapNode's lexbor-derived slot wins.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var d = document.implementation.createHTMLDocument("A");
+        \\var el = d.createElement("div");
+        \\var cl = el.cloneNode(true);
+        \\// Clone's ownerDocument must be d (the source doc), not the
+        \\// outer `document` that called the script.
+        \\(cl.ownerDocument === d) && (cl.ownerDocument !== document);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
