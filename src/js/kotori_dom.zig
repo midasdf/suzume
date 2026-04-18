@@ -381,6 +381,9 @@ const MoTarget = struct {
     subtree: bool = false,
     attribute_old_value: bool = false,
     character_data_old_value: bool = false,
+    // DOM §4.3.3 step 3.3: optional list of attribute local-names; empty slice
+    // means "no filter, match all attributes". Strings are owned by the target.
+    attribute_filter: []const []const u8 = &.{},
 };
 
 const MoRecord = struct {
@@ -6297,6 +6300,8 @@ fn nativeMoObserve(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
     var subtree = false;
     var attribute_old_value = false;
     var character_data_old_value = false;
+    // DOM §4.3.3 step 3.3: attributeFilter (sequence<DOMString>)
+    var attribute_filter: []const []const u8 = &.{};
 
     if (args.len >= 2 and args[1].isObject()) {
         const opts = args[1].asJsObject();
@@ -6320,12 +6325,31 @@ fn nativeMoObserve(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
             if (v.isBool()) character_data_old_value = v.asBool();
             if (v.isBool() and v.asBool()) character_data = true;
         }
+        // attributeFilter: JS array of strings. Presence implies attributes=true
+        // per DOM §4.3.3 step 3.3 (filter only applies when attributes observed).
+        if (opts.getProperty(vm.pool.intern("attributeFilter") catch return JsValue.undefined_val)) |v| {
+            if (v.isObject()) {
+                const arr_obj = v.asJsObject();
+                if (arr_obj.obj_type == .array) {
+                    const items = arr_obj.data.array.items;
+                    const list = try vm.allocator.alloc([]const u8, items.len);
+                    for (items, 0..) |item, fi| {
+                        const s = if (item.isString()) (vm.pool.get(item.asStringId()) orelse "") else "";
+                        list[fi] = try vm.allocator.dupe(u8, s);
+                    }
+                    attribute_filter = list;
+                    attributes = true;
+                }
+            }
+        }
     }
 
-    // Remove existing target with same node (re-observe replaces)
+    // Remove existing target with same node (re-observe replaces).
+    // Free any existing attribute_filter to avoid leaking.
     var i: usize = 0;
     while (i < obs.targets.items.len) {
         if (obs.targets.items[i].node_ptr == node_ptr) {
+            freeAttributeFilter(vm.allocator, obs.targets.items[i].attribute_filter);
             _ = obs.targets.orderedRemove(i);
         } else {
             i += 1;
@@ -6340,9 +6364,15 @@ fn nativeMoObserve(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
         .subtree = subtree,
         .attribute_old_value = attribute_old_value,
         .character_data_old_value = character_data_old_value,
+        .attribute_filter = attribute_filter,
     });
 
     return JsValue.undefined_val;
+}
+
+fn freeAttributeFilter(allocator: std.mem.Allocator, filter: []const []const u8) void {
+    for (filter) |s| allocator.free(s);
+    if (filter.len > 0) allocator.free(filter);
 }
 
 fn nativeMoDisconnect(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
@@ -6350,6 +6380,8 @@ fn nativeMoDisconnect(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerr
     const idx = getMoIdx(vm, this) orelse return JsValue.undefined_val;
     var obs = &g_mo_list.items[idx];
     obs.disconnected = true;
+    // DOM §4.3.3: free any attribute_filter slices owned by targets.
+    for (obs.targets.items) |t| freeAttributeFilter(vm.allocator, t.attribute_filter);
     obs.targets.clearRetainingCapacity();
     obs.pending.clearRetainingCapacity();
     return JsValue.undefined_val;
@@ -6440,6 +6472,18 @@ pub fn recordAttributeMutation(
                 if (!isAncestor(target, t.node_ptr)) continue;
             }
             if (!t.attributes) continue;
+            // DOM §4.3.3 step 3.3: attributeFilter gate. When filter is non-empty,
+            // only listed attribute local-names produce records.
+            if (t.attribute_filter.len > 0) {
+                var matched = false;
+                for (t.attribute_filter) |f| {
+                    if (std.mem.eql(u8, f, attr_name)) {
+                        matched = true;
+                        break;
+                    }
+                }
+                if (!matched) continue;
+            }
 
             const attr_val = JsValue.initString(vm.pool.intern(attr_name) catch continue);
             const ov = if (t.attribute_old_value and old_value != null)

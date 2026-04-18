@@ -2683,8 +2683,16 @@ fn recordMutationFull(
             const want = if (std.mem.eql(u8, mutation_type, "childList")) t.child_list else if (std.mem.eql(u8, mutation_type, "attributes")) t.attributes else if (std.mem.eql(u8, mutation_type, "characterData")) t.character_data else false;
             if (!want) continue;
 
-            // DOM spec: attributeFilter — skip if attr name not in filter
-            if (std.mem.eql(u8, mutation_type, "attributes") and !t.matchesAttributeFilter(attr_name)) continue;
+            // DOM §4.3.3 step 3.3: attributeFilter only matches attributes in the
+            // null namespace. Namespaced attributes (e.g. xlink:href) bypass the
+            // filter entirely — they are never matched by attributeFilter even if
+            // the local name appears in the list.
+            if (std.mem.eql(u8, mutation_type, "attributes")) {
+                if (t.attribute_filter.items.len > 0) {
+                    if (attr_namespace != null) continue;
+                    if (!t.matchesAttributeFilter(attr_name)) continue;
+                }
+            }
 
             var record = MutationRecord{
                 .type_str = mutation_type,
