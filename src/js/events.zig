@@ -40,6 +40,17 @@ const ListenerRecord = struct {
     capture: bool = false,
     passive: bool = false,
     once: bool = false,
+    // Layer 2A — AbortSignal integration (DOM §2.7.1 step 5, §2.9 step 5.3).
+    // `removed` is a soft-delete flag checked at dispatch loop heads so that a
+    // mid-dispatch abort which strips a later listener from the registry still
+    // skips it even when the dispatch loop iterates a snapshot.
+    // `signal_ref` + `abort_handler_ref` keep dup'd references to the signal
+    // and the internal abort-hook closure so that manual removeEventListener
+    // can call `sig.removeEventListener('abort', handler)` and detach the
+    // abort step (otherwise `_evtMap['abort']` leaks until the signal GC's).
+    removed: bool = false,
+    signal_ref: qjs.JSValue = .{ .tag = qjs.JS_TAG_UNDEFINED, .u = .{ .int32 = 0 } },
+    abort_handler_ref: qjs.JSValue = .{ .tag = qjs.JS_TAG_UNDEFINED, .u = .{ .int32 = 0 } },
 };
 
 const ListenerList = std.ArrayListUnmanaged(ListenerRecord);
