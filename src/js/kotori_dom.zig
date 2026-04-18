@@ -756,6 +756,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "hasAttribute", &nativeHasAttribute);
     try vm.registerNativeMethod(ep, "hasAttributes", &nativeHasAttributes);
     try vm.registerNativeMethod(ep, "toggleAttribute", &nativeToggleAttribute);
+    // DOM §4.9.1 Attr-node accessors (Layer 1D.1 Task 1): read-only
+    // lookup on the element's attribute list; return cached Attr wrapper.
+    try vm.registerNativeMethod(ep, "getAttributeNode", &nativeGetAttributeNode);
+    try vm.registerNativeMethod(ep, "getAttributeNodeNS", &nativeGetAttributeNodeNS);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
@@ -4515,6 +4519,117 @@ fn nativeNnmRemoveNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsVa
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
     bumpElemAttrVersion(elem);
     return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// Layer 1D.1 shared helpers — Attr-by-name / Attr-by-(ns,local)
+// See DOM §4.9.1 "get an attribute by name" / "…by namespace and local name".
+// ══════════════════════════════════════════════════════════════════════
+
+/// DOM §4.9.1 step 1 for "get an attribute by name": if `elem` is in the
+/// HTML namespace AND its owner document is an HTML document, the input
+/// qualified name is ASCII-lowercased before lookup. Otherwise returned
+/// as-is. `buf` is sized by the caller; if `src.len > buf.len` we skip
+/// the lowercase (rather than truncating).
+///
+/// Tolerates detached elements (no owner document) by treating them as
+/// HTML-compatible — matches the existing `elementInHtmlDoc` semantics
+/// at L4298 so both entry points agree on the lowercase cohort.
+fn maybeLowercaseForHtml(elem: *lxb.lxb_dom_element_t, src: []const u8, buf: []u8) []const u8 {
+    // LXB_NS_HTML sentinel (0x02). See `elementInHtmlDoc` @ L4298 for rationale:
+    // detached HTML-ns elements are treated as HTML-compatible.
+    if (elem.node.ns != 0x02) return src;
+    if (src.len > buf.len) return src;
+    var seen_upper = false;
+    for (src) |c| {
+        if (c >= 'A' and c <= 'Z') {
+            seen_upper = true;
+            break;
+        }
+    }
+    if (!seen_upper) return src;
+    for (src, 0..) |c, i| buf[i] = std.ascii.toLower(c);
+    return buf[0..src.len];
+}
+
+/// DOM §4.9.1 "get an attribute by name" — returns the cached Attr
+/// wrapper for the first lexbor attr whose qualified name matches `qn_in`
+/// (lowercased for HTML-ns+HTML-doc cohorts per step 1), or null.
+///
+/// Shared by Task 1 `getAttributeNode` and (future) NamedNodeMap
+/// entries; the qname fallback in `nativeNnmSetNamedItem` already
+/// exercises the same `lxb_dom_element_attr_by_name` primitive.
+fn getAttrByQName(vm: *VM, elem: *lxb.lxb_dom_element_t, qn_in: []const u8) ?*JsObject {
+    var buf: [256]u8 = undefined;
+    const qn = maybeLowercaseForHtml(elem, qn_in, &buf);
+    const a = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse return null;
+    return getOrCreateAttrWrapper(vm, @ptrCast(@alignCast(a)));
+}
+
+/// DOM §4.9.1 "get an attribute by namespace and local name" — wraps the
+/// Layer 1D `lookupAttrByNsLocal` walker (L4356) with the Attr-wrapper
+/// cache. Empty-string namespace is coerced to null per spec step 1 by
+/// the caller (e.g. `extractOptionalStringArg`) before invocation.
+fn getAttrByNsLocal(vm: *VM, elem: *lxb.lxb_dom_element_t,
+                    ns: ?[]const u8, local: []const u8) ?*JsObject {
+    const a = lookupAttrByNsLocal(elem, ns, local) orelse return null;
+    return getOrCreateAttrWrapper(vm, a);
+}
+
+/// Coerce an `Attr.namespaceURI` / `ns` argument per WebIDL DOMString?
+/// and DOM §4.9.1 step 1: null/undefined → null, "" → null, else the
+/// interned string slice.
+fn extractOptionalStringArg(vm: *VM, val: JsValue) ?[]const u8 {
+    if (val.isNull() or val.isUndefined()) return null;
+    if (val.isString()) {
+        const s = vm.pool.get(val.asStringId()) orelse return null;
+        if (s.len == 0) return null;
+        return s;
+    }
+    // Non-string, non-null: ToString coerce (e.g. number → "42"). Result
+    // is interned for the lifetime of the VM; empty post-ToString still
+    // coerces to null.
+    const s = argToString(vm, val);
+    if (s.len == 0) return null;
+    return s;
+}
+
+/// WebIDL DOMString coerce — unlike `extractOptionalStringArg`, empty
+/// string is returned as-is (local-name "" is not valid for lookups but
+/// we let the caller decide how to handle that).
+fn extractStringArg(vm: *VM, val: JsValue) ?[]const u8 {
+    if (val.isString()) return vm.pool.get(val.asStringId());
+    if (val.isNull() or val.isUndefined()) return argToString(vm, val);
+    return argToString(vm, val);
+}
+
+// ── DOM §4.9.1 Element.prototype.getAttributeNode[NS] (Layer 1D.1 Task 1) ──
+
+/// DOM §4.9.1 `getAttributeNode(qualifiedName)` — step 1 delegates to
+/// "get an attribute by name" (HTML-doc lowercase; null on miss).
+fn nativeGetAttributeNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.null_val;
+    const node = getThisNode(this) orelse return JsValue.null_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const qn = extractStringArg(vm, args[0]) orelse return JsValue.null_val;
+    const obj = getAttrByQName(vm, elem, qn) orelse return JsValue.null_val;
+    return JsValue.initObject(obj);
+}
+
+/// DOM §4.9.1 `getAttributeNodeNS(namespace, localName)` — step 1
+/// delegates to "get an attribute by namespace and local name" ("" → null).
+fn nativeGetAttributeNodeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.null_val;
+    const node = getThisNode(this) orelse return JsValue.null_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const ns = extractOptionalStringArg(vm, args[0]);
+    const local = extractStringArg(vm, args[1]) orelse return JsValue.null_val;
+    const obj = getAttrByNsLocal(vm, elem, ns, local) orelse return JsValue.null_val;
+    return JsValue.initObject(obj);
 }
 
 /// DOM §4.9.2 setNamedItem / setNamedItemNS — per WebIDL "A legacy

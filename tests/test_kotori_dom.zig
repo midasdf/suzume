@@ -1902,3 +1902,41 @@ test "Attr.ownerElement becomes null after toggleAttribute removal (Layer 1D Tas
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 1: getAttributeNode / getAttributeNodeNS ────────
+test "getAttributeNode returns same object as attributes[0]" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes[0] === el.getAttributeNode('id');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "getAttributeNode returns null on miss" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\document.createElement('div').getAttributeNode('missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "getAttributeNodeNS coerces empty string ns to null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.getAttributeNodeNS('', 'id') !== null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
