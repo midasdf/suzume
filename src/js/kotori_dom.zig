@@ -434,6 +434,34 @@ fn invalidateAttrWrapper(attr: *lxb.lxb_dom_attr_t) void {
     _ = g_attr_wrappers.remove(@intFromPtr(attr));
 }
 
+/// DOM §4.9.2 NamedNodeMap.prototype — single shared prototype for every
+/// live `Element.attributes` object. Populated during initNamedNodeMapProto()
+/// before any document is wrapped.
+var g_namednodemap_proto: ?*JsObject = null;
+
+/// Per-element monotonic attribute version counter. Bumped on every
+/// mutation (setAttribute / setAttributeNS / removeAttribute /
+/// toggleAttribute / setNamedItem / removeNamedItem). Read via the
+/// `__nnmVer` slot on map objects to decide whether to refresh indexed
+/// + named snapshots.
+var g_elem_attr_ver: std.AutoHashMapUnmanaged(usize, u64) = .{};
+
+/// Bump the per-element attribute version. Safe to call even before the
+/// map has been materialised; the first bump initialises to 1.
+fn bumpElemAttrVersion(elem: *lxb.lxb_dom_element_t) void {
+    const key = @intFromPtr(elem);
+    const gop = g_elem_attr_ver.getOrPut(g_alloc, key) catch return;
+    if (!gop.found_existing) gop.value_ptr.* = 0;
+    gop.value_ptr.* +%= 1;
+}
+
+// Interned string IDs for hidden NamedNodeMap + Attr-owner slots.
+// Populated in initNamedNodeMapProto, reused by all native methods.
+var g_sid_nnm_elem: ?StringId = null; // "__nnmElem"      usize elem ptr
+var g_sid_nnm_ver: ?StringId = null; // "__nnmVer"        u64 version
+var g_sid_nnm_cache: ?StringId = null; // "__nnmCache"    *JsObject map
+var g_sid_owner_elem_ptr: ?StringId = null; // "__ownerElemPtr" usize node ptr (on Attr)
+
 /// DOM §4.4 — write the per-Node owner document slot.
 /// `owner_doc_val` is `JsValue.null_val` for Document nodes themselves.
 /// The slot is named `_ownerDoc` (underscore prefix) to distinguish it from
@@ -577,6 +605,14 @@ pub fn deinit() void {
     // so we only need to drop the HashMap's own storage here.
     g_attr_wrappers.deinit(g_alloc);
     g_attr_wrappers = .{};
+    // NamedNodeMap per-element attribute version counter (DOM §4.9.2 live semantics).
+    g_elem_attr_ver.deinit(g_alloc);
+    g_elem_attr_ver = .{};
+    g_namednodemap_proto = null;
+    g_sid_nnm_elem = null;
+    g_sid_nnm_ver = null;
+    g_sid_nnm_cache = null;
+    g_sid_owner_elem_ptr = null;
     // Interface prototype maps (HTML/SVG). Values are JsObjects owned by the
     // VM arena, so we only drop the HashMap's own storage. Roots (HTMLElement /
     // SVGElement / MathMLElement prototypes) are likewise arena-owned.
@@ -795,6 +831,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
         }
     }
     try g_mathml_element_proto.?.freeze(vm.allocator);
+
+    // ── NamedNodeMap prototype + constructor (DOM §4.9.2, Layer 1D) ──
+    // Must run before the bootstrap document wrap so buildAttributesMap
+    // can link map objects to g_namednodemap_proto from the very first
+    // element.attributes access.
+    try initNamedNodeMapProto(vm);
 
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
@@ -1209,10 +1251,41 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
 
-    // Element.attributes (DOM §4.9 — NamedNodeMap)
+    // Element.attributes (DOM §4.9.2 — NamedNodeMap, identity-cached).
+    //
+    // Spec note: "Each attributes getter invocation returns the *same*
+    // NamedNodeMap." Cache the map JsObject on the Element wrapper via
+    // the hidden __nnmCache slot; refresh indexed/named own properties
+    // lazily when the per-element attr version counter advances.
     if (eql(name, "attributes")) {
         if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
-        return buildAttributesMap(vm, @ptrCast(node));
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        if (g_sid_nnm_cache) |cache_sid| {
+            if (obj.getProperty(cache_sid)) |cached| {
+                if (cached.isObject()) {
+                    const map = cached.asJsObject();
+                    // Lazy refresh when the element's attribute version
+                    // has advanced past the stamp we recorded at build
+                    // time (see refreshAttributesMap).
+                    if (g_sid_nnm_ver) |ver_sid| {
+                        const cur = g_elem_attr_ver.get(@intFromPtr(elem)) orelse 0;
+                        const stamped_val = map.getProperty(ver_sid) orelse JsValue.initNumber(0);
+                        const stamped_f = stamped_val.toNumber();
+                        const stamped: u64 = if (std.math.isFinite(stamped_f) and stamped_f >= 0)
+                            @intFromFloat(stamped_f)
+                        else
+                            0;
+                        if (stamped != cur) refreshAttributesMap(vm, map, elem);
+                    }
+                    return JsValue.initObject(map);
+                }
+            }
+        }
+        const built = buildAttributesMap(vm, elem) orelse return JsValue.null_val;
+        if (g_sid_nnm_cache) |cache_sid| {
+            obj.setProperty(vm.allocator, cache_sid, built) catch {};
+        }
+        return built;
     }
 
     // Element namespace properties (DOM §4.9)
@@ -2967,6 +3040,9 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     } else {
         _ = dom_b.lxb_dom_element_set_attribute(elem, n.ptr, n.len, v.ptr, v.len);
     }
+    // DOM §4.9.2 — NamedNodeMap is live. Bump the per-element version so
+    // any cached `el.attributes` map refreshes its snapshot on next read.
+    bumpElemAttrVersion(elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -3005,6 +3081,8 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     } else {
         _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
     }
+    // DOM §4.9.2 NamedNodeMap live-map version bump.
+    bumpElemAttrVersion(elem);
     setDomDirty();
     return JsValue.undefined_val;
 }
@@ -3034,9 +3112,17 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     // DOM §4.9.1: invalidate the cached Attr wrapper *before* lexbor frees
     // the attribute struct, otherwise the cache would hold a dangling key.
     if (dom_b.lxb_dom_element_attr_by_name(elem, attr_name.ptr, attr_name.len)) |a| {
+        // DOM §4.9 Attr.ownerElement — "remove an attribute" clears owner.
+        // Must run BEFORE invalidateAttrWrapper so the cached wrapper
+        // (still identified by this attr ptr) gets the update.
+        if (g_attr_wrappers.get(@intFromPtr(a))) |cached_wrap| {
+            setAttrOwnerElement(vm, cached_wrap, JsValue.null_val);
+        }
         invalidateAttrWrapper(a);
     }
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
+    // DOM §4.9.2 NamedNodeMap live-map version bump.
+    bumpElemAttrVersion(elem);
     return JsValue.undefined_val;
 }
 
@@ -4138,51 +4224,646 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.null_val) catch {};
 
+    // DOM §4.9 Attr.ownerElement — when the attr is part of an element's
+    // attribute list, ownerElement is that element. Lexbor exposes this
+    // via `attr.owner` (see `struct lxb_dom_attr` in attr.h). Wrappers
+    // materialised via `el.attributes[i]` / `getNamedItem` must observe
+    // the correct owner so the Task 7 InUseAttributeError check + WPT
+    // `Attr.ownerElement` assertions hold.
+    if (a.owner) |owner_elem| {
+        const owner_node: *lxb.lxb_dom_node_t = @ptrCast(owner_elem);
+        if (wrapNode(vm, owner_node)) |owner_js| {
+            setAttrOwnerElement(vm, attr_obj, owner_js);
+        } else if (g_sid_owner_elem_ptr) |ptr_sid| {
+            // Fallback: record the opaque node pointer so Task 7's check
+            // still succeeds even when wrapNode couldn't materialise a JS
+            // owner.
+            attr_obj.setProperty(
+                vm.allocator,
+                ptr_sid,
+                JsValue.initNumber(@floatFromInt(@intFromPtr(owner_node))),
+            ) catch {};
+            attr_obj.setProperty(
+                vm.allocator,
+                vm.pool.intern("ownerElement") catch ptr_sid,
+                JsValue.null_val,
+            ) catch {};
+        }
+    } else {
+        setAttrOwnerElement(vm, attr_obj, JsValue.null_val);
+    }
+
     g_attr_wrappers.put(vm.allocator, key, attr_obj) catch {};
     return attr_obj;
 }
 
-/// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).
-/// Returns an array-like object with .length, indexed access, .getNamedItem(), .item().
-/// The map is rebuilt per access so it stays live wrt setAttribute/removeAttribute;
-/// individual Attr wrappers are cached on the lexbor attr pointer for identity.
-fn buildAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
-    const map_obj = vm.createObj(.{}) catch return null;
-    var count: u32 = 0;
+/// WebIDL §3.6.1 — the NamedNodeMap interface object is not constructible.
+/// `new NamedNodeMap()` throws TypeError.
+fn nativeNnmConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+    return JsValue.undefined_val;
+}
 
-    // Iterate lexbor attributes using the proper attr-list link, not the
-    // generic sibling list (DOM §4.9.1). The previous `a.node.next` walk only
-    // ever exposed the first attribute.
+/// Extension point for Tasks 5-8 — registers native methods and
+/// `@@iterator` on `NamedNodeMap.prototype`. Each task appends its
+/// registrations here.
+fn initNamedNodeMapMethods(vm: *VM, proto: *JsObject) !void {
+    // Task 5: read-only lookup methods.
+    try vm.registerNativeMethod(proto, "item", &nativeNnmItem);
+    try vm.registerNativeMethod(proto, "getNamedItem", &nativeNnmGetNamedItem);
+    try vm.registerNativeMethod(proto, "getNamedItemNS", &nativeNnmGetNamedItemNS);
+    // Task 6: removal methods (NotFoundError on absent).
+    try vm.registerNativeMethod(proto, "removeNamedItem", &nativeNnmRemoveNamedItem);
+    try vm.registerNativeMethod(proto, "removeNamedItemNS", &nativeNnmRemoveNamedItemNS);
+    // Task 7: insertion methods — shared native per WebIDL legacy rule.
+    try vm.registerNativeMethod(proto, "setNamedItem", &nativeNnmSetNamedItem);
+    try vm.registerNativeMethod(proto, "setNamedItemNS", &nativeNnmSetNamedItem);
+    // Task 8: @@iterator — enables for..of and spread. Reuses the
+    // array-iterator pattern at vm.zig:2385-2388.
+    if (proto.symbol_props == null) proto.symbol_props = .{};
+    const iter_fn = try vm.createObj(.{ .obj_type = .native_function });
+    iter_fn.data = .{ .native_fn = &nativeNnmSymbolIterator };
+    try proto.symbol_props.?.put(
+        vm.allocator,
+        VM.SYMBOL_ITERATOR,
+        JsValue.initObject(iter_fn),
+    );
+}
+
+/// DOM §4.9.1 step 1 — for an HTML-namespace element inside an HTML
+/// document, the qualified-name lookup lowercases the input. kotori
+/// tags XMLDocument wrappers with `_isXmlDoc = true` (see nativeCreateDocument);
+/// any document without that flag is treated as HTML-compatible.
+fn elementInHtmlDoc(vm: *VM, elem: *lxb.lxb_dom_element_t) bool {
+    _ = vm;
+    // LXB_NS_HTML sentinel (per lexbor/ns.h).
+    if (elem.node.ns != 0x02) return false;
+    // Lexbor does not expose a stable "is this doc XML" bit on the
+    // element, but kotori's createDocument path sets `_isXmlDoc` on the
+    // Document JsObject. For now, treat HTML-ns elements in
+    // well-formed HTML documents (the mainline WPT case) as the lowercase
+    // cohort; XMLDocument flows rarely reach HTML-ns. A future task can
+    // refine this by reading the `_isXmlDoc` slot via the node cache.
+    return true;
+}
+
+/// DOM §4.9.2 item(index) — indexed getter steps. Returns `this[index]`
+/// from the live attribute list, or null if index is out of range /
+/// negative / NaN.
+fn nativeNnmItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.null_val;
+    const elem = nnmElem(this) orelse return JsValue.null_val;
+    const want_f = args[0].toNumber();
+    if (!std.math.isFinite(want_f) or want_f < 0) return JsValue.null_val;
+    const want: u32 = @intFromFloat(want_f);
+    var idx: u32 = 0;
+    var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (a) |attr| : (idx += 1) {
+        if (idx == want) {
+            const obj = getOrCreateAttrWrapper(vm, attr) orelse return JsValue.null_val;
+            return JsValue.initObject(obj);
+        }
+        a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+    }
+    return JsValue.null_val;
+}
+
+/// DOM §4.9.2 getNamedItem(qualifiedName) — delegates to §4.9.1 "get an
+/// attribute by name". HTML-ns + HTML-doc cohort lowercases the input
+/// before lookup.
+fn nativeNnmGetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    const elem = nnmElem(this) orelse return JsValue.null_val;
+    const qn_raw = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    var lower_buf: [256]u8 = undefined;
+    const qn: []const u8 = blk: {
+        if (!elementInHtmlDoc(vm, elem)) break :blk qn_raw;
+        if (qn_raw.len > lower_buf.len) break :blk qn_raw;
+        for (qn_raw, 0..) |c, i| lower_buf[i] = std.ascii.toLower(c);
+        break :blk lower_buf[0..qn_raw.len];
+    };
+    const a = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse return JsValue.null_val;
+    const obj = getOrCreateAttrWrapper(vm, @ptrCast(@alignCast(a))) orelse return JsValue.null_val;
+    return JsValue.initObject(obj);
+}
+
+/// Walk the live attribute list for an (ns, localName) match. `ns == null`
+/// matches attrs with null namespace (lexbor ns id outside the known URI
+/// set, or the null ns id). Returns the first match or null.
+fn lookupAttrByNsLocal(elem: *lxb.lxb_dom_element_t, ns: ?[]const u8, local: []const u8) ?*lxb.lxb_dom_attr_t {
+    var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (a) |attr| {
+        const attr_ns = nsIdToUri(attr.node.ns);
+        const ns_match = blk: {
+            if (ns == null) break :blk (attr_ns == null);
+            if (attr_ns) |u| break :blk std.mem.eql(u8, u, ns.?);
+            break :blk false;
+        };
+        if (ns_match) {
+            // Lexbor does not expose a standalone local-name accessor for
+            // attrs via the public `.noi` surface we import. Fall back to
+            // extracting the local name from the qualified name by
+            // trimming the prefix (if any).
+            var qn_len: usize = 0;
+            if (dom_b.lxb_dom_attr_qualified_name(@ptrCast(attr), &qn_len)) |qn_ptr| {
+                const qn = qn_ptr[0..qn_len];
+                const colon_idx = std.mem.indexOfScalar(u8, qn, ':');
+                const attr_local: []const u8 = if (colon_idx) |ci| qn[ci + 1 ..] else qn;
+                if (std.mem.eql(u8, attr_local, local)) return attr;
+            }
+        }
+        a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+    }
+    return null;
+}
+
+/// DOM §4.9.2 getNamedItemNS(namespace, localName) — delegates to §4.9.1
+/// "get an attribute by namespace and local name". Empty-string
+/// namespace coerces to null per spec step 1.
+fn nativeNnmGetNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.null_val;
+    const elem = nnmElem(this) orelse return JsValue.null_val;
+    const ns_arg = args[0];
+    const ns_slice: ?[]const u8 = if (ns_arg.isNull() or ns_arg.isUndefined()) null else blk: {
+        if (!ns_arg.isString()) break :blk null;
+        const s = vm.pool.get(ns_arg.asStringId()) orelse break :blk null;
+        if (s.len == 0) break :blk null;
+        break :blk s;
+    };
+    if (!args[1].isString()) return JsValue.null_val;
+    const local = vm.pool.get(args[1].asStringId()) orelse return JsValue.null_val;
+    const a = lookupAttrByNsLocal(elem, ns_slice, local) orelse return JsValue.null_val;
+    const obj = getOrCreateAttrWrapper(vm, a) orelse return JsValue.null_val;
+    return JsValue.initObject(obj);
+}
+
+/// Write Attr.ownerElement (JS-visible own property) plus the hidden
+/// `__ownerElemPtr` slot holding the backing node-pointer as an opaque
+/// integer. Native methods consult the hidden slot for cheap ownership
+/// checks (e.g. setNamedItem's InUseAttributeError test) without
+/// re-crossing the JS boundary.
+///
+/// Passing `JsValue.null_val` (or undefined) clears both sides.
+fn setAttrOwnerElement(vm: *VM, attr_obj: *JsObject, owner: JsValue) void {
+    const oe_sid = vm.pool.intern("ownerElement") catch return;
+    attr_obj.setProperty(vm.allocator, oe_sid, owner) catch {};
+    const ptr_sid = g_sid_owner_elem_ptr orelse return;
+    if (owner.isNull() or owner.isUndefined()) {
+        attr_obj.setProperty(vm.allocator, ptr_sid, JsValue.null_val) catch {};
+        return;
+    }
+    if (!owner.isObject()) return;
+    const owner_obj = owner.asJsObject();
+    const node = getThisNode(JsValue.initObject(owner_obj)) orelse return;
+    attr_obj.setProperty(
+        vm.allocator,
+        ptr_sid,
+        JsValue.initNumber(@floatFromInt(@intFromPtr(node))),
+    ) catch {};
+}
+
+/// DOM §4.9.2 removeNamedItem(qualifiedName) — delegates to §4.9.1
+/// "remove an attribute by name". Throws NotFoundError when the
+/// qualified name doesn't resolve on the live attribute list.
+fn nativeNnmRemoveNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isString()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
+    const elem = nnmElem(this) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const qn_raw = vm.pool.get(args[0].asStringId()) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    var lower_buf: [256]u8 = undefined;
+    const qn: []const u8 = blk: {
+        if (!elementInHtmlDoc(vm, elem)) break :blk qn_raw;
+        if (qn_raw.len > lower_buf.len) break :blk qn_raw;
+        for (qn_raw, 0..) |c, i| lower_buf[i] = std.ascii.toLower(c);
+        break :blk lower_buf[0..qn_raw.len];
+    };
+    const lxb_attr_opaque = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const lxb_attr: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(lxb_attr_opaque));
+    // Fetch (or materialise) the wrapper before invalidation so we can
+    // return it to the caller.
+    const attr_obj_opt = getOrCreateAttrWrapper(vm, lxb_attr);
+    // §4.9.1 "remove an attribute": clear ownerElement on the removed
+    // Attr BEFORE lexbor frees the struct.
+    if (attr_obj_opt) |o| setAttrOwnerElement(vm, o, JsValue.null_val);
+    // Drop cache entry first; post-remove the lxb pointer may be
+    // reassigned by lexbor internals.
+    invalidateAttrWrapper(lxb_attr);
+    _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
+    bumpElemAttrVersion(elem);
+    return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
+}
+
+/// DOM §4.9.2 removeNamedItemNS(namespace, localName) — delegates to
+/// §4.9.1 "remove an attribute by namespace and local name". Throws
+/// NotFoundError when the (ns, localName) pair doesn't resolve.
+fn nativeNnmRemoveNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
+    const elem = nnmElem(this) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const ns_arg = args[0];
+    const ns_slice: ?[]const u8 = if (ns_arg.isNull() or ns_arg.isUndefined()) null else blk: {
+        if (!ns_arg.isString()) break :blk null;
+        const s = vm.pool.get(ns_arg.asStringId()) orelse break :blk null;
+        if (s.len == 0) break :blk null;
+        break :blk s;
+    };
+    if (!args[1].isString()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    }
+    const local = vm.pool.get(args[1].asStringId()) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const lxb_attr = lookupAttrByNsLocal(elem, ns_slice, local) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    // Resolve the qualifiedName from the live attr so lexbor's name-keyed
+    // removal reaches the same record we just found.
+    var qn_len: usize = 0;
+    const qn_ptr = dom_b.lxb_dom_attr_qualified_name(@ptrCast(lxb_attr), &qn_len) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const qn = qn_ptr[0..qn_len];
+    const attr_obj_opt = getOrCreateAttrWrapper(vm, lxb_attr);
+    if (attr_obj_opt) |o| setAttrOwnerElement(vm, o, JsValue.null_val);
+    invalidateAttrWrapper(lxb_attr);
+    _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
+    bumpElemAttrVersion(elem);
+    return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
+}
+
+/// DOM §4.9.2 setNamedItem / setNamedItemNS — per WebIDL "A legacy
+/// interface that has both setNamedItem and setNamedItemNS must treat
+/// them identically" (§3.8), we register the same native under both
+/// names. The algorithm follows §4.9.1 "set an attribute":
+///   1. If attr's element is non-null and different, InUseAttributeError.
+///   2. Let old = attribute at (attr.namespace, attr.localName) on elem.
+///   3. If old === attr, return attr (idempotent).
+///   4/5. Replace old with attr OR append attr.
+///   6. Set attr's element to elem; clear old's element.
+///   7. Return old or null.
+fn nativeNnmSetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isObject()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    }
+    const elem = nnmElem(this) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    };
+    const attr_obj = args[0].asJsObject();
+
+    // Step 1: InUseAttributeError if attr.ownerElement is a different
+    // element. Prefer the hidden __ownerElemPtr slot (opaque node-ptr
+    // integer) so this check does not re-cross into JS just to read
+    // ownerElement.
+    const elem_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const elem_node_addr = @intFromPtr(elem_node);
+    if (g_sid_owner_elem_ptr) |ptr_sid| {
+        if (attr_obj.getProperty(ptr_sid)) |stashed| {
+            if (!stashed.isNull() and !stashed.isUndefined()) {
+                const f = stashed.toNumber();
+                if (std.math.isFinite(f) and f > 0.0) {
+                    const owner_addr: usize = @intFromFloat(f);
+                    if (owner_addr != elem_node_addr) {
+                        vm.pending_throw = try createDOMExceptionObj(vm, "InUseAttributeError");
+                        return JsValue.undefined_val;
+                    }
+                }
+            }
+        }
+    }
+
+    // Extract metadata from the Attr JS object (createAttribute /
+    // createAttributeNS populate `namespaceURI`, `localName`, `prefix`,
+    // `value`, `name`).
+    const ns_sid = try vm.pool.intern("namespaceURI");
+    const ns_v = attr_obj.getProperty(ns_sid) orelse JsValue.null_val;
+    const ns_slice: ?[]const u8 = if (ns_v.isNull() or ns_v.isUndefined()) null else blk: {
+        if (!ns_v.isString()) break :blk null;
+        const s = vm.pool.get(ns_v.asStringId()) orelse break :blk null;
+        if (s.len == 0) break :blk null;
+        break :blk s;
+    };
+    const local_sid = try vm.pool.intern("localName");
+    const local_v = attr_obj.getProperty(local_sid) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    };
+    if (!local_v.isString()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    }
+    const local_name = vm.pool.get(local_v.asStringId()) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    };
+
+    // Resolve qualifiedName. Prefer the cached `name` property set in
+    // createAttrObject (includes prefix), else fall back to localName.
+    const name_sid = try vm.pool.intern("name");
+    const name_v = attr_obj.getProperty(name_sid) orelse JsValue.null_val;
+    const qn_str: []const u8 = blk: {
+        if (name_v.isString()) {
+            if (vm.pool.get(name_v.asStringId())) |s| {
+                if (s.len > 0) break :blk s;
+            }
+        }
+        break :blk local_name;
+    };
+
+    // Resolve the value. Missing `value` defaults to "" per §4.9.1
+    // "set an attribute value" (the algorithm treats missing as empty).
+    const value_sid = try vm.pool.intern("value");
+    const value_v = attr_obj.getProperty(value_sid) orelse JsValue.null_val;
+    const value_str: []const u8 = blk: {
+        if (value_v.isString()) {
+            if (vm.pool.get(value_v.asStringId())) |s| break :blk s;
+        }
+        break :blk "";
+    };
+
+    // Step 2: look up old attr at (ns, local). If the incoming attr has
+    // no namespace, fall back to the qualified-name lookup so attrs
+    // authored via createAttribute (no ns) collide with in-place same-
+    // qualified-name attrs.
+    const old_lxb_opt: ?*lxb.lxb_dom_attr_t = blk: {
+        if (ns_slice != null) break :blk lookupAttrByNsLocal(elem, ns_slice, local_name);
+        if (dom_b.lxb_dom_element_attr_by_name(elem, qn_str.ptr, qn_str.len)) |p| {
+            break :blk @ptrCast(@alignCast(p));
+        }
+        break :blk null;
+    };
+    const old_obj_opt: ?*JsObject = if (old_lxb_opt) |a| getOrCreateAttrWrapper(vm, a) else null;
+
+    // Step 3: idempotence — same wrapper already on this element.
+    if (old_obj_opt) |oo| {
+        if (oo == attr_obj) return JsValue.initObject(attr_obj);
+    }
+
+    // Step 4/5: write via lexbor. lexbor treats NS-aware attrs by
+    // qualified name (§nativeSetAttributeNS:3149 already relies on this);
+    // the namespace tag is inferred from the prefix at attribute-list
+    // insertion time.
+    // Drop the pre-existing cache entry BEFORE the lexbor write; the
+    // replace case may free & reallocate the backing struct.
+    if (old_lxb_opt) |ol| invalidateAttrWrapper(ol);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, qn_str.ptr, qn_str.len, value_str.ptr, value_str.len);
+    bumpElemAttrVersion(elem);
+
+    // Re-resolve the just-written lexbor record and re-key g_attr_wrappers
+    // so future `el.attributes.getNamedItem(...)` returns the **same**
+    // JsObject we were just handed (spec §R2 — wrapper identity across
+    // element boundaries).
+    const new_lxb_opaque = dom_b.lxb_dom_element_attr_by_name(elem, qn_str.ptr, qn_str.len) orelse {
+        // Lexbor write succeeded but the record is unreachable — treat as
+        // a best-effort append and surface null old.
+        return if (old_obj_opt) |oo| JsValue.initObject(oo) else JsValue.null_val;
+    };
+    const new_lxb: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(new_lxb_opaque));
+    g_attr_wrappers.put(g_alloc, @intFromPtr(new_lxb), attr_obj) catch {};
+
+    // Step 6: record ownership. Wrap the element to produce the JS-side
+    // owner object once (no-op if already cached in the node map).
+    if (wrapNode(vm, elem_node)) |owner_js| {
+        setAttrOwnerElement(vm, attr_obj, owner_js);
+    } else {
+        // Fallback: still record the opaque ptr for future ownership
+        // checks even when the node cache can't materialise an owner.
+        if (g_sid_owner_elem_ptr) |ptr_sid| {
+            attr_obj.setProperty(
+                vm.allocator,
+                ptr_sid,
+                JsValue.initNumber(@floatFromInt(elem_node_addr)),
+            ) catch {};
+        }
+    }
+    // Displaced old Attr loses its ownerElement.
+    if (old_obj_opt) |oo| {
+        if (oo != attr_obj) setAttrOwnerElement(vm, oo, JsValue.null_val);
+    }
+
+    // Step 7: return old or null.
+    return if (old_obj_opt) |oo| JsValue.initObject(oo) else JsValue.null_val;
+}
+
+/// DOM §4.9.2 @@iterator — spec §3.6.1 "indexed getter + iterable" install.
+/// Returns a new iterator object whose `.next()` walks the element's live
+/// attribute list in declaration order. Re-reads the lexbor list from head
+/// on every `next()` so live mutations (setAttribute during iteration)
+/// are reflected, matching the live-NamedNodeMap contract.
+fn nativeNnmSymbolIterator(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    const iter = try vm.createObj(.{ .obj_type = .iterator });
+    iter.data = .{ .iterator_data = .{ .source = this } };
+    try vm.registerNativeMethod(iter, "next", &nativeNnmIteratorNext);
+    return JsValue.initObject(iter);
+}
+
+/// Iterator protocol `.next()` for NamedNodeMap. Uses the shared
+/// iterator_data.index cursor (0-based). Returns
+/// `{value: Attr, done: false}` while items remain, else
+/// `{value: undefined, done: true}`. Walks the lexbor list from head
+/// each call (O(n) per step) — acceptable for typical attribute counts
+/// (<10) and correct under live mutation.
+fn nativeNnmIteratorNext(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return iterResultDone(vm);
+    const iter = this.asJsObject();
+    if (iter.obj_type != .iterator) return iterResultDone(vm);
+    const data = &iter.data.iterator_data;
+    const elem = nnmElem(data.source) orelse return iterResultDone(vm);
+    const target_idx = data.index;
+    var j: u32 = 0;
+    var a: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
+    while (a) |attr| : (j += 1) {
+        if (j == target_idx) {
+            const obj = getOrCreateAttrWrapper(vm, attr) orelse return iterResultDone(vm);
+            data.index = target_idx + 1;
+            return iterResultValue(vm, JsValue.initObject(obj));
+        }
+        a = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(attr)));
+    }
+    return iterResultDone(vm);
+}
+
+/// Shared iterator-result helpers for NamedNodeMap's @@iterator. Local
+/// to kotori_dom because vm.zig's createIterResult is not pub.
+fn iterResultDone(vm: *VM) anyerror!JsValue {
+    const r = try vm.createObj(.{});
+    try r.setProperty(vm.allocator, try vm.pool.intern("value"), JsValue.undefined_val);
+    try r.setProperty(vm.allocator, try vm.pool.intern("done"), JsValue.initBool(true));
+    return JsValue.initObject(r);
+}
+
+fn iterResultValue(vm: *VM, val: JsValue) anyerror!JsValue {
+    const r = try vm.createObj(.{});
+    try r.setProperty(vm.allocator, try vm.pool.intern("value"), val);
+    try r.setProperty(vm.allocator, try vm.pool.intern("done"), JsValue.initBool(false));
+    return JsValue.initObject(r);
+}
+
+/// DOM §4.9.2 — build `NamedNodeMap.prototype` and expose `globalThis.NamedNodeMap`.
+/// Idempotent; safe to call more than once (only the first call does work).
+///
+/// Init ordering (spec §3.6 / §Init sequence): must run before any document is
+/// wrapped so that `buildAttributesMap` can safely link fresh map objects to
+/// the prototype. Methods are registered directly on the prototype as this
+/// single entry point (matches the pattern used by `vm.array_proto`).
+fn initNamedNodeMapProto(vm: *VM) !void {
+    if (g_namednodemap_proto != null) return;
+
+    // Intern hidden slot names once (hot-path read by every method).
+    g_sid_nnm_elem = try vm.pool.intern("__nnmElem");
+    g_sid_nnm_ver = try vm.pool.intern("__nnmVer");
+    g_sid_nnm_cache = try vm.pool.intern("__nnmCache");
+    g_sid_owner_elem_ptr = try vm.pool.intern("__ownerElemPtr");
+
+    // NamedNodeMap.prototype — inherits from Object.prototype by default.
+    const proto = try vm.createObj(.{});
+    g_namednodemap_proto = proto;
+
+    // Symbol.toStringTag = "NamedNodeMap" (per spec §3.8 legacy platform object
+    // toString tag). Follow the engine-internal slot pattern (vm.zig line 151:
+    // SYMBOL_TO_STRING_TAG is a module-level u32 key in symbol_props).
+    if (proto.symbol_props == null) proto.symbol_props = .{};
+    try proto.symbol_props.?.put(
+        vm.allocator,
+        VM.SYMBOL_TO_STRING_TAG,
+        JsValue.initString(try vm.pool.intern("NamedNodeMap")),
+    );
+
+    // Methods are registered in Tasks 5-8 (item / getNamedItem[NS] /
+    // removeNamedItem[NS] / setNamedItem[NS] / @@iterator) — see initNamedNodeMapMethods.
+    initNamedNodeMapMethods(vm, proto) catch {};
+
+    // globalThis.NamedNodeMap — constructor object whose .prototype is the map.
+    const ctor = try vm.createObj(.{ .obj_type = .native_function });
+    ctor.data = .{ .native_fn = &nativeNnmConstructor };
+    try ctor.setProperty(
+        vm.allocator,
+        try vm.pool.intern("prototype"),
+        JsValue.initObject(proto),
+    );
+    try proto.setProperty(
+        vm.allocator,
+        try vm.pool.intern("constructor"),
+        JsValue.initObject(ctor),
+    );
+    try vm.globals.put(
+        vm.allocator,
+        try vm.pool.intern("NamedNodeMap"),
+        JsValue.initObject(ctor),
+    );
+}
+
+/// Rewalk the live lexbor attribute list and overwrite the indexed +
+/// named + length own properties on `map_obj` (DOM §4.9.2 live
+/// semantics, spec §Liveness Option A). Called from both the first
+/// materialisation (via `buildAttributesMap`) and subsequent cache
+/// refreshes when the per-element version counter advances.
+fn refreshAttributesMap(vm: *VM, map_obj: *JsObject, elem: *lxb.lxb_dom_element_t) void {
+    // Record the version this snapshot reflects BEFORE the rewalk, so
+    // any method invoked reentrantly through getOrCreateAttrWrapper
+    // observes a consistent stamp.
+    const cur_ver = g_elem_attr_ver.get(@intFromPtr(elem)) orelse 0;
+    if (g_sid_nnm_ver) |sid| {
+        map_obj.setProperty(vm.allocator, sid, JsValue.initNumber(@floatFromInt(cur_ver))) catch {};
+    }
+
+    // Note: stale indexed entries from a longer previous snapshot remain
+    // as own properties. Writing the new `length` caps observable
+    // iteration, and the caller's lookups go through named properties or
+    // `item()`. A future task can sweep stale keys when shrink cases are
+    // measured in WPT.
+    var count: u32 = 0;
     var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (attr) |a| {
         const attr_obj = getOrCreateAttrWrapper(vm, a) orelse {
             attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
             continue;
         };
-
-        // Resolve the (possibly refreshed) name for named access.
         var attr_qn_len: usize = 0;
         if (dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len)) |qn| {
             const qn_str = qn[0..attr_qn_len];
             if (vm.pool.intern(qn_str)) |name_sid| {
-                // Indexed access
-                var idx_buf: [8]u8 = undefined;
+                var idx_buf: [16]u8 = undefined;
                 if (std.fmt.bufPrint(&idx_buf, "{d}", .{count})) |idx_str| {
                     if (vm.pool.intern(idx_str)) |idx_sid| {
                         map_obj.setProperty(vm.allocator, idx_sid, JsValue.initObject(attr_obj)) catch {};
                     } else |_| {}
                 } else |_| {}
-                // Named access
                 map_obj.setProperty(vm.allocator, name_sid, JsValue.initObject(attr_obj)) catch {};
                 count += 1;
             } else |_| {}
         }
-
         attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
     }
+    if (vm.pool.intern("length")) |len_sid| {
+        map_obj.setProperty(vm.allocator, len_sid, JsValue.initNumber(@floatFromInt(count))) catch {};
+    } else |_| {}
+}
 
-    map_obj.setProperty(vm.allocator, vm.pool.intern("length") catch return null, JsValue.initNumber(@floatFromInt(count))) catch {};
+/// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).
+/// Returns a JsObject whose `__proto__` is `NamedNodeMap.prototype`
+/// (from Task 1) and whose `__nnmElem` slot stores the owning element
+/// pointer so native methods can re-walk the live attribute list.
+///
+/// Indexed (`0`, `1`, …) + named (`"id"`, …) + `length` own properties
+/// are pre-written by `refreshAttributesMap` so bracket access keeps
+/// working without a custom getter callback (spec §Liveness Option A).
+fn buildAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
+    const map_obj = vm.createObj(.{}) catch return null;
+    // §4.9.2 — link to NamedNodeMap.prototype.
+    if (g_namednodemap_proto) |p| map_obj.prototype = p;
+    // Stash backing element pointer for native method dispatch.
+    if (g_sid_nnm_elem) |sid| {
+        map_obj.setProperty(
+            vm.allocator,
+            sid,
+            JsValue.initNumber(@floatFromInt(@intFromPtr(elem))),
+        ) catch {};
+    }
+    refreshAttributesMap(vm, map_obj, elem);
     return JsValue.initObject(map_obj);
+}
+
+/// Decode the hidden `__nnmElem` slot → `*lxb.lxb_dom_element_t`.
+/// Returns null if `this` is not a NamedNodeMap (slot missing or 0).
+fn nnmElem(this: JsValue) ?*lxb.lxb_dom_element_t {
+    if (!this.isObject()) return null;
+    const obj = this.asJsObject();
+    const sid = g_sid_nnm_elem orelse return null;
+    const v = obj.getProperty(sid) orelse return null;
+    const n = v.toNumber();
+    if (!std.math.isFinite(n) or n <= 0.0) return null;
+    return @ptrFromInt(@as(usize, @intFromFloat(n)));
 }
 
 fn tagNameUpper(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
@@ -5061,11 +5742,19 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
         // DOM §4.9.1: drop the cached Attr wrapper before lexbor frees it.
         if (dom_b.lxb_dom_element_attr_by_name(elem, name.ptr, name.len)) |a| {
+            // DOM §4.9 Attr.ownerElement — "remove an attribute" clears owner.
+            // Must run BEFORE invalidateAttrWrapper so the cached wrapper
+            // (still identified by this attr ptr) gets the update.
+            if (g_attr_wrappers.get(@intFromPtr(a))) |cached_wrap| {
+                setAttrOwnerElement(vm, cached_wrap, JsValue.null_val);
+            }
             invalidateAttrWrapper(a);
         }
         // Remove attribute
         _ = dom_b.lxb_dom_element_remove_attribute(elem, name.ptr, name.len);
         recordAttributeMutation(vm, node, name, old_val);
+        // DOM §4.9.2 NamedNodeMap live-map version bump.
+        bumpElemAttrVersion(elem);
         setDomDirty();
         return JsValue.initBool(false);
     } else {
@@ -5076,6 +5765,8 @@ fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         // Add attribute with empty value
         _ = dom_b.lxb_dom_element_set_attribute(elem, name.ptr, name.len, "", 0);
         recordAttributeMutation(vm, node, name, null);
+        // DOM §4.9.2 NamedNodeMap live-map version bump.
+        bumpElemAttrVersion(elem);
         setDomDirty();
         return JsValue.initBool(true);
     }

@@ -1554,3 +1554,351 @@ test "XMLDocument createElement('foo').ownerDocument === the XML doc (DOM §4.4)
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Layer 1D — NamedNodeMap (DOM §4.9.2)
+// ══════════════════════════════════════════════════════════════════════
+
+// Task 1: prototype + constructor registration.
+test "NamedNodeMap constructor + prototype installed (Layer 1D Task 1)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\typeof NamedNodeMap === 'function' &&
+        \\typeof NamedNodeMap.prototype === 'object' &&
+        \\NamedNodeMap.prototype.constructor === NamedNodeMap;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "new NamedNodeMap() throws (WebIDL §3.6.1)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var threw = false;
+        \\try { new NamedNodeMap(); } catch (e) { threw = true; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 2: el.attributes links to NamedNodeMap.prototype.
+test "el.attributes __proto__ === NamedNodeMap.prototype (Layer 1D Task 2)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\Object.getPrototypeOf(el.attributes) === NamedNodeMap.prototype;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "el.attributes[0] and el.attributes['id'] still resolve after Task 2" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes[0].value === 'x' && el.attributes['id'].value === 'x' &&
+        \\el.attributes.length === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 3: el.attributes === el.attributes identity invariant.
+test "el.attributes === el.attributes (identity cache, Layer 1D Task 3)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes === el.attributes;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 4: liveness — cached map reflects mutations on next read.
+test "NamedNodeMap liveness: length + named access update after setAttribute (Layer 1D Task 4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var m = el.attributes;
+        \\var before = m.length;
+        \\el.setAttribute('id', 'x');
+        \\before === 0 && m.length === 1 && m['id'].value === 'x';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap liveness: length drops after removeAttribute (Layer 1D Task 4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var m = el.attributes;
+        \\var before = m.length;
+        \\el.removeAttribute('id');
+        \\before === 1 && m.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 5: item + getNamedItem + getNamedItemNS.
+test "NamedNodeMap.item: in-range / out-of-range / negative (Layer 1D Task 5)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes.item(0).value === 'x' &&
+        \\el.attributes.item(999) === null &&
+        \\el.attributes.item(-1) === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.getNamedItem: HTML case-insensitive + missing returns null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('data-x', '1');
+        \\el.attributes.getNamedItem('DATA-X').value === '1' &&
+        \\el.attributes.getNamedItem('missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.getNamedItemNS: empty ns coerces to null" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes.getNamedItemNS('', 'id').value === 'x' &&
+        \\el.attributes.getNamedItemNS(null, 'id').value === 'x' &&
+        \\el.attributes.getNamedItemNS(null, 'missing') === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 6: removeNamedItem + removeNamedItemNS.
+test "NamedNodeMap.removeNamedItem returns removed Attr (Layer 1D Task 6)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.attributes.removeNamedItem('id');
+        \\a.value === 'x' && a.ownerElement === null && el.attributes.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.removeNamedItem throws NotFoundError when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var threw = false;
+        \\try { el.attributes.removeNamedItem('missing'); }
+        \\catch (e) { threw = e.name === 'NotFoundError'; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.removeNamedItemNS throws NotFoundError when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var threw = false;
+        \\try { el.attributes.removeNamedItemNS(null, 'missing'); }
+        \\catch (e) { threw = e.name === 'NotFoundError'; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 7: setNamedItem + setNamedItemNS.
+test "NamedNodeMap.setNamedItem: append returns null (Layer 1D Task 7)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var a = document.createAttribute('id'); a.value = 'x';
+        \\var prev = el.attributes.setNamedItem(a);
+        \\prev === null && el.attributes.getNamedItem('id').value === 'x';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.setNamedItem: replace returns old Attr, clears its ownerElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'old');
+        \\var oldNode = el.attributes.getNamedItem('id');
+        \\var a = document.createAttribute('id'); a.value = 'new';
+        \\var ret = el.attributes.setNamedItem(a);
+        \\ret === oldNode &&
+        \\oldNode.ownerElement === null &&
+        \\el.attributes.getNamedItem('id').value === 'new';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.setNamedItem: idempotent when same Attr on same element" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.attributes.getNamedItem('id');
+        \\el.attributes.setNamedItem(a) === a;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "NamedNodeMap.setNamedItem: InUseAttributeError for different element's Attr" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var a = document.createElement('div');
+        \\var b = document.createElement('div');
+        \\a.setAttribute('id', 'x');
+        \\var aAttr = a.attributes.getNamedItem('id');
+        \\var threw = false;
+        \\try { b.attributes.setNamedItem(aAttr); }
+        \\catch (e) { threw = e.name === 'InUseAttributeError'; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 8: @@iterator on NamedNodeMap.prototype.
+test "for..of el.attributes yields Attr nodes in index order (Layer 1D Task 8)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\var names = [];
+        \\for (var at of el.attributes) names.push(at.name);
+        \\names.length === 2 && names[0] === 'a' && names[1] === 'b';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "[...el.attributes] has correct length (Layer 1D Task 8)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\el.setAttribute('c', '3');
+        \\[...el.attributes].length === 3;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "el.attributes[Symbol.iterator] is callable (Layer 1D Task 8)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\typeof el.attributes[Symbol.iterator] === 'function';
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+// Task 10: Attr.ownerElement end-to-end tracking.
+test "Attr wrapper from el.attributes[0] has correct ownerElement (Layer 1D Task 10)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes[0].ownerElement === el;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "Attr.ownerElement becomes null after removeAttribute (Layer 1D Task 10)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.attributes[0];
+        \\el.removeAttribute('id');
+        \\a.ownerElement === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "Attr.ownerElement becomes null after toggleAttribute removal (Layer 1D Task 10)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('hidden', '');
+        \\var a = el.attributes[0];
+        \\el.toggleAttribute('hidden');
+        \\a.ownerElement === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
