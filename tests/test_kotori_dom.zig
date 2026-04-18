@@ -2076,3 +2076,50 @@ test "setAttributeNode throws InUseAttributeError" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 6: removeAttributeNode ──────────────────────────
+test "removeAttributeNode returns the Attr and clears ownerElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\var a = el.getAttributeNode('id');
+        \\var r = el.removeAttributeNode(a);
+        \\r === a && a.ownerElement === null && el.attributes.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "removeAttributeNode throws NotFoundError when Attr is not in list" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var orphan = document.createAttribute('id');
+        \\var caught = false;
+        \\try { el.removeAttributeNode(orphan); }
+        \\catch (e) { caught = (e.name === 'NotFoundError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "removeAttributeNode throws TypeError for non-Attr" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\var caught = false;
+        \\try { el.removeAttributeNode({}); }
+        \\catch (e) { caught = (e.name === 'TypeError'); }
+        \\caught;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

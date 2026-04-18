@@ -775,6 +775,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // prose "likewise": both method names share one native.
     try vm.registerNativeMethod(ep, "setAttributeNode", &nativeSetAttributeNodeImpl);
     try vm.registerNativeMethod(ep, "setAttributeNodeNS", &nativeSetAttributeNodeImpl);
+    // DOM §4.9.1 removeAttributeNode (Layer 1D.1 Task 6) — NotFoundError
+    // when the Attr is not in this element's attribute list (distinct from
+    // removeAttribute's silent-on-miss semantics, spec §R3).
+    try vm.registerNativeMethod(ep, "removeAttributeNode", &nativeRemoveAttributeNode);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
@@ -4945,6 +4949,82 @@ fn nativeSetAttributeNodeImpl(ctx: *anyopaque, this: JsValue, args: []const JsVa
 
     // Step 7: return old or null.
     return if (old_obj_opt) |oo| JsValue.initObject(oo) else JsValue.null_val;
+}
+
+/// DOM §4.9.1 removeAttributeNode(attr) — Element method:
+///   1. If attr is not this element's attribute list, throw NotFoundError.
+///   2. Remove attr.
+///   3. Return attr.
+/// Containment is checked by walking the lexbor attribute list and
+/// comparing against `attr.__attrBackingPtr` (Task 4). This is distinct
+/// from `removeAttribute` (silent on miss) and `NamedNodeMap.removeNamedItem`
+/// (name-keyed, also NotFoundError) — see spec §R3; do NOT unify.
+fn nativeRemoveAttributeNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !args[0].isObject()) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    }
+    const node = getThisNode(this) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    };
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    }
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+
+    const attr_obj = args[0].asJsObject();
+    if (!isAttrObject(attr_obj, vm)) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+        return JsValue.undefined_val;
+    }
+
+    // Step 1: containment check via the Task 4 backing-ptr. If the Attr
+    // has no backing ptr (never bound to a lexbor record) OR its backing
+    // ptr does not appear in this element's attribute list, NotFoundError.
+    const backing = getAttrBackingPtr(attr_obj) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    var a_opaque = dom_b.lxb_dom_element_first_attribute_noi(elem);
+    var found: ?*lxb.lxb_dom_attr_t = null;
+    while (a_opaque) |p| {
+        const attr: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(p));
+        if (@intFromPtr(attr) == backing) {
+            found = attr;
+            break;
+        }
+        a_opaque = dom_b.lxb_dom_element_next_attribute_noi(attr);
+    }
+    const target = found orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+
+    // Step 2: lexbor has no remove-by-pointer, so resolve the qualified
+    // name from the target record and call remove_attribute.
+    var qn_len: usize = 0;
+    const qn_ptr = dom_b.lxb_dom_attr_qualified_name(@ptrCast(target), &qn_len) orelse {
+        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
+        return JsValue.undefined_val;
+    };
+    const qn = qn_ptr[0..qn_len];
+
+    // Clear wrapper state BEFORE lexbor frees the struct: ownerElement
+    // on the JS Attr, cache entry in g_attr_wrappers, and the backing
+    // ptr slot so future setAttributeNode calls on this Attr re-key
+    // cleanly per spec §R1.
+    setAttrOwnerElement(vm, attr_obj, JsValue.null_val);
+    _ = g_attr_wrappers.remove(backing);
+    setAttrBackingPtr(vm, attr_obj, 0);
+    _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
+    bumpElemAttrVersion(elem);
+    setDomDirty();
+
+    // Step 3: return the passed-in Attr.
+    return JsValue.initObject(attr_obj);
 }
 
 /// DOM §4.9.2 setNamedItem / setNamedItemNS — per WebIDL "A legacy
