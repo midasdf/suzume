@@ -1585,3 +1585,31 @@ test "new NamedNodeMap() throws (WebIDL §3.6.1)" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// Task 2: el.attributes links to NamedNodeMap.prototype.
+test "el.attributes __proto__ === NamedNodeMap.prototype (Layer 1D Task 2)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\Object.getPrototypeOf(el.attributes) === NamedNodeMap.prototype;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "el.attributes[0] and el.attributes['id'] still resolve after Task 2" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('id', 'x');
+        \\el.attributes[0].value === 'x' && el.attributes['id'].value === 'x' &&
+        \\el.attributes.length === 1;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

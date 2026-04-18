@@ -4341,47 +4341,87 @@ fn initNamedNodeMapProto(vm: *VM) !void {
     );
 }
 
-/// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).
-/// Returns an array-like object with .length, indexed access, .getNamedItem(), .item().
-/// The map is rebuilt per access so it stays live wrt setAttribute/removeAttribute;
-/// individual Attr wrappers are cached on the lexbor attr pointer for identity.
-fn buildAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
-    const map_obj = vm.createObj(.{}) catch return null;
-    var count: u32 = 0;
+/// Rewalk the live lexbor attribute list and overwrite the indexed +
+/// named + length own properties on `map_obj` (DOM §4.9.2 live
+/// semantics, spec §Liveness Option A). Called from both the first
+/// materialisation (via `buildAttributesMap`) and subsequent cache
+/// refreshes when the per-element version counter advances.
+fn refreshAttributesMap(vm: *VM, map_obj: *JsObject, elem: *lxb.lxb_dom_element_t) void {
+    // Record the version this snapshot reflects BEFORE the rewalk, so
+    // any method invoked reentrantly through getOrCreateAttrWrapper
+    // observes a consistent stamp.
+    const cur_ver = g_elem_attr_ver.get(@intFromPtr(elem)) orelse 0;
+    if (g_sid_nnm_ver) |sid| {
+        map_obj.setProperty(vm.allocator, sid, JsValue.initNumber(@floatFromInt(cur_ver))) catch {};
+    }
 
-    // Iterate lexbor attributes using the proper attr-list link, not the
-    // generic sibling list (DOM §4.9.1). The previous `a.node.next` walk only
-    // ever exposed the first attribute.
+    // Note: stale indexed entries from a longer previous snapshot remain
+    // as own properties. Writing the new `length` caps observable
+    // iteration, and the caller's lookups go through named properties or
+    // `item()`. A future task can sweep stale keys when shrink cases are
+    // measured in WPT.
+    var count: u32 = 0;
     var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (attr) |a| {
         const attr_obj = getOrCreateAttrWrapper(vm, a) orelse {
             attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
             continue;
         };
-
-        // Resolve the (possibly refreshed) name for named access.
         var attr_qn_len: usize = 0;
         if (dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len)) |qn| {
             const qn_str = qn[0..attr_qn_len];
             if (vm.pool.intern(qn_str)) |name_sid| {
-                // Indexed access
-                var idx_buf: [8]u8 = undefined;
+                var idx_buf: [16]u8 = undefined;
                 if (std.fmt.bufPrint(&idx_buf, "{d}", .{count})) |idx_str| {
                     if (vm.pool.intern(idx_str)) |idx_sid| {
                         map_obj.setProperty(vm.allocator, idx_sid, JsValue.initObject(attr_obj)) catch {};
                     } else |_| {}
                 } else |_| {}
-                // Named access
                 map_obj.setProperty(vm.allocator, name_sid, JsValue.initObject(attr_obj)) catch {};
                 count += 1;
             } else |_| {}
         }
-
         attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(a)));
     }
+    if (vm.pool.intern("length")) |len_sid| {
+        map_obj.setProperty(vm.allocator, len_sid, JsValue.initNumber(@floatFromInt(count))) catch {};
+    } else |_| {}
+}
 
-    map_obj.setProperty(vm.allocator, vm.pool.intern("length") catch return null, JsValue.initNumber(@floatFromInt(count))) catch {};
+/// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).
+/// Returns a JsObject whose `__proto__` is `NamedNodeMap.prototype`
+/// (from Task 1) and whose `__nnmElem` slot stores the owning element
+/// pointer so native methods can re-walk the live attribute list.
+///
+/// Indexed (`0`, `1`, …) + named (`"id"`, …) + `length` own properties
+/// are pre-written by `refreshAttributesMap` so bracket access keeps
+/// working without a custom getter callback (spec §Liveness Option A).
+fn buildAttributesMap(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
+    const map_obj = vm.createObj(.{}) catch return null;
+    // §4.9.2 — link to NamedNodeMap.prototype.
+    if (g_namednodemap_proto) |p| map_obj.prototype = p;
+    // Stash backing element pointer for native method dispatch.
+    if (g_sid_nnm_elem) |sid| {
+        map_obj.setProperty(
+            vm.allocator,
+            sid,
+            JsValue.initNumber(@floatFromInt(@intFromPtr(elem))),
+        ) catch {};
+    }
+    refreshAttributesMap(vm, map_obj, elem);
     return JsValue.initObject(map_obj);
+}
+
+/// Decode the hidden `__nnmElem` slot → `*lxb.lxb_dom_element_t`.
+/// Returns null if `this` is not a NamedNodeMap (slot missing or 0).
+fn nnmElem(this: JsValue) ?*lxb.lxb_dom_element_t {
+    if (!this.isObject()) return null;
+    const obj = this.asJsObject();
+    const sid = g_sid_nnm_elem orelse return null;
+    const v = obj.getProperty(sid) orelse return null;
+    const n = v.toNumber();
+    if (!std.math.isFinite(n) or n <= 0.0) return null;
+    return @ptrFromInt(@as(usize, @intFromFloat(n)));
 }
 
 fn tagNameUpper(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
