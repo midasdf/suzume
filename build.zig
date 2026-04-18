@@ -715,6 +715,26 @@ pub fn build(b: *std.Build) void {
     const test_kotori_dom_step = b.step("test-kotori-dom", "Run kotori DOM binding tests");
     test_kotori_dom_step.dependOn(&run_kotori_dom_tests.step);
 
+    // ── kotori HTML interfaces resolver tests (pure-Zig, no C deps) ──
+    const kotori_html_ifaces_src_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/kotori_html_interfaces.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const test_kotori_html_ifaces_mod = b.createModule(.{
+        .root_source_file = b.path("tests/test_kotori_html_interfaces.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    test_kotori_html_ifaces_mod.addImport("kotori_html_interfaces", kotori_html_ifaces_src_mod);
+    const kotori_html_ifaces_tests = b.addTest(.{
+        .root_module = test_kotori_html_ifaces_mod,
+    });
+    const run_kotori_html_ifaces_tests = b.addRunArtifact(kotori_html_ifaces_tests);
+    const test_kotori_html_ifaces_step = b.step("test-kotori-html-ifaces", "Run kotori HTML interface resolver tests");
+    test_kotori_html_ifaces_step.dependOn(&run_kotori_html_ifaces_tests.step);
+    test_step.dependOn(&run_kotori_html_ifaces_tests.step);
+
     // ── Layout hit-test unit tests (CSSOM View §7.3) ──────────────
     // Use src/main.zig as root so relative @imports inside layout/hittest.zig
     // and its transitive deps resolve correctly.
