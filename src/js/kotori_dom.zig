@@ -401,6 +401,23 @@ fn nodeCachePut(allocator: std.mem.Allocator, node: *lxb.lxb_dom_node_t, obj: *J
     g_node_cache.put(allocator, @intFromPtr(node), obj) catch {};
 }
 
+/// DOM §4.4 — write the per-Node owner document slot.
+/// `owner_doc_val` is `JsValue.null_val` for Document nodes themselves.
+/// The slot is named `_ownerDoc` (underscore prefix) to distinguish it from
+/// the JS-visible `ownerDocument` property; the getter at domNodeGetProp
+/// reads this slot directly.
+pub fn setNodeOwnerDoc(vm: *VM, obj: *JsObject, owner_doc_val: JsValue) void {
+    const sid = vm.pool.intern("_ownerDoc") catch return;
+    obj.setProperty(vm.allocator, sid, owner_doc_val) catch {};
+}
+
+/// DOM §4.4 — read the per-Node owner document slot.
+/// Returns `JsValue.null_val` if the slot was never written.
+pub fn getNodeOwnerDoc(vm: *VM, obj: *JsObject) JsValue {
+    const sid = vm.pool.intern("_ownerDoc") catch return JsValue.null_val;
+    return obj.getProperty(sid) orelse JsValue.null_val;
+}
+
 fn nodeCacheRemove(node: *lxb.lxb_dom_node_t) void {
     _ = g_node_cache.remove(@intFromPtr(node));
 }
@@ -583,9 +600,14 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
     doc_obj.data = .{ .dom_node = document_ptr };
-    doc_obj.prototype = ep;
+    // DOM §4.4 — Document.prototype chains to Node.prototype, not
+    // Element.prototype. Document-specific methods (createElement,
+    // querySelector, etc.) are registered directly on doc_obj below.
+    doc_obj.prototype = np;
     // Cache document wrapper for === identity (WebIDL §3.1)
     nodeCachePut(vm.allocator, @ptrCast(@alignCast(document_ptr)), doc_obj);
+    // DOM §4.4 — Document itself has ownerDocument = null.
+    setNodeOwnerDoc(vm, doc_obj, JsValue.null_val);
     try vm.registerNativeMethod(doc_obj, "getElementById", &nativeGetElementById);
     try vm.registerNativeMethod(doc_obj, "querySelector", &nativeDocQuerySelector);
     try vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeDocQuerySelectorAll);
@@ -1112,14 +1134,13 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         fn_obj.data = .{ .native_fn = &nativeHasChildNodes };
         return JsValue.initObject(fn_obj);
     }
-    // Node.ownerDocument — null for Document nodes (DOM §4.4)
+    // Node.ownerDocument — read per-node _ownerDoc slot (DOM §4.4).
+    // Document nodes return null; every other node returns the creating
+    // document (including elements in XML documents, adopted/imported
+    // nodes, and nodes from DOMImplementation.createHTMLDocument etc).
     if (eql(name, "ownerDocument")) {
         if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) return JsValue.null_val;
-        if (g_document != null) {
-            const doc_id = vm.pool.intern("document") catch return JsValue.null_val;
-            return vm.globals.get(doc_id) orelse JsValue.null_val;
-        }
-        return JsValue.null_val;
+        return getNodeOwnerDoc(vm, obj);
     }
     if (eql(name, "innerHTML"))
         return getInnerHTML(vm, node);
@@ -1725,7 +1746,7 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
                         break :blk false;
                     };
                     const ns: ?[]const u8 = if (is_xhtml) HTML_NS_URI else null;
-                    return createJsOnlyElement(vm, tag_raw, ns);
+                    return createJsOnlyElement(vm, tag_raw, ns, this);
                 }
             }
         }
@@ -1738,8 +1759,11 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
 }
 
 /// Create a JS-only Element object (no lexbor node) for XML documents.
-/// Preserves tag name case exactly as given.
-fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8) !JsValue {
+/// Preserves tag name case exactly as given. `owner_doc` is the creating
+/// document (DOM §4.4); pass `JsValue.null_val` only when the element has
+/// no owning document (which is an exceptional situation — XML elements
+/// must always have an owner per DOM §4.5).
+fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8, owner_doc: JsValue) !JsValue {
     const obj = try vm.createObj(.{});
     if (vm.element_proto) |ep| obj.prototype = ep;
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(1));
@@ -1759,7 +1783,9 @@ fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8) !Js
         try obj.setProperty(vm.allocator, try vm.pool.intern("namespaceURI"), JsValue.null_val);
     }
     try obj.setProperty(vm.allocator, try vm.pool.intern("prefix"), JsValue.null_val);
-    try obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), JsValue.null_val);
+    // DOM §4.4 — owner document stored in the `_ownerDoc` slot, read by the
+    // ownerDocument getter in domNodeGetProp.
+    setNodeOwnerDoc(vm, obj, owner_doc);
     try obj.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initObject(try vm.createObj(.{ .obj_type = .array })));
     try obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
@@ -2048,6 +2074,12 @@ fn createAttrObject(
     }
     try obj.setProperty(vm.allocator, try vm.pool.intern("specified"), JsValue.initBool(true));
     try obj.setProperty(vm.allocator, try vm.pool.intern("ownerElement"), JsValue.null_val);
+    // DOM §4.9 — attr's ownerDocument is the creating doc. Attr wrappers
+    // are plain JsObjects (not `.dom_node`), so `domNodeGetProp` never
+    // fires for them; keep the JS-visible `ownerDocument` property for
+    // read access, AND write the `_ownerDoc` slot so downstream code that
+    // calls `getNodeOwnerDoc(attr)` sees the same value.
+    setNodeOwnerDoc(vm, obj, owner_doc);
     try obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), owner_doc);
     try obj.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("parentElement"), JsValue.null_val);
@@ -2410,7 +2442,7 @@ fn nativeCreateEvent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerro
 
 // ── document.createProcessingInstruction (DOM §4.1) ─────────────────
 
-fn nativeCreateProcessingInstruction(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len < 2) {
         return error.TypeError;
@@ -2436,7 +2468,12 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, _: JsValue, args: []const 
     try obj.setProperty(vm.allocator, try vm.pool.intern("data"), JsValue.initString(try vm.pool.intern(data_str)));
     try obj.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.initString(try vm.pool.intern(data_str)));
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.initString(try vm.pool.intern(data_str)));
-    try obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), JsValue.null_val);
+    // DOM §4.4 — ProcessingInstruction's ownerDocument is the creating doc.
+    // PI wrappers are plain JsObjects (not `.dom_node`), so write both the
+    // `_ownerDoc` slot AND the JS-visible property for direct JS reads.
+    const pi_owner_doc: JsValue = if (this.isObject()) this else JsValue.null_val;
+    setNodeOwnerDoc(vm, obj, pi_owner_doc);
+    try obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), pi_owner_doc);
     try obj.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("parentElement"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("previousSibling"), JsValue.null_val);
@@ -3390,6 +3427,17 @@ fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
     const mode_str: []const u8 = switch (root_sr.mode) { .open => "open", .closed => "closed" };
     const mode_val = JsValue.initString(vm.pool.intern(mode_str) catch return JsValue.initObject(obj));
     obj.setProperty(vm.allocator, mode_sid, mode_val) catch {};
+    // DOM §4.8 — the shadow root's ownerDocument equals the host element's
+    // ownerDocument. Derive by wrapping the host (lazy-caches in nodeCache)
+    // and reading its `_ownerDoc` slot. Shadow DOM is Non-goal per spec §1;
+    // fall back to null if the host wrap fails.
+    const host_node: *lxb.lxb_dom_node_t = @ptrCast(root_sr.host);
+    const host_owner: JsValue = blk: {
+        const host_val = wrapNode(vm, host_node) orelse break :blk JsValue.null_val;
+        if (!host_val.isObject()) break :blk JsValue.null_val;
+        break :blk getNodeOwnerDoc(vm, host_val.asJsObject());
+    };
+    setNodeOwnerDoc(vm, obj, host_owner);
     return JsValue.initObject(obj);
 }
 
@@ -3424,6 +3472,11 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
     doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
     doc_obj.prototype = g_node_proto;
+    // DOM §4.4 — Document.ownerDocument = null. Cache before wrapNode so
+    // descendants wrap-ups resolve to this wrapper rather than
+    // lazy-creating a fresh one.
+    nodeCachePut(vm.allocator, doc_node, doc_obj);
+    setNodeOwnerDoc(vm, doc_obj, JsValue.null_val);
     const nt_sid = try vm.pool.intern("nodeType");
     doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
     const nn_sid = try vm.pool.intern("nodeName");
@@ -3809,6 +3862,34 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
         lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
         else => g_node_proto,
     };
+    // DOM §4.4 — resolve the owner document from lexbor. The lexbor struct
+    // populates `node->owner_document` even for detached nodes
+    // (confirmed by existing readers at src/js/dom_node.zig:2332).
+    // Document nodes themselves have `ownerDocument === null`.
+    const owner_doc_val: JsValue = blk: {
+        if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) break :blk JsValue.null_val;
+        const od_c = node.owner_document;
+        if (od_c == null) break :blk JsValue.null_val;
+        const od_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(od_c));
+        // If the owner document already has a cached wrapper, reuse it; this
+        // ensures `node.ownerDocument === document` identity against the
+        // bootstrap / constructor wrappers.
+        if (nodeCacheGet(od_node)) |cached| {
+            break :blk JsValue.initObject(cached);
+        }
+        // Lazy-wrap the owner document as a bare Document JsObject.
+        // We only create the minimal wrapper here (no method registration);
+        // when JS later touches that document explicitly, the other
+        // creator paths will either reuse this cached wrapper or replace
+        // it with a richer one after a nodeCacheRemove.
+        const doc_wrap = vm.createObj(.{ .obj_type = .dom_node }) catch break :blk JsValue.null_val;
+        doc_wrap.data = .{ .dom_node = od_node };
+        doc_wrap.prototype = g_node_proto;
+        setNodeOwnerDoc(vm, doc_wrap, JsValue.null_val);
+        nodeCachePut(vm.allocator, od_node, doc_wrap);
+        break :blk JsValue.initObject(doc_wrap);
+    };
+    setNodeOwnerDoc(vm, obj, owner_doc_val);
     nodeCachePut(vm.allocator, node, obj);
     return JsValue.initObject(obj);
 }
@@ -4308,7 +4389,18 @@ fn nativeCloneNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
     // deep defaults to false per spec
     const deep = if (args.len > 0 and args[0].isBool()) args[0].asBool() else false;
     const cloned = dom_b.lxb_dom_node_clone(node, deep) orelse return JsValue.null_val;
-    return wrapNode(vm, cloned) orelse JsValue.null_val;
+    const clone_val = wrapNode(vm, cloned) orelse return JsValue.null_val;
+    // DOM §4.4.1 "clone a node" step 3 — the clone's ownerDocument is the
+    // same as the source's unless an override is supplied (importNode does
+    // that via its own wrapper in Task 2). `wrapNode` normally derives the
+    // owner from lexbor's `node->owner_document`, but lxb_dom_node_clone
+    // returns an interior clone whose owner-document field we don't
+    // assume about here — propagate from the source wrapper explicitly.
+    if (this.isObject() and clone_val.isObject()) {
+        const src_owner = getNodeOwnerDoc(vm, this.asJsObject());
+        setNodeOwnerDoc(vm, clone_val.asJsObject(), src_owner);
+    }
+    return clone_val;
 }
 
 // ── Node.isSameNode (DOM §4.4) ───────────────────────────────────────
@@ -4902,6 +4994,8 @@ fn wrapParsedHtmlDocAsJsDoc(vm: *VM, html: []const u8, content_type: []const u8)
     doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
     doc_obj.prototype = g_node_proto;
     nodeCachePut(vm.allocator, doc_node, doc_obj);
+    // DOM §4.4 — Document.ownerDocument = null.
+    setNodeOwnerDoc(vm, doc_obj, JsValue.null_val);
     const doc_val = JsValue.initObject(doc_obj);
 
     // nodeType = 9 (DOCUMENT_NODE)
@@ -5100,6 +5194,12 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     const doc_obj = try vm.createObj(.{});
     // DOM §4.5: createDocument returns an XMLDocument
     doc_obj.prototype = g_xml_doc_proto orelse g_node_proto;
+    // DOM §4.4 — Document.ownerDocument = null. This is a plain JsObject
+    // (no `.dom_node` data), so `domNodeGetProp` never fires for it;
+    // keep the JS-visible `ownerDocument` property AND the `_ownerDoc`
+    // slot in sync so both access paths return null.
+    setNodeOwnerDoc(vm, doc_obj, JsValue.null_val);
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), JsValue.null_val) catch {};
     const doc_val = JsValue.initObject(doc_obj);
 
     // Mark as XML document (createElement should NOT lowercase tag names)
@@ -5195,10 +5295,14 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     cd_impl.setProperty(vm.allocator, vm.pool.intern("createDocument") catch return doc_val, JsValue.initObject(cd_cd)) catch {};
     doc_obj.setProperty(vm.allocator, vm.pool.intern("implementation") catch return doc_val, JsValue.initObject(cd_impl)) catch {};
 
-    // If doctype provided (arg[2]), set ownerDocument on it
+    // If doctype provided (arg[2]), set ownerDocument on it (DOM §7.1).
+    // DocumentType may or may not be a `.dom_node` depending on how it was
+    // constructed — write both the slot and the JS-visible property so
+    // both access paths are consistent.
     if (args.len >= 3 and args[2].isObject()) {
         const od_sid2 = try vm.pool.intern("ownerDocument");
         const dt_obj2 = args[2].asJsObject();
+        setNodeOwnerDoc(vm, dt_obj2, doc_val);
         dt_obj2.setProperty(vm.allocator, od_sid2, doc_val) catch {};
     }
 
@@ -5235,8 +5339,9 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
             prefix = qn[0..colon_pos];
             local_name = qn[colon_pos + 1 ..];
         }
-        // Create JS-only element (XML document — preserve case)
-        const elem_val = try createJsOnlyElement(vm, local_name, ns_str);
+        // Create JS-only element (XML document — preserve case).
+        // Owner document is the freshly-created doc per DOM §7.1.
+        const elem_val = try createJsOnlyElement(vm, local_name, ns_str, doc_val);
         if (elem_val.isObject()) {
             const elem_obj = elem_val.asJsObject();
             if (prefix) |p| {
@@ -5244,7 +5349,8 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
                 elem_obj.setProperty(vm.allocator, try vm.pool.intern("tagName"), JsValue.initString(try vm.pool.intern(qn))) catch {};
                 elem_obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(try vm.pool.intern(qn))) catch {};
             }
-            elem_obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), doc_val) catch {};
+            // `createJsOnlyElement` already wrote the _ownerDoc slot via the
+            // helper; nothing more to do here.
             doc_element = elem_val;
         }
     }
@@ -5322,7 +5428,10 @@ fn nativeImplementationCreateDocumentType(ctx: *anyopaque, this: JsValue, args: 
     const sid_sid = try vm.pool.intern("systemId");
     obj.setProperty(vm.allocator, sid_sid, JsValue.initString(try vm.pool.intern(system_id))) catch {};
 
-    // ownerDocument = the document associated with this implementation (DOM §7.1)
+    // ownerDocument = the document associated with this implementation (DOM §7.1).
+    // DocumentType wrappers created here are plain JsObjects (no
+    // `.dom_node` data), so write both the `_ownerDoc` slot and the
+    // JS-visible `ownerDocument` property so both access paths agree.
     const od_sid = try vm.pool.intern("ownerDocument");
     const owner_doc: JsValue = blk: {
         // Read _ownerDoc from the implementation object (this)
@@ -5335,6 +5444,7 @@ fn nativeImplementationCreateDocumentType(ctx: *anyopaque, this: JsValue, args: 
         // Fallback: global document
         break :blk vm.globals.get(try vm.pool.intern("document")) orelse JsValue.null_val;
     };
+    setNodeOwnerDoc(vm, obj, owner_doc);
     obj.setProperty(vm.allocator, od_sid, owner_doc) catch {};
 
     // childNodes (empty NodeList-like)

@@ -961,3 +961,88 @@ test "form.length reflects element count (§4.10.21.1)" {
     const v = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("2", v);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// _ownerDoc slot / ownerDocument getter (DOM §4.4)
+//
+// The ownerDocument getter now reads the per-node `_ownerDoc` slot
+// instead of returning globalThis.document. Every wrapper/creator site
+// in kotori_dom.zig must write the slot so cross-document operations
+// (importNode, createHTMLDocument, createDocument) resolve correctly.
+// These tests anchor that contract end-to-end through JS.
+// ══════════════════════════════════════════════════════════════════════
+
+test "document.ownerDocument === null (DOM §4.4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\document.ownerDocument === null;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "createElement().ownerDocument === document (DOM §4.4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement("div");
+        \\el.ownerDocument === document;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "parsed element ownerDocument === document (DOM §4.4)" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.ownerDocument === document;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "createTextNode().ownerDocument === document (DOM §4.4)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var t = document.createTextNode("hi");
+        \\t.ownerDocument === document;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "createHTMLDocument() new-doc children ownerDocument !== outer document (DOM §7.1)" {
+    // DOMImplementation.createHTMLDocument returns a brand-new Document;
+    // its descendants' ownerDocument must equal *that* document — not
+    // the outer/original document. This is the regression the
+    // `_ownerDoc` slot fixes: before, `ownerDocument` always returned
+    // `globalThis.document`, masking cross-doc identity.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var d = document.implementation.createHTMLDocument("T");
+        \\var el = d.createElement("div");
+        \\// Two contracts in one: the new doc is NOT the outer doc,
+        \\// and an element created by the new doc reports the new doc
+        \\// as its ownerDocument (not the outer one).
+        \\(d !== document) && (el.ownerDocument === d) && (el.ownerDocument !== document);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "cloneNode() preserves ownerDocument (DOM §4.4.1)" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var a = document.getElementById("t");
+        \\var b = a.cloneNode(true);
+        \\b.ownerDocument === document && b.ownerDocument === a.ownerDocument;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
