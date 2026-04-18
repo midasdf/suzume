@@ -1227,3 +1227,19 @@ test "el.attributes is live: setAttribute on new name grows length" {
     const s = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("0,1", s);
 }
+
+test "setAttribute overwrites: cache invalidated, value reflects new" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('x', 'old');
+        \\var a1 = el.attributes[0];
+        \\el.setAttribute('x', 'new');
+        \\var a2 = el.attributes[0];
+        \\a2.value;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const s = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("new", s);
+}

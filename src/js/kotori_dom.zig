@@ -2872,6 +2872,11 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
+    // DOM §4.9.1: if an Attr wrapper is cached for the pre-existing attr struct,
+    // invalidate it before lexbor potentially reallocates the struct on overwrite.
+    if (dom_b.lxb_dom_element_attr_by_name(elem, n.ptr, n.len)) |pre_existing| {
+        invalidateAttrWrapper(pre_existing);
+    }
     // MO: capture old value for attribute mutation
     if (g_mo_list.items.len > 0) {
         var old_len: usize = 0;
@@ -2895,6 +2900,10 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const qn = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[1]);
     const v = if (args[2].isString()) vm.pool.get(args[2].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[2]);
+    // DOM §4.9.1: invalidate cached Attr wrapper before lexbor may reallocate on overwrite.
+    if (dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len)) |pre_existing| {
+        invalidateAttrWrapper(pre_existing);
+    }
     // MO: capture old value for attribute mutation
     if (g_mo_list.items.len > 0) {
         var old_len: usize = 0;
