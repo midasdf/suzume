@@ -1981,3 +1981,32 @@ test "hasAttributeNS and getAttributeNS coerce empty-string ns to null" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ── Layer 1D.1 Task 3: removeAttributeNS ─────────────────────────────
+test "removeAttributeNS silent no-op when absent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.removeAttributeNS(null, 'missing');
+        \\el.attributes.length === 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "removeAttributeNS removes matching attr and clears ownerElement" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttributeNS(null, 'id', 'x');
+        \\var a = el.getAttributeNodeNS(null, 'id');
+        \\el.removeAttributeNS(null, 'id');
+        \\a.ownerElement === null && el.hasAttribute('id') === false;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}

@@ -763,6 +763,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // DOM §4.9.1 namespace-aware getters (Layer 1D.1 Task 2).
     try vm.registerNativeMethod(ep, "hasAttributeNS", &nativeHasAttributeNS);
     try vm.registerNativeMethod(ep, "getAttributeNS", &nativeGetAttributeNS);
+    // DOM §4.9.1 namespace-aware remove (Layer 1D.1 Task 3).
+    try vm.registerNativeMethod(ep, "removeAttributeNS", &nativeRemoveAttributeNS);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
@@ -4678,6 +4680,45 @@ fn nativeGetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
         return JsValue.initString(sid);
     }
     return JsValue.initString(try vm.pool.intern(""));
+}
+
+// ── DOM §4.9.1 Element.prototype.removeAttributeNS (Layer 1D.1 Task 3) ──
+
+/// DOM §4.9.1 `removeAttributeNS(namespace, localName)`:
+///   1. Remove an attribute given namespace, localName, and this, and
+///      then return undefined.
+///
+/// "Remove an attribute by namespace and local name" silently succeeds
+/// on miss (contrast with NamedNodeMap.removeNamedItemNS which throws
+/// NotFoundError — spec §R3). Walks the element's attribute list once;
+/// on match, clears ownerElement on the cached wrapper, invalidates the
+/// cache, and removes via lexbor's qualified-name primitive (lexbor has
+/// no remove-by-ns-local helper).
+fn nativeRemoveAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.undefined_val;
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const ns = extractOptionalStringArg(vm, args[0]);
+    const local = extractStringArg(vm, args[1]) orelse return JsValue.undefined_val;
+
+    const attr = lookupAttrByNsLocal(elem, ns, local) orelse return JsValue.undefined_val;
+    // Resolve the qualified name from the live attr BEFORE invalidation
+    // (post-free the qname pointer may dangle).
+    var qn_len: usize = 0;
+    const qn_ptr = dom_b.lxb_dom_attr_qualified_name(@ptrCast(attr), &qn_len) orelse return JsValue.undefined_val;
+
+    // Clear ownerElement on the cached wrapper (if materialised) BEFORE
+    // lexbor frees the struct — mirrors nativeRemoveAttribute @ L3118.
+    if (g_attr_wrappers.get(@intFromPtr(attr))) |cached_wrap| {
+        setAttrOwnerElement(vm, cached_wrap, JsValue.null_val);
+    }
+    invalidateAttrWrapper(attr);
+    _ = dom_b.lxb_dom_element_remove_attribute(elem, qn_ptr, qn_len);
+    bumpElemAttrVersion(elem);
+    setDomDirty();
+    return JsValue.undefined_val;
 }
 
 /// DOM §4.9.2 setNamedItem / setNamedItemNS — per WebIDL "A legacy
