@@ -169,6 +169,18 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // ── Shared dom_names module (DOM §1.5 Name/QName/validate-and-extract).
+    // Shared between the root module (QuickJS path: dom_api.zig, dom_document.zig,
+    // dom_element.zig) and the kotori_dom module (kotori path). Exposed to both
+    // via `@import("dom_names")` to avoid the "file belongs to only one module"
+    // error that arises if kotori_dom and exe_mod both try to embed the file
+    // directly.
+    const dom_names_shared_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/dom_names.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // ── kotori DOM bridge module ────────────────────────────────────
     const kotori_dom_exe_mod = b.createModule(.{
         .root_source_file = b.path("src/js/kotori_dom.zig"),
@@ -176,6 +188,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kotori_dom_exe_mod.addImport("kotori", kotori_mod);
+    kotori_dom_exe_mod.addImport("dom_names", dom_names_shared_mod);
     kotori_dom_exe_mod.addIncludePath(lexbor_dep.path("lib"));
 
     // ── kotori runtime module ────────────────────────────────────
@@ -196,6 +209,7 @@ pub fn build(b: *std.Build) void {
     exe_mod.addImport("kotori", kotori_mod);
     exe_mod.addImport("kotori_dom", kotori_dom_exe_mod);
     exe_mod.addImport("kotori_runtime", kotori_rt_mod);
+    exe_mod.addImport("dom_names", dom_names_shared_mod);
 
     const exe = b.addExecutable(.{
         .name = "suzume",
@@ -405,6 +419,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    test_mod.addImport("dom_names", dom_names_shared_mod);
     const unit_tests = b.addTest(.{
         .root_module = test_mod,
     });
@@ -708,6 +723,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     kotori_dom_mod.addImport("kotori", kotori_mod);
+    kotori_dom_mod.addImport("dom_names", dom_names_shared_mod);
     kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
 
     const test_kotori_dom_mod = b.createModule(.{

@@ -3,6 +3,7 @@ const quickjs = @import("../bindings/quickjs.zig");
 const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const events = @import("events.zig");
+pub const dom_names = @import("dom_names");
 pub const serialize = @import("dom_serialize.zig");
 pub const dom_text = @import("dom_text.zig");
 pub const dom_sel = @import("dom_selector.zig");
@@ -785,6 +786,87 @@ pub fn classContains(class_str: []const u8, needle: []const u8) bool {
         if (std.mem.eql(u8, cls, needle)) return true;
     }
     return false;
+}
+
+/// Value returned by `validateAndExtractQjs` on success. `ns_cstr` and
+/// `qn_cstr` are QuickJS C-strings; callers MUST free them via
+/// `qjs.JS_FreeCString` after use (or via `freeValidated` below).
+///
+/// `namespace`/`prefix`/`local_name` slices borrow from the C-strings so
+/// they remain valid until the C-strings are freed. `prefix` and
+/// `local_name` are slices into `qn_cstr`; `namespace` is a slice into
+/// `ns_cstr` (or null).
+pub const QjsValidatedName = struct {
+    namespace: ?[]const u8,
+    prefix: ?[]const u8,
+    local_name: []const u8,
+    ns_cstr: ?[*:0]const u8,
+    qn_cstr: [*:0]const u8,
+
+    /// Free the retained QuickJS C-strings.
+    pub fn deinit(self: QjsValidatedName, c: *qjs.JSContext) void {
+        if (self.ns_cstr) |s| qjs.JS_FreeCString(c, s);
+        qjs.JS_FreeCString(c, self.qn_cstr);
+    }
+};
+
+/// Run DOM §1.5 validate-and-extract for the QuickJS path. On success,
+/// returns a `QjsValidatedName`; caller must call `.deinit(c)` once done.
+/// On error, throws the matching DOMException on `c` and returns null —
+/// the caller returns `quickjs.JS_EXCEPTION()` to propagate.
+///
+/// WebIDL coercion:
+///   * `ns_arg` — null/undefined → null namespace. Otherwise cast to
+///     DOMString. `""` is coerced to null per step 1.
+///   * `qn_arg` — mandatory. Cast to DOMString.
+pub fn validateAndExtractQjs(
+    c: *qjs.JSContext,
+    ns_arg: qjs.JSValue,
+    qn_arg: qjs.JSValue,
+) ?QjsValidatedName {
+    // Coerce namespace (nullable).
+    var ns_cstr: ?[*:0]const u8 = null;
+    var ns_slice: ?[]const u8 = null;
+    if (!quickjs.JS_IsNull(ns_arg) and !quickjs.JS_IsUndefined(ns_arg)) {
+        if (jsStringToSlice(c, ns_arg)) |s| {
+            ns_cstr = @ptrCast(s.ptr);
+            ns_slice = s.ptr[0..s.len];
+        }
+    }
+
+    // Coerce qualifiedName (required string). null/undefined → WebIDL
+    // stringifies to "null"/"undefined" — but callers that want
+    // [LegacyNullToEmptyString] handling should do that before calling us.
+    const qn_s = jsStringToSlice(c, qn_arg) orelse {
+        if (ns_cstr) |p| qjs.JS_FreeCString(c, p);
+        _ = throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
+        return null;
+    };
+    const qn_cstr: [*:0]const u8 = @ptrCast(qn_s.ptr);
+    const qn_slice: []const u8 = qn_s.ptr[0..qn_s.len];
+
+    const v = dom_names.validateAndExtract(qn_slice, ns_slice) catch |err| {
+        if (ns_cstr) |p| qjs.JS_FreeCString(c, p);
+        qjs.JS_FreeCString(c, qn_cstr);
+        const name: []const u8 = switch (err) {
+            error.InvalidCharacter => "InvalidCharacterError",
+            error.NamespaceMismatch => "NamespaceError",
+        };
+        const msg: []const u8 = switch (err) {
+            error.InvalidCharacter => "The string contains invalid characters.",
+            error.NamespaceMismatch => "The namespace URI provided is not valid for the given qualifiedName.",
+        };
+        _ = throwDOMException(c, name, msg);
+        return null;
+    };
+
+    return QjsValidatedName{
+        .namespace = v.namespace,
+        .prefix = v.prefix,
+        .local_name = v.local_name,
+        .ns_cstr = ns_cstr,
+        .qn_cstr = qn_cstr,
+    };
 }
 
 // ── Shorthand ↔ Longhand Expansion ──────────────────────────────────

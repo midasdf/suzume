@@ -7,6 +7,7 @@ const events = @import("events.zig");
 const Box = @import("../layout/box.zig").Box;
 const dom_bindings = @import("dom_bindings.zig");
 const dom_doc = @import("dom_document.zig");
+const dom_names = @import("dom_names");
 
 // ── Helpers (from shared dom_bindings) ──────────────────────────────
 const lowercaseAttrName = dom_bindings.lowercaseAttrName;
@@ -327,70 +328,20 @@ pub fn elementSetAttributeNS(
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
 
     // args[0] = namespace, args[1] = qualifiedName, args[2] = value
-    const qname = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
-    defer qjs.JS_FreeCString(c, qname.ptr);
-    const qname_s = qname.ptr[0..qname.len];
-
-    // DOM spec: validate qualifiedName per QName production (matching browser behavior)
-    if (!dom_doc.isValidQName(qname_s)) {
-        return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
-    }
-    if (!dom_doc.isValidXmlQName(qname_s)) {
-        return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
-    }
-
-    // Get namespace string
-    var ns_slice: ?[]const u8 = null;
-    var ns_cstr: ?[*]const u8 = null;
-    if (!quickjs.JS_IsNull(args[0]) and !quickjs.JS_IsUndefined(args[0])) {
-        if (jsStringToSlice(c, args[0])) |ns_s| {
-            ns_cstr = ns_s.ptr;
-            ns_slice = ns_s.ptr[0..ns_s.len];
-        }
-    }
-    defer if (ns_cstr) |p| qjs.JS_FreeCString(c, p);
-    // Treat empty namespace as null
-    const namespace: ?[]const u8 = if (ns_slice) |ns| (if (ns.len == 0) null else ns) else null;
-
-    // Extract prefix and local name
-    var prefix: ?[]const u8 = null;
-    var local_name: []const u8 = qname_s;
-    if (std.mem.indexOfScalar(u8, qname_s, ':')) |colon| {
-        prefix = qname_s[0..colon];
-        local_name = qname_s[colon + 1 ..];
-        // Local name after colon must not be empty
-        if (local_name.len == 0) {
-            return throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
-        }
-    }
-
-    // DOM spec namespace validation:
-    // 1. If namespace is null and prefix is not null, throw NamespaceError
-    if (namespace == null and prefix != null) {
-        return throwDOMException(c, "NamespaceError", "A namespace is required to use a prefix.");
-    }
-    // 2. If prefix is "xml" and namespace is not the XML namespace
-    if (prefix) |p| {
-        if (std.mem.eql(u8, p, "xml") and
-            (namespace == null or !std.mem.eql(u8, namespace.?, "http://www.w3.org/XML/1998/namespace")))
-        {
-            return throwDOMException(c, "NamespaceError", "The xml prefix must use the XML namespace.");
-        }
-    }
-    // 3. If qualifiedName or prefix is "xmlns" and namespace is not the XMLNS namespace
-    const is_xmlns_qname = std.mem.eql(u8, qname_s, "xmlns");
-    const is_xmlns_prefix = if (prefix) |p| std.mem.eql(u8, p, "xmlns") else false;
-    if ((is_xmlns_qname or is_xmlns_prefix) and
-        (namespace == null or !std.mem.eql(u8, namespace.?, "http://www.w3.org/2000/xmlns/")))
-    {
-        return throwDOMException(c, "NamespaceError", "The xmlns prefix/name must use the XMLNS namespace.");
-    }
-    // 4. If namespace is XMLNS and neither qualifiedName nor prefix is "xmlns"
-    if (namespace) |ns| {
-        if (std.mem.eql(u8, ns, "http://www.w3.org/2000/xmlns/") and !is_xmlns_qname and !is_xmlns_prefix) {
-            return throwDOMException(c, "NamespaceError", "The XMLNS namespace requires xmlns as prefix or qualified name.");
-        }
-    }
+    // DOM §1.5 validate and extract via shared algorithm (dom_names).
+    // `validated` owns the QJS C-strings for ns/qn for the rest of this
+    // function; free them via deinit.
+    const validated = api.validateAndExtractQjs(c, args[0], args[1]) orelse
+        return quickjs.JS_EXCEPTION();
+    defer validated.deinit(c);
+    // Reconstruct the full qualifiedName slice (lexbor stores it verbatim).
+    const qname_s: []const u8 = blk: {
+        var qn_len: usize = 0;
+        while (validated.qn_cstr[qn_len] != 0) : (qn_len += 1) {}
+        break :blk validated.qn_cstr[0..qn_len];
+    };
+    const namespace: ?[]const u8 = validated.namespace;
+    const local_name: []const u8 = validated.local_name;
 
     const val = jsStringToSlice(c, args[2]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
@@ -433,7 +384,7 @@ pub fn elementSetAttributeNS(
                                     }
                                     _ = lxb_dom_element_set_attribute(elem, attr_qn.ptr, attr_qn.len, val.ptr, val.len);
                                     const node_m: *lxb.lxb_dom_node_t = @ptrCast(elem);
-                                    events.recordMutationAttrNS(node_m, local_name, ns_slice, ov_ns);
+                                    events.recordMutationAttrNS(node_m, local_name, namespace, ov_ns);
                                     setDomDirty();
                                     return quickjs.JS_UNDEFINED();
                                 }
@@ -485,7 +436,7 @@ pub fn elementSetAttributeNS(
     }
 
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    events.recordMutationAttrNS(node, local_name, ns_slice, old_val);
+    events.recordMutationAttrNS(node, local_name, namespace, old_val);
     setDomDirty();
     return quickjs.JS_UNDEFINED();
 }

@@ -13,7 +13,7 @@
 const std = @import("std");
 
 // ── Shared Name/QName validation (DOM §1.5) ────────────────────────
-const dom_names = @import("dom_names.zig");
+const dom_names = @import("dom_names");
 
 // ── Kotori engine types (via module alias, set in build.zig) ────────
 const kotori = @import("kotori");
