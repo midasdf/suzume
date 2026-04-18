@@ -848,6 +848,13 @@ fn callListenersOnNodeFiltered(ctx: *qjs.JSContext, entry: *ListenerEntry, event
         if (current_event_flags.stop_propagation) break;
 
         const rec = entry.callbacks.items[i];
+        // DOM §2.9 step 5.3: if listener's removed is true, skip it. Covers
+        // mid-dispatch aborts where a previous listener soft-removed a later
+        // one (Layer 2A defense-in-depth).
+        if (rec.removed) {
+            i += 1;
+            continue;
+        }
         if (rec.capture != capture_phase) {
             i += 1;
             continue;
@@ -904,6 +911,11 @@ fn callEntryListenersFiltered(ctx: *qjs.JSContext, entry: *WindowListenerEntry, 
         if (current_event_flags.stop_immediate_propagation) break;
         if (current_event_flags.stop_propagation) break;
         const rec = entry.callbacks.items[i];
+        // DOM §2.9 step 5.3: skip soft-removed listeners (Layer 2A).
+        if (rec.removed) {
+            i += 1;
+            continue;
+        }
         if (rec.capture != capture_phase) {
             i += 1;
             continue;
