@@ -1820,34 +1820,6 @@ pub const KotoriRuntime = struct {
         \\    return attr;
         \\  };
         \\
-        \\  /* ─── Document.importNode — Attr support (DOM §4.7) ──────── */
-        \\  /* The traversal_and_fixups polyfill installs importNode for Element/
-        \\   * Text/Comment/CDATA/PI/Fragment, but its Attr branch used
-        \\   * targetDoc.createAttribute which strips namespace/prefix. Wrap it
-        \\   * to clone Attr nodes ourselves with all metadata preserved. */
-        \\  if (typeof Document !== 'undefined' && Document.prototype) {
-        \\    var origImportNode = Document.prototype.importNode;
-        \\    Document.prototype.importNode = function(node, deep){
-        \\      if (node && node.nodeType === 2) {
-        \\        /* Clone an Attr node manually; ownerElement is null per spec. */
-        \\        return {
-        \\          namespaceURI: node.namespaceURI == null ? null : node.namespaceURI,
-        \\          prefix:       node.prefix == null ? null : node.prefix,
-        \\          localName:    node.localName,
-        \\          name:         node.name,
-        \\          nodeName:     node.name,
-        \\          nodeType:     2,
-        \\          specified:    true,
-        \\          ownerElement: null,
-        \\          value:        node.value == null ? '' : String(node.value),
-        \\          nodeValue:    node.value == null ? '' : String(node.value),
-        \\          textContent:  node.value == null ? '' : String(node.value)
-        \\        };
-        \\      }
-        \\      return origImportNode.call(this, node, deep);
-        \\    };
-        \\    try { document.importNode = Document.prototype.importNode.bind(document); } catch(e) {}
-        \\  }
         \\})();
     ;
 

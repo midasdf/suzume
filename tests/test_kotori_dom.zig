@@ -1111,3 +1111,33 @@ test "cloneNode preserves source ownerDocument (cross-document) (DOM §4.4.1)" {
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
+
+test "impl.createHTMLDocument returned doc supports importNode (DOM §4.5)" {
+    // Documents returned from implementation.createHTMLDocument must have
+    // nativeImportNode registered so that cross-document import works.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var d1 = document.implementation.createHTMLDocument('A');
+        \\var d2 = document.implementation.createHTMLDocument('B');
+        \\var el = d1.createElement('div');
+        \\var clone = d2.importNode(el, true);
+        \\clone.ownerDocument === d2;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "importNode with zero args throws TypeError (DOM §4.5 step 1)" {
+    // DOM §4.5 step 1: calling importNode() with no arguments must throw TypeError.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\(function(){
+        \\  try { document.importNode(); return false; }
+        \\  catch(e) { return e instanceof TypeError; }
+        \\})()
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}

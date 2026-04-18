@@ -2362,7 +2362,7 @@ fn nativeAdoptNode(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!Js
 /// DOM §4.4: document.importNode(node, deep) — clones a node into this document.
 fn nativeImportNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0) return JsValue.null_val;
+    if (args.len == 0) return error.TypeError;
     // DOM §4.5 step 1: if node is a Document, throw NotSupportedError.
     if (args[0].isObject()) {
         const src_obj = args[0].asJsObject();
@@ -5127,6 +5127,7 @@ fn wrapParsedHtmlDocAsJsDoc(vm: *VM, html: []const u8, content_type: []const u8)
     vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName) catch {};
     vm.registerNativeMethod(doc_obj, "querySelector", &nativeQuerySelector) catch {};
     vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeQuerySelectorAll) catch {};
+    vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode) catch {};
 
     // implementation (self-referential for chained calls)
     const impl_obj = vm.createObj(.{}) catch return doc_val;
@@ -5353,6 +5354,7 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     vm.registerNativeMethod(doc_obj, "getElementsByClassName", &nativeGetElementsByClassName) catch {};
     vm.registerNativeMethod(doc_obj, "querySelector", &nativeQuerySelector) catch {};
     vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeQuerySelectorAll) catch {};
+    vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode) catch {};
 
     // implementation object for chained calls
     const cd_impl = vm.createObj(.{}) catch return doc_val;
