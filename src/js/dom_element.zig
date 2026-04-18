@@ -225,10 +225,12 @@ pub fn elementSetAttribute(
     }
     _ = lxb_dom_element_set_attribute(elem, attr_name.ptr, attr_name.len, val.ptr, val.len);
     const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
-    if (api.isElementConnected(elem)) {
-        events.recordMutationWithOldValue(node, "attributes", null, null, name.ptr[0..name.len], old_val_copy);
-        setDomDirty();
-    }
+    // DOM §4.3.3: MutationObserver reachability is determined by the isDescendant
+    // walk inside recordMutationFull, not by whether the mutating element is
+    // attached to the top-level document. Observers registered on detached
+    // subtree roots must still fire for attribute changes on descendants.
+    events.recordMutationWithOldValue(node, "attributes", null, null, name.ptr[0..name.len], old_val_copy);
+    setDomDirty();
     return quickjs.JS_UNDEFINED();
 }
 
