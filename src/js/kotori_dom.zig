@@ -428,6 +428,34 @@ fn invalidateAttrWrapper(attr: *lxb.lxb_dom_attr_t) void {
     _ = g_attr_wrappers.remove(@intFromPtr(attr));
 }
 
+/// DOM §4.9.2 NamedNodeMap.prototype — single shared prototype for every
+/// live `Element.attributes` object. Populated during initNamedNodeMapProto()
+/// before any document is wrapped.
+var g_namednodemap_proto: ?*JsObject = null;
+
+/// Per-element monotonic attribute version counter. Bumped on every
+/// mutation (setAttribute / setAttributeNS / removeAttribute /
+/// toggleAttribute / setNamedItem / removeNamedItem). Read via the
+/// `__nnmVer` slot on map objects to decide whether to refresh indexed
+/// + named snapshots.
+var g_elem_attr_ver: std.AutoHashMapUnmanaged(usize, u64) = .{};
+
+/// Bump the per-element attribute version. Safe to call even before the
+/// map has been materialised; the first bump initialises to 1.
+fn bumpElemAttrVersion(elem: *lxb.lxb_dom_element_t) void {
+    const key = @intFromPtr(elem);
+    const gop = g_elem_attr_ver.getOrPut(g_alloc, key) catch return;
+    if (!gop.found_existing) gop.value_ptr.* = 0;
+    gop.value_ptr.* +%= 1;
+}
+
+// Interned string IDs for hidden NamedNodeMap + Attr-owner slots.
+// Populated in initNamedNodeMapProto, reused by all native methods.
+var g_sid_nnm_elem: ?StringId = null; // "__nnmElem"      usize elem ptr
+var g_sid_nnm_ver: ?StringId = null; // "__nnmVer"        u64 version
+var g_sid_nnm_cache: ?StringId = null; // "__nnmCache"    *JsObject map
+var g_sid_owner_elem_ptr: ?StringId = null; // "__ownerElemPtr" usize node ptr (on Attr)
+
 /// DOM §4.4 — write the per-Node owner document slot.
 /// `owner_doc_val` is `JsValue.null_val` for Document nodes themselves.
 /// The slot is named `_ownerDoc` (underscore prefix) to distinguish it from
@@ -571,6 +599,14 @@ pub fn deinit() void {
     // so we only need to drop the HashMap's own storage here.
     g_attr_wrappers.deinit(g_alloc);
     g_attr_wrappers = .{};
+    // NamedNodeMap per-element attribute version counter (DOM §4.9.2 live semantics).
+    g_elem_attr_ver.deinit(g_alloc);
+    g_elem_attr_ver = .{};
+    g_namednodemap_proto = null;
+    g_sid_nnm_elem = null;
+    g_sid_nnm_ver = null;
+    g_sid_nnm_cache = null;
+    g_sid_owner_elem_ptr = null;
     // Interface prototype maps (HTML/SVG). Values are JsObjects owned by the
     // VM arena, so we only drop the HashMap's own storage. Roots (HTMLElement /
     // SVGElement / MathMLElement prototypes) are likewise arena-owned.
@@ -789,6 +825,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
         }
     }
     try g_mathml_element_proto.?.freeze(vm.allocator);
+
+    // ── NamedNodeMap prototype + constructor (DOM §4.9.2, Layer 1D) ──
+    // Must run before the bootstrap document wrap so buildAttributesMap
+    // can link map objects to g_namednodemap_proto from the very first
+    // element.attributes access.
+    try initNamedNodeMapProto(vm);
 
     // ── document global ──
     const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
@@ -4227,6 +4269,76 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
 
     g_attr_wrappers.put(vm.allocator, key, attr_obj) catch {};
     return attr_obj;
+}
+
+/// WebIDL §3.6.1 — the NamedNodeMap interface object is not constructible.
+/// `new NamedNodeMap()` throws TypeError.
+fn nativeNnmConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    vm.pending_throw = try createDOMExceptionObj(vm, "TypeError");
+    return JsValue.undefined_val;
+}
+
+/// Extension point for Tasks 5-8 — registers native methods and
+/// `@@iterator` on `NamedNodeMap.prototype`. Task 1 installs an empty
+/// stub so the build is green before methods exist.
+fn initNamedNodeMapMethods(vm: *VM, proto: *JsObject) !void {
+    _ = vm;
+    _ = proto;
+}
+
+/// DOM §4.9.2 — build `NamedNodeMap.prototype` and expose `globalThis.NamedNodeMap`.
+/// Idempotent; safe to call more than once (only the first call does work).
+///
+/// Init ordering (spec §3.6 / §Init sequence): must run before any document is
+/// wrapped so that `buildAttributesMap` can safely link fresh map objects to
+/// the prototype. Methods are registered directly on the prototype as this
+/// single entry point (matches the pattern used by `vm.array_proto`).
+fn initNamedNodeMapProto(vm: *VM) !void {
+    if (g_namednodemap_proto != null) return;
+
+    // Intern hidden slot names once (hot-path read by every method).
+    g_sid_nnm_elem = try vm.pool.intern("__nnmElem");
+    g_sid_nnm_ver = try vm.pool.intern("__nnmVer");
+    g_sid_nnm_cache = try vm.pool.intern("__nnmCache");
+    g_sid_owner_elem_ptr = try vm.pool.intern("__ownerElemPtr");
+
+    // NamedNodeMap.prototype — inherits from Object.prototype by default.
+    const proto = try vm.createObj(.{});
+    g_namednodemap_proto = proto;
+
+    // Symbol.toStringTag = "NamedNodeMap" (per spec §3.8 legacy platform object
+    // toString tag). Follow the engine-internal slot pattern (vm.zig line 151:
+    // SYMBOL_TO_STRING_TAG is a module-level u32 key in symbol_props).
+    if (proto.symbol_props == null) proto.symbol_props = .{};
+    try proto.symbol_props.?.put(
+        vm.allocator,
+        VM.SYMBOL_TO_STRING_TAG,
+        JsValue.initString(try vm.pool.intern("NamedNodeMap")),
+    );
+
+    // Methods are registered in Tasks 5-8 (item / getNamedItem[NS] /
+    // removeNamedItem[NS] / setNamedItem[NS] / @@iterator) — see initNamedNodeMapMethods.
+    initNamedNodeMapMethods(vm, proto) catch {};
+
+    // globalThis.NamedNodeMap — constructor object whose .prototype is the map.
+    const ctor = try vm.createObj(.{ .obj_type = .native_function });
+    ctor.data = .{ .native_fn = &nativeNnmConstructor };
+    try ctor.setProperty(
+        vm.allocator,
+        try vm.pool.intern("prototype"),
+        JsValue.initObject(proto),
+    );
+    try proto.setProperty(
+        vm.allocator,
+        try vm.pool.intern("constructor"),
+        JsValue.initObject(ctor),
+    );
+    try vm.globals.put(
+        vm.allocator,
+        try vm.pool.intern("NamedNodeMap"),
+        JsValue.initObject(ctor),
+    );
 }
 
 /// Build a NamedNodeMap-like object for Element.attributes (DOM §4.9).

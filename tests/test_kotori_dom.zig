@@ -1554,3 +1554,34 @@ test "XMLDocument createElement('foo').ownerDocument === the XML doc (DOM §4.4)
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Layer 1D — NamedNodeMap (DOM §4.9.2)
+// ══════════════════════════════════════════════════════════════════════
+
+// Task 1: prototype + constructor registration.
+test "NamedNodeMap constructor + prototype installed (Layer 1D Task 1)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\typeof NamedNodeMap === 'function' &&
+        \\typeof NamedNodeMap.prototype === 'object' &&
+        \\NamedNodeMap.prototype.constructor === NamedNodeMap;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
+
+test "new NamedNodeMap() throws (WebIDL §3.6.1)" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var threw = false;
+        \\try { new NamedNodeMap(); } catch (e) { threw = true; }
+        \\threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool());
+    try std.testing.expect(result.asBool());
+}
