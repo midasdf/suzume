@@ -1923,8 +1923,11 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     if (args.len == 0) return JsValue.null_val;
     // DOM §4.5 step 1: coerce argument to DOMString (null → "null", undefined → "undefined").
     const tag_raw = argToString(vm, args[0]);
-    // DOM §4.5 step 2: if localName does not match Name production → InvalidCharacterError.
-    if (tag_raw.len == 0 or !dom_names.isValidQName(tag_raw)) {
+    // DOM §4.5.1 step 2: if localName does not match the **Name** production
+    // → InvalidCharacterError. Per Document-createElement.html:48-53, ':',
+    // ':foo', 'f:oo', 'foo:', 'f:o:o', 'f::oo' are all VALID — Name allows
+    // ':' anywhere, unlike QName.
+    if (!dom_names.isValidName(tag_raw)) {
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
         return JsValue.null_val;
     }
@@ -1959,9 +1962,14 @@ fn nativeCreateElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     }
 
     // HTML document path — namespace is HTML. lexbor tags are lowercased.
+    // If lexbor rejects a Name-valid but QName-invalid tag (e.g. leading
+    // ':', trailing ':', or repeated colons), fall back to a JS-only
+    // element so DOM §4.5.1 still produces a usable Element node.
     const doc = getDocFromThis(this) orelse return JsValue.null_val;
-    const elem = dom_b.lxb_dom_document_create_element(doc, tag_raw.ptr, tag_raw.len, null) orelse return JsValue.null_val;
-    return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
+    if (dom_b.lxb_dom_document_create_element(doc, tag_raw.ptr, tag_raw.len, null)) |elem| {
+        return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
+    }
+    return createJsOnlyElement(vm, tag_raw, HTML_NS_URI, this);
 }
 
 /// Create a JS-only Element object (no lexbor node) for XML documents.
@@ -2932,6 +2940,13 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
+    // DOM §4.9.2 step 1: if qualifiedName does not match the Name production
+    // → InvalidCharacterError. Lexbor stores the qualified name verbatim
+    // downstream; only the JS-visible validation step tightens here.
+    if (!dom_names.isValidName(n)) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
+        return JsValue.undefined_val;
+    }
     // DOM §4.9.1: if an Attr wrapper is cached for the pre-existing attr struct,
     // invalidate it before lexbor potentially reallocates the struct on overwrite.
     if (dom_b.lxb_dom_element_attr_by_name(elem, n.ptr, n.len)) |pre_existing| {
@@ -2960,6 +2975,17 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const qn = if (args[1].isString()) vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[1]);
     const v = if (args[2].isString()) vm.pool.get(args[2].asStringId()) orelse return JsValue.undefined_val else argToString(vm, args[2]);
+    // DOM §4.9.3 step 1: run "validate and extract" on (namespace, qn).
+    // Errors map to InvalidCharacterError / NamespaceError via the shared
+    // queueValidationErr bridge. Lexbor stores the qualified name verbatim
+    // (passed as `qn` below); only the validation step tightens here.
+    const ns_in: ?[]const u8 = blk: {
+        if (args[0].isNull() or args[0].isUndefined()) break :blk null;
+        break :blk if (args[0].isString()) vm.pool.get(args[0].asStringId()) orelse null else argToString(vm, args[0]);
+    };
+    _ = dom_names.validateAndExtract(qn, ns_in) catch |err| {
+        return try queueValidationErr(vm, err);
+    };
     // DOM §4.9.1: invalidate cached Attr wrapper before lexbor may reallocate on overwrite.
     if (dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len)) |pre_existing| {
         invalidateAttrWrapper(pre_existing);
