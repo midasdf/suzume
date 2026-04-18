@@ -2019,8 +2019,11 @@ pub fn documentCreateAttribute(
     defer qjs.JS_FreeCString(c, s.ptr);
     const name = s.ptr[0..s.len];
 
-    // DOM §4.9.1 step 1: XML Name production (':' allowed anywhere).
-    if (!dom_names.isValidName(name))
+    // DOM §4.9.1 step 1: XML Name production. Use the permissive attr-name
+    // grammar that matches WPT productions.js `valid_names` (lenient: only
+    // empty + hard-invalid bytes reject — "0", "~", "\\", "'", '"', "0:a"
+    // are all accepted).
+    if (!dom_names.isValidAttrName(name))
         return api.throwDOMException(c, "InvalidCharacterError", "The string contains invalid characters.");
 
     // Delegate to the pre-registered JS closure which handles lowercasing

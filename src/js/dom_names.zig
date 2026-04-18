@@ -61,11 +61,16 @@ fn isInvalidNameStartChar(ch: u8) bool {
 }
 
 /// XML Name production (lenient browser variant). Used by DOM §4.5.1
-/// createElement, §4.9.1 createAttribute, §4.9.2 setAttribute —
-/// i.e. the non-NS-aware APIs. ':' is allowed ANYWHERE (including start and
-/// end and repeated colons). Matches WPT `Document-createElement.html:48-53`
-/// where `":"`, `":foo"`, `"f:oo"`, `"foo:"`, `"f:o:o"`, `"f::oo"` are all
-/// listed as VALID.
+/// createElement — i.e. the strict creator APIs. ':' is allowed ANYWHERE
+/// (including start and end and repeated colons). Matches WPT
+/// `Document-createElement.html:48-53` where `":"`, `":foo"`, `"f:oo"`,
+/// `"foo:"`, `"f:o:o"`, `"f::oo"` are all listed as VALID.
+///
+/// Rejects:
+///   * Empty input.
+///   * NameStartChar-invalid first byte (other than ':').
+///   * Hard-invalid bytes anywhere (whitespace / controls).
+///   * Trailing '>' (matches `createElement("foo>")` assertion).
 pub fn isValidName(name: []const u8) bool {
     if (name.len == 0) return false;
     // First char must pass NameStartChar rules *except* that ':' is allowed
@@ -73,6 +78,27 @@ pub fn isValidName(name: []const u8) bool {
     if (name[0] != ':' and isInvalidNameStartChar(name[0])) return false;
     // Interior chars: only hard-invalid bytes (whitespace / controls) reject.
     for (name[1..]) |ch| {
+        if (isHardInvalidNameChar(ch)) return false;
+    }
+    // Trailing '>' → invalid (matches WPT Document-createElement.html:48-53
+    // where `"foo>"` is listed as invalid).
+    if (name[name.len - 1] == '>') return false;
+    return true;
+}
+
+/// Lenient "Name" check for DOM §4.9.1 createAttribute and §4.9.2
+/// setAttribute. WPT `dom/nodes/productions.js` defines `valid_names` as
+/// `["x","X",":","a:0","invalid^Name","\\","'","\"","0","0:a",":a","x:y:x","~"]`
+/// — i.e. browsers accept nearly any non-empty string that does not contain
+/// hard-invalid bytes (whitespace / controls). Only `invalid_names = [""]`
+/// is rejected.
+///
+/// This helper matches that permissive grammar so pre-existing setAttribute
+/// call sites that previously used no validation do not regress when wired
+/// through the shared module.
+pub fn isValidAttrName(name: []const u8) bool {
+    if (name.len == 0) return false;
+    for (name) |ch| {
         if (isHardInvalidNameChar(ch)) return false;
     }
     return true;

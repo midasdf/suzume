@@ -2941,9 +2941,11 @@ fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
     const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
     // DOM §4.9.2 step 1: if qualifiedName does not match the Name production
-    // → InvalidCharacterError. Lexbor stores the qualified name verbatim
-    // downstream; only the JS-visible validation step tightens here.
-    if (!dom_names.isValidName(n)) {
+    // → InvalidCharacterError. Use the permissive attr-name grammar that
+    // matches WPT productions.js `valid_names` (lenient: only empty +
+    // hard-invalid bytes reject). Lexbor stores the qualified name
+    // verbatim downstream; only the JS-visible validation step tightens.
+    if (!dom_names.isValidAttrName(n)) {
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
         return JsValue.undefined_val;
     }
