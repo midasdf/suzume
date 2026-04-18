@@ -55,6 +55,48 @@ const ListenerRecord = struct {
 
 const ListenerList = std.ArrayListUnmanaged(ListenerRecord);
 
+/// DOM §2.7.1 + §3.1 — central teardown for a listener registration.
+/// Assumes `list.items[idx]` is a live record (caller re-derives idx if
+/// records have shifted). Performs, in order:
+///   1. Mark `removed = true` so any active dispatch snapshot skips it
+///      (DOM §2.9 step 5.3).
+///   2. If the record is bound to an AbortSignal, call
+///      `signal.removeEventListener('abort', handler_ref)` on the polyfill
+///      to detach the abort step, then JS_FreeValue both dup'd refs.
+///   3. JS_FreeValue the callback.
+///   4. `orderedRemove(idx)` from the list.
+fn freeListenerRecord(
+    c: *qjs.JSContext,
+    list: *ListenerList,
+    idx: usize,
+) void {
+    const rec_ptr = &list.items[idx];
+    rec_ptr.removed = true;
+
+    if (!quickjs.JS_IsUndefined(rec_ptr.signal_ref)) {
+        // Call sig.removeEventListener('abort', abort_handler_ref) to unhook
+        // the polyfill's `_evtMap['abort']` entry. Exceptions are ignored —
+        // the polyfill's splice is a no-op on a missing entry (e.g., after
+        // a `{once:true}` abort fire already cleared it).
+        const rm_fn = qjs.JS_GetPropertyStr(c, rec_ptr.signal_ref, "removeEventListener");
+        defer qjs.JS_FreeValue(c, rm_fn);
+        if (qjs.JS_IsFunction(c, rm_fn)) {
+            const abort_str = qjs.JS_NewStringLen(c, "abort", 5);
+            defer qjs.JS_FreeValue(c, abort_str);
+            var rm_args = [2]qjs.JSValue{ abort_str, rec_ptr.abort_handler_ref };
+            const r = qjs.JS_Call(c, rm_fn, rec_ptr.signal_ref, 2, &rm_args);
+            qjs.JS_FreeValue(c, r);
+        }
+        qjs.JS_FreeValue(c, rec_ptr.signal_ref);
+        qjs.JS_FreeValue(c, rec_ptr.abort_handler_ref);
+        rec_ptr.signal_ref = quickjs.JS_UNDEFINED();
+        rec_ptr.abort_handler_ref = quickjs.JS_UNDEFINED();
+    }
+
+    qjs.JS_FreeValue(c, rec_ptr.callback);
+    _ = list.orderedRemove(idx);
+}
+
 /// Map from (node_ptr, event_type) -> list of listener records.
 /// We use a simple array of entries since the number is typically small.
 const ListenerEntry = struct {
