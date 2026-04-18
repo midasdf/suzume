@@ -318,6 +318,51 @@ pub fn elementSetTextContent(
         return quickjs.JS_UNDEFINED();
     }
 
+    // DOM §4.2.7 "replace all": the textContent setter replaces all children
+    // and emits a single childList MutationRecord whose removedNodes contains
+    // EVERY detached descendant (not just the first). Previously only
+    // node.first_child was captured, losing N−1 siblings from removedNodes.
+    //
+    // Collect every child pointer BEFORE the remove loop so we can emit a
+    // bulk childList record after. prev/next siblings are null per spec —
+    // the synthesized "replace all" record does not populate sibling metadata.
+    var removed_buf: [256]*lxb.lxb_dom_node_t = undefined;
+    var removed_heap: ?[]*lxb.lxb_dom_node_t = null;
+    defer if (removed_heap) |h| std.heap.c_allocator.free(h);
+    var removed_len: usize = 0;
+    {
+        var ch: ?*lxb.lxb_dom_node_t = node.first_child;
+        while (ch) |cn| : (ch = cn.next) {
+            if (removed_len < removed_buf.len) {
+                removed_buf[removed_len] = cn;
+                removed_len += 1;
+            } else {
+                // Spill to heap once the stack buffer overflows.
+                if (removed_heap == null) {
+                    const new_cap: usize = removed_buf.len * 2;
+                    const h = std.heap.c_allocator.alloc(*lxb.lxb_dom_node_t, new_cap) catch {
+                        // On OOM fall back to recording what we have.
+                        break;
+                    };
+                    @memcpy(h[0..removed_buf.len], removed_buf[0..removed_buf.len]);
+                    removed_heap = h;
+                }
+                if (removed_heap) |h| {
+                    if (removed_len >= h.len) {
+                        const grown = std.heap.c_allocator.realloc(h, h.len * 2) catch break;
+                        removed_heap = grown;
+                    }
+                    removed_heap.?[removed_len] = cn;
+                    removed_len += 1;
+                }
+            }
+        }
+    }
+    const removed_slice: []const *lxb.lxb_dom_node_t = if (removed_heap) |h|
+        h[0..removed_len]
+    else
+        removed_buf[0..removed_len];
+
     // DOM spec: setting textContent to null/undefined removes all children
     if (quickjs.JS_IsNull(args[0]) or quickjs.JS_IsUndefined(args[0])) {
         // Remove all child nodes (don't create empty text node)
@@ -326,7 +371,9 @@ pub fn elementSetTextContent(
         }
         // Clear JS-only children (PI, etc.)
         _ = qjs.JS_SetPropertyStr(c, this_val, "__jsChildren", qjs.JS_NewArray(c));
-        events.recordMutation(node, "childList", null, null, null);
+        if (removed_len > 0) {
+            events.recordMutationChildListBulk(node, &.{}, removed_slice, null, null);
+        }
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     }
@@ -335,13 +382,13 @@ pub fn elementSetTextContent(
             lxb_dom_node_remove(child);
         }
         _ = qjs.JS_SetPropertyStr(c, this_val, "__jsChildren", qjs.JS_NewArray(c));
-        events.recordMutation(node, "childList", null, null, null);
+        if (removed_len > 0) {
+            events.recordMutationChildListBulk(node, &.{}, removed_slice, null, null);
+        }
         api.setDomDirty();
         return quickjs.JS_UNDEFINED();
     };
     defer qjs.JS_FreeCString(c, s.ptr);
-    // DOM spec: 1. Capture first removed child for MutationObserver
-    const removed_child = node.first_child;
     // Remove all children (detach, not destroy — preserves subtree)
     while (node.first_child) |child| {
         lxb_dom_node_remove(child);
@@ -357,8 +404,13 @@ pub fn elementSetTextContent(
         added_child = text_node;
     }
     // DOM spec: only record childList mutation if something actually changed
-    if (added_child != null or removed_child != null) {
-        events.recordMutation(node, "childList", added_child, removed_child, null);
+    if (added_child != null or removed_len > 0) {
+        if (added_child) |ac| {
+            const added_one = [_]*lxb.lxb_dom_node_t{ac};
+            events.recordMutationChildListBulk(node, &added_one, removed_slice, null, null);
+        } else {
+            events.recordMutationChildListBulk(node, &.{}, removed_slice, null, null);
+        }
     }
     api.setDomDirty();
     return quickjs.JS_UNDEFINED();

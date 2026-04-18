@@ -5933,19 +5933,70 @@ fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
     // 1. Remove all children
     // 2. If value is non-empty string, create and append a Text node
     if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT or nt == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+        // DOM §4.2.7 "replace all" — collect every detached descendant for
+        // removedNodes BEFORE the remove loop, then emit one childList
+        // MutationRecord with the full slice. Previously no MO record was
+        // emitted on this path at all.
+        var removed_buf: [256]JsValue = undefined;
+        var removed_heap: ?[]JsValue = null;
+        defer if (removed_heap) |h| vm.allocator.free(h);
+        var removed_len: usize = 0;
+        if (g_mo_list.items.len > 0) {
+            var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+            while (ch) |c| : (ch = nodeNext(c)) {
+                const wrapped = wrapNode(vm, c) orelse continue;
+                if (removed_len < removed_buf.len) {
+                    removed_buf[removed_len] = wrapped;
+                    removed_len += 1;
+                } else {
+                    if (removed_heap == null) {
+                        const h = vm.allocator.alloc(JsValue, removed_buf.len * 2) catch break;
+                        @memcpy(h[0..removed_buf.len], removed_buf[0..removed_buf.len]);
+                        removed_heap = h;
+                    }
+                    if (removed_heap) |h| {
+                        if (removed_len >= h.len) {
+                            const grown = vm.allocator.realloc(h, h.len * 2) catch break;
+                            removed_heap = grown;
+                        }
+                        removed_heap.?[removed_len] = wrapped;
+                        removed_len += 1;
+                    }
+                }
+            }
+        }
+
         // Remove all children first
         while (nodeFirstChild(node)) |child| {
             dom_b.lxb_dom_node_remove(child);
         }
-        if (val.isNull()) return; // null → just remove children, no text node
 
-        var buf: [64]u8 = undefined;
-        const s = VM.formatValue(vm.pool, val, &buf);
-        if (s.len > 0) {
-            _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        var added_wrapped: ?JsValue = null;
+        if (!val.isNull()) {
+            var buf: [64]u8 = undefined;
+            const s = VM.formatValue(vm.pool, val, &buf);
+            if (s.len > 0) {
+                _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
+                if (g_mo_list.items.len > 0) {
+                    if (nodeFirstChild(node)) |new_text| {
+                        added_wrapped = wrapNode(vm, new_text);
+                    }
+                }
+            }
+        }
+
+        // Emit one childList record with all removed (+ optional added).
+        if (g_mo_list.items.len > 0 and (removed_len > 0 or added_wrapped != null)) {
+            const removed_slice: []const JsValue = if (removed_heap) |h|
+                h[0..removed_len]
+            else
+                removed_buf[0..removed_len];
+            recordChildListMutationBulk(vm, node, added_wrapped, removed_slice);
         }
     } else {
-        // CharacterData nodes: set data directly
+        // CharacterData nodes: set data directly (characterData MO record
+        // for these types is handled separately by the Text/Comment/PI
+        // setters in dom_node.zig / dom_text.zig).
         if (val.isNull()) {
             _ = dom_b.lxb_dom_node_text_content_set(node, "", 0);
         } else {
@@ -6445,6 +6496,66 @@ pub fn recordChildListMutation(
                 .removed_nodes = JsValue.initObject(removed_arr),
                 .previous_sibling = prev_sib,
                 .next_sibling = next_sib,
+                .attribute_name = JsValue.null_val,
+                .old_value = JsValue.null_val,
+            }) catch {};
+            g_mo_pending = true;
+            break;
+        }
+    }
+}
+
+/// Record a childList mutation for any matching MutationObservers with a
+/// bulk removedNodes slice. Used by textContent/innerHTML "replace all" —
+/// DOM §4.2.7 requires every detached descendant to appear in removedNodes.
+pub fn recordChildListMutationBulk(
+    vm: *VM,
+    target: *lxb.lxb_dom_node_t,
+    added: ?JsValue,
+    removed_slice: []const JsValue,
+) void {
+    const target_ptr = @intFromPtr(target);
+    const target_wrapped = wrapNode(vm, target) orelse return;
+
+    // addedNodes array (0 or 1 entries — callers always synthesize a single
+    // Text node or nothing when doing "replace all").
+    const added_arr = vm.createObj(.{ .obj_type = .array }) catch return;
+    added_arr.prototype = vm.array_proto;
+    if (added) |a| {
+        const ai = vm.allocator.alloc(JsValue, 1) catch return;
+        ai[0] = a;
+        added_arr.data = .{ .array = .{ .items = ai, .capacity = 1 } };
+    } else {
+        added_arr.data = .{ .array = .{ .items = &.{}, .capacity = 0 } };
+    }
+
+    // removedNodes array — full slice.
+    const removed_arr = vm.createObj(.{ .obj_type = .array }) catch return;
+    removed_arr.prototype = vm.array_proto;
+    if (removed_slice.len > 0) {
+        const ri = vm.allocator.alloc(JsValue, removed_slice.len) catch return;
+        @memcpy(ri, removed_slice);
+        removed_arr.data = .{ .array = .{ .items = ri, .capacity = removed_slice.len } };
+    } else {
+        removed_arr.data = .{ .array = .{ .items = &.{}, .capacity = 0 } };
+    }
+
+    for (g_mo_list.items) |*obs| {
+        if (obs.disconnected) continue;
+        for (obs.targets.items) |t| {
+            if (t.node_ptr != target_ptr and !t.subtree) continue;
+            if (t.node_ptr != target_ptr and t.subtree) {
+                if (!isAncestor(target, t.node_ptr)) continue;
+            }
+            if (!t.child_list) continue;
+
+            obs.pending.append(vm.allocator, .{
+                .type_str = "childList",
+                .target = target_wrapped,
+                .added_nodes = JsValue.initObject(added_arr),
+                .removed_nodes = JsValue.initObject(removed_arr),
+                .previous_sibling = JsValue.null_val,
+                .next_sibling = JsValue.null_val,
                 .attribute_name = JsValue.null_val,
                 .old_value = JsValue.null_val,
             }) catch {};
