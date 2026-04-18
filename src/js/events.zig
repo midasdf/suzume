@@ -383,8 +383,10 @@ pub fn jsRemoveEventListener(
                 while (i < entry.callbacks.items.len) {
                     const rec = entry.callbacks.items[i];
                     if (jsValueEqual(rec.callback, callback) and rec.capture == capture) {
-                        qjs.JS_FreeValue(c, rec.callback);
-                        _ = entry.callbacks.orderedRemove(i);
+                        // Layer 2A: route through freeListenerRecord so any abort
+                        // step on an AbortSignal is detached before we free the
+                        // record. DOM §2.7.1 step 5 + §3.1.
+                        freeListenerRecord(c, &entry.callbacks, i);
                         break;
                     }
                     i += 1;
@@ -420,8 +422,10 @@ pub fn jsRemoveEventListener(
                 while (i < entry.callbacks.items.len) {
                     const rec = entry.callbacks.items[i];
                     if (jsValueEqual(rec.callback, callback) and rec.capture == capture) {
-                        qjs.JS_FreeValue(c, rec.callback);
-                        _ = entry.callbacks.orderedRemove(i);
+                        // Layer 2A: route through freeListenerRecord so any abort
+                        // step on an AbortSignal is detached before we free the
+                        // record. DOM §2.7.1 step 5 + §3.1.
+                        freeListenerRecord(c, &entry.callbacks, i);
                         break;
                     }
                     i += 1;
@@ -865,8 +869,9 @@ fn callListenersOnNodeFiltered(ctx: *qjs.JSContext, entry: *ListenerEntry, event
         syncStopFlags(ctx, event_obj);
 
         if (rec.once) {
-            qjs.JS_FreeValue(ctx, rec.callback);
-            _ = entry.callbacks.orderedRemove(i);
+            // Layer 2A: route through freeListenerRecord so any bound
+            // AbortSignal step is detached before we free the record.
+            freeListenerRecord(ctx, &entry.callbacks, i);
         } else {
             i += 1;
         }
@@ -913,8 +918,9 @@ fn callEntryListenersFiltered(ctx: *qjs.JSContext, entry: *WindowListenerEntry, 
         }
         syncStopFlags(ctx, event_obj);
         if (rec.once) {
-            qjs.JS_FreeValue(ctx, rec.callback);
-            _ = entry.callbacks.orderedRemove(i);
+            // Layer 2A: route through freeListenerRecord so any bound
+            // AbortSignal step is detached before we free the record.
+            freeListenerRecord(ctx, &entry.callbacks, i);
         } else {
             i += 1;
         }
