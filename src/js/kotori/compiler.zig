@@ -319,28 +319,28 @@ pub const Compiler = struct {
                 if (bin.op == .logical_and) {
                     try self.compileNode(bin.lhs);
                     try self.emitOp(.dup);
-                    const skip = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+                    const skip = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
                     try self.emitOp(.pop);
                     try self.compileNode(bin.rhs);
-                    self.current.bc.patchJump(skip);
+                    self.current.bc.patchJumpLong(skip);
                     return;
                 }
                 if (bin.op == .logical_or) {
                     try self.compileNode(bin.lhs);
                     try self.emitOp(.dup);
-                    const skip = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+                    const skip = try self.current.bc.emitJumpLong(self.allocator, .jump_if_true_long);
                     try self.emitOp(.pop);
                     try self.compileNode(bin.rhs);
-                    self.current.bc.patchJump(skip);
+                    self.current.bc.patchJumpLong(skip);
                     return;
                 }
                 if (bin.op == .nullish) {
                     try self.compileNode(bin.lhs);
                     try self.emitOp(.dup);
-                    const skip = try self.current.bc.emitJump(self.allocator, .jump_if_not_nullish);
+                    const skip = try self.current.bc.emitJumpLong(self.allocator, .jump_if_not_nullish_long);
                     try self.emitOp(.pop);
                     try self.compileNode(bin.rhs);
-                    self.current.bc.patchJump(skip);
+                    self.current.bc.patchJumpLong(skip);
                     return;
                 }
                 try self.compileNode(bin.lhs);
@@ -359,12 +359,12 @@ pub const Compiler = struct {
 
             .conditional => |c| {
                 try self.compileNode(c.test_);
-                const else_jump = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+                const else_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
                 try self.compileNode(c.consequent);
-                const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
-                self.current.bc.patchJump(else_jump);
+                const end_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
+                self.current.bc.patchJumpLong(else_jump);
                 try self.compileNode(c.alternate);
-                self.current.bc.patchJump(end_jump);
+                self.current.bc.patchJumpLong(end_jump);
             },
 
             .program => |list| {
@@ -425,27 +425,27 @@ pub const Compiler = struct {
             // ── Control flow ─────────────────────────────────────────
             .if_stmt => |s| {
                 try self.compileNode(s.test_);
-                const else_jump = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+                const else_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
                 try self.compileNode(s.consequent);
                 if (s.alternate != null_node) {
-                    const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
-                    self.current.bc.patchJump(else_jump);
+                    const end_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
+                    self.current.bc.patchJumpLong(else_jump);
                     try self.compileNode(s.alternate);
-                    self.current.bc.patchJump(end_jump);
+                    self.current.bc.patchJumpLong(end_jump);
                 } else {
-                    self.current.bc.patchJump(else_jump);
+                    self.current.bc.patchJumpLong(else_jump);
                 }
             },
 
             .while_stmt => |s| {
                 const loop_start = self.current.bc.currentOffset();
                 try self.compileNode(s.test_);
-                const exit_jump = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+                const exit_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
                 self.pushLoopCtx(self.current.scope_depth, false);
                 try self.compileNode(s.body);
                 self.patchContinueJumps(loop_start);
                 try self.emitLoop(loop_start);
-                self.current.bc.patchJump(exit_jump);
+                self.current.bc.patchJumpLong(exit_jump);
                 self.patchBreakJumps();
                 self.popLoopCtx();
             },
@@ -457,8 +457,8 @@ pub const Compiler = struct {
                 const continue_target = self.current.bc.currentOffset();
                 self.patchContinueJumps(continue_target);
                 try self.compileNode(s.test_);
-                const back_jump = try self.current.bc.emitJump(self.allocator, .jump_if_true);
-                self.current.bc.patchJumpTo(back_jump, loop_start);
+                const back_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_true_long);
+                self.current.bc.patchJumpLongTo(back_jump, loop_start);
                 self.patchBreakJumps();
                 self.popLoopCtx();
             },
@@ -472,7 +472,7 @@ pub const Compiler = struct {
                 var exit_jump: ?u32 = null;
                 if (s.test_ != null_node) {
                     try self.compileNode(s.test_);
-                    exit_jump = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+                    exit_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
                 }
                 self.pushLoopCtx(self.current.scope_depth, false);
                 try self.compileNode(s.body);
@@ -484,7 +484,7 @@ pub const Compiler = struct {
                 }
                 try self.emitLoop(loop_start);
                 if (exit_jump) |ej| {
-                    self.current.bc.patchJump(ej);
+                    self.current.bc.patchJumpLong(ej);
                 }
                 self.patchBreakJumps();
                 self.popLoopCtx();
@@ -850,10 +850,10 @@ pub const Compiler = struct {
         try self.emitOp(.dup);
         try self.emitConstant(JsValue.undefined_val);
         try self.emitOp(.strict_eq);
-        const skip_default = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+        const skip_default = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
         try self.emitOp(.pop); // pop the undefined value
         try self.compileNode(default_node); // push default
-        self.current.bc.patchJump(skip_default);
+        self.current.bc.patchJumpLong(skip_default);
         // Now store the value
         const target = self.parser.ast.getNode(target_node);
         switch (target) {
@@ -935,16 +935,16 @@ pub const Compiler = struct {
         try self.compileIdentifierLoad(name_id);
         try self.emitOp(.dup);
         const skip = switch (op) {
-            .logical_and_assign => try self.current.bc.emitJump(self.allocator, .jump_if_false),
-            .logical_or_assign => try self.current.bc.emitJump(self.allocator, .jump_if_true),
-            .nullish_assign => try self.current.bc.emitJump(self.allocator, .jump_if_not_nullish),
+            .logical_and_assign => try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long),
+            .logical_or_assign => try self.current.bc.emitJumpLong(self.allocator, .jump_if_true_long),
+            .nullish_assign => try self.current.bc.emitJumpLong(self.allocator, .jump_if_not_nullish_long),
             else => unreachable,
         };
         try self.emitOp(.pop);
         try self.compileNode(rhs);
         try self.emitOp(.dup);
         try self.compileIdentifierStore(name_id);
-        self.current.bc.patchJump(skip);
+        self.current.bc.patchJumpLong(skip);
     }
 
     fn compileDelete(self: *Compiler, operand: NodeIndex) CompileError!void {
@@ -1049,11 +1049,11 @@ pub const Compiler = struct {
                     try self.emitOpU16(.load_local, @intCast(i));
                     try self.emitConstant(JsValue.undefined_val);
                     try self.emitOp(.strict_ne);
-                    const jump_over = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+                    const jump_over = try self.current.bc.emitJumpLong(self.allocator, .jump_if_true_long);
                     // Evaluate default expression and store
                     try self.compileNode(ap.right);
                     try self.emitOpU16(.store_local, @intCast(i));
-                    self.current.bc.patchJump(jump_over);
+                    self.current.bc.patchJumpLong(jump_over);
                     // If left side is a destructuring pattern, destructure after default check
                     const left = self.parser.ast.getNode(ap.left);
                     switch (left) {
@@ -1092,10 +1092,10 @@ pub const Compiler = struct {
                     try self.emitOpU16(.load_local, @intCast(i));
                     try self.emitConstant(JsValue.undefined_val);
                     try self.emitOp(.strict_ne);
-                    const jump_over = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+                    const jump_over = try self.current.bc.emitJumpLong(self.allocator, .jump_if_true_long);
                     try self.compileNode(asgn.rhs);
                     try self.emitOpU16(.store_local, @intCast(i));
-                    self.current.bc.patchJump(jump_over);
+                    self.current.bc.patchJumpLong(jump_over);
                     // Destructure if lhs is a pattern
                     const left = self.parser.ast.getNode(asgn.lhs);
                     switch (left) {
@@ -1677,38 +1677,40 @@ pub const Compiler = struct {
     fn compileOptionalMember(self: *Compiler, object: NodeIndex, property: StringId) CompileError!void {
         try self.compileNode(object); // [obj]
         try self.emitOp(.dup); // [obj, obj]
-        const null_jump = try self.current.bc.emitJump(self.allocator, .jump_if_nullish); // pops → [obj]
+        const null_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_nullish_long); // pops → [obj]
         const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(property)));
         try self.emitOpU16(.get_prop, ci); // [result]
-        const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
-        self.current.bc.patchJump(null_jump); // [obj] (null/undefined)
+        const end_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
+        self.current.bc.patchJumpLong(null_jump); // [obj] (null/undefined)
         try self.emitOp(.pop); // []
         try self.emitConstant(JsValue.undefined_val); // [undefined]
-        self.current.bc.patchJump(end_jump);
+        self.current.bc.patchJumpLong(end_jump);
     }
 
     fn compileOptionalComputedMember(self: *Compiler, object: NodeIndex, property: NodeIndex) CompileError!void {
         try self.compileNode(object); // [obj]
         try self.emitOp(.dup); // [obj, obj]
-        const null_jump = try self.current.bc.emitJump(self.allocator, .jump_if_nullish); // pops → [obj]
+        const null_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_nullish_long); // pops → [obj]
         try self.compileNode(property); // [obj, key]
         try self.emitOp(.get_elem); // [result]
-        const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
-        self.current.bc.patchJump(null_jump); // [obj]
+        const end_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
+        self.current.bc.patchJumpLong(null_jump); // [obj]
         try self.emitOp(.pop); // []
         try self.emitConstant(JsValue.undefined_val); // [undefined]
-        self.current.bc.patchJump(end_jump);
+        self.current.bc.patchJumpLong(end_jump);
     }
 
     // ── Loop helper ──────────────────────────────────────────────────
 
     fn emitLoop(self: *Compiler, loop_start: u32) CompileError!void {
-        try self.emitOp(.jump);
+        try self.emitOp(.jump_long);
         const current = self.current.bc.currentOffset();
-        const delta: i16 = @intCast(@as(i32, @intCast(loop_start)) - @as(i32, @intCast(current + 2)));
-        const u: u16 = @bitCast(delta);
+        const delta: i32 = @as(i32, @intCast(loop_start)) - @as(i32, @intCast(current + 4));
+        const u: u32 = @bitCast(delta);
         try self.current.bc.code.append(self.allocator, @intCast(u & 0xFF));
         try self.current.bc.code.append(self.allocator, @intCast((u >> 8) & 0xFF));
+        try self.current.bc.code.append(self.allocator, @intCast((u >> 16) & 0xFF));
+        try self.current.bc.code.append(self.allocator, @intCast((u >> 24) & 0xFF));
     }
 
     // ── Loop context management ─────────────────────────────────────
@@ -1728,14 +1730,14 @@ pub const Compiler = struct {
     fn patchBreakJumps(self: *Compiler) void {
         const ctx = &self.current.loop_stack[self.current.loop_depth - 1];
         for (ctx.break_jumps[0..ctx.break_count]) |patch_pos| {
-            self.current.bc.patchJump(patch_pos);
+            self.current.bc.patchJumpLong(patch_pos);
         }
     }
 
     fn patchContinueJumps(self: *Compiler, target: u32) void {
         const ctx = &self.current.loop_stack[self.current.loop_depth - 1];
         for (ctx.continue_jumps[0..ctx.continue_count]) |patch_pos| {
-            self.current.bc.patchJumpTo(patch_pos, target);
+            self.current.bc.patchJumpLongTo(patch_pos, target);
         }
     }
 
@@ -1845,7 +1847,7 @@ pub const Compiler = struct {
             const done_id = try self.parser.pool.intern("done");
             const done_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(done_id)));
             try self.emitOpU16(.get_prop, done_ci);
-            const exit_jump = try self.current.bc.emitJump(self.allocator, .jump_if_true);
+            const exit_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_true_long);
             // Not done: get .value
             const value_id = try self.parser.pool.intern("value");
             const value_ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(value_id)));
@@ -1859,7 +1861,7 @@ pub const Compiler = struct {
             self.patchContinueJumps(continue_target);
             try self.emitLoop(loop_start);
 
-            self.current.bc.patchJump(exit_jump);
+            self.current.bc.patchJumpLong(exit_jump);
             try self.emitOp(.pop); // discard final result object
             self.patchBreakJumps();
             self.popLoopCtx();
@@ -1888,7 +1890,7 @@ pub const Compiler = struct {
         try self.compileIdentifierLoad(idx_name);
         try self.compileIdentifierLoad(len_name);
         try self.emitOp(.lt);
-        const exit_jump = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+        const exit_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
 
         self.pushLoopCtx(self.current.scope_depth, false);
 
@@ -1915,7 +1917,7 @@ pub const Compiler = struct {
         try self.emitLoop(loop_start);
 
         // Exit
-        self.current.bc.patchJump(exit_jump);
+        self.current.bc.patchJumpLong(exit_jump);
         self.patchBreakJumps();
         self.popLoopCtx();
         try self.endScope();
@@ -1937,7 +1939,7 @@ pub const Compiler = struct {
     fn compileBreak(self: *Compiler) CompileError!void {
         if (self.findBreakContext()) |ctx| {
             try self.emitPopLocalsToDepth(ctx.scope_depth);
-            const jump = try self.current.bc.emitJump(self.allocator, .jump);
+            const jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
             ctx.break_jumps[ctx.break_count] = jump;
             ctx.break_count += 1;
         }
@@ -1946,7 +1948,7 @@ pub const Compiler = struct {
     fn compileContinue(self: *Compiler) CompileError!void {
         if (self.findLoopContext()) |ctx| {
             try self.emitPopLocalsToDepth(ctx.scope_depth);
-            const jump = try self.current.bc.emitJump(self.allocator, .jump);
+            const jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
             ctx.continue_jumps[ctx.continue_count] = jump;
             ctx.continue_count += 1;
         }
@@ -1954,7 +1956,7 @@ pub const Compiler = struct {
 
     fn compileTryCatch(self: *Compiler, t: anytype) CompileError!void {
         // try_begin → offset to catch handler
-        const try_begin_patch = try self.current.bc.emitJump(self.allocator, .try_begin);
+        const try_begin_patch = try self.current.bc.emitJumpLong(self.allocator, .try_begin_long);
 
         // Compile try body
         try self.compileNode(t.block);
@@ -1963,10 +1965,10 @@ pub const Compiler = struct {
         try self.emitOp(.try_end);
 
         // Jump over catch
-        const end_jump = try self.current.bc.emitJump(self.allocator, .jump);
+        const end_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
 
         // Patch try_begin to point to catch handler
-        self.current.bc.patchJump(try_begin_patch);
+        self.current.bc.patchJumpLong(try_begin_patch);
 
         // Compile catch clause
         if (t.handler != null_node) {
@@ -1996,7 +1998,7 @@ pub const Compiler = struct {
         }
 
         // Patch end jump
-        self.current.bc.patchJump(end_jump);
+        self.current.bc.patchJumpLong(end_jump);
     }
 
     fn compileUpdate(self: *Compiler, operand: NodeIndex, op: ast_mod.UnaryOp) CompileError!void {
@@ -2048,16 +2050,16 @@ pub const Compiler = struct {
             try self.emitOp(.dup); // dup discriminant
             try self.compileNode(sc.test_); // push case value
             try self.emitOp(.strict_eq); // compare
-            const skip = try self.current.bc.emitJump(self.allocator, .jump_if_false);
+            const skip = try self.current.bc.emitJumpLong(self.allocator, .jump_if_false_long);
             // Match: pop discriminant and jump to body
             try self.emitOp(.pop);
-            body_patches[i] = try self.current.bc.emitJump(self.allocator, .jump);
-            self.current.bc.patchJump(skip);
+            body_patches[i] = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
+            self.current.bc.patchJumpLong(skip);
         }
 
         // No match: pop discriminant and jump to default or end
         try self.emitOp(.pop);
-        const no_match_jump = try self.current.bc.emitJump(self.allocator, .jump);
+        const no_match_jump = try self.current.bc.emitJumpLong(self.allocator, .jump_long);
 
         // Phase 2: Bodies (with fallthrough and break support)
         self.pushLoopCtx(self.current.scope_depth, true); // switch uses break context
@@ -2066,9 +2068,9 @@ pub const Compiler = struct {
             const sc = self.parser.ast.getNode(case_idx).switch_case;
             if (sc.test_ == null_node) {
                 // default body — patch no_match_jump here
-                self.current.bc.patchJump(no_match_jump);
+                self.current.bc.patchJumpLong(no_match_jump);
             } else {
-                self.current.bc.patchJump(body_patches[i]);
+                self.current.bc.patchJumpLong(body_patches[i]);
             }
 
             const body_items = self.parser.ast.getNodeList(sc.body);
@@ -2079,7 +2081,7 @@ pub const Compiler = struct {
 
         // If no default, patch no_match to end
         if (!has_default) {
-            self.current.bc.patchJump(no_match_jump);
+            self.current.bc.patchJumpLong(no_match_jump);
         }
 
         self.patchBreakJumps();

@@ -52,10 +52,15 @@ pub const OpCode = enum(u8) {
     load_upvalue,
     store_upvalue,
 
-    // Control flow
+    // Control flow (short: i16 offset, 2 bytes)
     jump,
     jump_if_false,
     jump_if_true,
+
+    // Control flow (long: i32 offset, 4 bytes) — used by compiler for all jumps
+    jump_long,
+    jump_if_false_long,
+    jump_if_true_long,
 
     // Functions
     new_function, // operand: u16 constant index → FunctionObj
@@ -90,7 +95,8 @@ pub const OpCode = enum(u8) {
     get_keys, // stack: [obj] → [array] — get Object.keys()
 
     // Exception handling
-    try_begin, // operand: i16 offset to catch handler
+    try_begin, // operand: i16 offset to catch handler (short, kept for compat)
+    try_begin_long, // operand: i32 offset to catch handler
     try_end,
     throw_,
 
@@ -124,9 +130,13 @@ pub const OpCode = enum(u8) {
     call_method_spread, // stack: [this, func, args_array] → [result]
     construct_spread, // stack: [func, args_array] → [result]
 
-    // Nullish coalescing / optional chaining
+    // Nullish coalescing / optional chaining (short: i16 offset)
     jump_if_not_nullish, // pop TOS, jump if NOT null/undefined
     jump_if_nullish, // pop TOS, jump if null/undefined
+
+    // Nullish coalescing / optional chaining (long: i32 offset)
+    jump_if_not_nullish_long,
+    jump_if_nullish_long,
 
     // Special
     typeof_,
@@ -176,6 +186,16 @@ pub const Bytecode = struct {
         try self.emitWithU16(allocator, op, u);
     }
 
+    /// Append opcode followed by an i32 operand in little-endian order.
+    pub fn emitWithI32(self: *Bytecode, allocator: std.mem.Allocator, op: OpCode, operand: i32) !void {
+        const u: u32 = @bitCast(operand);
+        try self.code.append(allocator, @intFromEnum(op));
+        try self.code.append(allocator, @intCast(u & 0xFF));
+        try self.code.append(allocator, @intCast((u >> 8) & 0xFF));
+        try self.code.append(allocator, @intCast((u >> 16) & 0xFF));
+        try self.code.append(allocator, @intCast((u >> 24) & 0xFF));
+    }
+
     /// Add a value to the constant pool and return its index.
     pub fn addConstant(self: *Bytecode, allocator: std.mem.Allocator, val: JsValue) !u16 {
         const index: u16 = @intCast(self.constants.items.len);
@@ -211,5 +231,34 @@ pub const Bytecode = struct {
         const u: u16 = @bitCast(delta);
         self.code.items[patch_pos] = @intCast(u & 0xFF);
         self.code.items[patch_pos + 1] = @intCast((u >> 8) & 0xFF);
+    }
+
+    /// Emit a long jump instruction with a 4-byte i32 placeholder offset.
+    /// Returns the byte position of the placeholder so it can be patched later.
+    /// Use the _long opcode variants (jump_long, jump_if_false_long, etc.).
+    pub fn emitJumpLong(self: *Bytecode, allocator: std.mem.Allocator, op: OpCode) !u32 {
+        try self.code.append(allocator, @intFromEnum(op));
+        const patch_pos: u32 = @intCast(self.code.items.len);
+        try self.code.append(allocator, 0x00); // placeholder byte 0
+        try self.code.append(allocator, 0x00); // placeholder byte 1
+        try self.code.append(allocator, 0x00); // placeholder byte 2
+        try self.code.append(allocator, 0x00); // placeholder byte 3
+        return patch_pos;
+    }
+
+    /// Patch the i32 long jump offset at `patch_pos` to reach the current code position.
+    pub fn patchJumpLong(self: *Bytecode, patch_pos: u32) void {
+        self.patchJumpLongTo(patch_pos, self.currentOffset());
+    }
+
+    /// Patch the i32 long jump offset at `patch_pos` to reach an arbitrary target position.
+    pub fn patchJumpLongTo(self: *Bytecode, patch_pos: u32, target: u32) void {
+        const after_operand: u32 = patch_pos + 4;
+        const delta: i32 = @as(i32, @intCast(target)) - @as(i32, @intCast(after_operand));
+        const u: u32 = @bitCast(delta);
+        self.code.items[patch_pos] = @intCast(u & 0xFF);
+        self.code.items[patch_pos + 1] = @intCast((u >> 8) & 0xFF);
+        self.code.items[patch_pos + 2] = @intCast((u >> 16) & 0xFF);
+        self.code.items[patch_pos + 3] = @intCast((u >> 24) & 0xFF);
     }
 };

@@ -5876,3 +5876,31 @@ test "Layer 0A: non-callable .then fulfills with resolution itself" {
     try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
 }
 
+// Layer 0E: long-jump encoding — function body large enough to exceed i16 offset range (>32KB).
+// Each "if (x > 0) { r = r + N; }" compiles to ~20 bytes. 1700 iterations ≈ 34KB bytecode,
+// which would panic with i16 @intCast overflow but succeeds with i32 long jumps.
+test "Layer 0E: large function body triggers long-jump encoding" {
+    // Build a JS source with a function containing >1700 if-statements so that
+    // the jump offset from the first if to its else target exceeds 32767 bytes.
+    // Allocate ~120KB for the source text (1700 iterations × ~60 chars each).
+    const src_buf = try std.testing.allocator.alloc(u8, 120_000);
+    defer std.testing.allocator.free(src_buf);
+    var pos: usize = 0;
+    const header = "function bigFn(x) { var r = 0;\n";
+    @memcpy(src_buf[pos..][0..header.len], header);
+    pos += header.len;
+    var i: u32 = 0;
+    while (i < 1700) : (i += 1) {
+        const line = try std.fmt.bufPrint(src_buf[pos..], "if (x > 0) {{ r = r + {d}; }}\n", .{i});
+        pos += line.len;
+    }
+    const footer = "return r; } bigFn(1)";
+    @memcpy(src_buf[pos..][0..footer.len], footer);
+    pos += footer.len;
+    const src = src_buf[0..pos];
+
+    const result = try evalExpr(src);
+    // sum of 0..1699 = 1699 * 1700 / 2 = 1444150
+    try std.testing.expectApproxEqAbs(@as(f64, 1444150.0), result.asNumber(), 1.0);
+}
+

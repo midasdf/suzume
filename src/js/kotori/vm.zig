@@ -641,6 +641,40 @@ pub const VM = struct {
                     }
                 },
 
+                // ── Control flow (long: i32 offset) ──────────────────
+                .jump_long => {
+                    const offset = self.readI32(frame);
+                    frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                },
+                .jump_if_false_long => {
+                    const offset = self.readI32(frame);
+                    const val = self.pop();
+                    if (!val.isTruthy()) {
+                        frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    }
+                },
+                .jump_if_true_long => {
+                    const offset = self.readI32(frame);
+                    const val = self.pop();
+                    if (val.isTruthy()) {
+                        frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    }
+                },
+                .jump_if_not_nullish_long => {
+                    const offset = self.readI32(frame);
+                    const val = self.pop();
+                    if (!val.isNull() and !val.isUndefined()) {
+                        frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    }
+                },
+                .jump_if_nullish_long => {
+                    const offset = self.readI32(frame);
+                    const val = self.pop();
+                    if (val.isNull() or val.isUndefined()) {
+                        frame.ip = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    }
+                },
+
                 // ── Functions ────────────────────────────────────────
                 .new_function => {
                     const ci = self.readU16(frame);
@@ -1822,6 +1856,17 @@ pub const VM = struct {
                     };
                     self.try_depth += 1;
                 },
+                .try_begin_long => {
+                    const offset = self.readI32(frame);
+                    const catch_ip: u32 = @intCast(@as(i32, @intCast(frame.ip)) + offset);
+                    self.ensureTryCapacity();
+                    self.try_stack[self.try_depth] = .{
+                        .catch_offset = catch_ip,
+                        .frame_idx = self.frame_count - 1,
+                        .sp = self.sp,
+                    };
+                    self.try_depth += 1;
+                },
 
                 .try_end => {
                     if (self.try_depth > 0) self.try_depth -= 1;
@@ -2325,6 +2370,12 @@ pub const VM = struct {
         const bytes: *const [2]u8 = @ptrCast(frame.bc.code.items[frame.ip..][0..2]);
         frame.ip += 2;
         return std.mem.bytesToValue(i16, bytes);
+    }
+
+    fn readI32(_: *VM, frame: *CallFrame) i32 {
+        const bytes: *const [4]u8 = @ptrCast(frame.bc.code.items[frame.ip..][0..4]);
+        frame.ip += 4;
+        return std.mem.bytesToValue(i32, bytes);
     }
 
     // ── Built-in objects ────────────────────────────────────────────
