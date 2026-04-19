@@ -228,9 +228,13 @@ pub fn elementSetAttribute(
     }
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
-    // DOM spec: HTML elements lowercase attribute names
+    // DOM §4.9: if element is in an HTML document, ASCII-lowercase the
+    // qualified name; XML documents preserve case.
     var lower_buf: [1024]u8 = undefined;
-    const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
+    const attr_name = if (isXmlDocumentForElement(c, this_val))
+        name.ptr[0..name.len]
+    else
+        lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
     // Capture old value before setting (for MutationObserver attributeOldValue)
     // Must copy to stack buffer because lexbor invalidates pointer on set_attribute
     var old_val_buf: [4096]u8 = undefined;
