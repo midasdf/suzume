@@ -977,6 +977,9 @@ pub const VM = struct {
                     const slot = self.readU16(frame);
                     const abs_slot = frame.base_sp + slot;
                     self.closeUpvalueAt(abs_slot);
+                    // close_upvalue is used by endScope as a "pop + close" operation.
+                    // Pop the value from the stack so sp decrements correctly.
+                    _ = self.pop();
                 },
 
                 // ── Objects ──────────────────────────────────────────

@@ -408,11 +408,12 @@ pub const Compiler = struct {
 
             // ── Variables ────────────────────────────────────────────
             .var_decl => |decl| {
+                const is_var = decl.kind == .@"var";
                 const declarators = self.parser.ast.getNodeList(decl.declarators);
                 for (declarators) |d_idx| {
                     const d = self.parser.ast.getNode(d_idx);
                     switch (d) {
-                        .var_declarator => |vd| try self.compileVarDeclarator(vd.name, vd.init_),
+                        .var_declarator => |vd| try self.compileVarDeclarator(vd.name, vd.init_, is_var),
                         else => {},
                     }
                 }
@@ -599,7 +600,7 @@ pub const Compiler = struct {
 
     // ── Variable compilation ─────────────────────────────────────────
 
-    fn compileVarDeclarator(self: *Compiler, name_node: NodeIndex, init_node: NodeIndex) CompileError!void {
+    fn compileVarDeclarator(self: *Compiler, name_node: NodeIndex, init_node: NodeIndex, is_var: bool) CompileError!void {
         switch (self.parser.ast.getNode(name_node)) {
             .identifier => |name_id| {
                 // Simple: const x = expr
@@ -608,7 +609,7 @@ pub const Compiler = struct {
                 } else {
                     try self.emitConstant(JsValue.undefined_val);
                 }
-                try self.storeBinding(name_id);
+                try self.storeBinding(name_id, is_var);
             },
             .array_pattern => |list| {
                 // const [a, b, c] = expr
@@ -637,7 +638,7 @@ pub const Compiler = struct {
         }
     }
 
-    fn storeBinding(self: *Compiler, name_id: StringId) CompileError!void {
+    fn storeBinding(self: *Compiler, name_id: StringId, is_var: bool) CompileError!void {
         if (self.current.scope_depth > 0 or !self.current.is_script) {
             // Reuse an existing local slot if hoisting pre-registered this name,
             // otherwise allocate a new one. This prevents duplicate slots when
@@ -646,7 +647,18 @@ pub const Compiler = struct {
                 existing
             else
                 try self.addLocal(name_id);
+            // Emit store_local to write the initializer into the stack slot:
+            // - At scope_depth==0 in a function: always store (this is the normal case).
+            // - For `var` at scope_depth>0 in a function: hoistVarDeclarations() has
+            //   pre-registered this name at depth=0, reserving a slot in the pre-allocated
+            //   locals region (sp starts at local_count on function entry). The initializer
+            //   must be explicitly stored; leaving it as a stack temporary would corrupt sp
+            //   and cause wrong values on subsequent iterations or reads.
+            // - For `let`/`const` at scope_depth>0, and for any var inside blocks in script
+            //   mode: the initializer value stays on the stack AS the local (endScope pops).
             if (!self.current.is_script and self.current.scope_depth == 0) {
+                try self.emitOpU16(.store_local, slot);
+            } else if (is_var and !self.current.is_script and self.current.scope_depth > 0) {
                 try self.emitOpU16(.store_local, slot);
             }
         } else {
@@ -655,48 +667,93 @@ pub const Compiler = struct {
         }
     }
 
-    /// Pre-scan a function body block and register all top-level var/function_decl
-    /// names as locals (scope_depth==0 slots). This implements JS var hoisting:
-    /// all var bindings are visible throughout the function, even before the
-    /// declaration point in the source. Function bodies that close over var
-    /// names declared later in the same scope can thus resolve them as upvalues
-    /// during compileFunctionBody (rather than falling back to globals).
+    /// Pre-scan a function body and register ALL var/function_decl names as
+    /// locals at depth=0. This implements JS var hoisting: `var` declarations
+    /// are function-scoped, not block-scoped, so they must be pre-allocated
+    /// before any code in the function body executes.
     ///
-    /// Only scans the immediate block children (not nested blocks inside
-    /// if/for/etc.) because JS var hoisting is function-scoped, not block-scoped.
+    /// Scans RECURSIVELY into nested blocks (if/for/while/try/catch/switch/etc.)
+    /// but does NOT descend into nested function declarations or expressions,
+    /// since those have their own function scope.
     fn hoistVarDeclarations(self: *Compiler, block_list: NodeList) CompileError!void {
         const items = self.parser.ast.getNodeList(block_list);
         for (items) |item| {
-            switch (self.parser.ast.getNode(item)) {
-                .var_decl => |decl| {
-                    if (decl.kind != .@"var") continue; // only `var`, not let/const
-                    const declarators = self.parser.ast.getNodeList(decl.declarators);
-                    for (declarators) |d_idx| {
-                        const decl_node = self.parser.ast.getNode(d_idx);
-                        switch (decl_node) {
-                            .var_declarator => |vd| {
-                                const name_node = self.parser.ast.getNode(vd.name);
-                                switch (name_node) {
-                                    .identifier => |name_id| {
-                                        if (self.resolveLocal(&self.current, name_id) == null) {
-                                            _ = try self.addLocal(name_id);
-                                        }
-                                    },
-                                    else => {},
-                                }
-                            },
-                            else => {},
-                        }
+            try self.hoistVarNode(item);
+        }
+    }
+
+    /// Recursively hoist `var` bindings from a single AST node.
+    /// Stops at function boundaries (function_decl, function_expr, arrow_function, etc.).
+    fn hoistVarNode(self: *Compiler, node_idx: NodeIndex) CompileError!void {
+        switch (self.parser.ast.getNode(node_idx)) {
+            .var_decl => |decl| {
+                if (decl.kind != .@"var") return; // only `var`, not let/const
+                const declarators = self.parser.ast.getNodeList(decl.declarators);
+                for (declarators) |d_idx| {
+                    switch (self.parser.ast.getNode(d_idx)) {
+                        .var_declarator => |vd| {
+                            switch (self.parser.ast.getNode(vd.name)) {
+                                .identifier => |name_id| {
+                                    if (self.resolveLocal(&self.current, name_id) == null) {
+                                        _ = try self.addLocal(name_id);
+                                    }
+                                },
+                                else => {},
+                            }
+                        },
+                        else => {},
                     }
-                },
-                .function_decl => |fd| {
-                    const name_id = fd.name orelse continue;
-                    if (self.resolveLocal(&self.current, name_id) == null) {
-                        _ = try self.addLocal(name_id);
-                    }
-                },
-                else => {},
-            }
+                }
+            },
+            .function_decl => |fd| {
+                // Hoist the function name itself, but do NOT descend into its body.
+                const name_id = fd.name orelse return;
+                if (self.resolveLocal(&self.current, name_id) == null) {
+                    _ = try self.addLocal(name_id);
+                }
+            },
+            // Descend into statement containers (but NOT into nested function bodies)
+            .block => |list| {
+                const children = self.parser.ast.getNodeList(list);
+                for (children) |child| try self.hoistVarNode(child);
+            },
+            .if_stmt => |s| {
+                try self.hoistVarNode(s.consequent);
+                if (s.alternate != null_node) try self.hoistVarNode(s.alternate);
+            },
+            .while_stmt => |s| try self.hoistVarNode(s.body),
+            .do_while_stmt => |s| try self.hoistVarNode(s.body),
+            .for_stmt => |s| {
+                if (s.init_ != null_node) try self.hoistVarNode(s.init_);
+                try self.hoistVarNode(s.body);
+            },
+            .for_in_stmt => |s| {
+                try self.hoistVarNode(s.left);
+                try self.hoistVarNode(s.body);
+            },
+            .for_of_stmt => |s| {
+                try self.hoistVarNode(s.left);
+                try self.hoistVarNode(s.body);
+            },
+            .try_stmt => |t| {
+                try self.hoistVarNode(t.block);
+                if (t.handler != null_node) try self.hoistVarNode(t.handler);
+                if (t.finalizer != null_node) try self.hoistVarNode(t.finalizer);
+            },
+            .catch_clause => |cc| try self.hoistVarNode(cc.body),
+            .switch_stmt => |s| {
+                const cases = self.parser.ast.getNodeList(s.cases);
+                for (cases) |c| try self.hoistVarNode(c);
+            },
+            .switch_case => |c| {
+                const stmts = self.parser.ast.getNodeList(c.body);
+                for (stmts) |stmt| try self.hoistVarNode(stmt);
+            },
+            .labeled_stmt => |s| try self.hoistVarNode(s.body),
+            // Stop at function expressions and arrow functions — they have their own scope
+            .function_expr, .arrow_function, .class_decl => return,
+            // For any other node (expression statements etc.) — no vars to hoist
+            else => {},
         }
     }
 
@@ -711,7 +768,7 @@ pub const Compiler = struct {
                     try self.emitOp(.dup);
                     try self.emitConstant(JsValue.initNumber(@floatFromInt(i)));
                     try self.emitOp(.get_elem);
-                    try self.storeBinding(name_id);
+                    try self.storeBinding(name_id, false);
                 },
                 .assign_pattern => |ap| {
                     // [a = default] — get element, if undefined use default
@@ -788,7 +845,7 @@ pub const Compiler = struct {
                             try self.emitOp(.dup);
                             const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(key_name)));
                             try self.emitOpU16(.get_prop, ci);
-                            try self.storeBinding(target_id);
+                            try self.storeBinding(target_id, false);
                         },
                         .assign_pattern => |ap| {
                             // {key = default} or {key: target = default}
@@ -822,7 +879,7 @@ pub const Compiler = struct {
                     switch (rest_node) {
                         .identifier => |name_id| {
                             try self.emitOp(.dup);
-                            try self.storeBinding(name_id);
+                            try self.storeBinding(name_id, false);
                         },
                         else => {},
                     }
@@ -841,7 +898,7 @@ pub const Compiler = struct {
         try self.emitOp(.swap);
         try self.emitConstant(JsValue.initNumber(@floatFromInt(start_index)));
         try self.emitOpU16(.call, 1);
-        try self.storeBinding(name_id);
+        try self.storeBinding(name_id, false);
     }
 
     fn compileDefaultValue(self: *Compiler, target_node: NodeIndex, default_node: NodeIndex) CompileError!void {
@@ -857,7 +914,7 @@ pub const Compiler = struct {
         // Now store the value
         const target = self.parser.ast.getNode(target_node);
         switch (target) {
-            .identifier => |name_id| try self.storeBinding(name_id),
+            .identifier => |name_id| try self.storeBinding(name_id, false),
             else => {},
         }
     }
@@ -1658,7 +1715,7 @@ pub const Compiler = struct {
 
         // 7. Store constructor as class name (stack: [ctor])
         if (cls.name) |name_id| {
-            try self.storeBinding(name_id);
+            try self.storeBinding(name_id, false);
         }
     }
 
@@ -2104,7 +2161,7 @@ pub const Compiler = struct {
             try self.current.bc.code.append(self.allocator, @intCast(name_ci & 0xFF));
             try self.current.bc.code.append(self.allocator, @intCast((name_ci >> 8) & 0xFF));
             // Store as local binding name
-            try self.storeBinding(spec.local);
+            try self.storeBinding(spec.local, false);
         }
         // Side-effect imports (no specifiers) still need to trigger module load
         if (specs.len == 0) {
