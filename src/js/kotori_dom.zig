@@ -15,6 +15,9 @@ const std = @import("std");
 // ── Shared Name/QName validation (DOM §1.5) ────────────────────────
 const dom_names = @import("dom_names");
 
+// ── HTML §2.6 reflected attributes table (Layer 4A) ────────────────
+const refl = @import("html_reflection.zig");
+
 // ── Kotori engine types (via module alias, set in build.zig) ────────
 const kotori = @import("kotori");
 
@@ -1222,6 +1225,142 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// HTML §2.6 reflected-attribute dispatcher
+// ══════════════════════════════════════════════════════════════════════
+
+/// Resolve the HTML interface name for an element node (e.g. "HTMLInputElement").
+/// Returns null for non-HTML-NS elements or non-element nodes — those don't
+/// participate in HTML §2.6 reflection.
+fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    // Only HTML-namespace elements have HTML IDL reflections. Reject
+    // null-namespace, SVG, MathML, XLink, etc.
+    if (nsIdToUri(elem.node.ns)) |uri| {
+        if (!std.mem.eql(u8, uri, "http://www.w3.org/1999/xhtml")) return null;
+    } else {
+        return null;
+    }
+    var ln_len: usize = 0;
+    const ln_ptr = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return null;
+    const local_name = ln_ptr[0..ln_len];
+    const iface_mod = @import("kotori_html_interfaces.zig");
+    return iface_mod.resolveInterface("http://www.w3.org/1999/xhtml", local_name);
+}
+
+/// Reflection getter dispatch. Returns null if no reflection applies and
+/// the caller should continue with its fallback.
+///
+/// HTML §2.6 — one of:
+///   - DOMString → getAttribute-or-"" (§2.6.2 "DOMString")
+///   - boolean → hasAttribute (§2.6.2 "boolean")
+///   - long → rules-for-parsing-integers §2.4.4.1, default on fail
+///   - unsigned long → rules-for-parsing-non-negative §2.4.4.2
+///   - url → DOMString for now (Layer 4B will canonicalize)
+fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
+    const iface = resolveHtmlIfaceForNode(node) orelse return null;
+    const row = refl.lookup(iface, name) orelse return null;
+    switch (row.type) {
+        .domstring, .url => return getAttr(vm, node, row.content),
+        .boolean => {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            const has = dom_b.lxb_dom_element_has_attribute(elem, row.content.ptr, row.content.len);
+            return JsValue.initBool(has);
+        },
+        .long => {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseInteger(p[0..val_len])) |v| {
+                    return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+        .unsigned_long => {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseNonNegativeInteger(p[0..val_len])) |v| {
+                    return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+    }
+}
+
+/// Reflection setter dispatch. Returns true if the reflection was applied
+/// (caller should not continue); false if no reflection matched.
+fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsValue) bool {
+    const iface = resolveHtmlIfaceForNode(node) orelse return false;
+    const row = refl.lookup(iface, name) orelse return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    switch (row.type) {
+        .domstring, .url => {
+            // ECMAScript ToString. `null` → "null", `undefined` → "undefined"
+            // per §2.6.2 DOMString setter — the spec steps "set the content
+            // attribute to value" follow a pre-ToString conversion.
+            var buf: [64]u8 = undefined;
+            const s = valueToString(vm, val, &buf);
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .boolean => {
+            if (val.isTruthy()) {
+                _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, "", 0);
+            } else {
+                _ = dom_b.lxb_dom_element_remove_attribute(elem, row.content.ptr, row.content.len);
+            }
+            return true;
+        },
+        .long => {
+            const n = val.toNumber();
+            const i32v: i32 = if (std.math.isFinite(n)) blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                if (n < @as(f64, std.math.minInt(i32))) break :blk std.math.minInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            } else 0;
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{i32v}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .unsigned_long => {
+            const n = val.toNumber();
+            // §2.6.2 unsigned long setter: negative / non-finite ⇒ default.
+            const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            };
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{out}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+    }
+}
+
+/// Minimal ECMAScript ToString for DOMString setters. Covers string,
+/// number, boolean, null, undefined. Falls back to "[object Object]" for
+/// objects (spec-correct for the primitive path we care about here — full
+/// ToPrimitive coercion lives in kotori/vm.zig).
+fn valueToString(vm: *VM, val: JsValue, buf: []u8) []const u8 {
+    if (val.isString()) {
+        return vm.pool.get(val.asStringId()) orelse "";
+    }
+    if (val.isBool()) return if (val.asBool()) "true" else "false";
+    if (val.isNumber()) {
+        return std.fmt.bufPrint(buf, "{d}", .{val.toNumber()}) catch "0";
+    }
+    if (val.isNull()) return "null";
+    if (val.isUndefined()) return "undefined";
+    return "[object Object]";
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Property interception handlers
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1283,6 +1422,11 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, node, "id");
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
+
+    // HTML §2.6 reflected attributes (Layer 4A). Dispatches via the
+    // table in html_reflection.zig. Early-return on hit; fall through
+    // to the remaining hard-coded properties on miss.
+    if (reflectionGet(vm, node, name)) |v| return v;
 
     // Element.attributes (DOM §4.9.2 — NamedNodeMap, identity-cached).
     //
@@ -1601,6 +1745,12 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
     }
     if (eql(name, "className")) {
         setAttrFromVal(vm, node, "class", val);
+        setDomDirty();
+        return true;
+    }
+
+    // HTML §2.6 reflected attributes setter (Layer 4A).
+    if (reflectionSet(vm, node, name, val)) {
         setDomDirty();
         return true;
     }
@@ -2444,6 +2594,117 @@ fn nativeCSSGetPropertyValue(ctx: *anyopaque, this: JsValue, args: []const JsVal
 fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     return JsValue.initString(try vm.pool.intern(""));
+}
+
+/// CSSStyleDeclaration.setProperty(property, value[, priority]) — CSSOM §6.7.4.
+/// Writes the property into the element's inline `style` attribute using
+/// the same `updateStyleProp` helper that the `element.style.X = Y` path uses.
+fn nativeCSSSetProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2 or !this.isObject()) return JsValue.undefined_val;
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const prop_in = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    var name_buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &name_buf);
+    const new_val = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    var attr_len: usize = 0;
+    const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    var result_buf: [2048]u8 = undefined;
+    const new_style = updateStyleProp(old_style, css_prop, new_val, &result_buf);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+/// CSSStyleDeclaration.removeProperty(property) — CSSOM §6.7.5.
+/// Removes a property from the inline style by setting its value to "".
+fn nativeCSSRemoveProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !this.isObject()) return JsValue.initString(try vm.pool.intern(""));
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const prop_in = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    var name_buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &name_buf);
+    // Capture old value before removal (return value per spec).
+    var attr_len: usize = 0;
+    const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    const old_val = findCssPropValue(old_style, css_prop) orelse "";
+    const old_val_sid = try vm.pool.intern(old_val);
+    // Remove by writing empty value (updateStyleProp with "" removes the property).
+    var result_buf: [2048]u8 = undefined;
+    const new_style = updateStyleProp(old_style, css_prop, "", &result_buf);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+    setDomDirty();
+    return JsValue.initString(old_val_sid);
+}
+
+/// CSSStyleDeclaration.item(index) — CSSOM §6.7.3.
+/// Returns the CSS property name at the given index, or "" if out of range.
+/// Parses the inline style attribute to enumerate property names.
+fn nativeCSSItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.initString(try vm.pool.intern(""));
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const idx: usize = if (args.len > 0) @intFromFloat(@max(0, @trunc(args[0].toNumber()))) else 0;
+    var attr_len: usize = 0;
+    const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    // Iterate through "prop:val;" pairs to find the idx-th property name.
+    var count: usize = 0;
+    var rest = style_str;
+    while (rest.len > 0) {
+        // Find next semicolon or end
+        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+        const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
+        if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
+        if (decl.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, decl, ':') orelse continue;
+        const prop = std.mem.trim(u8, decl[0..colon], " \t\r\n");
+        if (prop.len == 0) continue;
+        if (count == idx) {
+            return JsValue.initString(try vm.pool.intern(prop));
+        }
+        count += 1;
+    }
+    return JsValue.initString(try vm.pool.intern(""));
+}
+
+/// CSSStyleDeclaration.length — CSSOM §6.7.3.
+/// Returns the number of declared properties in the inline style.
+fn nativeCSSLengthGet(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.initNumber(0);
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initNumber(0);
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    var attr_len: usize = 0;
+    const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    var count: usize = 0;
+    var rest = style_str;
+    while (rest.len > 0) {
+        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+        const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
+        if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
+        if (decl.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, decl, ':') != null) count += 1;
+    }
+    return JsValue.initNumber(@floatFromInt(count));
 }
 
 fn nativeCreateTextNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -4187,6 +4448,17 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
 fn createStyleObj(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
     const obj = vm.createObj(.{ .obj_type = .dom_style }) catch return null;
     obj.data = .{ .dom_style = @ptrCast(elem) };
+    // CSSOM §6.7 CSSStyleDeclaration methods on the inline-style object.
+    // Mirror the registrations done in nativeGetComputedStyle so that both
+    // `element.style.getPropertyValue()` and `getComputedStyle(el).getPropertyValue()`
+    // resolve. Without this, the methods are undefined on inline style objects.
+    vm.registerNativeMethod(obj, "getPropertyValue",  &nativeCSSGetPropertyValue)  catch {};
+    vm.registerNativeMethod(obj, "getPropertyPriority",&nativeCSSGetPropertyPriority) catch {};
+    vm.registerNativeMethod(obj, "setProperty",        &nativeCSSSetProperty)        catch {};
+    vm.registerNativeMethod(obj, "removeProperty",     &nativeCSSRemoveProperty)     catch {};
+    vm.registerNativeMethod(obj, "item",               &nativeCSSItem)               catch {};
+    // `length` as a native getter via the same own-property approach.
+    vm.registerNativeMethod(obj, "length",             &nativeCSSLengthGet)          catch {};
     return JsValue.initObject(obj);
 }
 
