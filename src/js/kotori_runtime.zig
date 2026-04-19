@@ -91,6 +91,14 @@ pub const KotoriRuntime = struct {
         // nodes with their namespace/prefix/localName preserved.
         _ = self.eval(attributes_polyfill_js);
 
+        // CSSOM §1: CSS global object with supports() + escape() per
+        // https://www.w3.org/TR/cssom-1/#the-css-interface. Only a polyfill —
+        // the native QJS path already provides this via dom_api.zig:5666 but
+        // kotori globals don't see that registration. Without CSS unset, every
+        // WPT css/* test-harness fails at `CSS.supports(...)` with
+        // "Cannot read properties of undefined (reading 'supports')".
+        _ = self.eval(css_global_polyfill_js);
+
         return self;
     }
 
@@ -1820,6 +1828,71 @@ pub const KotoriRuntime = struct {
         \\    return attr;
         \\  };
         \\
+        \\})();
+    ;
+
+    /// CSSOM §1 — install the CSS global interface on kotori. Mirrors the
+    /// QJS path at `src/js/dom_api.zig:5666` (the native CSS object bound
+    /// there is only visible to QJS; kotori globals need their own polyfill).
+    /// Implements CSS.supports(property, value) using a scratch element's
+    /// inline-style round-trip (accepted if setProperty leaves a non-empty
+    /// getPropertyValue), and CSS.escape(v) per CSSOM §6.5.1 serialization
+    /// of an identifier.
+    const css_global_polyfill_js =
+        \\(function(){
+        \\  if (typeof globalThis.CSS !== 'undefined' && globalThis.CSS.supports) return;
+        \\  var CSS_obj = globalThis.CSS || {};
+        \\  /* CSS.supports(property, value) OR CSS.supports("property: value") */
+        \\  CSS_obj.supports = function(prop, value){
+        \\    try {
+        \\      var p, v;
+        \\      if (value === undefined) {
+        \\        /* Condition form: "property: value" */
+        \\        var s = String(prop);
+        \\        var i = s.indexOf(':');
+        \\        if (i < 0) return false;
+        \\        p = s.substring(0, i).trim();
+        \\        v = s.substring(i + 1).trim();
+        \\      } else {
+        \\        p = String(prop);
+        \\        v = String(value);
+        \\      }
+        \\      if (!p) return false;
+        \\      var el = document.createElement('div');
+        \\      try { el.style.setProperty(p, v); } catch (e) { return false; }
+        \\      var back = '';
+        \\      try { back = el.style.getPropertyValue(p); } catch (e) { back = ''; }
+        \\      return back !== '' && back !== null && back !== undefined;
+        \\    } catch (e) {
+        \\      return false;
+        \\    }
+        \\  };
+        \\  /* CSS.escape(v) per CSSOM §6.5.1 */
+        \\  CSS_obj.escape = function(v){
+        \\    v = String(v);
+        \\    if (!v.length) return '';
+        \\    var r = '', i = 0, c;
+        \\    if (v.length === 1 && v.charCodeAt(0) === 0) return '\uFFFD';
+        \\    for (; i < v.length; i++) {
+        \\      c = v.charCodeAt(i);
+        \\      if (c === 0) r += '\uFFFD';
+        \\      else if ((c >= 1 && c <= 31) || c === 127 ||
+        \\               (i === 0 && c >= 48 && c <= 57) ||
+        \\               (i === 1 && c >= 48 && c <= 57 && v.charCodeAt(0) === 45)) {
+        \\        r += '\\' + c.toString(16) + ' ';
+        \\      } else if (i === 0 && c === 45 && v.length === 1) {
+        \\        r += '\\' + v.charAt(i);
+        \\      } else if (c >= 128 || c === 45 || c === 95 ||
+        \\                 (c >= 48 && c <= 57) || (c >= 65 && c <= 90) ||
+        \\                 (c >= 97 && c <= 122)) {
+        \\        r += v.charAt(i);
+        \\      } else {
+        \\        r += '\\' + v.charAt(i);
+        \\      }
+        \\    }
+        \\    return r;
+        \\  };
+        \\  globalThis.CSS = CSS_obj;
         \\})();
     ;
 
