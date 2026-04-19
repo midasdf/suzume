@@ -1334,6 +1334,19 @@ export fn suzume_element_matches(node: *lxb.lxb_dom_node_t, sel_ptr: [*]const u8
     return elementMatchesSelector(node, sel_ptr[0..sel_len]);
 }
 
+/// Throw a SyntaxError DOMException with a message that includes the offending
+/// selector string and method name, per WebIDL error-message convention.
+/// DOM §4.2.6 "scope-matching a selectors string": parse failures throw
+/// SyntaxError. The message text is not spec-mandated but must be informative.
+fn throwSelectorSyntax(c: *qjs.JSContext, method: []const u8, sel: []const u8) qjs.JSValue {
+    var buf: [512]u8 = undefined;
+    // Clip the selector in the message to keep the buffer bounded.
+    const max_sel_show: usize = 256;
+    const shown = if (sel.len > max_sel_show) sel[0..max_sel_show] else sel;
+    const msg = std.fmt.bufPrint(&buf, "Failed to execute '{s}': '{s}' is not a valid selector.", .{ method, shown }) catch "is not a valid selector.";
+    return api.throwDOMException(c, "SyntaxError", msg);
+}
+
 pub fn elementMatches(
     ctx: ?*qjs.JSContext,
     this_val: qjs.JSValue,
@@ -1348,7 +1361,7 @@ pub fn elementMatches(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel = s.ptr[0..s.len];
     if (hasUndeclaredNamespace(sel))
-        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+        return throwSelectorSyntax(c, "matches", sel);
     return quickjs.JS_NewBool(elementMatchesSelector(node, sel));
 }
 
@@ -1368,7 +1381,7 @@ pub fn elementClosest(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel = s.ptr[0..s.len];
     if (hasUndeclaredNamespace(sel))
-        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+        return throwSelectorSyntax(c, "closest", sel);
 
     // Walk up from this element — :scope refers to this element
     setScopeElement(node);
@@ -1397,7 +1410,7 @@ pub fn elementQuerySelector(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel = s.ptr[0..s.len];
     if (hasUndeclaredNamespace(sel))
-        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+        return throwSelectorSyntax(c, "querySelector", sel);
 
     setScopeElement(node);
     defer clearScopeElement();
@@ -1419,7 +1432,7 @@ pub fn elementQuerySelectorAll(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel_qs = s.ptr[0..s.len];
     if (hasUndeclaredNamespace(sel_qs))
-        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+        return throwSelectorSyntax(c, "querySelectorAll", sel_qs);
 
     setScopeElement(node);
     defer clearScopeElement();
@@ -1587,7 +1600,7 @@ pub fn documentQuerySelector(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel_d = s.ptr[0..s.len];
     if (hasUndeclaredNamespace(sel_d))
-        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+        return throwSelectorSyntax(c, "querySelector", sel_d);
 
     const doc_node = api.dom_doc.getDocumentNode() orelse return quickjs.JS_NULL();
     const found = walkTreeBySelector(doc_node, sel_d) orelse return quickjs.JS_NULL();
@@ -1607,7 +1620,7 @@ pub fn documentQuerySelectorAll(
     defer qjs.JS_FreeCString(c, s.ptr);
     const sel_da = s.ptr[0..s.len];
     if (hasUndeclaredNamespace(sel_da))
-        return api.throwDOMException(c, "SyntaxError", "'" ++ "' is not a valid selector.");
+        return throwSelectorSyntax(c, "querySelectorAll", sel_da);
 
     const arr = qjs.JS_NewArray(c);
     if (quickjs.JS_IsException(arr)) return arr;
