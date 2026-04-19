@@ -459,16 +459,64 @@ fn skipWsAndComments(s: []const u8, pos: *usize) void {
     }
 }
 
-/// If raw_val ends with "!important" (case-insensitive, possibly with whitespace),
-/// return the trimmed value without the suffix.  Otherwise return null.
+/// Strip trailing whitespace + CSS comments from `s`. Returns the resulting slice.
+/// Iterates until no more trailing whitespace/comments can be removed (comments
+/// may be nested between whitespace runs: `red /*a*/ /*b*/`).
+fn stripTrailingWsComments(s: []const u8) []const u8 {
+    var cur = s;
+    while (true) {
+        const before = cur;
+        cur = std.mem.trimEnd(u8, cur, " \t\r\n\x0c");
+        if (cur.len >= 2 and cur[cur.len - 1] == '/' and cur[cur.len - 2] == '*') {
+            // Walk back to find the matching '/*'
+            var i: usize = cur.len - 2;
+            var found = false;
+            while (i > 0) {
+                i -= 1;
+                if (i + 1 < cur.len and cur[i] == '/' and cur[i + 1] == '*') {
+                    found = true;
+                    cur = cur[0..i];
+                    break;
+                }
+            }
+            if (!found) return cur;
+        }
+        if (cur.len == before.len) return cur;
+    }
+}
+
+/// If raw_val ends with "!important" (case-insensitive), possibly with
+/// whitespace and/or CSS comments interleaved between `!` and `important`
+/// and at the tail, return the trimmed value without the suffix.
+/// Otherwise return null.
+///
+/// CSS Syntax §5.4.5 *consume a declaration* step 4: look at the last two
+/// non-whitespace, non-comment tokens; if they are `!` + `important`, set
+/// the important flag and drop them from the value.
 fn endsWithImportant(raw_val: []const u8) ?[]const u8 {
-    const s = std.mem.trimEnd(u8, raw_val, " \t\r\n");
-    const suffix = "!important";
-    if (s.len < suffix.len) return null;
-    const tail = s[s.len - suffix.len ..];
-    if (!std.ascii.eqlIgnoreCase(tail, suffix)) return null;
-    const before = std.mem.trimEnd(u8, s[0 .. s.len - suffix.len], " \t\r\n");
-    return before;
+    // Strip trailing whitespace + comments.
+    var s = stripTrailingWsComments(raw_val);
+    const important = "important";
+    if (s.len < important.len) return null;
+    const tail = s[s.len - important.len ..];
+    if (!std.ascii.eqlIgnoreCase(tail, important)) return null;
+    // Ensure the character before `important` is a word boundary.
+    if (s.len > important.len) {
+        const prev = s[s.len - important.len - 1];
+        if ((prev >= 'A' and prev <= 'Z') or (prev >= 'a' and prev <= 'z') or
+            (prev >= '0' and prev <= '9') or prev == '-' or prev == '_')
+            return null;
+    } else {
+        // No "!" before "important" at all.
+        return null;
+    }
+    s = s[0 .. s.len - important.len];
+    // Strip ws + comments between `!` and `important`.
+    s = stripTrailingWsComments(s);
+    if (s.len == 0 or s[s.len - 1] != '!') return null;
+    s = s[0 .. s.len - 1];
+    // Final remainder: trim trailing ws + comments.
+    return stripTrailingWsComments(s);
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────
@@ -1284,4 +1332,94 @@ test "CSSOM §6.7.3: setProperty clears important when re-set with empty priorit
     try list.upsert(alloc, "color", "red", false);
     try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
     try std.testing.expect(!list.entries.items[0].important);
+}
+
+// ── Layer 3A: !important parse robustness ─────────────────────────────
+//
+// CSS Syntax §5.4.5 *consume a declaration* step 4: examine the last two
+// non-whitespace, non-comment tokens. If they are `!` + `important`, set
+// the important flag and drop them from the value.
+
+test "Layer3A important: basic trailing !important" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try parseIntoList(&list, alloc, "color: red !important");
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(list.entries.items[0].important);
+}
+
+test "Layer3A important: uppercase IMPORTANT" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try parseIntoList(&list, alloc, "color: red !IMPORTANT");
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(list.entries.items[0].important);
+}
+
+test "Layer3A important: whitespace between ! and important" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try parseIntoList(&list, alloc, "color: red !  important");
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(list.entries.items[0].important);
+}
+
+test "Layer3A important: trailing comment after !important" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try parseIntoList(&list, alloc, "color: red !important /* trailing */");
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(list.entries.items[0].important);
+}
+
+test "Layer3A important: comment between ! and important" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try parseIntoList(&list, alloc, "color: red ! /* x */ important");
+    try std.testing.expectEqualStrings("red", list.entries.items[0].value);
+    try std.testing.expect(list.entries.items[0].important);
+}
+
+test "Layer3A important: not important for !foo tail" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+    try parseIntoList(&list, alloc, "color: red !foo");
+    try std.testing.expectEqual(@as(usize, 1), list.entries.items.len);
+    // Whole tail preserved as value (no important stripped).
+    try std.testing.expect(!list.entries.items[0].important);
+    try std.testing.expect(std.mem.indexOf(u8, list.entries.items[0].value, "!foo") != null);
+}
+
+test "Layer3A important: no match when !important is the full value" {
+    // A bare "!important" (no preceding value) has no remainder — ill-formed,
+    // but the helper still reports the flag and returns an empty remainder.
+    // parseIntoList filters out empty values (see Layer3A normalisation commit).
+    const r = endsWithImportant("!important");
+    try std.testing.expect(r != null);
+    try std.testing.expectEqualStrings("", r.?);
+}
+
+test "Layer3A important: word-boundary rejects 'un!important' suffix glue" {
+    // "something!important" (no whitespace before `!`) must NOT be flagged
+    // because there's no `!` as a separate token — the leading `t` of
+    // `red!important` is still valid though, per CSS Syntax §5.4.5:
+    // `!` is always its own token. Our implementation requires the `!`
+    // to be directly preceded by ws/comment or be the value start.
+    //
+    // Validate: "red!important" — the `!` is its own token, important set,
+    // remainder "red".
+    const r = endsWithImportant("red!important");
+    try std.testing.expect(r != null);
+    try std.testing.expectEqualStrings("red", r.?);
+
+    // Whereas "redimportant" (no bang) → null.
+    const r2 = endsWithImportant("redimportant");
+    try std.testing.expect(r2 == null);
 }
