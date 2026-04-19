@@ -5358,6 +5358,155 @@ test "eval: Uint8Array slice" {
     try std.testing.expectApproxEqAbs(@as(f64, 7.0), result.asNumber(), 0.001);
 }
 
+// ── TypedArray kind differentiation (ECMA-262 §23.2) ───────────────
+
+test "eval: Int8Array stores negative values correctly" {
+    const result = try evalExpr(
+        \\var a = new Int8Array(1);
+        \\a[0] = -1;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8Array wraps 256 to 0" {
+    const result = try evalExpr(
+        \\var a = new Uint8Array(1);
+        \\a[0] = 256;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Int8Array wraps 128 to -128" {
+    const result = try evalExpr(
+        \\var a = new Int8Array(1);
+        \\a[0] = 128;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, -128.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint16Array stores 65535 correctly" {
+    const result = try evalExpr(
+        \\var a = new Uint16Array(1);
+        \\a[0] = 65535;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 65535.0), result.asNumber(), 0.001);
+}
+
+test "eval: Int16Array stores -1 correctly" {
+    const result = try evalExpr(
+        \\var a = new Int16Array(1);
+        \\a[0] = -1;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, -1.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint32Array stores 4294967295 correctly" {
+    const result = try evalExpr(
+        \\var a = new Uint32Array(1);
+        \\a[0] = 4294967295;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 4294967295.0), result.asNumber(), 1.0);
+}
+
+test "eval: Int32Array stores -1 then Uint32Array views same buffer as 4294967295" {
+    const result = try evalExpr(
+        \\var buf = new ArrayBuffer(4);
+        \\var i32 = new Int32Array(buf);
+        \\var u32 = new Uint32Array(buf);
+        \\i32[0] = -1;
+        \\u32[0]
+    );
+    // -1 in two's complement 32-bit = 0xFFFFFFFF = 4294967295
+    try std.testing.expectApproxEqAbs(@as(f64, 4294967295.0), result.asNumber(), 1.0);
+}
+
+test "eval: Float32Array stores and reads back a value" {
+    const result = try evalExpr(
+        \\var a = new Float32Array(1);
+        \\a[0] = 1.5;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.5), result.asNumber(), 0.001);
+}
+
+test "eval: Float64Array stores and reads back a value" {
+    const result = try evalExpr(
+        \\var a = new Float64Array(1);
+        \\a[0] = 3.14159265358979;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.14159265358979), result.asNumber(), 0.000001);
+}
+
+test "eval: Float64Array length is element count not byte count" {
+    const result = try evalExpr(
+        \\var a = new Float64Array(4);
+        \\a.length
+    );
+    // 4 float64 elements = 32 bytes, but length should be 4
+    try std.testing.expectApproxEqAbs(@as(f64, 4.0), result.asNumber(), 0.001);
+}
+
+test "eval: Int32Array length is element count" {
+    const result = try evalExpr(
+        \\var a = new Int32Array(8);
+        \\a.length
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 8.0), result.asNumber(), 0.001);
+}
+
+test "eval: Float32Array stores IEEE754 and Float64Array reads different interpretation" {
+    // Write 1.0 as f32 into ArrayBuffer, verify f64 reads the 4-byte f32 bits differently
+    const result = try evalExpr(
+        \\var buf = new ArrayBuffer(4);
+        \\var f32 = new Float32Array(buf);
+        \\f32[0] = 1.0;
+        \\f32[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 1.0), result.asNumber(), 0.0001);
+}
+
+test "eval: Uint8ClampedArray clamps 300 to 255" {
+    const result = try evalExpr(
+        \\var a = new Uint8ClampedArray(1);
+        \\a[0] = 300;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 255.0), result.asNumber(), 0.001);
+}
+
+test "eval: Uint8ClampedArray clamps -1 to 0" {
+    const result = try evalExpr(
+        \\var a = new Uint8ClampedArray(1);
+        \\a[0] = -1;
+        \\a[0]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 0.0), result.asNumber(), 0.001);
+}
+
+test "eval: Int32Array from array conversion" {
+    const result = try evalExpr(
+        \\var a = new Int32Array([-1, 0, 1, 2147483647]);
+        \\a[0] + a[2] + a[3]
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2147483647.0), result.asNumber(), 1.0);
+}
+
+test "eval: typed array byteLength vs length differ for multi-byte elements" {
+    const result = try evalExpr(
+        \\var a = new Int32Array(3);
+        \\a.byteLength
+    );
+    // 3 int32 elements = 12 bytes
+    try std.testing.expectApproxEqAbs(@as(f64, 12.0), result.asNumber(), 0.001);
+}
+
 test "eval: Object.getOwnPropertyDescriptors includes symbol keys" {
     const result = try evalExpr(
         \\var sym = Symbol("test");
@@ -5904,3 +6053,31 @@ test "Layer 0E: large function body triggers long-jump encoding" {
     try std.testing.expectApproxEqAbs(@as(f64, 1444150.0), result.asNumber(), 1.0);
 }
 
+
+// Layer 0D: instruction budget — infinite loop must throw RangeError, not hang.
+test "Layer 0D: instruction budget exhaustion throws RangeError" {
+    const source = "var x = 0; while (true) { x = x + 1; }";
+    var compiler = Compiler.init(std.testing.allocator, source);
+    defer compiler.deinit();
+    var bc = try compiler.compile();
+    defer bc.deinit(std.testing.allocator);
+    var vm_inst = VM.init(std.testing.allocator, &bc, compiler.parser.pool);
+    defer vm_inst.deinit();
+    try vm_inst.initBuiltins();
+    // Set a low budget so the infinite loop is interrupted quickly.
+    vm_inst.setBudget(1_000);
+    // execute() must return without hanging; pending_throw holds the RangeError.
+    _ = try vm_inst.execute();
+    // A RangeError must have been thrown (pending_throw is set).
+    const thrown = vm_inst.pending_throw orelse {
+        return error.ExpectedRangeError;
+    };
+    // Verify it is an object whose "name" property contains "RangeError".
+    try std.testing.expect(thrown.isObject());
+    const obj = thrown.asJsObject();
+    const name_sid = try compiler.parser.pool.intern("name");
+    const name_val = obj.getProperty(name_sid) orelse JsValue.undefined_val;
+    try std.testing.expect(name_val.isString());
+    const range_sid = try compiler.parser.pool.intern("RangeError");
+    try std.testing.expectEqual(range_sid, name_val.asStringId());
+}

@@ -32,6 +32,40 @@ pub const ObjType = enum(u8) {
     proxy,
 };
 
+/// ECMA-262 §23.2 — element type tag for typed arrays.
+pub const TypedArrayKind = enum(u8) {
+    u8_t, // Uint8Array
+    i8_t, // Int8Array
+    u16_t, // Uint16Array
+    i16_t, // Int16Array
+    u32_t, // Uint32Array
+    i32_t, // Int32Array
+    f32_t, // Float32Array
+    f64_t, // Float64Array
+    u64_big, // BigUint64Array (stored as raw bytes, no BigInt JS value yet)
+    i64_big, // BigInt64Array  (stored as raw bytes, no BigInt JS value yet)
+    u8_clamped, // Uint8ClampedArray (clamp on write, same read as u8_t)
+
+    /// Number of bytes per element.
+    pub fn elementSize(self: TypedArrayKind) usize {
+        return switch (self) {
+            .u8_t, .i8_t, .u8_clamped => 1,
+            .u16_t, .i16_t => 2,
+            .u32_t, .i32_t, .f32_t => 4,
+            .f64_t, .u64_big, .i64_big => 8,
+        };
+    }
+};
+
+/// Backing storage for a typed array — owns or views raw bytes.
+pub const TypedArrayData = struct {
+    kind: TypedArrayKind,
+    /// Raw bytes. May be an owned allocation or a view into an ArrayBuffer.
+    bytes: []u8,
+    /// True when this object owns the allocation (must free on deinit).
+    owned: bool,
+};
+
 /// Per-property attribute bits (packed into one byte).
 pub const PropertyAttrs = packed struct(u8) {
     writable: bool = true,
@@ -121,8 +155,12 @@ pub const JsObject = struct {
         weak_set_data: std.AutoArrayHashMapUnmanaged(usize, void),
         generator_data: GeneratorData,
         iterator_data: IteratorData,
+        /// ArrayBuffer raw bytes (owned allocation).
         bytes_data: []u8,
+        /// ArrayBuffer view (not owned — slice into another buffer).
         bytes_view: []u8,
+        /// Typed array with element-type information.
+        typed_array_data: TypedArrayData,
         proxy_data: ProxyData,
     };
 
@@ -144,6 +182,7 @@ pub const JsObject = struct {
                 if (g.init_args.len > 0) allocator.free(g.init_args);
             },
             .bytes_data => |b| if (b.len > 0) allocator.free(b),
+            .typed_array_data => |ta| if (ta.owned and ta.bytes.len > 0) allocator.free(ta.bytes),
             .none, .native_fn, .dom_node, .dom_style, .regexp_data, .date_ms, .iterator_data, .bytes_view, .proxy_data => {},
         }
     }
