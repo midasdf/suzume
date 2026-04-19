@@ -196,8 +196,12 @@ pub fn elementGetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    // DOM §4.9 getAttribute: ASCII-lowercase only for HTML-document elements.
     var lower_buf: [1024]u8 = undefined;
-    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+    const name = if (isXmlDocumentForElement(c, this_val))
+        s.ptr[0..s.len]
+    else
+        lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
     if (val == null) {
@@ -641,8 +645,12 @@ pub fn elementHasAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
+    // DOM §4.9 hasAttribute: ASCII-lowercase only for HTML-document elements.
     var lower_buf: [1024]u8 = undefined;
-    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+    const name = if (isXmlDocumentForElement(c, this_val))
+        s.ptr[0..s.len]
+    else
+        lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
 
