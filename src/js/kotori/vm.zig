@@ -1,5 +1,6 @@
 const std = @import("std");
 const kio = @import("kotori_io.zig");
+const kotori_regex = @import("regex.zig");
 const ctime = @cImport({
     @cInclude("time.h");
 });
@@ -6459,37 +6460,23 @@ pub const VM = struct {
     };
 
     /// Entry point: search for pattern in str. Returns match + captures.
+    ///
+    /// Layer 0C Task 2 — delegates to the ECMA-262 §22.2-compliant engine in
+    /// `src/js/kotori/regex.zig` (backtracking NFA with lookahead/lookbehind,
+    /// backreferences, named groups). The legacy result shape is preserved so
+    /// existing call sites compile unchanged; `.captures` entries convert
+    /// from `kotori_regex.LegacyMatch` -> local `MatchResult`.
     fn regexSearch(pattern: []const u8, str: []const u8, ignore_case: bool) ?RegexResult {
-        var pat = pattern;
-        var anchored_start = false;
-        var anchored_end = false;
-        if (pat.len > 0 and pat[0] == '^') {
-            anchored_start = true;
-            pat = pat[1..];
-        }
-        if (pat.len > 0 and pat[pat.len - 1] == '$' and (pat.len < 2 or pat[pat.len - 2] != '\\')) {
-            anchored_end = true;
-            pat = pat[0 .. pat.len - 1];
-        }
-        var caps: [16]?MatchResult = [_]?MatchResult{null} ** 16;
-        if (anchored_start) {
-            var gc: u8 = 0;
-            if (regexExpr(pat, str, 0, ignore_case, &caps, &gc)) |end| {
-                if (anchored_end and end != str.len) return null;
-                return .{ .start = 0, .end = end, .captures = caps };
-            }
-            return null;
-        }
-        var pos: usize = 0;
-        while (pos <= str.len) : (pos += 1) {
-            caps = [_]?MatchResult{null} ** 16;
-            var gc: u8 = 0;
-            if (regexExpr(pat, str, pos, ignore_case, &caps, &gc)) |end| {
-                if (anchored_end and end != str.len) continue;
-                return .{ .start = pos, .end = end, .captures = caps };
+        const flags: kotori_regex.Flags = .{ .ignore_case = ignore_case };
+        const legacy = kotori_regex.searchLegacy(pattern, str, flags) orelse return null;
+        var out: RegexResult = .{ .start = legacy.start, .end = legacy.end };
+        var i: usize = 0;
+        while (i < legacy.captures.len and i < out.captures.len) : (i += 1) {
+            if (legacy.captures[i]) |m| {
+                out.captures[i] = .{ .start = m.start, .end = m.end };
             }
         }
-        return null;
+        return out;
     }
 
     /// Backward compat wrapper
