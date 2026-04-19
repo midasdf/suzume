@@ -64,6 +64,26 @@ fn classContains(class_str: []const u8, needle: []const u8) bool {
     return api.classContains(class_str, needle);
 }
 
+/// Returns true if the element's owner document is an XML document
+/// (i.e. `document._isXmlDoc === true`). Used to gate ASCII-lowercasing
+/// of non-namespaced attribute names per DOM §4.9 / HTML §2.1: HTML
+/// documents lowercase on set, XML documents preserve case.
+///
+/// The `_isXmlDoc` flag is set by `Document.implementation.createDocument()`
+/// in `dom_document.zig` and consulted by `__buildAttr` in `dom_api.zig`;
+/// this helper keeps the native attribute functions in sync with that gate.
+/// Returns `false` (HTML behaviour) when ownerDocument is null/undefined
+/// or the flag is absent — preserving legacy behaviour for detached nodes.
+fn isXmlDocumentForElement(c: *qjs.JSContext, this_val: qjs.JSValue) bool {
+    const owner_doc = qjs.JS_GetPropertyStr(c, this_val, "ownerDocument");
+    defer qjs.JS_FreeValue(c, owner_doc);
+    if (quickjs.JS_IsUndefined(owner_doc) or quickjs.JS_IsNull(owner_doc)) return false;
+    const flag = qjs.JS_GetPropertyStr(c, owner_doc, "_isXmlDoc");
+    defer qjs.JS_FreeValue(c, flag);
+    if (quickjs.JS_IsUndefined(flag) or quickjs.JS_IsNull(flag)) return false;
+    return qjs.JS_ToBool(c, flag) > 0;
+}
+
 fn throwDOMException(c: *qjs.JSContext, name: []const u8, message: []const u8) qjs.JSValue {
     return api.throwDOMException(c, name, message);
 }
@@ -176,8 +196,12 @@ pub fn elementGetAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NULL();
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NULL();
     defer qjs.JS_FreeCString(c, s.ptr);
+    // DOM §4.9 getAttribute: ASCII-lowercase only for HTML-document elements.
     var lower_buf: [1024]u8 = undefined;
-    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+    const name = if (isXmlDocumentForElement(c, this_val))
+        s.ptr[0..s.len]
+    else
+        lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     var val_len: usize = 0;
     const val = lxb_dom_element_get_attribute(elem, name.ptr, name.len, &val_len);
     if (val == null) {
@@ -208,9 +232,13 @@ pub fn elementSetAttribute(
     }
     const val = jsStringToSlice(c, args[1]) orelse return quickjs.JS_UNDEFINED();
     defer qjs.JS_FreeCString(c, val.ptr);
-    // DOM spec: HTML elements lowercase attribute names
+    // DOM §4.9: if element is in an HTML document, ASCII-lowercase the
+    // qualified name; XML documents preserve case.
     var lower_buf: [1024]u8 = undefined;
-    const attr_name = lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
+    const attr_name = if (isXmlDocumentForElement(c, this_val))
+        name.ptr[0..name.len]
+    else
+        lowercaseAttrName(name.ptr[0..name.len], &lower_buf);
     // Capture old value before setting (for MutationObserver attributeOldValue)
     // Must copy to stack buffer because lexbor invalidates pointer on set_attribute
     var old_val_buf: [4096]u8 = undefined;
@@ -617,8 +645,12 @@ pub fn elementHasAttribute(
     const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
     const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_NewBool(false);
     defer qjs.JS_FreeCString(c, s.ptr);
+    // DOM §4.9 hasAttribute: ASCII-lowercase only for HTML-document elements.
     var lower_buf: [1024]u8 = undefined;
-    const name = lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
+    const name = if (isXmlDocumentForElement(c, this_val))
+        s.ptr[0..s.len]
+    else
+        lowercaseAttrName(s.ptr[0..s.len], &lower_buf);
     return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
 
