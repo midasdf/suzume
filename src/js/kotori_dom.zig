@@ -2596,6 +2596,117 @@ fn nativeCSSGetPropertyPriority(ctx: *anyopaque, _: JsValue, _: []const JsValue)
     return JsValue.initString(try vm.pool.intern(""));
 }
 
+/// CSSStyleDeclaration.setProperty(property, value[, priority]) — CSSOM §6.7.4.
+/// Writes the property into the element's inline `style` attribute using
+/// the same `updateStyleProp` helper that the `element.style.X = Y` path uses.
+fn nativeCSSSetProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2 or !this.isObject()) return JsValue.undefined_val;
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const prop_in = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    var name_buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &name_buf);
+    const new_val = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    var attr_len: usize = 0;
+    const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    var result_buf: [2048]u8 = undefined;
+    const new_style = updateStyleProp(old_style, css_prop, new_val, &result_buf);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+    setDomDirty();
+    return JsValue.undefined_val;
+}
+
+/// CSSStyleDeclaration.removeProperty(property) — CSSOM §6.7.5.
+/// Removes a property from the inline style by setting its value to "".
+fn nativeCSSRemoveProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0 or !this.isObject()) return JsValue.initString(try vm.pool.intern(""));
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const prop_in = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
+    var name_buf: [128]u8 = undefined;
+    const css_prop = camelToKebab(prop_in, &name_buf);
+    // Capture old value before removal (return value per spec).
+    var attr_len: usize = 0;
+    const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    const old_val = findCssPropValue(old_style, css_prop) orelse "";
+    const old_val_sid = try vm.pool.intern(old_val);
+    // Remove by writing empty value (updateStyleProp with "" removes the property).
+    var result_buf: [2048]u8 = undefined;
+    const new_style = updateStyleProp(old_style, css_prop, "", &result_buf);
+    _ = dom_b.lxb_dom_element_set_attribute(elem, "style", 5, new_style.ptr, new_style.len);
+    setDomDirty();
+    return JsValue.initString(old_val_sid);
+}
+
+/// CSSStyleDeclaration.item(index) — CSSOM §6.7.3.
+/// Returns the CSS property name at the given index, or "" if out of range.
+/// Parses the inline style attribute to enumerate property names.
+fn nativeCSSItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.initString(try vm.pool.intern(""));
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initString(try vm.pool.intern(""));
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    const idx: usize = if (args.len > 0) @intFromFloat(@max(0, @trunc(args[0].toNumber()))) else 0;
+    var attr_len: usize = 0;
+    const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    // Iterate through "prop:val;" pairs to find the idx-th property name.
+    var count: usize = 0;
+    var rest = style_str;
+    while (rest.len > 0) {
+        // Find next semicolon or end
+        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+        const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
+        if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
+        if (decl.len == 0) continue;
+        const colon = std.mem.indexOfScalar(u8, decl, ':') orelse continue;
+        const prop = std.mem.trim(u8, decl[0..colon], " \t\r\n");
+        if (prop.len == 0) continue;
+        if (count == idx) {
+            return JsValue.initString(try vm.pool.intern(prop));
+        }
+        count += 1;
+    }
+    return JsValue.initString(try vm.pool.intern(""));
+}
+
+/// CSSStyleDeclaration.length — CSSOM §6.7.3.
+/// Returns the number of declared properties in the inline style.
+fn nativeCSSLengthGet(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.initNumber(0);
+    const obj = this.asJsObject();
+    if (obj.obj_type != .dom_style) return JsValue.initNumber(0);
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
+    var attr_len: usize = 0;
+    const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
+        p[0..attr_len]
+    else
+        "";
+    var count: usize = 0;
+    var rest = style_str;
+    while (rest.len > 0) {
+        const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+        const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
+        if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
+        if (decl.len == 0) continue;
+        if (std.mem.indexOfScalar(u8, decl, ':') != null) count += 1;
+    }
+    return JsValue.initNumber(@floatFromInt(count));
+}
+
 fn nativeCreateTextNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     const doc = getDocFromThis(this) orelse return JsValue.null_val;
@@ -4337,6 +4448,17 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
 fn createStyleObj(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
     const obj = vm.createObj(.{ .obj_type = .dom_style }) catch return null;
     obj.data = .{ .dom_style = @ptrCast(elem) };
+    // CSSOM §6.7 CSSStyleDeclaration methods on the inline-style object.
+    // Mirror the registrations done in nativeGetComputedStyle so that both
+    // `element.style.getPropertyValue()` and `getComputedStyle(el).getPropertyValue()`
+    // resolve. Without this, the methods are undefined on inline style objects.
+    vm.registerNativeMethod(obj, "getPropertyValue",  &nativeCSSGetPropertyValue)  catch {};
+    vm.registerNativeMethod(obj, "getPropertyPriority",&nativeCSSGetPropertyPriority) catch {};
+    vm.registerNativeMethod(obj, "setProperty",        &nativeCSSSetProperty)        catch {};
+    vm.registerNativeMethod(obj, "removeProperty",     &nativeCSSRemoveProperty)     catch {};
+    vm.registerNativeMethod(obj, "item",               &nativeCSSItem)               catch {};
+    // `length` as a native getter via the same own-property approach.
+    vm.registerNativeMethod(obj, "length",             &nativeCSSLengthGet)          catch {};
     return JsValue.initObject(obj);
 }
 
