@@ -15,6 +15,9 @@ const std = @import("std");
 // ── Shared Name/QName validation (DOM §1.5) ────────────────────────
 const dom_names = @import("dom_names");
 
+// ── HTML §2.6 reflected attributes table (Layer 4A) ────────────────
+const refl = @import("html_reflection.zig");
+
 // ── Kotori engine types (via module alias, set in build.zig) ────────
 const kotori = @import("kotori");
 
@@ -1222,6 +1225,142 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// HTML §2.6 reflected-attribute dispatcher
+// ══════════════════════════════════════════════════════════════════════
+
+/// Resolve the HTML interface name for an element node (e.g. "HTMLInputElement").
+/// Returns null for non-HTML-NS elements or non-element nodes — those don't
+/// participate in HTML §2.6 reflection.
+fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    // Only HTML-namespace elements have HTML IDL reflections. Reject
+    // null-namespace, SVG, MathML, XLink, etc.
+    if (nsIdToUri(elem.node.ns)) |uri| {
+        if (!std.mem.eql(u8, uri, "http://www.w3.org/1999/xhtml")) return null;
+    } else {
+        return null;
+    }
+    var ln_len: usize = 0;
+    const ln_ptr = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return null;
+    const local_name = ln_ptr[0..ln_len];
+    const iface_mod = @import("kotori_html_interfaces.zig");
+    return iface_mod.resolveInterface("http://www.w3.org/1999/xhtml", local_name);
+}
+
+/// Reflection getter dispatch. Returns null if no reflection applies and
+/// the caller should continue with its fallback.
+///
+/// HTML §2.6 — one of:
+///   - DOMString → getAttribute-or-"" (§2.6.2 "DOMString")
+///   - boolean → hasAttribute (§2.6.2 "boolean")
+///   - long → rules-for-parsing-integers §2.4.4.1, default on fail
+///   - unsigned long → rules-for-parsing-non-negative §2.4.4.2
+///   - url → DOMString for now (Layer 4B will canonicalize)
+fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
+    const iface = resolveHtmlIfaceForNode(node) orelse return null;
+    const row = refl.lookup(iface, name) orelse return null;
+    switch (row.type) {
+        .domstring, .url => return getAttr(vm, node, row.content),
+        .boolean => {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            const has = dom_b.lxb_dom_element_has_attribute(elem, row.content.ptr, row.content.len);
+            return JsValue.initBool(has);
+        },
+        .long => {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseInteger(p[0..val_len])) |v| {
+                    return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+        .unsigned_long => {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseNonNegativeInteger(p[0..val_len])) |v| {
+                    return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+    }
+}
+
+/// Reflection setter dispatch. Returns true if the reflection was applied
+/// (caller should not continue); false if no reflection matched.
+fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsValue) bool {
+    const iface = resolveHtmlIfaceForNode(node) orelse return false;
+    const row = refl.lookup(iface, name) orelse return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    switch (row.type) {
+        .domstring, .url => {
+            // ECMAScript ToString. `null` → "null", `undefined` → "undefined"
+            // per §2.6.2 DOMString setter — the spec steps "set the content
+            // attribute to value" follow a pre-ToString conversion.
+            var buf: [64]u8 = undefined;
+            const s = valueToString(vm, val, &buf);
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .boolean => {
+            if (val.isTruthy()) {
+                _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, "", 0);
+            } else {
+                _ = dom_b.lxb_dom_element_remove_attribute(elem, row.content.ptr, row.content.len);
+            }
+            return true;
+        },
+        .long => {
+            const n = val.toNumber();
+            const i32v: i32 = if (std.math.isFinite(n)) blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                if (n < @as(f64, std.math.minInt(i32))) break :blk std.math.minInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            } else 0;
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{i32v}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .unsigned_long => {
+            const n = val.toNumber();
+            // §2.6.2 unsigned long setter: negative / non-finite ⇒ default.
+            const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            };
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{out}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+    }
+}
+
+/// Minimal ECMAScript ToString for DOMString setters. Covers string,
+/// number, boolean, null, undefined. Falls back to "[object Object]" for
+/// objects (spec-correct for the primitive path we care about here — full
+/// ToPrimitive coercion lives in kotori/vm.zig).
+fn valueToString(vm: *VM, val: JsValue, buf: []u8) []const u8 {
+    if (val.isString()) {
+        return vm.pool.get(val.asStringId()) orelse "";
+    }
+    if (val.isBool()) return if (val.asBool()) "true" else "false";
+    if (val.isNumber()) {
+        return std.fmt.bufPrint(buf, "{d}", .{val.toNumber()}) catch "0";
+    }
+    if (val.isNull()) return "null";
+    if (val.isUndefined()) return "undefined";
+    return "[object Object]";
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // Property interception handlers
 // ══════════════════════════════════════════════════════════════════════
 
@@ -1283,6 +1422,11 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, node, "id");
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
+
+    // HTML §2.6 reflected attributes (Layer 4A). Dispatches via the
+    // table in html_reflection.zig. Early-return on hit; fall through
+    // to the remaining hard-coded properties on miss.
+    if (reflectionGet(vm, node, name)) |v| return v;
 
     // Element.attributes (DOM §4.9.2 — NamedNodeMap, identity-cached).
     //
@@ -1601,6 +1745,12 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
     }
     if (eql(name, "className")) {
         setAttrFromVal(vm, node, "class", val);
+        setDomDirty();
+        return true;
+    }
+
+    // HTML §2.6 reflected attributes setter (Layer 4A).
+    if (reflectionSet(vm, node, name, val)) {
         setDomDirty();
         return true;
     }
