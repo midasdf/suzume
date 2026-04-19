@@ -234,7 +234,7 @@ fn matchSingleSelector(node: *lxb.lxb_dom_node_t, sel: []const u8) bool {
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
 
     // Parse into parts with combinators
-    var parts: [16]SelectorPart = undefined;
+    var parts: [64]SelectorPart = undefined;
     const count = parseSelectorParts(sel, &parts);
     if (count == 0) return false;
 
@@ -1536,7 +1536,7 @@ pub fn walkTreeBySelector(node: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb
     }
 
     // Parse selector with combinators (>, +, ~, space)
-    var parts_buf: [16]SelectorPart = undefined;
+    var parts_buf: [64]SelectorPart = undefined;
     const part_count = parseSelectorParts(trimmed, &parts_buf);
     if (part_count == 0) return null;
     const parts = parts_buf[0..part_count];
@@ -2087,7 +2087,7 @@ pub fn walkTreeCollect(ctx: *qjs.JSContext, root: *lxb.lxb_dom_node_t, selector:
         }
     }
 
-    var parts_buf: [16]SelectorPart = undefined;
+    var parts_buf: [64]SelectorPart = undefined;
     const part_count = parseSelectorParts(trimmed, &parts_buf);
     if (part_count == 0) return;
     const parts = parts_buf[0..part_count];
