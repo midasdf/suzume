@@ -64,6 +64,26 @@ fn classContains(class_str: []const u8, needle: []const u8) bool {
     return api.classContains(class_str, needle);
 }
 
+/// Returns true if the element's owner document is an XML document
+/// (i.e. `document._isXmlDoc === true`). Used to gate ASCII-lowercasing
+/// of non-namespaced attribute names per DOM §4.9 / HTML §2.1: HTML
+/// documents lowercase on set, XML documents preserve case.
+///
+/// The `_isXmlDoc` flag is set by `Document.implementation.createDocument()`
+/// in `dom_document.zig` and consulted by `__buildAttr` in `dom_api.zig`;
+/// this helper keeps the native attribute functions in sync with that gate.
+/// Returns `false` (HTML behaviour) when ownerDocument is null/undefined
+/// or the flag is absent — preserving legacy behaviour for detached nodes.
+fn isXmlDocumentForElement(c: *qjs.JSContext, this_val: qjs.JSValue) bool {
+    const owner_doc = qjs.JS_GetPropertyStr(c, this_val, "ownerDocument");
+    defer qjs.JS_FreeValue(c, owner_doc);
+    if (quickjs.JS_IsUndefined(owner_doc) or quickjs.JS_IsNull(owner_doc)) return false;
+    const flag = qjs.JS_GetPropertyStr(c, owner_doc, "_isXmlDoc");
+    defer qjs.JS_FreeValue(c, flag);
+    if (quickjs.JS_IsUndefined(flag) or quickjs.JS_IsNull(flag)) return false;
+    return qjs.JS_ToBool(c, flag) > 0;
+}
+
 fn throwDOMException(c: *qjs.JSContext, name: []const u8, message: []const u8) qjs.JSValue {
     return api.throwDOMException(c, name, message);
 }
