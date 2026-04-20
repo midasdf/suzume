@@ -2302,3 +2302,117 @@ test "Phase 6.2: calc-size basis in first arg accepted" {
     const v = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("calc-size(auto, 100px + 10%)", v);
 }
+
+// ── MutationObserver Layer 1B tests ─────────────────────────────────
+
+test "MO subtree:true records childList mutation on descendant" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"parent\"><span id=\"child\"></span></div></body></html>",
+        \\var records = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
+        \\});
+        \\var parent = document.getElementById("parent");
+        \\var child = document.getElementById("child");
+        \\obs.observe(parent, { childList: true, subtree: true });
+        \\var newEl = document.createElement("em");
+        \\child.appendChild(newEl);
+        \\records.length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    // subtree:true means mutation on child (descendant of parent) must be recorded
+    try std.testing.expect(result.isNumber() and result.toNumber() == 1.0);
+}
+
+test "MO subtree:false does NOT record childList mutation on descendant" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"parent\"><span id=\"child\"></span></div></body></html>",
+        \\var records = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
+        \\});
+        \\var parent = document.getElementById("parent");
+        \\var child = document.getElementById("child");
+        \\obs.observe(parent, { childList: true, subtree: false });
+        \\var newEl = document.createElement("em");
+        \\child.appendChild(newEl);
+        \\records.length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    // subtree:false — mutation on child (not parent itself) must NOT be recorded
+    try std.testing.expect(result.isNumber() and result.toNumber() == 0.0);
+}
+
+test "MO characterData records data setter mutation" {
+    var ctx = try TestCtx.init(
+        "<html><body><p id=\"p\">hello</p></body></html>",
+        \\var records = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
+        \\});
+        \\var p = document.getElementById("p");
+        \\var text = p.firstChild;
+        \\obs.observe(text, { characterData: true });
+        \\text.data = "world";
+        \\records.length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isNumber() and result.toNumber() == 1.0);
+}
+
+test "MO characterDataOldValue captured in data setter" {
+    var ctx = try TestCtx.init(
+        "<html><body><p id=\"p\">hello</p></body></html>",
+        \\var oldVals = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) oldVals.push(recs[i].oldValue);
+        \\});
+        \\var p = document.getElementById("p");
+        \\var text = p.firstChild;
+        \\obs.observe(text, { characterData: true, characterDataOldValue: true });
+        \\text.data = "world";
+        \\oldVals[0];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("hello", v);
+}
+
+test "MO characterData records textContent setter on Text node" {
+    var ctx = try TestCtx.init(
+        "<html><body><p id=\"p\">hello</p></body></html>",
+        \\var records = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) records.push(recs[i]);
+        \\});
+        \\var text = document.getElementById("p").firstChild;
+        \\obs.observe(text, { characterData: true });
+        \\text.textContent = "changed";
+        \\records.length;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isNumber() and result.toNumber() == 1.0);
+}
+
+test "MO attributeOldValue captured in removeAttribute" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\" data-x=\"42\"></div></body></html>",
+        \\var oldVals = [];
+        \\var obs = new MutationObserver(function(recs) {
+        \\  for (var i = 0; i < recs.length; i++) oldVals.push(recs[i].oldValue);
+        \\});
+        \\var el = document.getElementById("t");
+        \\obs.observe(el, { attributes: true, attributeOldValue: true });
+        \\el.removeAttribute("data-x");
+        \\oldVals[0];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("42", v);
+}

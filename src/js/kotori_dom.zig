@@ -3454,6 +3454,24 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     const attr_name = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
     // DOM §4.9.1: invalidate the cached Attr wrapper *before* lexbor frees
     // the attribute struct, otherwise the cache would hold a dangling key.
+    // MO: capture old value BEFORE removal so attributeOldValue is correct (DOM §4.3.3).
+    var old_val: ?[]const u8 = null;
+    var old_val_buf: [256]u8 = undefined;
+    var old_val_heap: ?[]u8 = null;
+    defer if (old_val_heap) |h| vm.allocator.free(h);
+    if (g_mo_list.items.len > 0) {
+        var old_len: usize = 0;
+        if (dom_b.lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &old_len)) |ptr| {
+            if (old_len <= old_val_buf.len) {
+                @memcpy(old_val_buf[0..old_len], ptr[0..old_len]);
+                old_val = old_val_buf[0..old_len];
+            } else if (vm.allocator.alloc(u8, old_len)) |h| {
+                old_val_heap = h;
+                @memcpy(h, ptr[0..old_len]);
+                old_val = h;
+            } else |_| {}
+        }
+    }
     if (dom_b.lxb_dom_element_attr_by_name(elem, attr_name.ptr, attr_name.len)) |a| {
         // DOM §4.9 Attr.ownerElement — "remove an attribute" clears owner.
         // Must run BEFORE invalidateAttrWrapper so the cached wrapper
@@ -3466,6 +3484,10 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
     // DOM §4.9.2 NamedNodeMap live-map version bump.
     bumpElemAttrVersion(elem);
+    // MO: queue attribute mutation record with captured old value.
+    if (g_mo_list.items.len > 0) {
+        recordAttributeMutation(vm, node, attr_name, old_val);
+    }
     return JsValue.undefined_val;
 }
 
@@ -7553,15 +7575,36 @@ fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
             recordChildListMutationBulk(vm, node, added_wrapped, removed_slice);
         }
     } else {
-        // CharacterData nodes: set data directly (characterData MO record
-        // for these types is handled separately by the Text/Comment/PI
-        // setters in dom_node.zig / dom_text.zig).
+        // CharacterData nodes (Text/Comment/PI): setting .data / .nodeValue /
+        // .textContent triggers a characterData MutationRecord (DOM §4.3.3).
+        // Capture old value BEFORE the write so characterDataOldValue is correct.
+        var old_buf: [256]u8 = undefined;
+        var old_heap: ?[]u8 = null;
+        defer if (old_heap) |h| vm.allocator.free(h);
+        const old_val: ?[]const u8 = if (g_mo_list.items.len > 0) blk: {
+            var old_len: usize = 0;
+            if (dom_b.lxb_dom_node_text_content(node, &old_len)) |ptr| {
+                if (old_len <= old_buf.len) {
+                    @memcpy(old_buf[0..old_len], ptr[0..old_len]);
+                    break :blk old_buf[0..old_len];
+                }
+                const h = vm.allocator.alloc(u8, old_len) catch break :blk null;
+                old_heap = h;
+                @memcpy(h, ptr[0..old_len]);
+                break :blk h;
+            }
+            break :blk null;
+        } else null;
+
         if (val.isNull()) {
             _ = dom_b.lxb_dom_node_text_content_set(node, "", 0);
         } else {
             var buf: [64]u8 = undefined;
             const s = VM.formatValue(vm.pool, val, &buf);
             _ = dom_b.lxb_dom_node_text_content_set(node, s.ptr, s.len);
+        }
+        if (g_mo_list.items.len > 0) {
+            recordCharDataMutation(vm, node, old_val);
         }
     }
 }
