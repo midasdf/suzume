@@ -1474,16 +1474,26 @@ pub const VM = struct {
                             self.push(val);
                             continue;
                         }
-                        // Wave 6 Phase 6.2 NARROW: bracket SET intentionally
-                        // falls through to generic property store (baseline
-                        // Phase 6.0 behavior). Rationale: enabling bracket SET
-                        // through domStyleSetProp requires a complete deep
-                        // validator for `*-invalid.html` tests — surface check
-                        // accepts round(1, 1%) / abs(1 + ) / attr() / etc.
-                        // Bracket GET still routes through DOM for
-                        // computed-style access (see .get_elem above).
-                        // Re-enable once validator covers calc-arithmetic
-                        // and full type-compat checks (future Phase 6.4+).
+                        // Wave 12 Track I: DOM node/style property interception
+                        // via bracket SET. Mirrors the dot-access dispatch at
+                        // `.set_prop` (line ~1261) so WPT helpers using
+                        // `el.style[prop] = val` reach `domStyleSetProp` with
+                        // the deep CSS validator gate (css_validator.zig) that
+                        // implements CSSOM §6.7.2 "invalid values leave the
+                        // specified value unchanged". Previously rolled back
+                        // in Wave 6 Phase 6.2 (commit b6cbaa5) pending full
+                        // validator coverage — Phase 6.3 closed math/gradient/
+                        // transform/attr/calc-arithmetic gaps so the reland
+                        // no longer regresses `*-invalid.html` tests. Numeric
+                        // bracket keys on dom_* objects (`style[0]`, item(i))
+                        // are handled below by the generic array-index path,
+                        // so only route string keys through the DOM hook.
+                        if (key.isString() and (obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_set_prop != null) {
+                            if (self.dom_set_prop.?(self, obj, key.asStringId(), val)) {
+                                self.push(val);
+                                continue;
+                            }
+                        }
                         if (obj.obj_type == .array) {
                             if (self.toArrayIndex(key)) |i| {
                                 // Grow array if needed
