@@ -4055,14 +4055,130 @@ fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
 //   event.currentTarget = wrap(N)
 //   event.composedPath() returns the path filtered to nodes visible from N's
 //   tree root (closed-tree filtering).
+
+/// DOM §2.9 "inner invoke" — fire all listeners registered on
+/// `target_addr` for (`type_str`, `capture_flag`) against `ev_obj`. Honors:
+///   - `removed` soft-delete flag (DOM §2.7.1 step 5 / §2.9 step 5.3)
+///   - `once`: mark removed before invoking; free the record after
+///   - `passive`: temporarily force `cancelable=false` and restore
+///     `defaultPrevented` / `returnValue` after the callback
+///   - `_stopImmediate`: break out of the listener loop
+///
+/// `match_any_capture = true` means capture_flag is ignored (used by the
+/// standalone EventTarget path where there is no tree so capture vs bubble
+/// is irrelevant — all listeners fire).
+///
+/// Returns `true` if `_stopImmediate` was hit inside the loop (so the caller
+/// can abort subsequent phases).
+fn runListenersForTarget(
+    vm: *VM,
+    target_addr: usize,
+    type_str: []const u8,
+    ev_obj: *JsObject,
+    capture_flag: bool,
+    match_any_capture: bool,
+) bool {
+    // Snapshot matching listeners BEFORE iterating so that mid-dispatch
+    // add/remove/abort do not perturb the iteration. `removed` is a
+    // soft-delete flag checked again at call time because orderedRemove
+    // shifts items (spec §2.9 step 5.3).
+    var snapshot: std.ArrayListUnmanaged(JsValue) = .empty;
+    defer snapshot.deinit(g_alloc);
+    for (g_listeners.items) |entry| {
+        if (@intFromPtr(entry.node_ptr) != target_addr) continue;
+        if (!std.mem.eql(u8, entry.event_type, type_str)) continue;
+        if (entry.removed) continue;
+        if (!match_any_capture and entry.capture != capture_flag) continue;
+        snapshot.append(g_alloc, entry.callback) catch continue;
+    }
+
+    const si_sid_opt = vm.pool.intern("_stopImmediate") catch null;
+    const dp_sid_loop = vm.pool.intern("defaultPrevented") catch null;
+    const cancel_sid = vm.pool.intern("cancelable") catch null;
+    const rv_sid = vm.pool.intern("returnValue") catch null;
+
+    var stopped_immediate = false;
+    for (snapshot.items) |cb| {
+        // Re-locate the live entry by (target, type, callback, capture) because
+        // it may have been removed mid-dispatch (signal abort, prior once-fire,
+        // manual removeEventListener).
+        var found_idx: ?usize = null;
+        var is_once_val = false;
+        var is_passive_val = false;
+        for (g_listeners.items, 0..) |e, li| {
+            if (@intFromPtr(e.node_ptr) != target_addr) continue;
+            if (!std.mem.eql(u8, e.event_type, type_str)) continue;
+            if (e.callback.bits != cb.bits) continue;
+            if (!match_any_capture and e.capture != capture_flag) continue;
+            if (e.removed) continue;
+            found_idx = li;
+            is_once_val = e.once;
+            is_passive_val = e.passive;
+            break;
+        }
+        if (found_idx == null) continue;
+
+        // DOM §2.9 step 5.4: mark `once` removed BEFORE invoking so a
+        // re-entrant dispatch (nested dispatchEvent) does not re-fire it.
+        if (is_once_val) g_listeners.items[found_idx.?].removed = true;
+
+        // DOM §2.9 step 5.5: passive listener flag — temporarily override
+        // `cancelable` and snapshot `defaultPrevented`/`returnValue` so any
+        // `preventDefault()` the listener calls becomes a no-op.
+        var saved_cancelable: JsValue = JsValue.undefined_val;
+        var saved_dp: JsValue = JsValue.undefined_val;
+        var saved_rv: JsValue = JsValue.undefined_val;
+        if (is_passive_val) {
+            if (cancel_sid) |s| {
+                saved_cancelable = ev_obj.getProperty(s) orelse JsValue.undefined_val;
+                ev_obj.setProperty(vm.allocator, s, JsValue.initBool(false)) catch {};
+            }
+            if (dp_sid_loop) |s| saved_dp = ev_obj.getProperty(s) orelse JsValue.undefined_val;
+            if (rv_sid) |s| saved_rv = ev_obj.getProperty(s) orelse JsValue.undefined_val;
+        }
+
+        _ = vm.callJsFunction(cb, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
+
+        if (is_passive_val) {
+            if (cancel_sid) |s| ev_obj.setProperty(vm.allocator, s, saved_cancelable) catch {};
+            if (dp_sid_loop) |s| ev_obj.setProperty(vm.allocator, s, saved_dp) catch {};
+            if (rv_sid) |s| ev_obj.setProperty(vm.allocator, s, saved_rv) catch {};
+        }
+
+        if (is_once_val) {
+            // Re-locate: orderedRemove inside freeListenerRecord may have shifted.
+            for (g_listeners.items, 0..) |e, li| {
+                if (@intFromPtr(e.node_ptr) != target_addr) continue;
+                if (!std.mem.eql(u8, e.event_type, type_str)) continue;
+                if (e.callback.bits != cb.bits) continue;
+                if (!match_any_capture and e.capture != capture_flag) continue;
+                if (!e.removed) continue;
+                freeListenerRecord(vm, li);
+                break;
+            }
+        }
+
+        if (si_sid_opt) |si_sid| {
+            if (ev_obj.getProperty(si_sid)) |sv| {
+                if (sv.isTruthy()) {
+                    stopped_immediate = true;
+                    break;
+                }
+            }
+        }
+    }
+    return stopped_immediate;
+}
+
 fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0) return JsValue.initBool(false);
 
     // HTML §8.1.3.1: window.dispatchEvent dispatches to window-level listeners.
-    // The window_proxy object has no DOM node, so handle it separately.
+    // The window_proxy object has no DOM node, so handle it separately. Uses
+    // the unified runListenersForTarget helper for once/passive/removed/
+    // stopImmediate semantics (DOM §2.9).
     if (this.isObject() and this.asJsObject().obj_type == .window_proxy) {
-        // Parse event type from the argument (string or Event object with .type).
         var type_str: []const u8 = "event";
         if (args[0].isString()) {
             type_str = vm.pool.get(args[0].asStringId()) orelse "event";
@@ -4076,29 +4192,28 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
             args[0].asJsObject()
         else
             vm.createObj(.{}) catch return JsValue.initBool(false);
+        // Set currentTarget/target to window for listener visibility.
+        const tgt_sid = vm.pool.intern("target") catch null;
+        const ct_sid = vm.pool.intern("currentTarget") catch null;
+        if (tgt_sid) |s| ev_obj.setProperty(vm.allocator, s, this) catch {};
+        if (ct_sid) |s| ev_obj.setProperty(vm.allocator, s, this) catch {};
         const sentinel_ptr = @intFromPtr(&g_window_sentinel);
-        var wi: usize = 0;
-        while (wi < g_listeners.items.len) {
-            const entry = g_listeners.items[wi];
-            if (@intFromPtr(entry.node_ptr) != sentinel_ptr or
-                !std.mem.eql(u8, entry.event_type, type_str))
-            {
-                wi += 1;
-                continue;
-            }
-            const is_once = entry.once;
-            _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
-            if (is_once) {
-                g_alloc.free(g_listeners.items[wi].event_type);
-                _ = g_listeners.orderedRemove(wi);
-            } else {
-                wi += 1;
+        _ = runListenersForTarget(vm, sentinel_ptr, type_str, ev_obj, false, true);
+        // DOM §2.7: return !canceled (false only if defaultPrevented+cancelable).
+        const dp_sid = vm.pool.intern("defaultPrevented") catch null;
+        var canceled = false;
+        if (dp_sid) |s| {
+            if (ev_obj.getProperty(s)) |dv| {
+                if (dv.isTruthy()) canceled = true;
             }
         }
-        return JsValue.initBool(true);
+        return JsValue.initBool(!canceled);
     }
 
-    // DOM §2.7: standalone EventTarget.dispatchEvent — no DOM node, dispatch from g_listeners.
+    // DOM §2.7: standalone EventTarget.dispatchEvent — no DOM node, no tree,
+    // dispatch via runListenersForTarget. No capture/bubble phases: every
+    // listener registered on this target fires regardless of its capture flag
+    // (there is no propagation path).
     if (this.isObject()) {
         const this_obj = this.asJsObject();
         if (this_obj.obj_type != .dom_node) {
@@ -4120,101 +4235,17 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
                             args[0].asJsObject()
                         else
                             vm.createObj(.{}) catch return JsValue.initBool(false);
-                        // Set target/currentTarget on event
                         const tgt_sid = vm.pool.intern("target") catch null;
                         const ct_sid = vm.pool.intern("currentTarget") catch null;
                         if (tgt_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
                         if (ct_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
-                        // DOM §2.9: snapshot the matching listeners BEFORE iterating
-                        // so that mid-dispatch add/remove/abort do not perturb the
-                        // snapshot. `removed` is a soft-delete flag checked at each
-                        // step (spec §2.9 step 5.3). The backing index is checked
-                        // again at call-time because orderedRemove shifts items.
-                        var snapshot: std.ArrayListUnmanaged(JsValue) = .empty;
-                        defer snapshot.deinit(g_alloc);
-                        for (g_listeners.items) |entry| {
-                            if (@intFromPtr(entry.node_ptr) == target_addr and
-                                std.mem.eql(u8, entry.event_type, type_str_et) and
-                                !entry.removed)
-                            {
-                                snapshot.append(g_alloc, entry.callback) catch continue;
-                            }
-                        }
-                        const si_sid_opt = vm.pool.intern("_stopImmediate") catch null;
-                        const dp_sid_loop = vm.pool.intern("defaultPrevented") catch null;
-                        const cancel_sid = vm.pool.intern("cancelable") catch null;
-                        const rv_sid = vm.pool.intern("returnValue") catch null;
-                        for (snapshot.items) |cb| {
-                            // Look up the live entry by callback identity + node + type. If it
-                            // was removed mid-dispatch (signal abort, manual removeEventListener,
-                            // or a prior once-fire), skip it.
-                            var found_idx: ?usize = null;
-                            var is_once_val = false;
-                            var is_passive_val = false;
-                            for (g_listeners.items, 0..) |e, li| {
-                                if (@intFromPtr(e.node_ptr) == target_addr and
-                                    std.mem.eql(u8, e.event_type, type_str_et) and
-                                    e.callback.bits == cb.bits and
-                                    !e.removed)
-                                {
-                                    found_idx = li;
-                                    is_once_val = e.once;
-                                    is_passive_val = e.passive;
-                                    break;
-                                }
-                            }
-                            if (found_idx == null) continue;
-                            // DOM §2.9 step 5.4: for a `once` listener, mark it removed
-                            // BEFORE invoking so a re-entrant dispatch (nested
-                            // dispatchEvent from inside the listener) does not fire it
-                            // again. The actual cleanup + signal detach happens in
-                            // freeListenerRecord after the callback returns.
-                            if (is_once_val) g_listeners.items[found_idx.?].removed = true;
-                            // DOM §2.9 step 5.5: Passive listener flag — temporarily
-                            // override `cancelable` and snapshot both `defaultPrevented`
-                            // + `returnValue`. Per spec, a passive listener's
-                            // preventDefault() is a no-op; we emulate by suppressing any
-                            // change the listener makes to the defaultPrevented /
-                            // returnValue flags. Nesting-safe: saved values are
-                            // restored after the listener returns.
-                            var saved_cancelable: JsValue = JsValue.undefined_val;
-                            var saved_dp: JsValue = JsValue.undefined_val;
-                            var saved_rv: JsValue = JsValue.undefined_val;
-                            if (is_passive_val) {
-                                if (cancel_sid) |s| {
-                                    saved_cancelable = ev_obj_et.getProperty(s) orelse JsValue.undefined_val;
-                                    ev_obj_et.setProperty(vm.allocator, s, JsValue.initBool(false)) catch {};
-                                }
-                                if (dp_sid_loop) |s| saved_dp = ev_obj_et.getProperty(s) orelse JsValue.undefined_val;
-                                if (rv_sid) |s| saved_rv = ev_obj_et.getProperty(s) orelse JsValue.undefined_val;
-                            }
-                            _ = vm.callJsFunction(cb, JsValue.initObject(ev_obj_et), &.{JsValue.initObject(ev_obj_et)}) catch {};
-                            if (is_passive_val) {
-                                if (cancel_sid) |s| ev_obj_et.setProperty(vm.allocator, s, saved_cancelable) catch {};
-                                if (dp_sid_loop) |s| ev_obj_et.setProperty(vm.allocator, s, saved_dp) catch {};
-                                if (rv_sid) |s| ev_obj_et.setProperty(vm.allocator, s, saved_rv) catch {};
-                            }
-                            if (is_once_val) {
-                                // Re-locate because orderedRemove may have shifted.
-                                for (g_listeners.items, 0..) |e, li| {
-                                    if (@intFromPtr(e.node_ptr) == target_addr and
-                                        std.mem.eql(u8, e.event_type, type_str_et) and
-                                        e.callback.bits == cb.bits and
-                                        e.removed)
-                                    {
-                                        freeListenerRecord(vm, li);
-                                        break;
-                                    }
-                                }
-                            }
-                            if (si_sid_opt) |si_sid| {
-                                if (ev_obj_et.getProperty(si_sid)) |sv| {
-                                    if (sv.isTruthy()) break;
-                                }
-                            }
-                        }
-                        // DOM §2.7: dispatchEvent returns false if event was canceled
-                        // (defaultPrevented + cancelable), true otherwise.
+                        // eventPhase = AT_TARGET (2)
+                        if (vm.pool.intern("eventPhase") catch null) |s|
+                            ev_obj_et.setProperty(vm.allocator, s, JsValue.initNumber(2)) catch {};
+                        _ = runListenersForTarget(vm, target_addr, type_str_et, ev_obj_et, false, true);
+                        // eventPhase = NONE (0) after dispatch.
+                        if (vm.pool.intern("eventPhase") catch null) |s|
+                            ev_obj_et.setProperty(vm.allocator, s, JsValue.initNumber(0)) catch {};
                         const dp_sid = vm.pool.intern("defaultPrevented") catch null;
                         var canceled = false;
                         if (dp_sid) |s| {
@@ -4305,26 +4336,95 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     const rpi_sid = vm.pool.intern("__rawPathIds") catch return JsValue.initBool(false);
     ev_obj.setProperty(vm.allocator, rpi_sid, JsValue.initObject(raw_ids)) catch {};
 
-    // Dispatch: simple bubble-phase walk from target up the path. For each
-    // node N, call all listeners whose node_ptr == N and event_type == type.
-    // Retarget event.target = retarget(original_target, N).
+    // Read bubbles/cancelable from the event to drive §2.9 phases.
+    var event_bubbles = false;
+    const bubbles_sid = vm.pool.intern("bubbles") catch return JsValue.initBool(false);
+    if (ev_obj.getProperty(bubbles_sid)) |bv| event_bubbles = bv.isTruthy();
+
+    // Reset per-dispatch flags on the event object so a re-used Event follows
+    // §2.9 state. initEvent/new Event set these to false, but an Event that
+    // was already dispatched once may carry them.
+    const stopped_sid = vm.pool.intern("_stopped") catch return JsValue.initBool(false);
+    const stop_imm_sid = vm.pool.intern("_stopImmediate") catch return JsValue.initBool(false);
+    const cancel_bubble_sid = vm.pool.intern("_cancelBubble") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, stopped_sid, JsValue.initBool(false)) catch {};
+    ev_obj.setProperty(vm.allocator, stop_imm_sid, JsValue.initBool(false)) catch {};
+    ev_obj.setProperty(vm.allocator, cancel_bubble_sid, JsValue.initBool(false)) catch {};
+
     const target_sid = vm.pool.intern("target") catch return JsValue.initBool(false);
     const ct_sid = vm.pool.intern("currentTarget") catch return JsValue.initBool(false);
-    var i: usize = 0;
-    while (i < path_len) : (i += 1) {
-        const node = path_buf[i];
-        const retargeted = sr.retarget(target, node);
-        ev_obj.setProperty(vm.allocator, target_sid, wrapNode(vm, retargeted) orelse JsValue.null_val) catch {};
-        ev_obj.setProperty(vm.allocator, ct_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
-        // Find matching listeners
-        for (g_listeners.items) |entry| {
-            if (@intFromPtr(entry.node_ptr) != @intFromPtr(node)) continue;
-            if (!std.mem.eql(u8, entry.event_type, type_str)) continue;
-            _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
+    const phase_sid = vm.pool.intern("eventPhase") catch return JsValue.initBool(false);
+
+    // §2.9 target is path_buf[0]; the remainder of the path (indices 1..N-1)
+    // are ancestors ordered from innermost → root.
+    const target_node = path_buf[0];
+    const target_wrap = wrapNode(vm, target_node) orelse JsValue.null_val;
+    ev_obj.setProperty(vm.allocator, target_sid, target_wrap) catch {};
+
+    // Helper closure to check if stopPropagation was called on the event.
+    const isStopped = struct {
+        fn f(ev: *JsObject, sid: u32) bool {
+            if (ev.getProperty(sid)) |v| return v.isTruthy();
+            return false;
+        }
+    }.f;
+
+    // ── Capture phase: walk path from root (path_buf[N-1]) down to path_buf[1] ──
+    // Target itself runs in the target phase (below). eventPhase = CAPTURING_PHASE (1).
+    // §2.9 step 9.4: capture-phase listeners only fire for capture=true listeners.
+    ev_obj.setProperty(vm.allocator, phase_sid, JsValue.initNumber(1)) catch {};
+    if (path_len > 1) {
+        var ci: usize = path_len;
+        while (ci > 1) {
+            ci -= 1;
+            if (isStopped(ev_obj, stopped_sid)) break;
+            const node = path_buf[ci];
+            const retargeted = sr.retarget(target, node);
+            ev_obj.setProperty(vm.allocator, target_sid, wrapNode(vm, retargeted) orelse JsValue.null_val) catch {};
+            ev_obj.setProperty(vm.allocator, ct_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
+            _ = runListenersForTarget(vm, @intFromPtr(node), type_str, ev_obj, true, false);
         }
     }
 
-    return JsValue.initBool(true);
+    // ── Target phase: path_buf[0]. eventPhase = AT_TARGET (2). ──
+    // §2.9 step 10: at the target, both capture and non-capture listeners fire.
+    if (!isStopped(ev_obj, stopped_sid)) {
+        ev_obj.setProperty(vm.allocator, phase_sid, JsValue.initNumber(2)) catch {};
+        ev_obj.setProperty(vm.allocator, target_sid, target_wrap) catch {};
+        ev_obj.setProperty(vm.allocator, ct_sid, target_wrap) catch {};
+        _ = runListenersForTarget(vm, @intFromPtr(target_node), type_str, ev_obj, false, true);
+    }
+
+    // ── Bubble phase: walk path from path_buf[1] up to path_buf[N-1]. ──
+    // eventPhase = BUBBLING_PHASE (3). Only runs if event.bubbles is true.
+    // §2.9 step 11.4: bubble-phase listeners are the non-capture listeners.
+    if (event_bubbles and path_len > 1) {
+        ev_obj.setProperty(vm.allocator, phase_sid, JsValue.initNumber(3)) catch {};
+        var bi: usize = 1;
+        while (bi < path_len) : (bi += 1) {
+            if (isStopped(ev_obj, stopped_sid)) break;
+            const node = path_buf[bi];
+            const retargeted = sr.retarget(target, node);
+            ev_obj.setProperty(vm.allocator, target_sid, wrapNode(vm, retargeted) orelse JsValue.null_val) catch {};
+            ev_obj.setProperty(vm.allocator, ct_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
+            _ = runListenersForTarget(vm, @intFromPtr(node), type_str, ev_obj, false, false);
+        }
+    }
+
+    // §2.9 step 13: unset currentTarget and reset phase to NONE (0).
+    ev_obj.setProperty(vm.allocator, ct_sid, JsValue.null_val) catch {};
+    ev_obj.setProperty(vm.allocator, phase_sid, JsValue.initNumber(0)) catch {};
+    // Restore target to the original (spec target after dispatch).
+    ev_obj.setProperty(vm.allocator, target_sid, target_wrap) catch {};
+
+    // §2.7: dispatchEvent returns false if the event is canceled
+    // (defaultPrevented), true otherwise.
+    const dp_sid = vm.pool.intern("defaultPrevented") catch return JsValue.initBool(true);
+    var canceled = false;
+    if (ev_obj.getProperty(dp_sid)) |dv| {
+        if (dv.isTruthy()) canceled = true;
+    }
+    return JsValue.initBool(!canceled);
 }
 
 /// Event.composedPath() — reads currentTarget from `this`, then filters the
