@@ -60,6 +60,17 @@ pub fn setFlushCallback(cb: ?*const fn () void) void {
     flush_fn = cb;
 }
 
+/// Bridge to `dom_api.setDomDirty` so kotori DOM mutations also mark the
+/// shared cascade dirty flag (and bump dom_version / MO-pending). Keeps
+/// kotori_dom free of a direct dom_api import — kotori_dom is a standalone
+/// build module (see header comment on `flush_fn`).
+pub var mark_dirty_fn: ?*const fn () void = null;
+
+/// Register the cascade-dirty bridge. Called from main during page init.
+pub fn setMarkDirtyCallback(cb: ?*const fn () void) void {
+    mark_dirty_fn = cb;
+}
+
 /// Register the cascade-resolve bridge. Called from main after the first
 /// cascade so kotori.getComputedStyle returns the same resolved values as
 /// the QuickJS path (CSSOM §6.5 resolved value algorithm).
@@ -353,8 +364,24 @@ fn getDocFromThis(this: JsValue) ?*anyopaque {
     return g_document;
 }
 
+/// Mark the DOM as dirty for both kotori's local bookkeeping (event-loop /
+/// MutationObserver flush) AND — via the `mark_dirty_fn` bridge registered
+/// from main — the shared cascade dirty flag in `dom_api`, so
+/// `flushStylesIfDirty` (invoked by `nativeGetComputedStyle` via `flush_fn`)
+/// triggers a synchronous restyle before resolved-value reads.
+///
+/// Without the bridge, kotori mutations such as `el.style.color = 'black'`
+/// left `dom_api.dom_dirty == false`, so `getComputedStyle(el).color`
+/// returned the stale cascaded parent value instead of the newly written
+/// inline declaration. This blocked css-color / cssom WPT gains under
+/// `SUZUME_JS=kotori` (Wave 10 Track C handoff).
+///
+/// kotori_dom is a standalone build module and cannot import `dom_api`
+/// directly; the callback pattern (same as `flush_fn` / `resolve_fn`)
+/// keeps the boundary clean.
 fn setDomDirty() void {
     dom_dirty = true;
+    if (mark_dirty_fn) |f| f();
 }
 
 // ── Event listener storage ──────────────────────────────────────────
@@ -2466,6 +2493,17 @@ fn nativeCreateElementNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     const obj_val = wrapNode(vm, node) orelse return JsValue.null_val;
     const obj = obj_val.asJsObject();
 
+    // DOM §4.5.3 + HTML §4: re-dispatch interface prototype using the
+    // spec-correct parsed local_name (validateAndExtract strips prefix +
+    // preserves case). wrapNode above used lexbor's local-name getter,
+    // which for prefixed qnames may return "prefix:local" or the
+    // lowercased form — neither of which routes to the correct per-tag
+    // interface (e.g. `createElementNS(HTML_NS, "html:span")` must land
+    // on HTMLSpanElement.prototype, and `createElementNS(HTML_NS, "SPAN")`
+    // must land on HTMLUnknownElement.prototype).
+    const owner_doc_val = getNodeOwnerDoc(vm, obj);
+    applyInterfaceProto(vm, obj, ns_str, create_name, owner_doc_val);
+
     // Store prefix as own property for prefix getter
     if (prefix) |p| {
         const prefix_sid = try vm.pool.intern("__prefix");
@@ -2482,16 +2520,20 @@ fn nativeCreateElementNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
         }
     }
 
-    // Store original localName for case preservation (lexbor lowercases)
-    // Only needed if localName contains uppercase chars
-    var has_upper = false;
-    for (create_name) |ch| {
-        if (ch >= 'A' and ch <= 'Z') {
-            has_upper = true;
-            break;
+    // Store original localName — lexbor stores the full qualified name
+    // (lowercased for HTML docs) and its `local_name` getter returns the
+    // same bytes, so for prefixed qnames or any qname with uppercase we
+    // must override with the parsed + case-preserved local_name from
+    // `validateAndExtract` (DOM §4.5.3 steps 5+7). Always set when the
+    // parsed local differs from the qname; the getter at domNodeGetProp
+    // reads this slot first for localName access.
+    const needs_orig = (prefix != null) or blk: {
+        for (create_name) |ch| {
+            if (ch >= 'A' and ch <= 'Z') break :blk true;
         }
-    }
-    if (has_upper) {
+        break :blk false;
+    };
+    if (needs_orig) {
         const orig_sid = try vm.pool.intern("__origLocal");
         const orig_val = JsValue.initString(try vm.pool.intern(create_name));
         obj.setProperty(vm.allocator, orig_sid, orig_val) catch {};
@@ -6027,6 +6069,25 @@ fn tagNameUpperWithPrefix(vm: *VM, js_obj: *JsObject, elem: *lxb.lxb_dom_element
                 pos += 1;
             }
             return JsValue.initString(vm.pool.intern(buf[0..pos]) catch return JsValue.null_val);
+        }
+    }
+    // No prefix. DOM §4.9 tagName: non-HTML namespaces preserve case; HTML
+    // namespace uppercases. Honor __origLocal set by createElementNS so that
+    // e.g. `createElementNS("test", "SPAN").tagName === "SPAN"` round-trips
+    // lexbor's internal lowercasing.
+    const orig_sid = vm.pool.intern("__origLocal") catch return tagNameUpper(vm, elem);
+    if (js_obj.getProperty(orig_sid)) |ov| {
+        if (ov.isString()) {
+            const orig_str = vm.pool.get(ov.asStringId()) orelse return tagNameUpper(vm, elem);
+            const is_html = (elem.node.ns == 0x02); // LXB_NS_HTML
+            if (!is_html) {
+                return JsValue.initString(vm.pool.intern(orig_str) catch return JsValue.null_val);
+            }
+            // HTML: uppercase the preserved local name
+            var buf: [256]u8 = undefined;
+            const n = @min(orig_str.len, buf.len);
+            for (0..n) |i| buf[i] = std.ascii.toUpper(orig_str[i]);
+            return JsValue.initString(vm.pool.intern(buf[0..n]) catch return JsValue.null_val);
         }
     }
     return tagNameUpper(vm, elem);

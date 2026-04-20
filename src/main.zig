@@ -88,6 +88,18 @@ fn kotoriFlushStylesIfDirty() void {
     dom_api.flushStylesIfDirty();
 }
 
+/// Bridge: kotori DOM mutation → set the shared `dom_api` cascade dirty
+/// flag (bumps dom_version, arms MutationObserver pending, and flags the
+/// cascade so the next `flushStylesIfDirty` triggers a sync restyle).
+///
+/// kotori_dom keeps its own local `dom_dirty` for event-loop bookkeeping;
+/// this bridge wires the *second* flag that `flushStylesIfDirty` actually
+/// reads. Without it, `el.style.color = 'black'` + `getComputedStyle(el)`
+/// returned the stale parent-cascaded color under kotori (Wave 10 Track C).
+fn kotoriMarkDomDirty() void {
+    dom_api.setDomDirty();
+}
+
 /// Bridge: kotori DOM style setters → CSSOM §6.7.2 invalid-value
 /// rejection via `dom_style.isValidCssValue`. Called before writing any
 /// `el.style.X = Y`, `el.style[X] = Y`, or `el.style.setProperty(X, Y)`.
@@ -901,6 +913,7 @@ fn navigateTo(
     kotori_dom.setFlushCallback(&kotoriFlushStylesIfDirty);
     kotori_dom.setResolveCallback(&kotoriResolveComputedValue);
     kotori_dom.setValidateCallback(&kotoriValidateCssValue);
+    kotori_dom.setMarkDirtyCallback(&kotoriMarkDomDirty);
 
     // Defer JavaScript execution until after first paint for faster initial render.
     page.pending_js_init = true;

@@ -16,6 +16,7 @@ const std = @import("std");
 const computed_mod = @import("../computed.zig");
 const ComputedStyle = computed_mod.ComputedStyle;
 const Box = @import("../../layout/box.zig").Box;
+const color_serialize = @import("../../js/color_serialize.zig");
 
 /// Serialize `prop` from `style` (with optional layout `box_opt` for used
 /// values) into `buf`. Returns the written slice or `null` if the property
@@ -168,19 +169,11 @@ fn dimStr(dim: ComputedStyle.Dimension, buf: []u8) ?[]const u8 {
 }
 
 fn argbToSlice(argb: u32, buf: []u8) ?[]const u8 {
-    const a: u8 = @intCast((argb >> 24) & 0xFF);
-    const r: u8 = @intCast((argb >> 16) & 0xFF);
-    const g: u8 = @intCast((argb >> 8) & 0xFF);
-    const b: u8 = @intCast(argb & 0xFF);
-    if (a == 255) {
-        return std.fmt.bufPrint(buf, "rgb({d}, {d}, {d})", .{ r, g, b }) catch null;
-    } else if (a == 0) {
-        // CSSOM: transparent serializes as "rgba(0, 0, 0, 0)"
-        return std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, 0)", .{ r, g, b }) catch null;
-    } else {
-        const af: f32 = @as(f32, @floatFromInt(a)) / 255.0;
-        return std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d})", .{ r, g, b, af }) catch null;
-    }
+    // Delegate to the JS-engine-agnostic canonical serializer (CSS Color 4
+    // §15 / CSSOM §7.6). Keeps kotori's computed-style path and QuickJS's
+    // `dom_style.argbToCssColor` in sync on alpha precision (1 / 2 / 3
+    // decimals with minimum round-trip, not a raw f32 debug print).
+    return color_serialize.argbToBuf(argb, buf);
 }
 
 fn displayStr(style: *const ComputedStyle) []const u8 {
