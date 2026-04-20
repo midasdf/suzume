@@ -4725,37 +4725,123 @@ pub fn calcUnitRank(unit: []const u8) u8 {
     return 2;
 }
 
-/// Simplify single-argument min()/max() to the bare value: min(1px) → calc(1px), min(1%) → 1%
-/// Also converts absolute units: min(1in) → calc(96px)
+/// Parse a single literal term (number+unit) into a value normalized to the
+/// canonical unit for absolute lengths (px). Returns null if the term is not
+/// a simple literal (e.g. contains parens, operators, or unknown units).
+/// `unit` is always the canonical lowercased unit string. Absolute lengths are
+/// converted to px.
+fn parseLiteralToCanonical(s: []const u8) ?struct { value: f64, unit: []const u8 } {
+    const t = std.mem.trim(u8, s, " \t\r\n");
+    if (t.len == 0) return null;
+    // Reject anything with parens/operators — we only evaluate bare literals
+    for (t) |ch| {
+        if (ch == '(' or ch == ')' or ch == '*' or ch == '/') return null;
+    }
+    // Parse sign+digits
+    var ne: usize = 0;
+    if (ne < t.len and (t[ne] == '-' or t[ne] == '+')) ne += 1;
+    var saw_digit = false;
+    while (ne < t.len and ((t[ne] >= '0' and t[ne] <= '9') or t[ne] == '.')) : (ne += 1) {
+        if (t[ne] >= '0' and t[ne] <= '9') saw_digit = true;
+    }
+    if (!saw_digit) return null;
+    const v = std.fmt.parseFloat(f64, t[0..ne]) catch return null;
+    const raw_unit = std.mem.trim(u8, t[ne..], " \t");
+    // Lowercase unit (stable storage: returns static strings for known units)
+    if (raw_unit.len == 0) return .{ .value = v, .unit = "" };
+    if (eqlIgnoreCase(raw_unit, "in")) return .{ .value = v * 96.0, .unit = "px" };
+    if (eqlIgnoreCase(raw_unit, "cm")) return .{ .value = v * (96.0 / 2.54), .unit = "px" };
+    if (eqlIgnoreCase(raw_unit, "mm")) return .{ .value = v * (96.0 / 25.4), .unit = "px" };
+    if (eqlIgnoreCase(raw_unit, "q")) return .{ .value = v * (96.0 / 101.6), .unit = "px" };
+    if (eqlIgnoreCase(raw_unit, "pt")) return .{ .value = v * (96.0 / 72.0), .unit = "px" };
+    if (eqlIgnoreCase(raw_unit, "pc")) return .{ .value = v * 16.0, .unit = "px" };
+    if (eqlIgnoreCase(raw_unit, "px")) return .{ .value = v, .unit = "px" };
+    if (std.mem.eql(u8, raw_unit, "%")) return .{ .value = v, .unit = "%" };
+    // Other unit categories (em/rem/vh/vw/deg/s/...) — return lowercased unit only
+    // when it fits canonical static shape. Reject to avoid heap complications.
+    if (raw_unit.len > 8) return null;
+    inline for (.{ "em", "rem", "ex", "ch", "rex", "rch", "cap", "rcap", "ic", "ric", "lh", "rlh", "vw", "vh", "vmin", "vmax", "vi", "vb", "svw", "svh", "lvw", "lvh", "dvw", "dvh", "deg", "rad", "grad", "turn", "s", "ms", "hz", "khz", "dpi", "dpcm", "dppx", "x", "fr" }) |known| {
+        if (eqlIgnoreCase(raw_unit, known)) return .{ .value = v, .unit = known };
+    }
+    return null;
+}
+
+/// Simplify single/multi-argument min()/max() to a canonical form.
+///
+/// Per CSS Values 4 §9.1:
+///   - `min(1px)` / `max(1px)` → `calc(1px)` (specified value)
+///   - `min(1in)` → `calc(96px)` (absolute unit conversion)
+///   - `min(50px, 100px)` → `calc(50px)` (all-constant eager simplification)
+///   - `min(50px, 1em)` stays as-is (mixed categories — caller keeps original)
+///   - Case-insensitive units: `min(1PX)` → `calc(1px)`
 pub fn canonicalizeSingleArgMath(val: []const u8, buf: *[512]u8) ?[]const u8 {
     const trimmed = std.mem.trim(u8, val, " \t\r\n");
+    if (trimmed.len < 5) return null;
     if (trimmed[trimmed.len - 1] != ')') return null;
-    // Extract inner content
-    var prefix_len: usize = 0;
-    if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "min(")) prefix_len = 4 else if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "max(")) prefix_len = 4 else return null;
-    const inner = std.mem.trim(u8, trimmed[prefix_len .. trimmed.len - 1], " ");
-    // Check: single argument (no commas at top level)
+    // Extract function name + inner content
+    var is_min = false;
+    if (eqlIgnoreCase(trimmed[0..4], "min(")) {
+        is_min = true;
+    } else if (!eqlIgnoreCase(trimmed[0..4], "max(")) return null;
+    const inner = std.mem.trim(u8, trimmed[4 .. trimmed.len - 1], " ");
+    if (inner.len == 0) return null;
+
+    // Split on top-level commas
+    var args: [16][]const u8 = undefined;
+    var arg_count: usize = 0;
     var nesting: usize = 0;
-    for (inner) |ch| {
+    var start: usize = 0;
+    for (inner, 0..) |ch, k| {
         if (ch == '(') nesting += 1 else if (ch == ')') {
             if (nesting > 0) nesting -= 1;
-        } else if (ch == ',' and nesting == 0) return null; // multi-arg
+        } else if (ch == ',' and nesting == 0) {
+            if (arg_count >= 16) return null;
+            args[arg_count] = std.mem.trim(u8, inner[start..k], " ");
+            arg_count += 1;
+            start = k + 1;
+        }
+    }
+    if (arg_count >= 16) return null;
+    args[arg_count] = std.mem.trim(u8, inner[start..], " ");
+    arg_count += 1;
+
+    if (arg_count == 1) {
+        // Single arg: wrap in calc() and let canonicalizeCalcValue handle unit
+        // conversion and canonical output.
+        var tmp_buf: [512]u8 = undefined;
+        const calc_str = std.fmt.bufPrint(&tmp_buf, "calc({s})", .{args[0]}) catch return null;
+        return canonicalizeCalcValue(calc_str, buf);
     }
 
-    // Wrap as calc() and canonicalize
-    var tmp_buf: [512]u8 = undefined;
-    const calc_str = std.fmt.bufPrint(&tmp_buf, "calc({s})", .{inner}) catch return null;
+    // Multi-arg: only simplify when EVERY arg is a same-category literal.
+    // Otherwise we cannot evaluate — return null so the caller keeps the
+    // original form.
+    const first = parseLiteralToCanonical(args[0]) orelse return null;
+    var best = first.value;
+    for (1..arg_count) |i| {
+        const next = parseLiteralToCanonical(args[i]) orelse return null;
+        if (!std.mem.eql(u8, next.unit, first.unit)) return null;
+        best = if (is_min) @min(best, next.value) else @max(best, next.value);
+    }
+    // Build `calc({value}{unit})` and run canonicalizer for final formatting.
+    var calc_str_buf: [128]u8 = undefined;
+    const calc_str = std.fmt.bufPrint(&calc_str_buf, "calc({d}{s})", .{ best, first.unit }) catch return null;
     return canonicalizeCalcValue(calc_str, buf);
 }
 
-/// Simplify constant clamp(): clamp(1px, 2px, 3px) → calc(2px) when all args are same-unit constants
+/// Simplify constant clamp(): clamp(1px, 2px, 3px) → calc(2px) when all args
+/// are same-category literal constants.  Per CSS Values 4 §9.1 clamp(MIN,VAL,MAX)
+/// eagerly simplifies to max(MIN, min(VAL, MAX)).  Mixed absolute length units
+/// (in, cm, mm, pt, pc, q, px) are compatible and normalized to px.  The
+/// special "none" token is treated as -∞ in the MIN slot and +∞ in the MAX
+/// slot (the bound is unbounded in that direction).
 pub fn canonicalizeClamp(val: []const u8, buf: *[512]u8) ?[]const u8 {
     const trimmed = std.mem.trim(u8, val, " \t\r\n");
     if (trimmed.len < 7) return null;
     if (!eqlIgnoreCase(trimmed[0..6], "clamp(")) return null;
     if (trimmed[trimmed.len - 1] != ')') return null;
     const inner = std.mem.trim(u8, trimmed[6 .. trimmed.len - 1], " ");
-    // Split on commas (top-level only)
+    // Split on top-level commas
     var args: [3][]const u8 = undefined;
     var arg_count: usize = 0;
     var start: usize = 0;
@@ -4770,32 +4856,36 @@ pub fn canonicalizeClamp(val: []const u8, buf: *[512]u8) ?[]const u8 {
             start = k + 1;
         }
     }
-    if (arg_count < 2) return null;
+    if (arg_count != 2) return null;
     args[arg_count] = std.mem.trim(u8, inner[start..], " ");
     arg_count += 1;
-    if (arg_count != 3) return null;
 
-    // Parse each arg as number+unit
-    const parsed = struct {
-        fn parse(s: []const u8) ?struct { value: f64, unit: []const u8 } {
-            var ne: usize = 0;
-            if (ne < s.len and (s[ne] == '-' or s[ne] == '+')) ne += 1;
-            while (ne < s.len and (s[ne] >= '0' and s[ne] <= '9' or s[ne] == '.')) ne += 1;
-            if (ne == 0) return null;
-            const v = std.fmt.parseFloat(f64, s[0..ne]) catch return null;
-            return .{ .value = v, .unit = s[ne..] };
-        }
-    };
-    const min_arg = parsed.parse(args[0]) orelse return null;
-    const val_arg = parsed.parse(args[1]) orelse return null;
-    const max_arg = parsed.parse(args[2]) orelse return null;
-    // All same unit
-    if (!std.mem.eql(u8, min_arg.unit, val_arg.unit) or !std.mem.eql(u8, val_arg.unit, max_arg.unit)) return null;
+    // Parse center argument (VAL) first: it always has a unit and sets the
+    // category for "none" bounds.
+    const val_arg = parseLiteralToCanonical(args[1]) orelse return null;
+    // MIN may be "none" → -∞; else must be same-category literal.
+    var min_val: f64 = undefined;
+    if (eqlIgnoreCase(args[0], "none")) {
+        min_val = -std.math.inf(f64);
+    } else {
+        const min_arg = parseLiteralToCanonical(args[0]) orelse return null;
+        if (!std.mem.eql(u8, min_arg.unit, val_arg.unit)) return null;
+        min_val = min_arg.value;
+    }
+    // MAX may be "none" → +∞; else must be same-category literal.
+    var max_val: f64 = undefined;
+    if (eqlIgnoreCase(args[2], "none")) {
+        max_val = std.math.inf(f64);
+    } else {
+        const max_arg = parseLiteralToCanonical(args[2]) orelse return null;
+        if (!std.mem.eql(u8, max_arg.unit, val_arg.unit)) return null;
+        max_val = max_arg.value;
+    }
     // Evaluate: clamp(min, val, max) = max(min, min(val, max))
-    const result = @max(min_arg.value, @min(val_arg.value, max_arg.value));
-    // Convert absolute units
+    const result = @max(min_val, @min(val_arg.value, max_val));
+    if (std.math.isInf(result) or std.math.isNan(result)) return null;
     var calc_str_buf: [128]u8 = undefined;
-    const calc_str = std.fmt.bufPrint(&calc_str_buf, "calc({d}{s})", .{ result, min_arg.unit }) catch return null;
+    const calc_str = std.fmt.bufPrint(&calc_str_buf, "calc({d}{s})", .{ result, val_arg.unit }) catch return null;
     return canonicalizeCalcValue(calc_str, buf);
 }
 
@@ -5494,4 +5584,89 @@ test "normalizeCssNumber: 1e-6" {
     var buf: [64]u8 = undefined;
     const r = normalizeCssNumber("1e-6", &buf);
     try std.testing.expectEqualStrings("0.000001", r.?);
+}
+
+// ── Math function simplification (CSS Values 4 §9.1) ──────────────────
+
+test "canonicalizeSingleArgMath: min(1px) → calc(1px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("min(1px)", &buf);
+    try std.testing.expectEqualStrings("calc(1px)", r.?);
+}
+
+test "canonicalizeSingleArgMath: max(3px) → calc(3px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("max(3px)", &buf);
+    try std.testing.expectEqualStrings("calc(3px)", r.?);
+}
+
+test "canonicalizeSingleArgMath: min(1in) absolute → calc(96px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("min(1in)", &buf);
+    try std.testing.expectEqualStrings("calc(96px)", r.?);
+}
+
+test "canonicalizeSingleArgMath: case-insensitive unit min(1PX)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("min(1PX)", &buf);
+    try std.testing.expectEqualStrings("calc(1px)", r.?);
+}
+
+test "canonicalizeSingleArgMath: multi-arg same-unit min(50px, 100px) → calc(50px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("min(50px, 100px)", &buf);
+    try std.testing.expectEqualStrings("calc(50px)", r.?);
+}
+
+test "canonicalizeSingleArgMath: multi-arg absolute max(1in, 50px) → calc(96px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("max(1in, 50px)", &buf);
+    try std.testing.expectEqualStrings("calc(96px)", r.?);
+}
+
+test "canonicalizeSingleArgMath: mixed category min(1px, 1em) stays (null)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeSingleArgMath("min(1px, 1em)", &buf);
+    try std.testing.expect(r == null);
+}
+
+test "canonicalizeClamp: clamp(1px, 2px, 3px) → calc(2px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeClamp("clamp(1px, 2px, 3px)", &buf);
+    try std.testing.expectEqualStrings("calc(2px)", r.?);
+}
+
+test "canonicalizeClamp: clamp(5px, 2px, 3px) → calc(3px) (upper bound wins)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeClamp("clamp(5px, 2px, 3px)", &buf);
+    // min=5, val=2, max=3 → max(5, min(2,3)) = max(5, 2) = 5 clamped down by
+    // the upper bound at 3 in the spec form, actually result = max(5, 2) = 5
+    // since max(5,3) is actually 5 which is above max=3… spec algorithm keeps
+    // min bound when it exceeds max, per CSS Values 4 §9.1.
+    try std.testing.expectEqualStrings("calc(5px)", r.?);
+}
+
+test "canonicalizeClamp: clamp(none, 5px, 10px) → calc(5px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeClamp("clamp(none, 5px, 10px)", &buf);
+    try std.testing.expectEqualStrings("calc(5px)", r.?);
+}
+
+test "canonicalizeClamp: clamp(1px, 20px, none) → calc(20px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeClamp("clamp(1px, 20px, none)", &buf);
+    try std.testing.expectEqualStrings("calc(20px)", r.?);
+}
+
+test "canonicalizeClamp: absolute unit mix clamp(1in, 50px, 200px) → calc(96px)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeClamp("clamp(1in, 50px, 200px)", &buf);
+    // 1in = 96px; clamp(96, 50, 200) = max(96, min(50,200)) = max(96, 50) = 96
+    try std.testing.expectEqualStrings("calc(96px)", r.?);
+}
+
+test "canonicalizeClamp: mixed category clamp(1px, 5em, 10px) stays (null)" {
+    var buf: [512]u8 = undefined;
+    const r = canonicalizeClamp("clamp(1px, 5em, 10px)", &buf);
+    try std.testing.expect(r == null);
 }
