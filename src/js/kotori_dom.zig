@@ -1849,6 +1849,28 @@ fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "cssText"))
         return getAttr(vm, @ptrCast(elem), "style");
 
+    // CSSOM §6.7.3 `length` — number of declared properties. Returned as a
+    // plain numeric property (not a method) so that `style.length == 0`
+    // coerces correctly per WPT tests (e.g.
+    // css/cssom/getComputedStyle-detached-subtree.html).
+    if (eql(name, "length")) {
+        var attr_len_l: usize = 0;
+        const style_l = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len_l)) |p|
+            p[0..attr_len_l]
+        else
+            "";
+        var count: usize = 0;
+        var rest = style_l;
+        while (rest.len > 0) {
+            const semi = std.mem.indexOfScalar(u8, rest, ';') orelse rest.len;
+            const decl = std.mem.trim(u8, rest[0..semi], " \t\r\n");
+            if (semi < rest.len) rest = rest[semi + 1 ..] else rest = "";
+            if (decl.len == 0) continue;
+            if (std.mem.indexOfScalar(u8, decl, ':') != null) count += 1;
+        }
+        return JsValue.initNumber(@floatFromInt(count));
+    }
+
     // Convert camelCase → kebab-case
     var kebab_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(name, &kebab_buf);
@@ -2623,14 +2645,93 @@ fn nativeGetComputedStyle(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
 
     const obj = try vm.createObj(.{ .obj_type = .dom_style });
     obj.data = .{ .dom_style = @ptrCast(elem) };
-    // Register getPropertyValue as an own property so that domStyleGetProp's
-    // own-property check above resolves it before the CSS-name fallback.
+    // CSSOM §6.7 CSSStyleDeclaration methods on the computed-style object.
+    // Register as own properties so that domStyleGetProp's own-property check
+    // resolves them before the CSS-name fallback.
     try vm.registerNativeMethod(obj, "getPropertyValue", &nativeCSSGetPropertyValue);
     try vm.registerNativeMethod(obj, "getPropertyPriority", &nativeCSSGetPropertyPriority);
+    // CSSOM §6.7.2: computed style is read-only. setProperty/removeProperty
+    // must throw NoModificationAllowedError (legacy code 7).
+    try vm.registerNativeMethod(obj, "setProperty", &nativeComputedSetProperty);
+    try vm.registerNativeMethod(obj, "removeProperty", &nativeComputedRemoveProperty);
+    // CSS §2.1 / CSSOM §6.7.3: supports / item are read-only methods. The
+    // `length` attribute is NOT registered here — domStyleGetProp resolves
+    // `length` to a numeric property so `style.length == 0` coerces per
+    // CSSOM §6.7.3 rather than returning the function object.
+    try vm.registerNativeMethod(obj, "supports", &nativeCSSDeclSupports);
+    try vm.registerNativeMethod(obj, "item", &nativeCSSItem);
     // __element internal back-reference (matches QuickJS path for debugging).
     const elem_sid = try vm.pool.intern("__element");
     obj.setProperty(vm.allocator, elem_sid, args[0]) catch {};
     return JsValue.initObject(obj);
+}
+
+/// CSSOM §6.7.2 — computed-style CSSStyleDeclaration is read-only. Throws
+/// NoModificationAllowedError when setProperty is invoked on a resolved-value
+/// object (the one returned from getComputedStyle). Mirrors browsers, whose
+/// computed style declarations reject writes.
+fn nativeComputedSetProperty(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    vm.pending_throw = try createDOMExceptionObj(vm, "NoModificationAllowedError");
+    return JsValue.undefined_val;
+}
+
+/// CSSOM §6.7.2 — computed-style removeProperty throws NoModificationAllowedError.
+fn nativeComputedRemoveProperty(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    vm.pending_throw = try createDOMExceptionObj(vm, "NoModificationAllowedError");
+    return JsValue.initString(try vm.pool.intern(""));
+}
+
+/// CSS §2.1 CSS.supports(property, value) — accepts either the two-argument
+/// (property, value) form or the single-argument "property: value" condition
+/// form. Delegates the "is this a valid CSS value?" question to the
+/// validate_fn bridge (same callback that CSSOM §6.7.2 invalid-write
+/// rejection uses). When no validator is installed (unit-test harness), the
+/// result degrades to "true if both parts are non-empty" — the safe default
+/// matching the CSS.supports polyfill's round-trip semantics.
+fn nativeCSSDeclSupports(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len == 0) return JsValue.initBool(false);
+
+    var prop_buf: [256]u8 = undefined;
+    var val_buf: [1024]u8 = undefined;
+    var prop_slice: []const u8 = "";
+    var val_slice: []const u8 = "";
+
+    if (args.len == 1) {
+        // Condition form: "property: value" — optionally wrapped in parens.
+        if (!args[0].isString()) return JsValue.initBool(false);
+        const cond_in = vm.pool.get(args[0].asStringId()) orelse "";
+        var cond = std.mem.trim(u8, cond_in, " \t\r\n");
+        if (cond.len >= 2 and cond[0] == '(' and cond[cond.len - 1] == ')') {
+            cond = std.mem.trim(u8, cond[1 .. cond.len - 1], " \t\r\n");
+        }
+        const colon = std.mem.indexOfScalar(u8, cond, ':') orelse return JsValue.initBool(false);
+        const p_raw = std.mem.trim(u8, cond[0..colon], " \t\r\n");
+        const v_raw = std.mem.trim(u8, cond[colon + 1 ..], " \t\r\n");
+        if (p_raw.len == 0 or v_raw.len == 0) return JsValue.initBool(false);
+        const pn = @min(p_raw.len, prop_buf.len);
+        @memcpy(prop_buf[0..pn], p_raw[0..pn]);
+        prop_slice = prop_buf[0..pn];
+        const vn = @min(v_raw.len, val_buf.len);
+        @memcpy(val_buf[0..vn], v_raw[0..vn]);
+        val_slice = val_buf[0..vn];
+    } else {
+        if (!args[0].isString() or !args[1].isString()) return JsValue.initBool(false);
+        const p_in = vm.pool.get(args[0].asStringId()) orelse "";
+        const v_in = vm.pool.get(args[1].asStringId()) orelse "";
+        if (p_in.len == 0 or v_in.len == 0) return JsValue.initBool(false);
+        prop_slice = p_in;
+        val_slice = v_in;
+    }
+
+    if (validate_fn) |vf| {
+        return JsValue.initBool(vf(prop_slice, val_slice));
+    }
+    // Fallback: no validator registered — return true when both pieces are
+    // non-empty, matching the conservative round-trip polyfill semantics.
+    return JsValue.initBool(prop_slice.len > 0 and val_slice.len > 0);
 }
 
 /// CSSStyleDeclaration.getPropertyValue(propertyName) for the computed-style
@@ -4581,9 +4682,12 @@ fn createStyleObj(vm: *VM, elem: *lxb.lxb_dom_element_t) ?JsValue {
     vm.registerNativeMethod(obj, "getPropertyPriority",&nativeCSSGetPropertyPriority) catch {};
     vm.registerNativeMethod(obj, "setProperty",        &nativeCSSSetProperty)        catch {};
     vm.registerNativeMethod(obj, "removeProperty",     &nativeCSSRemoveProperty)     catch {};
+    // CSS §2.1: supports() is callable on any CSSStyleDeclaration.
+    vm.registerNativeMethod(obj, "supports",           &nativeCSSDeclSupports)       catch {};
     vm.registerNativeMethod(obj, "item",               &nativeCSSItem)               catch {};
-    // `length` as a native getter via the same own-property approach.
-    vm.registerNativeMethod(obj, "length",             &nativeCSSLengthGet)          catch {};
+    // Note: `length` is NOT registered as a method here — domStyleGetProp
+    // resolves it to a numeric property so `style.length == 0` coerces per
+    // CSSOM §6.7.3 rather than returning the function object.
     return JsValue.initObject(obj);
 }
 
