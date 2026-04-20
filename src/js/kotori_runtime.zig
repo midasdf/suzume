@@ -99,6 +99,15 @@ pub const KotoriRuntime = struct {
         // "Cannot read properties of undefined (reading 'supports')".
         _ = self.eval(css_global_polyfill_js);
 
+        // DOM §3.1: AbortController / AbortSignal polyfill for kotori. The QJS
+        // path installs these via `src/js/web_api.zig:2677-2691`; kotori has no
+        // visibility into that registration, so without this polyfill every
+        // WPT test referencing `new AbortController()` throws
+        // "Cannot read properties of undefined (reading 'signal')". This is a
+        // pure-JS polyfill that composes over the native
+        // addEventListener/removeEventListener bindings in kotori_dom.zig.
+        _ = self.eval(abort_controller_polyfill_js);
+
         return self;
     }
 
@@ -1922,6 +1931,107 @@ pub const KotoriRuntime = struct {
         \\    return r;
         \\  };
         \\  globalThis.CSS = CSS_obj;
+        \\})();
+    ;
+
+    /// DOM §3.1 — AbortController / AbortSignal polyfill. Self-contained
+    /// mini-EventTarget (uses an internal `_evtMap`, not suzume's native
+    /// addEventListener) because the kotori native path stores listener
+    /// records keyed by DOM node pointers / standalone EventTarget `_et_ptr`.
+    /// AbortSignal is a plain JS object that the native
+    /// `nativeAddEventListener` hook (kotori_dom.zig) calls
+    /// `.addEventListener('abort', handler, {once:true})` on to register the
+    /// abort step (DOM §2.7.1 step 5). Mirrors the QJS polyfill at
+    /// `src/js/web_api.zig:2677-2691`.
+    const abort_controller_polyfill_js =
+        \\(function(){
+        \\  if (typeof globalThis.AbortController !== 'undefined') return;
+        \\  function AbortSignal(){
+        \\    if (!(this instanceof AbortSignal)) throw new TypeError("Failed to construct 'AbortSignal': please use 'new'.");
+        \\    this.aborted = false;
+        \\    this.reason = undefined;
+        \\    this._evtMap = {};
+        \\    this.onabort = null;
+        \\  }
+        \\  AbortSignal.prototype.addEventListener = function(t, fn, o){
+        \\    if (!this._evtMap[t]) this._evtMap[t] = [];
+        \\    this._evtMap[t].push({ fn: fn, once: !!(o && o.once) });
+        \\  };
+        \\  AbortSignal.prototype.removeEventListener = function(t, fn){
+        \\    var a = this._evtMap[t];
+        \\    if (a) for (var i = a.length - 1; i >= 0; i--) if (a[i].fn === fn) a.splice(i, 1);
+        \\  };
+        \\  AbortSignal.prototype.dispatchEvent = function(e){
+        \\    e.target = this; e.currentTarget = this;
+        \\    var a = this._evtMap[e.type];
+        \\    if (a) {
+        \\      a = a.slice();
+        \\      for (var i = 0; i < a.length; i++) {
+        \\        try { a[i].fn.call(this, e); } catch(ex) {}
+        \\        if (a[i].once) this.removeEventListener(e.type, a[i].fn);
+        \\      }
+        \\    }
+        \\    e.currentTarget = null;
+        \\    return !e.defaultPrevented;
+        \\  };
+        \\  AbortSignal.prototype.throwIfAborted = function(){ if (this.aborted) throw this.reason; };
+        \\  AbortSignal.abort = function(reason){
+        \\    var s = new AbortSignal();
+        \\    s.aborted = true;
+        \\    s.reason = reason !== undefined ? reason : (typeof DOMException !== 'undefined' ? new DOMException('The operation was aborted.', 'AbortError') : new Error('AbortError'));
+        \\    return s;
+        \\  };
+        \\  AbortSignal.timeout = function(ms){
+        \\    var s = new AbortSignal();
+        \\    setTimeout(function(){
+        \\      s.aborted = true;
+        \\      s.reason = typeof DOMException !== 'undefined' ? new DOMException('The operation timed out.', 'TimeoutError') : new Error('TimeoutError');
+        \\      var e; try { e = new Event('abort'); } catch(_) { e = { type: 'abort' }; }
+        \\      if (s.onabort) try { s.onabort(e); } catch(_){}
+        \\      s.dispatchEvent(e);
+        \\    }, ms);
+        \\    return s;
+        \\  };
+        \\  AbortSignal.any = function(signals){
+        \\    if (!signals || signals.length === 0) return new AbortSignal();
+        \\    var s = new AbortSignal();
+        \\    for (var i = 0; i < signals.length; i++) {
+        \\      if (signals[i].aborted) { s.aborted = true; s.reason = signals[i].reason; return s; }
+        \\    }
+        \\    var hs = [];
+        \\    for (var i = 0; i < signals.length; i++) {
+        \\      (function(sig){
+        \\        var h = function(){
+        \\          if (!s.aborted) {
+        \\            s.aborted = true; s.reason = sig.reason;
+        \\            for (var k = 0; k < hs.length; k++) hs[k].sig.removeEventListener('abort', hs[k].h);
+        \\            var e; try { e = new Event('abort'); } catch(_) { e = { type: 'abort' }; }
+        \\            if (s.onabort) try { s.onabort(e); } catch(_){}
+        \\            s.dispatchEvent(e);
+        \\          }
+        \\        };
+        \\        hs.push({ sig: sig, h: h });
+        \\        sig.addEventListener('abort', h);
+        \\      })(signals[i]);
+        \\    }
+        \\    return s;
+        \\  };
+        \\  globalThis.AbortSignal = AbortSignal;
+        \\  function AbortController(){
+        \\    if (!(this instanceof AbortController)) throw new TypeError("Failed to construct 'AbortController': please use 'new'.");
+        \\    this.signal = new AbortSignal();
+        \\  }
+        \\  AbortController.prototype.abort = function(reason){
+        \\    var s = this.signal;
+        \\    if (!s.aborted) {
+        \\      s.aborted = true;
+        \\      s.reason = reason !== undefined ? reason : (typeof DOMException !== 'undefined' ? new DOMException('The operation was aborted.', 'AbortError') : new Error('AbortError'));
+        \\      var e; try { e = new Event('abort'); } catch(_) { e = { type: 'abort' }; }
+        \\      if (s.onabort) try { s.onabort(e); } catch(_){}
+        \\      s.dispatchEvent(e);
+        \\    }
+        \\  };
+        \\  globalThis.AbortController = AbortController;
         \\})();
     ;
 

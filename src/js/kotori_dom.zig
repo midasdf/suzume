@@ -392,9 +392,34 @@ pub const EventListener = struct {
     capture: bool,
     once: bool = false,
     passive: bool = false,
+    // Layer 2A — AbortSignal integration (DOM §2.7.1 step 5, §2.9 step 5.3).
+    // `removed` is a soft-delete flag checked by dispatch so that an abort
+    // mid-dispatch removes not-yet-fired later listeners from the current
+    // dispatch snapshot. `signal_ref` holds the JS AbortSignal object; when
+    // `removeEventListener` frees the record it also calls
+    // `sig.removeEventListener('abort', handler)` to detach the abort step.
+    removed: bool = false,
+    signal_ref: JsValue = JsValue.undefined_val,
+    abort_handler_ref: JsValue = JsValue.undefined_val,
 };
 
 var g_listeners: std.ArrayListUnmanaged(EventListener) = .empty;
+
+// Layer 2A — global registry for abort hooks. Each entry binds a native
+// handler function object (stored in _evtMap['abort']) to the (target, type,
+// callback, capture) tuple it must feed into target.removeEventListener when
+// the signal aborts. We use a side table (instead of stashing the tuple on
+// the handler_obj itself) because the polyfill's dispatch sets `this = signal`
+// when invoking handlers, so the handler fn cannot recover its own obj via
+// `this` — instead it receives a VM-provided callee value we look up here.
+const AbortHookEntry = struct {
+    handler_obj: *JsObject, // identity key
+    target: JsValue,
+    type_val: JsValue,
+    callback: JsValue,
+    capture: bool,
+};
+var g_abort_hooks: std.ArrayListUnmanaged(AbortHookEntry) = .empty;
 
 // DOM prototype chain: Node.prototype → CharacterData.prototype → Text/Comment.prototype
 // Element.prototype also inherits from Node.prototype
@@ -3693,21 +3718,15 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     const vm = VM.vmFromCtx(ctx);
     if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
     const callback = args[1];
-    if (!callback.isObject()) return JsValue.undefined_val;
-
-    // Resolve the target node pointer (DOM node, window, or standalone EventTarget).
-    const node_ptr: *anyopaque = resolveEventTarget(vm, this) orelse return JsValue.undefined_val;
-
-    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
-
-    // Own the event type string
-    const owned = try g_alloc.alloc(u8, event_type.len);
-    @memcpy(owned, event_type);
 
     // Parse options: boolean (capture) or object {capture, once, passive, signal}
+    // DOM §2.7.1: option parsing (+ getter side effects) happens BEFORE the
+    // null-callback short-circuit, so we read the dict up front.
     var capture = false;
     var once = false;
     var passive = false;
+    var signal_val: JsValue = JsValue.undefined_val;
+    var has_signal = false;
     if (args.len > 2) {
         if (args[2].isBool()) {
             capture = args[2].asBool();
@@ -3722,7 +3741,75 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
             if (vm.pool.intern("passive") catch null) |sid| {
                 if (opts.getProperty(sid)) |v| passive = v.isTruthy();
             }
+            // DOM §2.7.1 + WebIDL: `signal` has IDL type AbortSignal (not
+            // nullable). Passing `null` explicitly must throw TypeError.
+            // Passing `undefined` or omitting the key is a no-op. Use the VM's
+            // native error.TypeError so `catch(e){ e instanceof TypeError }`
+            // passes the WPT assert_throws_js check.
+            if (vm.pool.intern("signal") catch null) |sid| {
+                if (opts.getProperty(sid)) |v| {
+                    if (v.isNull()) return error.TypeError;
+                    if (v.isObject()) {
+                        signal_val = v;
+                        has_signal = true;
+                    }
+                }
+            }
         }
+    }
+
+    // DOM §2.7.1 step 2: if signal is already aborted, do not add the listener.
+    if (has_signal) {
+        const aborted_sid = vm.pool.intern("aborted") catch null;
+        if (aborted_sid) |sid| {
+            if (signal_val.asJsObject().getProperty(sid)) |av| {
+                if (av.isTruthy()) return JsValue.undefined_val;
+            }
+        }
+    }
+
+    // DOM §2.7.1 step 3: callback null/undefined is a silent no-op (after the
+    // option getters have run).
+    if (!callback.isObject()) return JsValue.undefined_val;
+
+    // Resolve the target node pointer (DOM node, window, or standalone EventTarget).
+    const node_ptr: *anyopaque = resolveEventTarget(vm, this) orelse return JsValue.undefined_val;
+
+    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+
+    // DOM §2.7.1 step 4: if target's event listener list already contains a
+    // listener with the same (type, callback, capture) triple, do NOT append
+    // a duplicate. Idempotency matters for both wpt/dom/events/AEL-once and
+    // every handler-registered-twice user pattern.
+    const target_addr_ds: usize = @intFromPtr(node_ptr);
+    for (g_listeners.items) |existing| {
+        if (@intFromPtr(existing.node_ptr) == target_addr_ds and
+            std.mem.eql(u8, existing.event_type, event_type) and
+            existing.callback.bits == callback.bits and
+            existing.capture == capture and
+            !existing.removed)
+        {
+            // Duplicate — spec says we return without doing anything, NOT
+            // even re-registering the abort step. The already-present record
+            // retains its original `signal`/`abort_handler_ref`; ours would
+            // leak if we installed another, so just skip.
+            return JsValue.undefined_val;
+        }
+    }
+
+    // Own the event type string
+    const owned = try g_alloc.alloc(u8, event_type.len);
+    @memcpy(owned, event_type);
+
+    // Layer 2A step 4 — register abort hook on the signal. The signal is the
+    // polyfill's pure-JS AbortSignal; we attach a `{once:true}` 'abort'
+    // listener that calls `target.removeEventListener(type, cb, cap)` when the
+    // signal fires. `removeEventListener` in turn marks the matching record
+    // as `removed` (DOM §2.9 step 5.3). We store the handler so manual
+    // removeEventListener can detach the abort step.
+    var abort_handler: JsValue = JsValue.undefined_val;
+    if (has_signal) {
+        abort_handler = installAbortHook(vm, this, signal_val, args[0], callback, capture) catch JsValue.undefined_val;
     }
 
     try g_listeners.append(g_alloc, .{
@@ -3732,8 +3819,118 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
         .capture = capture,
         .once = once,
         .passive = passive,
+        .signal_ref = if (has_signal) signal_val else JsValue.undefined_val,
+        .abort_handler_ref = abort_handler,
     });
     return JsValue.undefined_val;
+}
+
+/// DOM §2.7.1 step 5 / §3.1 — register the abort step on an AbortSignal.
+/// Directly mutates `signal._evtMap['abort']` (the polyfill's own storage)
+/// with a native handler whose identity is recorded in `g_abort_hooks`. When
+/// the signal aborts, `nativeAbortHookFire` scans `g_abort_hooks` to find the
+/// matching tuple (target, type, callback, capture) and issues the native
+/// `removeEventListener`. Returns the handler JsValue so a later manual
+/// removeEventListener can splice it out of `_evtMap['abort']`.
+fn installAbortHook(
+    vm: *VM,
+    target: JsValue,
+    signal: JsValue,
+    type_val: JsValue,
+    callback: JsValue,
+    capture: bool,
+) anyerror!JsValue {
+    const handler_obj = try vm.createObj(.{ .obj_type = .native_function });
+    handler_obj.data = .{ .native_fn = &nativeAbortHookFire };
+    const handler_val = JsValue.initObject(handler_obj);
+
+    // Register the binding so nativeAbortHookFire can recover the tuple on
+    // invocation. The handler object pointer is the identity key.
+    try g_abort_hooks.append(g_alloc, .{
+        .handler_obj = handler_obj,
+        .target = target,
+        .type_val = type_val,
+        .callback = callback,
+        .capture = capture,
+    });
+
+    // Direct mutation: signal._evtMap['abort'].push({fn: handler, once: true}).
+    if (!signal.isObject()) return handler_val;
+    const signal_obj = signal.asJsObject();
+    const evtmap_sid = try vm.pool.intern("_evtMap");
+    var evtmap_val = signal_obj.getProperty(evtmap_sid) orelse JsValue.undefined_val;
+    if (!evtmap_val.isObject()) {
+        const new_map = try vm.createObj(.{});
+        evtmap_val = JsValue.initObject(new_map);
+        try signal_obj.setProperty(vm.allocator, evtmap_sid, evtmap_val);
+    }
+    const evtmap_obj = evtmap_val.asJsObject();
+    const abort_sid = try vm.pool.intern("abort");
+    var abort_arr_val = evtmap_obj.getProperty(abort_sid) orelse JsValue.undefined_val;
+    if (!abort_arr_val.isObject()) {
+        const new_arr = try vm.createObj(.{ .obj_type = .array });
+        new_arr.data = .{ .array = .empty };
+        new_arr.prototype = vm.array_proto;
+        abort_arr_val = JsValue.initObject(new_arr);
+        try evtmap_obj.setProperty(vm.allocator, abort_sid, abort_arr_val);
+    }
+    const entry_obj = try vm.createObj(.{});
+    try entry_obj.setProperty(vm.allocator, try vm.pool.intern("fn"), handler_val);
+    try entry_obj.setProperty(vm.allocator, try vm.pool.intern("once"), JsValue.initBool(true));
+    try abort_arr_val.asJsObject().data.array.append(vm.allocator, JsValue.initObject(entry_obj));
+    return handler_val;
+}
+
+/// Fires when the polyfill dispatches 'abort' on a signal. Finds the matching
+/// entry in `g_abort_hooks` by locating the topmost native_function on the VM
+/// stack (the callee) and calling `target.removeEventListener(type, cb, cap)`.
+fn nativeAbortHookFire(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    // Find the topmost native_function on the stack whose native_fn is us —
+    // that's the handler_obj registered for this entry. callJsFunction pushes
+    // the func before invoking, so it's still on the stack when we run.
+    var found: ?*JsObject = null;
+    var i = vm.sp;
+    while (i > 0) {
+        i -= 1;
+        const v = vm.stack[i];
+        if (v.isObject()) {
+            const o = v.asJsObject();
+            if (o.obj_type == .native_function and o.data.native_fn == &nativeAbortHookFire) {
+                found = o;
+                break;
+            }
+        }
+    }
+    const handler = found orelse return JsValue.undefined_val;
+    // Look up the binding.
+    var matched: ?AbortHookEntry = null;
+    for (g_abort_hooks.items) |entry| {
+        if (entry.handler_obj == handler) {
+            matched = entry;
+            break;
+        }
+    }
+    const rec = matched orelse return JsValue.undefined_val;
+    if (!rec.target.isObject()) return JsValue.undefined_val;
+    const rel_sid = vm.pool.intern("removeEventListener") catch return JsValue.undefined_val;
+    const rel_fn = rec.target.asJsObject().getProperty(rel_sid) orelse return JsValue.undefined_val;
+    if (!rel_fn.isObject()) return JsValue.undefined_val;
+    _ = vm.callJsFunction(rel_fn, rec.target, &.{ rec.type_val, rec.callback, JsValue.initBool(rec.capture) }) catch {};
+    return JsValue.undefined_val;
+}
+
+/// Deregister an abort hook binding (called when the matching ListenerRecord
+/// is freed). Safe to call if the binding is already gone.
+fn removeAbortHookBinding(handler_obj: *JsObject) void {
+    var i: usize = 0;
+    while (i < g_abort_hooks.items.len) {
+        if (g_abort_hooks.items[i].handler_obj == handler_obj) {
+            _ = g_abort_hooks.orderedRemove(i);
+            continue;
+        }
+        i += 1;
+    }
 }
 
 /// window.removeEventListener — removes a previously registered window listener.
@@ -3928,33 +4125,104 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
                         const ct_sid = vm.pool.intern("currentTarget") catch null;
                         if (tgt_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
                         if (ct_sid) |s| ev_obj_et.setProperty(vm.allocator, s, this) catch {};
-                        // Iterate with index to support once-removal during dispatch
-                        var li: usize = 0;
-                        while (li < g_listeners.items.len) {
-                            const entry = g_listeners.items[li];
-                            if (@intFromPtr(entry.node_ptr) != target_addr or
-                                !std.mem.eql(u8, entry.event_type, type_str_et))
+                        // DOM §2.9: snapshot the matching listeners BEFORE iterating
+                        // so that mid-dispatch add/remove/abort do not perturb the
+                        // snapshot. `removed` is a soft-delete flag checked at each
+                        // step (spec §2.9 step 5.3). The backing index is checked
+                        // again at call-time because orderedRemove shifts items.
+                        var snapshot: std.ArrayListUnmanaged(JsValue) = .empty;
+                        defer snapshot.deinit(g_alloc);
+                        for (g_listeners.items) |entry| {
+                            if (@intFromPtr(entry.node_ptr) == target_addr and
+                                std.mem.eql(u8, entry.event_type, type_str_et) and
+                                !entry.removed)
                             {
-                                li += 1;
-                                continue;
+                                snapshot.append(g_alloc, entry.callback) catch continue;
                             }
-                            const is_once = entry.once;
-                            _ = vm.callJsFunction(entry.callback, JsValue.initObject(ev_obj_et), &.{JsValue.initObject(ev_obj_et)}) catch {};
-                            // Remove once-listeners after invocation
-                            if (is_once) {
-                                g_alloc.free(g_listeners.items[li].event_type);
-                                _ = g_listeners.orderedRemove(li);
-                            } else {
-                                li += 1;
+                        }
+                        const si_sid_opt = vm.pool.intern("_stopImmediate") catch null;
+                        const dp_sid_loop = vm.pool.intern("defaultPrevented") catch null;
+                        const cancel_sid = vm.pool.intern("cancelable") catch null;
+                        const rv_sid = vm.pool.intern("returnValue") catch null;
+                        for (snapshot.items) |cb| {
+                            // Look up the live entry by callback identity + node + type. If it
+                            // was removed mid-dispatch (signal abort, manual removeEventListener,
+                            // or a prior once-fire), skip it.
+                            var found_idx: ?usize = null;
+                            var is_once_val = false;
+                            var is_passive_val = false;
+                            for (g_listeners.items, 0..) |e, li| {
+                                if (@intFromPtr(e.node_ptr) == target_addr and
+                                    std.mem.eql(u8, e.event_type, type_str_et) and
+                                    e.callback.bits == cb.bits and
+                                    !e.removed)
+                                {
+                                    found_idx = li;
+                                    is_once_val = e.once;
+                                    is_passive_val = e.passive;
+                                    break;
+                                }
                             }
-                            // Check stopImmediatePropagation
-                            if (vm.pool.intern("_stopImmediate") catch null) |si_sid| {
+                            if (found_idx == null) continue;
+                            // DOM §2.9 step 5.4: for a `once` listener, mark it removed
+                            // BEFORE invoking so a re-entrant dispatch (nested
+                            // dispatchEvent from inside the listener) does not fire it
+                            // again. The actual cleanup + signal detach happens in
+                            // freeListenerRecord after the callback returns.
+                            if (is_once_val) g_listeners.items[found_idx.?].removed = true;
+                            // DOM §2.9 step 5.5: Passive listener flag — temporarily
+                            // override `cancelable` and snapshot both `defaultPrevented`
+                            // + `returnValue`. Per spec, a passive listener's
+                            // preventDefault() is a no-op; we emulate by suppressing any
+                            // change the listener makes to the defaultPrevented /
+                            // returnValue flags. Nesting-safe: saved values are
+                            // restored after the listener returns.
+                            var saved_cancelable: JsValue = JsValue.undefined_val;
+                            var saved_dp: JsValue = JsValue.undefined_val;
+                            var saved_rv: JsValue = JsValue.undefined_val;
+                            if (is_passive_val) {
+                                if (cancel_sid) |s| {
+                                    saved_cancelable = ev_obj_et.getProperty(s) orelse JsValue.undefined_val;
+                                    ev_obj_et.setProperty(vm.allocator, s, JsValue.initBool(false)) catch {};
+                                }
+                                if (dp_sid_loop) |s| saved_dp = ev_obj_et.getProperty(s) orelse JsValue.undefined_val;
+                                if (rv_sid) |s| saved_rv = ev_obj_et.getProperty(s) orelse JsValue.undefined_val;
+                            }
+                            _ = vm.callJsFunction(cb, JsValue.initObject(ev_obj_et), &.{JsValue.initObject(ev_obj_et)}) catch {};
+                            if (is_passive_val) {
+                                if (cancel_sid) |s| ev_obj_et.setProperty(vm.allocator, s, saved_cancelable) catch {};
+                                if (dp_sid_loop) |s| ev_obj_et.setProperty(vm.allocator, s, saved_dp) catch {};
+                                if (rv_sid) |s| ev_obj_et.setProperty(vm.allocator, s, saved_rv) catch {};
+                            }
+                            if (is_once_val) {
+                                // Re-locate because orderedRemove may have shifted.
+                                for (g_listeners.items, 0..) |e, li| {
+                                    if (@intFromPtr(e.node_ptr) == target_addr and
+                                        std.mem.eql(u8, e.event_type, type_str_et) and
+                                        e.callback.bits == cb.bits and
+                                        e.removed)
+                                    {
+                                        freeListenerRecord(vm, li);
+                                        break;
+                                    }
+                                }
+                            }
+                            if (si_sid_opt) |si_sid| {
                                 if (ev_obj_et.getProperty(si_sid)) |sv| {
                                     if (sv.isTruthy()) break;
                                 }
                             }
                         }
-                        return JsValue.initBool(true);
+                        // DOM §2.7: dispatchEvent returns false if event was canceled
+                        // (defaultPrevented + cancelable), true otherwise.
+                        const dp_sid = vm.pool.intern("defaultPrevented") catch null;
+                        var canceled = false;
+                        if (dp_sid) |s| {
+                            if (ev_obj_et.getProperty(s)) |dv| {
+                                if (dv.isTruthy()) canceled = true;
+                            }
+                        }
+                        return JsValue.initBool(!canceled);
                     }
                 }
             }
@@ -4604,15 +4872,72 @@ fn nativeRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsVal
         if (@intFromPtr(entry.node_ptr) == target_addr and
             std.mem.eql(u8, entry.event_type, event_type) and
             entry.callback.bits == callback.bits and
-            entry.capture == capture)
+            entry.capture == capture and
+            !entry.removed)
         {
-            g_alloc.free(entry.event_type);
-            _ = g_listeners.orderedRemove(i);
+            freeListenerRecord(vm, i);
             return JsValue.undefined_val;
         }
         i += 1;
     }
     return JsValue.undefined_val;
+}
+
+/// DOM §2.7.1 + §3.1 — central teardown for a g_listeners[idx] record:
+///   1. Mark `removed=true` so an active dispatch snapshot skips it.
+///   2. If `signal_ref` is set, detach the abort step by directly splicing the
+///      matching `{fn: handler, once: true}` entry out of
+///      `signal._evtMap['abort']`. This is symmetric with installAbortHook and
+///      avoids any JS reentry during dispatch.
+///   3. Free the owned event_type string.
+///   4. orderedRemove from g_listeners.
+fn freeListenerRecord(vm: *VM, idx: usize) void {
+    if (idx >= g_listeners.items.len) return;
+    const entry_ptr = &g_listeners.items[idx];
+    entry_ptr.removed = true;
+
+    if (entry_ptr.signal_ref.isObject() and entry_ptr.abort_handler_ref.isObject()) {
+        const signal_obj = entry_ptr.signal_ref.asJsObject();
+        if (vm.pool.intern("_evtMap") catch null) |evtmap_sid| {
+            if (signal_obj.getProperty(evtmap_sid)) |evtmap_val| {
+                if (evtmap_val.isObject()) {
+                    if (vm.pool.intern("abort") catch null) |abort_sid| {
+                        if (evtmap_val.asJsObject().getProperty(abort_sid)) |arr_val| {
+                            if (arr_val.isObject() and arr_val.asJsObject().obj_type == .array) {
+                                // Splice out matching {fn:handler_ref} entries
+                                const arr_obj = arr_val.asJsObject();
+                                const fn_sid_o = vm.pool.intern("fn") catch null;
+                                if (fn_sid_o) |fn_sid| {
+                                    var i: usize = 0;
+                                    while (i < arr_obj.data.array.items.len) {
+                                        const entry = arr_obj.data.array.items[i];
+                                        var match = false;
+                                        if (entry.isObject()) {
+                                            if (entry.asJsObject().getProperty(fn_sid)) |fv| {
+                                                if (fv.bits == entry_ptr.abort_handler_ref.bits) match = true;
+                                            }
+                                        }
+                                        if (match) {
+                                            _ = arr_obj.data.array.orderedRemove(i);
+                                        } else {
+                                            i += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Deregister from the global abort-hooks registry.
+        if (entry_ptr.abort_handler_ref.isObject()) {
+            removeAbortHookBinding(entry_ptr.abort_handler_ref.asJsObject());
+        }
+    }
+
+    g_alloc.free(entry_ptr.event_type);
+    _ = g_listeners.orderedRemove(idx);
 }
 
 
