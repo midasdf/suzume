@@ -2454,3 +2454,76 @@ test "buildAttributesMap lexbor iteration — all 3 attrs accessible by index (D
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// createEvent extra interfaces + new Event constructors (DOM §4.5)
+// ══════════════════════════════════════════════════════════════════════
+//
+// Per current DOM §4.5 eventInterfaceTable, MutationEvent and ProgressEvent
+// are NOT legacy-createable (createEvent must throw NOT_SUPPORTED_ERR), but
+// their global constructors must still exist for `new MutationEvent()`,
+// `instanceof`, and MutationEvent.MODIFICATION constant access (see WPT
+// dom/nodes/attributes.html). TouchEvent IS legacy-createable per the spec.
+
+test "MutationEvent global exists with MODIFICATION/ADDITION/REMOVAL constants" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\// MutationEvent global + constants required by dom/nodes/attributes.html
+        \\var ok = (typeof MutationEvent === "function");
+        \\ok = ok && (MutationEvent.MODIFICATION === 1);
+        \\ok = ok && (MutationEvent.ADDITION === 2);
+        \\ok = ok && (MutationEvent.REMOVAL === 3);
+        \\// createEvent("MutationEvent") must throw NotSupportedError (DOM §4.5)
+        \\var threw = false;
+        \\try { document.createEvent("MutationEvent"); }
+        \\catch (e) { threw = (e.name === "NotSupportedError"); }
+        \\ok && threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "ProgressEvent global exists but createEvent throws NotSupportedError" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var ok = (typeof ProgressEvent === "function");
+        \\// createEvent("ProgressEvent") must throw NotSupportedError (DOM §4.5)
+        \\var threw = false;
+        \\try { document.createEvent("ProgressEvent"); }
+        \\catch (e) { threw = (e.name === "NotSupportedError"); }
+        \\ok && threw;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "createEvent TouchEvent alias produces instance inheriting from UIEvent" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var ev = document.createEvent("TouchEvent");
+        \\// TouchEvent.prototype → UIEvent.prototype → Event.prototype
+        \\var ok = (ev instanceof TouchEvent) && (ev instanceof UIEvent) && (ev instanceof Event);
+        \\// Default TouchEvent fields (Touch Events §5) — empty TouchList-ish arrays
+        \\ok = ok && (ev.touches.length === 0);
+        \\ok = ok && (ev.targetTouches.length === 0);
+        \\ok = ok && (ev.changedTouches.length === 0);
+        \\ok;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "createEvent case-insensitive TouchEvent aliases" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var lower = document.createEvent("touchevent");
+        \\var upper = document.createEvent("TOUCHEVENT");
+        \\(lower instanceof TouchEvent) && (upper instanceof TouchEvent);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
