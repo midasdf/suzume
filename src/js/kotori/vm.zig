@@ -10056,6 +10056,17 @@ pub const VM = struct {
             const obj = iterable.asJsObject();
             if (obj.obj_type == .generator or obj.obj_type == .async_generator) return iterable;
             if (obj.obj_type == .iterator) return iterable;
+            // ECMA-262 §7.4.2 GetIterator: must call [[Get]] with @@iterator,
+            // which MUST invoke the Proxy `get` trap when the object is a Proxy.
+            // Route Proxy through proxyGetSymbol so the trap handler sees the
+            // real Symbol value rather than the direct symbol_props walk below.
+            if (obj.obj_type == .proxy) {
+                const iter_fn = try self.proxyGetSymbol(obj, SYMBOL_ITERATOR, iterable);
+                if (!iter_fn.isUndefined() and !iter_fn.isNull()) {
+                    return try self.callJsFunction(iter_fn, iterable, &.{});
+                }
+                return null;
+            }
             if (self.findSymbolProp(obj, SYMBOL_ITERATOR)) |iter_fn| {
                 return try self.callJsFunction(iter_fn, iterable, &.{});
             }
@@ -10102,11 +10113,34 @@ pub const VM = struct {
         var data = &obj.data.iterator_data;
         if (!data.source.isObject()) return try vm.createIterResult(JsValue.undefined_val, true);
         const src = data.source.asJsObject();
-        if (src.obj_type != .array) return try vm.createIterResult(JsValue.undefined_val, true);
-        if (data.index < src.data.array.items.len) {
-            const val = src.data.array.items[data.index];
-            data.index += 1;
-            return try vm.createIterResult(val, false);
+        // Fast path: native array
+        if (src.obj_type == .array) {
+            if (data.index < src.data.array.items.len) {
+                const val = src.data.array.items[data.index];
+                data.index += 1;
+                return try vm.createIterResult(val, false);
+            }
+            return try vm.createIterResult(JsValue.undefined_val, true);
+        }
+        // Proxy path (ECMA-262 §22.1.5.2): read length and indexed items via [[Get]].
+        // This handles array-like Proxies such as classList.
+        if (src.obj_type == .proxy) {
+            const length_id = try vm.pool.intern("length");
+            const len_val = try vm.proxyGet(src, length_id, data.source);
+            const len: u32 = blk: {
+                if (len_val.isInt()) break :blk @intCast(@max(0, len_val.asInt()));
+                if (len_val.isNumber()) break :blk @intFromFloat(@max(0.0, @floor(len_val.asNumber())));
+                break :blk 0;
+            };
+            if (data.index < len) {
+                var idx_buf: [20]u8 = undefined;
+                const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{data.index}) catch "0";
+                const idx_id = try vm.pool.intern(idx_str);
+                const val = try vm.proxyGet(src, idx_id, data.source);
+                data.index += 1;
+                return try vm.createIterResult(val, false);
+            }
+            return try vm.createIterResult(JsValue.undefined_val, true);
         }
         return try vm.createIterResult(JsValue.undefined_val, true);
     }
@@ -10595,6 +10629,25 @@ pub const VM = struct {
             return JsValue.undefined_val;
         }
         return pd.target.getProperty(name_id) orelse JsValue.undefined_val;
+    }
+
+    /// Like proxyGet but for well-known symbol keys (ECMA-262 §7.4.2).
+    /// Passes JsValue.initSymbol(sym_id) to the trap so the JS handler
+    /// sees an actual Symbol rather than the string "undefined" that
+    /// keyToStringId produces for unknown value types.
+    /// Falls back to findSymbolProp on the target when no trap is installed.
+    fn proxyGetSymbol(self: *VM, proxy_obj: *JsObject, sym_id: u32, receiver: JsValue) !JsValue {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("get");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const key_sym = JsValue.initSymbol(sym_id);
+                return try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{ JsValue.initObject(pd.target), key_sym, receiver });
+            }
+        }
+        // No trap: walk target's symbol_props chain directly.
+        return self.findSymbolProp(pd.target, sym_id) orelse JsValue.undefined_val;
     }
 
     fn proxySet(self: *VM, proxy_obj: *JsObject, name_id: StringId, val: JsValue, receiver: JsValue) !bool {
