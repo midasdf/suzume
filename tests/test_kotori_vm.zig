@@ -6119,3 +6119,65 @@ test "eval: indirect eval falls back to globals without crashing" {
     , "out");
     try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
 }
+
+// ── Wave 13 Track K: function decl closure over outer let ────────
+// ECMA-262 §10.2.1.3 — Function declarations must close over the
+// VariableEnvironment where they are declared, so hoisted function
+// decls can read/write outer `let`/`const` bindings just like arrow
+// functions do. Pre-fix: `function f(){ count++; }` could not capture
+// outer `let count` because the compiler emitted the function object
+// BEFORE the outer `let` slot was allocated, so `resolveUpvalue`
+// failed and the identifier fell through to a global lookup.
+
+test "closure bug: function decl captures outer let (nested)" {
+    const result = try evalExpr(
+        \\function outer() {
+        \\  let count = 0;
+        \\  function handler() { count++; }
+        \\  handler();
+        \\  handler();
+        \\  return count;
+        \\}
+        \\outer()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "closure bug: arrow captures outer let (nested, control)" {
+    const result = try evalExpr(
+        \\function outer() {
+        \\  let count = 0;
+        \\  const handler = () => { count++; };
+        \\  handler();
+        \\  handler();
+        \\  return count;
+        \\}
+        \\outer()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "closure bug: function decl returns closure over let" {
+    const result = try evalExpr(
+        \\function makeHandler() {
+        \\  let count = 0;
+        \\  function bump() { count++; return count; }
+        \\  return bump;
+        \\}
+        \\var f = makeHandler();
+        \\f(); f(); f()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 3.0), result.asNumber(), 0.001);
+}
+
+test "closure bug: function decl captures outer const" {
+    const result = try evalExpr(
+        \\function outer() {
+        \\  const offset = 10;
+        \\  function add(x) { return x + offset; }
+        \\  return add(5);
+        \\}
+        \\outer()
+    );
+    try std.testing.expectApproxEqAbs(@as(f64, 15.0), result.asNumber(), 0.001);
+}
