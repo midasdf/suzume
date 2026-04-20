@@ -810,6 +810,49 @@ pub const Compiler = struct {
         }
     }
 
+    /// Pre-register top-level `let`/`const` binding names from a function
+    /// body block as locals at depth=0. This is narrower than the `var`
+    /// hoist (which recurses into nested blocks) because `let`/`const` are
+    /// block-scoped — we only pre-register the immediate children of the
+    /// function body so that hoisted nested `function_decl` bodies can
+    /// close over them via upvalues (ECMA-262 §10.2.1.3 —
+    /// InstantiateFunctionObject captures the surrounding Environment).
+    ///
+    /// Pre-registration only reserves the slot; the actual initializer is
+    /// still emitted by the main compilation pass via `storeBinding`,
+    /// which reuses the pre-allocated slot via `resolveLocal`. The TDZ
+    /// window between function entry and the `let`/`const` statement is
+    /// not strictly enforced (kotori does not enforce TDZ in general),
+    /// but the slot holds `undefined` (like any uninitialized local) which
+    /// preserves expected behaviour for forward references.
+    fn hoistLexicalTopLevel(self: *Compiler, block_list: NodeList) CompileError!void {
+        const items = self.parser.ast.getNodeList(block_list);
+        for (items) |item| {
+            switch (self.parser.ast.getNode(item)) {
+                .var_decl => |decl| {
+                    if (decl.kind != .let and decl.kind != .@"const") continue;
+                    const declarators = self.parser.ast.getNodeList(decl.declarators);
+                    for (declarators) |d_idx| {
+                        switch (self.parser.ast.getNode(d_idx)) {
+                            .var_declarator => |vd| {
+                                switch (self.parser.ast.getNode(vd.name)) {
+                                    .identifier => |name_id| {
+                                        if (self.resolveLocal(&self.current, name_id) == null) {
+                                            _ = try self.addLocal(name_id);
+                                        }
+                                    },
+                                    else => {},
+                                }
+                            },
+                            else => {},
+                        }
+                    }
+                },
+                else => {},
+            }
+        }
+    }
+
     fn compileArrayDestructure(self: *Compiler, list: NodeList) CompileError!void {
         const elements = self.parser.ast.getNodeList(list);
         for (elements, 0..) |elem, i| {
@@ -1278,6 +1321,16 @@ pub const Compiler = struct {
                 // these names as upvalues (rather than globals), which is
                 // required for JS's function-scoped var hoisting semantics.
                 try self.hoistVarDeclarations(list);
+
+                // ECMA-262 §10.2.1.3 — InstantiateFunctionObject captures the
+                // surrounding LexicalEnvironment. Hoisted nested function
+                // declarations compiled below must be able to resolve
+                // top-level `let`/`const` names from this block as upvalues.
+                // Pre-register those names so resolveUpvalue succeeds while
+                // the function body is being compiled. Only top-level
+                // (immediate-child) lexical bindings are pre-registered —
+                // nested-block `let`/`const` remain block-scoped.
+                try self.hoistLexicalTopLevel(list);
 
                 // Also hoist function bodies: emit function objects and store
                 // them into their pre-reserved local slots so they are
