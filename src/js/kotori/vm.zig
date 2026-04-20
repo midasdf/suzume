@@ -8050,14 +8050,49 @@ pub const VM = struct {
         const source = self.pool.get(arg.asStringId()) orelse return JsValue.undefined_val;
         if (source.len == 0) return JsValue.undefined_val;
 
-        // Step 2: Compile the source string
+        // Step 2: Compile the source string.
+        // ECMA-262 §19.2.1.1 PerformEval — direct eval captures the calling
+        // frame's local bindings. nativeEval is a native call, so frames[-1]
+        // is the frame that invoked `eval(...)`. We synthesize a throwaway
+        // FunctionScope mirroring that frame's local names and hand it to
+        // the compiler; identifier resolution in the eval source then emits
+        // load_upvalue/store_upvalue against an upvalues array whose cells
+        // point back at the calling frame's stack slots.
         var compiler = Compiler.initWithPool(self.allocator, source, self.pool);
+
+        // Build the synthetic outer scope from the calling frame's local_names.
+        const calling_frame_opt: ?*CallFrame = if (self.frame_count > 0)
+            &self.frames[self.frame_count - 1]
+        else
+            null;
+        var outer_scope = compiler_mod.FunctionScope{};
+        if (calling_frame_opt) |cf| {
+            const names = cf.bc.local_names;
+            const count = @min(names.len, cf.bc.local_count);
+            if (count > 0) {
+                compiler.setEvalOuterLocals(&outer_scope, names[0..count]) catch {};
+            }
+        }
+
         const eval_bc = compiler.compile() catch {
             // Parse error → throw SyntaxError
             compiler.deinit();
             self.pending_throw = try self.createErrorObj("SyntaxError");
             return JsValue.undefined_val;
         };
+
+        // Snapshot the captured parent-slot list before releasing the compiler.
+        const captures = compiler.evalOuterCaptures();
+        var eval_upvalues: []?*UpvalueCell = &.{};
+        if (captures.len > 0 and calling_frame_opt != null) {
+            eval_upvalues = try self.allocator.alloc(?*UpvalueCell, captures.len);
+            const cf = calling_frame_opt.?;
+            for (captures, 0..) |parent_slot, i| {
+                const stack_idx: u32 = cf.base_sp + @as(u32, parent_slot);
+                eval_upvalues[i] = try self.getOrCreateUpvalue(stack_idx);
+            }
+        }
+
         // Note: do NOT call compiler.deinit() here — it would free the bytecode
         // constants. The eval_bc owns a separate copy of code+constants from compile().
         // We only deinit the parser side. compiler.deinit() frees self.current.bc
@@ -8072,7 +8107,7 @@ pub const VM = struct {
             .bc = &eval_bc,
             .ip = 0,
             .base_sp = self.sp,
-            .upvalues = &.{},
+            .upvalues = eval_upvalues,
         };
         self.frame_count += 1;
         // Reserve stack slots for locals
@@ -8085,10 +8120,12 @@ pub const VM = struct {
         const result = self.run(saved_frame_count) catch |err| {
             self.frame_count = saved_frame_count;
             self.sp = saved_sp;
+            if (eval_upvalues.len > 0) self.allocator.free(eval_upvalues);
             return err;
         };
         self.frame_count = saved_frame_count;
         self.sp = saved_sp;
+        if (eval_upvalues.len > 0) self.allocator.free(eval_upvalues);
         return result;
     }
 
