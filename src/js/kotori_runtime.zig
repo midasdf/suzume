@@ -1085,7 +1085,9 @@ pub const KotoriRuntime = struct {
         \\  }
         \\
         \\  /* Run the filter (DOM §6.2 "filter a node"). Returns the filter
-        \\   * result constant (ACCEPT/REJECT/SKIP). */
+        \\   * result constant (ACCEPT/REJECT/SKIP).
+        \\   * Per spec: Get(filter, 'acceptNode') on every traverse, throw
+        \\   * TypeError if missing / not callable. */
         \\  function filterNode(walker, node){
         \\    if (!node) return FILTER_REJECT;
         \\    var bit = showBit(node.nodeType);
@@ -1093,16 +1095,16 @@ pub const KotoriRuntime = struct {
         \\    var filter = walker._filter;
         \\    if (filter == null) return FILTER_ACCEPT;
         \\    var r;
-        \\    try {
-        \\      if (typeof filter === 'function') {
-        \\        r = filter.call(null, node);
-        \\      } else if (typeof filter.acceptNode === 'function') {
-        \\        r = filter.acceptNode.call(filter, node);
-        \\      } else {
-        \\        return FILTER_ACCEPT;
+        \\    if (typeof filter === 'function') {
+        \\      r = filter.call(null, node);
+        \\    } else {
+        \\      /* DOM §6.2 "filter a node": perform Get(filter, 'acceptNode')
+        \\       * on every traverse. Throw TypeError if not callable. */
+        \\      var accept = filter.acceptNode;
+        \\      if (typeof accept !== 'function') {
+        \\        throw new TypeError("Failed to execute 'acceptNode' on 'NodeFilter': acceptNode is not a function");
         \\      }
-        \\    } catch(e) {
-        \\      throw e;
+        \\      r = accept.call(filter, node);
         \\    }
         \\    var ri = Number(r);
         \\    if (ri === FILTER_ACCEPT || ri === FILTER_REJECT || ri === FILTER_SKIP) return ri;
@@ -1127,7 +1129,14 @@ pub const KotoriRuntime = struct {
         \\  defGet(TWP, 'filter',      function(){ return this._filter; });
         \\  defGet(TWP, 'currentNode',
         \\    function(){ return this._current; },
-        \\    function(v){ if (v == null) throw new TypeError('currentNode must not be null'); this._current = v; }
+        \\    function(v){
+        \\      /* DOM §6.1 IDL: currentNode attribute is a Node; Web IDL type
+        \\       * check throws TypeError for non-Node values. */
+        \\      if (v == null || typeof v !== 'object' || typeof v.nodeType !== 'number') {
+        \\        throw new TypeError('currentNode must be a Node');
+        \\      }
+        \\      this._current = v;
+        \\    }
         \\  );
         \\
         \\  /* DOM §6.1 parentNode: find nearest inclusive ancestor that is
