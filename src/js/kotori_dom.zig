@@ -1403,6 +1403,41 @@ fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue 
             }
             return JsValue.initNumber(@floatFromInt(row.default_int));
         },
+        .nullable_domstring => {
+            // HTML §2.6.2 "DOMString?" — missing attribute returns null,
+            // present attribute returns the value as-is (no enum coercion).
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            if (!dom_b.lxb_dom_element_has_attribute(elem, row.content.ptr, row.content.len)) {
+                return JsValue.null_val;
+            }
+            return getAttr(vm, node, row.content);
+        },
+        .enumerated_ascii => {
+            // HTML §2.4.3 canonical-value rule. If attribute absent OR value
+            // matches no keyword, substitute missing-or-invalid default
+            // (null means IDL attribute returns "").
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            const resolved: []const u8 = if (val_ptr) |p|
+                refl.matchEnumValue(p[0..val_len], row.keywords, row.default_str) orelse ""
+            else
+                row.default_str orelse "";
+            const sid = vm.pool.intern(resolved) catch return JsValue.null_val;
+            return JsValue.initString(sid);
+        },
+        .double_with_fallback => {
+            // HTML §2.6.2 "double" — §2.4.4.3 parse, fallback on miss.
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseFloatingPoint(p[0..val_len])) |v| {
+                    return JsValue.initNumber(v);
+                }
+            }
+            return JsValue.initNumber(row.default_double);
+        },
     }
 }
 
@@ -1451,6 +1486,34 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
             };
             var buf: [16]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{d}", .{out}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .nullable_domstring, .enumerated_ascii => {
+            // Both of these serialize through the DOMString setter — the
+            // getter side does the canonicalization. HTML §2.6.2 nullable
+            // setter rule treats `null` specially (removes attribute); the
+            // enumerated setter just writes the value verbatim and lets the
+            // getter's canonicalization handle invalid values.
+            if (row.type == .nullable_domstring and val.isNull()) {
+                _ = dom_b.lxb_dom_element_remove_attribute(elem, row.content.ptr, row.content.len);
+                return true;
+            }
+            var buf: [64]u8 = undefined;
+            const s = valueToString(vm, val, &buf);
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .double_with_fallback => {
+            // §2.6.2 double setter: ECMAScript ToNumber, write back with
+            // best-effort formatting. NaN/Inf must be rejected per WebIDL
+            // "unrestricted double" vs "double"; our rows use the finite
+            // form so reject non-finite as an early return (leaves existing
+            // content attribute untouched, matching browser behavior).
+            const n = val.toNumber();
+            if (!std.math.isFinite(n)) return true;
+            var buf: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{n}) catch "0";
             _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
             return true;
         },
