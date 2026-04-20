@@ -534,12 +534,24 @@ pub const table = &[_]ReflectedAttr{
 /// O(n) linear scan — table is ~200 rows, well within branch-predictor range.
 /// `iface` is the element's resolved HTML interface name (e.g. "HTMLInputElement").
 /// A row with `iface = "HTMLElement"` matches every HTML element.
+///
+/// Note: rows of type `.url` are intentionally NOT returned from this lookup.
+/// HTML §2.6.2 "URL" reflection requires the getter to resolve the content
+/// attribute value against `document.baseURI`. The native dispatch path in
+/// `kotori_dom.reflectionGet` doesn't have the document context or URL
+/// parser available, so we delegate URL-type reflections to the JS-level
+/// prototype polyfill in `dom_api.zig` (which uses `new URL(v, document.baseURI).href`).
+/// Returning null here for `.url` rows lets the native dispatcher fall
+/// through to the prototype chain where the polyfill getter runs.
 pub fn lookup(iface: []const u8, idl: []const u8) ?*const ReflectedAttr {
     for (table) |*row| {
         if (std.mem.eql(u8, row.idl, idl) and
             (std.mem.eql(u8, row.iface, iface) or
              std.mem.eql(u8, row.iface, "HTMLElement")))
         {
+            // Skip URL-type rows — see doc comment. Continue scanning in
+            // case a more specific row (e.g. HTMLElement override) matches.
+            if (row.type == .url) return null;
             return row;
         }
     }
@@ -547,7 +559,10 @@ pub fn lookup(iface: []const u8, idl: []const u8) ?*const ReflectedAttr {
 }
 
 /// HTML §2.4.4.1 rules-for-parsing-integers.
-/// Returns null on failure; caller substitutes the spec-defined default.
+/// Returns null on parse failure OR on out-of-range values (< -2^31 or > 2^31-1)
+/// so the caller can substitute the spec-defined default. Per the reflection
+/// rule for `long`: "If it fails or returns an out of range value, or if the
+/// attribute is absent, the default value must be returned instead."
 /// Skips leading ASCII whitespace; accepts optional leading +/-.
 /// Trailing non-digit characters are allowed (spec collects only digits).
 pub fn parseInteger(s: []const u8) ?i64 {
@@ -569,15 +584,26 @@ pub fn parseInteger(s: []const u8) ?i64 {
     }
     if (i >= s.len or s[i] < '0' or s[i] > '9') return null;
     var val: i64 = 0;
+    // Accumulate digits. Cap val at i64 ceiling to detect overflow; values
+    // outside the i32 range are handled post-sign with a range check so
+    // that the sentinel null triggers the caller's "use default" branch
+    // (HTML §2.6.2 signed-long reflection rule).
     while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {
-        val = val * 10 + @as(i64, s[i] - '0');
-        if (val > std.math.maxInt(i32) + 1) {
-            val = std.math.maxInt(i32) + 1; // clamp to prevent overflow before sign
+        // Cheap overflow guard: once val exceeds 2^31 there's no way the
+        // final signed value is in-range, so stop accumulating early.
+        if (val > @as(i64, std.math.maxInt(i32)) + 1) {
+            // Still need to consume trailing digits so trailing non-digits
+            // don't get treated as a second integer; but we already know
+            // the result is out of range.
+            val = @as(i64, std.math.maxInt(i32)) + 2; // sentinel "too big"
+            continue;
         }
+        val = val * 10 + @as(i64, s[i] - '0');
     }
     val *= sign;
-    if (val > std.math.maxInt(i32)) val = std.math.maxInt(i32);
-    if (val < std.math.minInt(i32)) val = std.math.minInt(i32);
+    // Spec §2.6.2 "long": out-of-range ⇒ caller uses default.
+    if (val > std.math.maxInt(i32)) return null;
+    if (val < std.math.minInt(i32)) return null;
     return val;
 }
 
@@ -587,6 +613,276 @@ pub fn parseNonNegativeInteger(s: []const u8) ?i64 {
     const v = parseInteger(s) orelse return null;
     if (v < 0) return null;
     return v;
+}
+
+// ── URL canonicalization (HTML §2.6 "URL" reflected attributes) ──────
+//
+// HTML §2.6.2 "URL" on getting: "if the content attribute is absent, the IDL
+// attribute must return the empty string. Otherwise, the IDL attribute must
+// parse the value of the content attribute relative to the element's node
+// document and if that is successful, return the resulting URL string. If
+// parsing fails, then the value of the content attribute must be returned
+// instead, converted to a USVString."
+//
+// This is a minimal join implementation for reflection-getter use: it
+// handles the common cases (absolute URLs, scheme-relative, path-absolute,
+// and simple relative paths with "." / "..") without pulling in the full
+// WHATWG URL parser from `src/url/parser.zig` (which lives in a different
+// module and would require build graph changes to import). The full parser
+// is expected to replace this once Track F wires url_parser into the
+// kotori_dom dispatch path.
+
+/// Returns true if `s` starts with a URL scheme ("<alpha>[alpha-num+-.]*:").
+fn hasScheme(s: []const u8) bool {
+    if (s.len == 0) return false;
+    if (!std.ascii.isAlphabetic(s[0])) return false;
+    var i: usize = 1;
+    while (i < s.len) : (i += 1) {
+        const c = s[i];
+        if (c == ':') return i > 0;
+        if (!std.ascii.isAlphanumeric(c) and c != '+' and c != '-' and c != '.') return false;
+    }
+    return false;
+}
+
+/// Strip leading/trailing ASCII whitespace (WHATWG URL preprocessing).
+fn trimAsciiWs(s: []const u8) []const u8 {
+    var start: usize = 0;
+    var end: usize = s.len;
+    while (start < end and s[start] <= 0x20) : (start += 1) {}
+    while (end > start and s[end - 1] <= 0x20) : (end -= 1) {}
+    return s[start..end];
+}
+
+/// Remove "." and ".." segments from `path` per RFC 3986 §5.2.4.
+/// Input and output both start with '/'. Writes into `out` (caller-sized).
+fn removeDotSegments(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(allocator);
+
+    // Split into segments preserving leading '/'.
+    var segs: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer segs.deinit(allocator);
+
+    var i: usize = 0;
+    const has_leading_slash = path.len > 0 and path[0] == '/';
+    if (has_leading_slash) i = 1;
+    var start: usize = i;
+    while (i <= path.len) : (i += 1) {
+        if (i == path.len or path[i] == '/') {
+            try segs.append(allocator, path[start..i]);
+            start = i + 1;
+        }
+    }
+
+    // Stack-based normalization.
+    var stack: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer stack.deinit(allocator);
+
+    for (segs.items, 0..) |seg, idx| {
+        const is_last = idx == segs.items.len - 1;
+        if (std.mem.eql(u8, seg, ".")) {
+            if (is_last) {
+                // Trailing "." becomes an empty segment ("/path/./" → "/path/").
+                try stack.append(allocator, "");
+            }
+            continue;
+        }
+        if (std.mem.eql(u8, seg, "..")) {
+            if (stack.items.len > 0) _ = stack.pop();
+            if (is_last) try stack.append(allocator, "");
+            continue;
+        }
+        try stack.append(allocator, seg);
+    }
+
+    if (has_leading_slash) try out.append(allocator, '/');
+    for (stack.items, 0..) |seg, idx| {
+        try out.appendSlice(allocator, seg);
+        if (idx + 1 < stack.items.len) try out.append(allocator, '/');
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// Split a base URL into (prefix-up-to-authority, path, has_authority).
+/// prefix = "scheme://host[:port]" (or "scheme:" if no authority).
+/// Assumes `base` has a scheme (caller validated via `hasScheme`).
+fn splitBase(base: []const u8) struct { prefix: []const u8, path: []const u8 } {
+    // Find ':' after scheme.
+    var colon: usize = 0;
+    while (colon < base.len and base[colon] != ':') : (colon += 1) {}
+    if (colon >= base.len) return .{ .prefix = base, .path = "" };
+    const after_scheme = colon + 1;
+
+    // Authority starts with "//" ?
+    if (after_scheme + 1 < base.len and base[after_scheme] == '/' and base[after_scheme + 1] == '/') {
+        // Authority ends at next '/', '?', '#', or end of string.
+        var end = after_scheme + 2;
+        while (end < base.len and base[end] != '/' and base[end] != '?' and base[end] != '#') : (end += 1) {}
+        return .{ .prefix = base[0..end], .path = base[end..] };
+    }
+
+    // No authority ("data:", "mailto:", etc.) — opaque path.
+    return .{ .prefix = base[0..after_scheme], .path = base[after_scheme..] };
+}
+
+/// Strip `?query` and `#fragment` from a path-like string.
+fn stripQueryFragment(s: []const u8) []const u8 {
+    for (s, 0..) |c, idx| {
+        if (c == '?' or c == '#') return s[0..idx];
+    }
+    return s;
+}
+
+/// Canonicalize a content-attribute URL value against a base URL per
+/// HTML §2.6.2 "URL" reflection. Returns an owned slice.
+///
+/// Behavior (matches §2.6.2 as closely as a minimal joiner can):
+///   - If `value` (after trimming) has a scheme → return it as-is.
+///   - Else if base is present and has a scheme → resolve `value` against
+///     the base using RFC 3986 §5.2-style merge:
+///       * scheme-relative ("//host/path")  → base-scheme + value
+///       * path-absolute ("/path")          → base-authority-prefix + value
+///       * query-only ("?...") / fragment-only ("#...") → base-path-no-query + value
+///       * relative path                     → merge against base path
+///   - Else → return a duplicate of `value` (raw fallback).
+///
+/// The caller owns the returned slice and must `allocator.free()` it.
+pub fn canonicalizeUrl(
+    allocator: std.mem.Allocator,
+    value: []const u8,
+    base_url: ?[]const u8,
+) ![]u8 {
+    const v = trimAsciiWs(value);
+
+    // Case 1: value already absolute.
+    if (hasScheme(v)) return allocator.dupe(u8, v);
+
+    // Case 2: no base, nothing to resolve.
+    const base_raw = base_url orelse return allocator.dupe(u8, value);
+    const base = trimAsciiWs(base_raw);
+    if (!hasScheme(base)) return allocator.dupe(u8, value);
+
+    const base_parts = splitBase(base);
+
+    // Empty value ⇒ base without fragment.
+    if (v.len == 0) {
+        const base_no_frag = blk: {
+            for (base, 0..) |c, idx| {
+                if (c == '#') break :blk base[0..idx];
+            }
+            break :blk base;
+        };
+        return allocator.dupe(u8, base_no_frag);
+    }
+
+    // Case 3a: scheme-relative ("//host/path").
+    if (v.len >= 2 and v[0] == '/' and v[1] == '/') {
+        // scheme:// + "//host/..."  →  scheme: + value
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        // Prefix is up to and including scheme + ":"  (need to locate it).
+        var colon: usize = 0;
+        while (colon < base.len and base[colon] != ':') : (colon += 1) {}
+        try out.appendSlice(allocator, base[0 .. colon + 1]);
+        try out.appendSlice(allocator, v);
+        return out.toOwnedSlice(allocator);
+    }
+
+    // Case 3b: path-absolute ("/path").
+    if (v.len >= 1 and v[0] == '/') {
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        try out.appendSlice(allocator, base_parts.prefix);
+        const joined = try removeDotSegments(allocator, v);
+        defer allocator.free(joined);
+        try out.appendSlice(allocator, joined);
+        return out.toOwnedSlice(allocator);
+    }
+
+    // Case 3c: fragment-only.
+    if (v[0] == '#') {
+        // base without fragment + value
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        for (base, 0..) |c, idx| {
+            if (c == '#') {
+                try out.appendSlice(allocator, base[0..idx]);
+                break;
+            }
+        } else {
+            try out.appendSlice(allocator, base);
+        }
+        try out.appendSlice(allocator, v);
+        return out.toOwnedSlice(allocator);
+    }
+
+    // Case 3d: query-only.
+    if (v[0] == '?') {
+        // base without query+fragment + value
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        const base_clean = stripQueryFragment(base);
+        try out.appendSlice(allocator, base_clean);
+        try out.appendSlice(allocator, v);
+        return out.toOwnedSlice(allocator);
+    }
+
+    // Case 3e: relative path. Merge against base path.
+    // base path for merge: strip query+fragment, then strip final segment
+    // (everything after the last '/', keeping the '/'). If base has no
+    // path, use "/".
+    const base_path_raw = stripQueryFragment(base_parts.path);
+    var merge_base: []const u8 = "/";
+    if (base_path_raw.len > 0) {
+        // Find last '/'
+        var last_slash: ?usize = null;
+        var k: usize = base_path_raw.len;
+        while (k > 0) {
+            k -= 1;
+            if (base_path_raw[k] == '/') {
+                last_slash = k;
+                break;
+            }
+        }
+        if (last_slash) |ls| {
+            merge_base = base_path_raw[0 .. ls + 1];
+        }
+    }
+
+    // Build "merge_base + value-up-to-query/fragment" then remove dot segs.
+    // Keep query/fragment from value intact (not subject to dot-seg removal).
+    var val_path_end: usize = v.len;
+    var val_extra_start: usize = v.len;
+    for (v, 0..) |c, idx| {
+        if (c == '?' or c == '#') {
+            val_path_end = idx;
+            val_extra_start = idx;
+            break;
+        }
+    }
+    const val_path = v[0..val_path_end];
+    const val_extra = v[val_extra_start..];
+
+    // Concatenate merge_base (must start with '/') with val_path.
+    var joined_path: std.ArrayListUnmanaged(u8) = .empty;
+    defer joined_path.deinit(allocator);
+    // Ensure we start with '/': if base has no authority and merge_base is
+    // empty/non-slash, just use val_path.
+    const leading_slash = merge_base.len > 0 and merge_base[0] == '/';
+    if (leading_slash) try joined_path.appendSlice(allocator, merge_base)
+    else try joined_path.appendSlice(allocator, merge_base);
+    try joined_path.appendSlice(allocator, val_path);
+
+    const normalized = try removeDotSegments(allocator, joined_path.items);
+    defer allocator.free(normalized);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, base_parts.prefix);
+    try out.appendSlice(allocator, normalized);
+    try out.appendSlice(allocator, val_extra);
+    return out.toOwnedSlice(allocator);
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────
@@ -600,7 +896,18 @@ test "parseInteger basics" {
     try std.testing.expectEqual(@as(?i64, null), parseInteger("abc"));
     try std.testing.expectEqual(@as(?i64, null), parseInteger(" -"));
     try std.testing.expectEqual(@as(?i64, 12), parseInteger("12px"));
-    try std.testing.expectEqual(@as(?i64, 2147483647), parseInteger("99999999999"));
+}
+
+test "parseInteger out of range returns null (spec: reflecting caller uses default)" {
+    // §2.6.2 signed-long reflection: out-of-range ⇒ null ⇒ caller uses default.
+    try std.testing.expectEqual(@as(?i64, null), parseInteger("99999999999"));
+    try std.testing.expectEqual(@as(?i64, null), parseInteger("2147483648")); // maxInt(i32)+1
+    try std.testing.expectEqual(@as(?i64, null), parseInteger("-2147483649")); // minInt(i32)-1
+}
+
+test "parseInteger i32 boundaries are in range" {
+    try std.testing.expectEqual(@as(?i64, 2147483647), parseInteger("2147483647"));
+    try std.testing.expectEqual(@as(?i64, -2147483648), parseInteger("-2147483648"));
 }
 
 test "parseNonNegativeInteger rejects negatives" {
@@ -626,4 +933,59 @@ test "lookup finds concrete iface row" {
 
 test "lookup returns null for unknown idl" {
     try std.testing.expect(lookup("HTMLInputElement", "nonexistent") == null);
+}
+
+test "lookup skips URL-type rows so JS polyfill can canonicalize" {
+    // HTMLAnchorElement.href is .url — native lookup must return null so
+    // the dispatch falls through to the prototype-level `new URL(v, baseURI)`
+    // polyfill in dom_api.zig (HTML §2.6.2 URL reflection).
+    try std.testing.expect(lookup("HTMLAnchorElement", "href") == null);
+    try std.testing.expect(lookup("HTMLImageElement", "src") == null);
+    try std.testing.expect(lookup("HTMLFormElement", "action") == null);
+}
+
+test "lookup still returns non-URL rows" {
+    // Sanity: boolean/long/domstring rows continue to dispatch natively.
+    try std.testing.expect(lookup("HTMLInputElement", "disabled") != null);
+    try std.testing.expect(lookup("HTMLInputElement", "maxLength") != null);
+    try std.testing.expect(lookup("HTMLAnchorElement", "target") != null);
+}
+
+// ── canonicalizeUrl tests (HTML §2.6.2 URL reflection) ────────────────
+
+test "canonicalizeUrl resolves relative against base" {
+    const alloc = std.testing.allocator;
+    const resolved = try canonicalizeUrl(alloc, "foo", "http://example.com/");
+    defer alloc.free(resolved);
+    try std.testing.expectEqualStrings("http://example.com/foo", resolved);
+}
+
+test "canonicalizeUrl keeps absolute URL" {
+    const alloc = std.testing.allocator;
+    const resolved = try canonicalizeUrl(alloc, "https://other.example/path", "http://example.com/");
+    defer alloc.free(resolved);
+    try std.testing.expectEqualStrings("https://other.example/path", resolved);
+}
+
+test "canonicalizeUrl handles no base" {
+    const alloc = std.testing.allocator;
+    const resolved = try canonicalizeUrl(alloc, "http://example.com/", null);
+    defer alloc.free(resolved);
+    try std.testing.expectEqualStrings("http://example.com/", resolved);
+}
+
+test "canonicalizeUrl falls back to raw on parse failure" {
+    // Relative URL with no base is a parse failure per WHATWG URL §4.3;
+    // §2.6.2 says return the content attribute value as-is in that case.
+    const alloc = std.testing.allocator;
+    const resolved = try canonicalizeUrl(alloc, "foo", null);
+    defer alloc.free(resolved);
+    try std.testing.expectEqualStrings("foo", resolved);
+}
+
+test "canonicalizeUrl resolves dot-segments" {
+    const alloc = std.testing.allocator;
+    const resolved = try canonicalizeUrl(alloc, "../x", "http://example.com/a/b/c");
+    defer alloc.free(resolved);
+    try std.testing.expectEqualStrings("http://example.com/a/x", resolved);
 }
