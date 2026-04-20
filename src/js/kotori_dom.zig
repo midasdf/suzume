@@ -1220,6 +1220,52 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     do_proto.prototype = ev_proto;
     try registerEventCtor(vm, "DeviceOrientationEvent", do_proto, proto_sid);
 
+    // MutationEvent.prototype → Event.prototype (legacy DOM Events L3 §5)
+    // Default attributes exposed on the prototype so `new MutationEvent()`
+    // instances inherit them without per-constructor boilerplate.
+    // NOT in the createEvent alias table — current DOM §4.5 requires
+    // createEvent("MutationEvent") to throw NOT_SUPPORTED_ERR.
+    const mut_proto = try vm.createObj(.{});
+    mut_proto.prototype = ev_proto;
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("relatedNode"), JsValue.null_val);
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("prevValue"), JsValue.initString(try vm.pool.intern("")));
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("newValue"), JsValue.initString(try vm.pool.intern("")));
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("attrName"), JsValue.initString(try vm.pool.intern("")));
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("attrChange"), JsValue.initNumber(0));
+    // attrChange constants (DOM Events L3 §5) — required by dom/nodes/attributes.html
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("MODIFICATION"), JsValue.initNumber(1));
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("ADDITION"), JsValue.initNumber(2));
+    try mut_proto.setProperty(vm.allocator, try vm.pool.intern("REMOVAL"), JsValue.initNumber(3));
+    try registerEventCtor(vm, "MutationEvent", mut_proto, proto_sid);
+    // Mirror the constants onto the constructor itself for MutationEvent.MODIFICATION access
+    const mut_ctor_val = vm.globals.get(try vm.pool.intern("MutationEvent")) orelse unreachable;
+    const mut_ctor_obj = mut_ctor_val.asJsObject();
+    try mut_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("MODIFICATION"), JsValue.initNumber(1));
+    try mut_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("ADDITION"), JsValue.initNumber(2));
+    try mut_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("REMOVAL"), JsValue.initNumber(3));
+
+    // ProgressEvent.prototype → Event.prototype (XHR §4.6 / HTML §8.9.2)
+    // NOT in createEvent alias table — current DOM §4.5 requires
+    // createEvent("ProgressEvent") to throw NOT_SUPPORTED_ERR.
+    const prog_proto = try vm.createObj(.{});
+    prog_proto.prototype = ev_proto;
+    try prog_proto.setProperty(vm.allocator, try vm.pool.intern("lengthComputable"), JsValue.initBool(false));
+    try prog_proto.setProperty(vm.allocator, try vm.pool.intern("loaded"), JsValue.initNumber(0));
+    try prog_proto.setProperty(vm.allocator, try vm.pool.intern("total"), JsValue.initNumber(0));
+    try registerEventCtor(vm, "ProgressEvent", prog_proto, proto_sid);
+
+    // TouchEvent.prototype → UIEvent.prototype (Touch Events §5)
+    // touches/targetTouches/changedTouches default to empty TouchList-like arrays.
+    const touch_proto = try vm.createObj(.{});
+    touch_proto.prototype = ui_proto;
+    const empty_touches = try vm.createObj(.{ .obj_type = .array });
+    const empty_target_touches = try vm.createObj(.{ .obj_type = .array });
+    const empty_changed_touches = try vm.createObj(.{ .obj_type = .array });
+    try touch_proto.setProperty(vm.allocator, try vm.pool.intern("touches"), JsValue.initObject(empty_touches));
+    try touch_proto.setProperty(vm.allocator, try vm.pool.intern("targetTouches"), JsValue.initObject(empty_target_touches));
+    try touch_proto.setProperty(vm.allocator, try vm.pool.intern("changedTouches"), JsValue.initObject(empty_changed_touches));
+    try registerEventCtor(vm, "TouchEvent", touch_proto, proto_sid);
+
     // ── MutationObserver constructor (DOM §4.3) ──
     const mo_ctor = try vm.createObj(.{ .obj_type = .native_function });
     mo_ctor.data = .{ .native_fn = &nativeMutationObserverConstructor };
@@ -2922,9 +2968,17 @@ fn resolveCreateEventInterface(input: []const u8) ?[]const u8 {
         .{ .alias = "messageevent", .ctor = "MessageEvent" },
         .{ .alias = "mouseevent", .ctor = "MouseEvent" },
         .{ .alias = "mouseevents", .ctor = "MouseEvent" },
+        // NOTE: MutationEvent / MutationEvents / ProgressEvent are intentionally
+        // absent — current DOM §4.5 eventInterfaceTable removed them, and
+        // Document-createEvent.https.html explicitly asserts they throw
+        // NOT_SUPPORTED_ERR. The global `MutationEvent` / `ProgressEvent`
+        // constructors still exist (for `new MutationEvent()`, instanceof,
+        // and the MutationEvent.MODIFICATION/ADDITION/REMOVAL constants used
+        // by attributes.html) — they are just not legacy-createable.
         .{ .alias = "storageevent", .ctor = "StorageEvent" },
         .{ .alias = "svgevents", .ctor = "Event" },
         .{ .alias = "textevent", .ctor = "TextEvent" },
+        .{ .alias = "touchevent", .ctor = "TouchEvent" },
         .{ .alias = "uievent", .ctor = "UIEvent" },
         .{ .alias = "uievents", .ctor = "UIEvent" },
     };
