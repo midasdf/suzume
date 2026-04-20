@@ -2062,6 +2062,8 @@ fn collectByTagNameNS(vm: *VM, root: *lxb.lxb_dom_node_t, ns: ?[]const u8, local
 
 fn nativeDocumentFragmentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     const doc = g_document orelse return JsValue.null_val;
     const frag = sr.lxb_dom_document_create_document_fragment(doc) orelse return JsValue.null_val;
     return wrapNode(vm, frag) orelse JsValue.null_val;
@@ -3173,12 +3175,21 @@ fn nativeCreateEvent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerro
     const ctor_val = vm.globals.get(ctor_sid) orelse return JsValue.null_val;
     if (!ctor_val.isObject()) return JsValue.null_val;
     const ctor = ctor_val.asJsObject();
-    // Create uninitialised event via Event constructor (empty args)
+    // Create uninitialised event via Event constructor (empty args).
+    // Set native_call_is_construct so the guard inside nativeEventConstructor passes.
     const empty_args: []const JsValue = &.{};
+    vm.native_call_is_construct = true;
     const result = if (ctor.obj_type == .native_function)
-        try ctor.data.native_fn(@ptrCast(vm), JsValue.undefined_val, empty_args)
+        ctor.data.native_fn(@ptrCast(vm), JsValue.undefined_val, empty_args) catch |err| {
+            vm.native_call_is_construct = false;
+            return err;
+        }
     else
-        try nativeEventConstructor(@ptrCast(vm), JsValue.undefined_val, empty_args);
+        nativeEventConstructor(@ptrCast(vm), JsValue.undefined_val, empty_args) catch |err| {
+            vm.native_call_is_construct = false;
+            return err;
+        };
+    vm.native_call_is_construct = false;
     // Set prototype from the target constructor (not Event)
     if (result.isObject()) {
         const result_obj = result.asJsObject();
@@ -4635,6 +4646,8 @@ fn nativeNoOpConstructor(_: *anyopaque, _: JsValue, _: []const JsValue) anyerror
 /// DOM: new Document() — creates an empty XML document (no children).
 fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     // Create a new empty lexbor document
     const new_doc = dom_b.lxb_html_document_create() orelse return JsValue.undefined_val;
     if (created_doc_count < created_docs.len) {
@@ -4686,6 +4699,8 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
 
 fn nativeTextConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     const doc = g_document orelse return JsValue.null_val;
     const data = if (args.len > 0 and !args[0].isUndefined()) argToString(vm, args[0]) else "";
     const node = dom_b.lxb_dom_document_create_text_node(doc, data.ptr, data.len) orelse return JsValue.null_val;
@@ -4694,6 +4709,8 @@ fn nativeTextConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) any
 
 fn nativeCommentConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     const doc = g_document orelse return JsValue.null_val;
     const data = if (args.len > 0 and !args[0].isUndefined()) argToString(vm, args[0]) else "";
     const node = dom_b.lxb_dom_document_create_comment(doc, data.ptr, data.len) orelse return JsValue.null_val;
@@ -4708,6 +4725,8 @@ fn nativeCommentConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) 
 /// Uses the JsObject pointer itself as the identity key in g_listeners.
 fn nativeEventTargetConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     const obj = try vm.createObj(.{});
     // Store self-pointer as _et_ptr so addEventListener can identify standalone targets
     const et_ptr_sid = try vm.pool.intern("_et_ptr");
@@ -4740,6 +4759,8 @@ fn resolveEventTarget(vm: *VM, this: JsValue) ?*anyopaque {
 /// DOM 2.5: new Event(type, eventInitDict) constructor.
 fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     const obj = try vm.createObj(.{});
 
     // type argument (required by spec but we tolerate missing)
@@ -4801,6 +4822,8 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
 /// DOM 2.5: new CustomEvent(type, eventInitDict) constructor.
 fn nativeCustomEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     // Create as Event first, then add detail
     const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
     if (!ev_val.isObject()) return ev_val;
@@ -7782,6 +7805,8 @@ fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []c
 
 fn nativeDOMParserConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     const obj = try vm.createObj(.{});
     if (g_domparser_proto) |p| obj.prototype = p;
     return JsValue.initObject(obj);
@@ -8554,6 +8579,8 @@ fn writeDecl(buf: *[2048]u8, off: usize, prop: []const u8, val: []const u8) usiz
 
 fn nativeMutationObserverConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // WebIDL §3.2.1: interface constructors require `new`
+    if (!vm.native_call_is_construct) return error.TypeError;
     if (args.len == 0) return JsValue.undefined_val;
     const callback = args[0];
     if (!callback.isObject()) return JsValue.undefined_val;

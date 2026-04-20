@@ -94,6 +94,10 @@ pub const VM = struct {
     try_depth: u32 = 0,
     /// Set by native functions (e.g. DOM) to inject a JS-catchable throw.
     pending_throw: ?JsValue = null,
+    /// Set to true by the .construct opcode before invoking a native function,
+    /// so DOM interface constructors can enforce WebIDL §3.2.1 (requires `new`).
+    native_call_is_construct: bool = false,
+
     /// Floor frame index for current run() scope.
     run_scope_floor: u32 = 0,
 
@@ -1852,7 +1856,18 @@ pub const VM = struct {
                     if (obj.obj_type == .native_function) {
                         const native = obj.data.native_fn;
                         const base = self.sp - arg_count;
-                        const result = try native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]);
+                        self.native_call_is_construct = true;
+                        const result = native(@ptrCast(self), JsValue.undefined_val, self.stack[base..self.sp]) catch |err| blk: {
+                            self.native_call_is_construct = false;
+                            if (err == error.TypeError) {
+                                self.sp = base - 1; // pop func + args
+                                const caught = try self.throwTypeError("TypeError");
+                                if (!caught) break :blk JsValue.undefined_val;
+                                continue;
+                            }
+                            return err;
+                        };
+                        self.native_call_is_construct = false;
                         // Set prototype from constructor's .prototype property
                         if (result.isObject()) {
                             const result_obj = result.asJsObject();
