@@ -1389,56 +1389,15 @@ pub const KotoriRuntime = struct {
         \\  }
         \\
         \\  /* ============ createElementNS fixups (§4.5) ================= */
-        \\  /* Wrap document.createElementNS so:
-        \\   *  - prefix is set correctly and localName strips the prefix
-        \\   *  - if namespace !== HTML namespace, the result is NOT branded
-        \\   *    as HTMLElement (using Object.setPrototypeOf).
-        \\   *  - if namespace is HTML ns, case is preserved verbatim per spec
-        \\   *    (createElement lowercases; createElementNS does not).
+        \\  /* Native kotori_dom.nativeCreateElementNS now handles the full
+        \\   * DOM §4.5.3 + HTML §4 dispatch (prefix/localName case
+        \\   * preservation via __origLocal + per-tag HTMLElement subclass
+        \\   * prototype via applyInterfaceProto). The previous JS polyfill
+        \\   * un-branded every non-HTML element to Element.prototype — which
+        \\   * defeated SVG/MathML subclass dispatch — and clobbered
+        \\   * localName on prefixed qnames. Both concerns are now native
+        \\   * responsibilities; no JS wrapper is installed.
         \\   */
-        \\  var HTMLNS = 'http://www.w3.org/1999/xhtml';
-        \\  var SVGNS  = 'http://www.w3.org/2000/svg';
-        \\  /* Capture a non-HTML prototype reference to un-brand non-HTML elements.
-        \\   * Prefer Element.prototype; fall back to Node.prototype. */
-        \\  var ElementProto = (typeof Element !== 'undefined' && Element.prototype) ? Element.prototype : null;
-        \\  var nativeCreateElementNS = document.createElementNS;
-        \\  if (typeof nativeCreateElementNS === 'function') {
-        \\    document.createElementNS = function(ns, qn){
-        \\      /* Convert undefined/null per spec → for namespace, null = no namespace. */
-        \\      var nsStr = (ns == null) ? null : String(ns);
-        \\      var qnStr = (qn == null) ? String(qn) : String(qn);
-        \\      var el = nativeCreateElementNS.call(document, nsStr, qnStr);
-        \\      if (el == null) return el;
-        \\      /* Fix localName/prefix if qn contains a colon. Native kotori may
-        \\       * leave localName as the full qualified name. */
-        \\      var colon = qnStr.indexOf(':');
-        \\      if (colon >= 0) {
-        \\        var pfx = qnStr.substring(0, colon);
-        \\        var ln  = qnStr.substring(colon + 1);
-        \\        try { Object.defineProperty(el, 'prefix', {value: pfx, configurable:true, enumerable:true}); } catch(e){}
-        \\        try { Object.defineProperty(el, 'localName', {value: ln, configurable:true, enumerable:true}); } catch(e){}
-        \\      } else {
-        \\        /* Explicit null prefix per spec. */
-        \\        try {
-        \\          var curP = el.prefix;
-        \\          if (curP !== null) Object.defineProperty(el, 'prefix', {value: null, configurable:true, enumerable:true});
-        \\        } catch(e){}
-        \\      }
-        \\      /* Brand handling: if ns is not HTML, un-brand by pointing proto
-        \\       * to Element.prototype (avoids HTMLElement subclass checks). */
-        \\      if (nsStr !== HTMLNS && ElementProto != null) {
-        \\        try { Object.setPrototypeOf(el, ElementProto); } catch(e){}
-        \\      }
-        \\      /* Also fix namespaceURI on the element for null/empty ns. */
-        \\      if (nsStr === null || nsStr === '') {
-        \\        try { Object.defineProperty(el, 'namespaceURI', {value: null, configurable:true, enumerable:true}); } catch(e){}
-        \\      }
-        \\      return el;
-        \\    };
-        \\    if (typeof Document !== 'undefined' && Document.prototype) {
-        \\      Document.prototype.createElementNS = document.createElementNS;
-        \\    }
-        \\  }
         \\
         \\  /* ============ template.content (HTML §4.12.3) =============== */
         \\  /* If native Element doesn't expose .content on template elements,
