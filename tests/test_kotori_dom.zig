@@ -2527,3 +2527,128 @@ test "createEvent case-insensitive TouchEvent aliases" {
     const result = try ctx.run();
     try std.testing.expect(result.isBool() and result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Wave 9 — getComputedStyle CSSStyleDeclaration method surface (CSSOM §6.7)
+// ══════════════════════════════════════════════════════════════════════
+// CSSOM §6.7.2 says the computed-style CSSStyleDeclaration returned from
+// getComputedStyle() is read-only; setProperty / removeProperty must throw
+// NoModificationAllowedError. CSS §2.1 CSS.supports() is also exposed on
+// the declaration; the kotori path re-uses the validate_fn bridge so
+// installing the Phase 6.2 validator returns css_validator's verdict.
+
+test "getComputedStyle().supports returns true for valid property/value" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\var cs = getComputedStyle(el);
+        \\typeof cs.supports === "function" && cs.supports("color", "red");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "getComputedStyle().supports returns false for invalid value" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\var cs = getComputedStyle(el);
+        \\cs.supports("color", "not-a-color-xyzzy");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and !result.asBool());
+}
+
+test "getComputedStyle().supports accepts condition-string form" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\var cs = getComputedStyle(el);
+        \\cs.supports("color: red") && cs.supports("(color: red)");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "getComputedStyle().setProperty throws NoModificationAllowedError" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\var cs = getComputedStyle(el);
+        \\var name = null;
+        \\try { cs.setProperty("color", "red"); }
+        \\catch (e) { name = e.name; }
+        \\name;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const s = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("NoModificationAllowedError", s);
+}
+
+test "getComputedStyle().removeProperty throws NoModificationAllowedError" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\" style=\"color: red;\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\var cs = getComputedStyle(el);
+        \\var name = null;
+        \\try { cs.removeProperty("color"); }
+        \\catch (e) { name = e.name; }
+        \\name;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const s = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("NoModificationAllowedError", s);
+}
+
+test "getComputedStyle() exposes item method and numeric length" {
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\" style=\"color: red; background-color: blue;\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\var cs = getComputedStyle(el);
+        \\// CSSOM §6.7.3: item() is a method, length is a numeric attribute.
+        \\typeof cs.item === "function" && typeof cs.length === "number" && cs.length === 2;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "getComputedStyle() on detached element: length == 0 coerces correctly" {
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\// Regression test for css/cssom/getComputedStyle-detached-subtree.html —
+        \\// when `length` was registered as a method, `style.length == 0` evaluated
+        \\// `function == 0` → false. The attribute form returns a Number, so the
+        \\// coercion matches CSSOM §6.7.3 `length` semantics.
+        \\var detached = document.createElement('div');
+        \\var cs = getComputedStyle(detached);
+        \\cs.length == 0;
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "inline style.supports delegates to validator" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style.supports("color", "red") && !el.style.supports("color", "not-a-color-xyzzy");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
