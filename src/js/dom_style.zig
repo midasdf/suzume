@@ -3332,30 +3332,63 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
     // var() always valid
     if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "var(")) return true;
 
-    // Math functions valid if complete function call (ends with matching ')')
+    // Math functions valid if complete function call (ends with matching
+    // ')') AND well-formed at the syntactic level (non-empty inner, no
+    // empty comma-separated slots, balanced parens). Deeper semantic
+    // checks (e.g. type compatibility of clamp args) are still deferred
+    // to the property-specific grammar switch below.
     if (trimmed[trimmed.len - 1] == ')') {
-        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "calc(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "min(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "max(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "clamp(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "round(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "mod(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "rem(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "abs(")) return true;
-        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sign(")) return true;
+        const hasValidMathArgs = struct {
+            fn check(s: []const u8) bool {
+                const open_idx = std.mem.indexOfScalar(u8, s, '(') orelse return false;
+                const inner = std.mem.trim(u8, s[open_idx + 1 .. s.len - 1], " \t\r\n");
+                if (inner.len == 0) return false;
+                var depth: i32 = 0;
+                var saw_content_in_arg: bool = false;
+                var i: usize = 0;
+                while (i < inner.len) : (i += 1) {
+                    const ch = inner[i];
+                    if (ch == '(') {
+                        depth += 1;
+                        saw_content_in_arg = true;
+                    } else if (ch == ')') {
+                        depth -= 1;
+                        if (depth < 0) return false;
+                        saw_content_in_arg = true;
+                    } else if (ch == ',' and depth == 0) {
+                        if (!saw_content_in_arg) return false; // empty slot
+                        saw_content_in_arg = false;
+                    } else if (ch != ' ' and ch != '\t' and ch != '\r' and ch != '\n') {
+                        saw_content_in_arg = true;
+                    }
+                }
+                if (depth != 0) return false;
+                if (!saw_content_in_arg) return false; // trailing empty slot
+                return true;
+            }
+        }.check;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "calc(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "min(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "max(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "clamp(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "round(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "mod(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "rem(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "abs(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sign(")) return hasValidMathArgs(trimmed);
         // Trig functions
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "sin(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "cos(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "tan(")) return true;
-        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "asin(")) return true;
-        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "acos(")) return true;
-        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "atan(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "atan2(")) return true;
-        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sqrt(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "pow(")) return true;
-        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "hypot(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "log(")) return true;
-        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "exp(")) return true;
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "sin(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "cos(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "tan(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "asin(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "acos(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "atan(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "atan2(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sqrt(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "pow(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "hypot(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "log(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "exp(")) return hasValidMathArgs(trimmed);
         // Color functions — validate structure
         if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) {
             // hwb only supports modern (space) syntax, reject commas

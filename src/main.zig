@@ -88,6 +88,15 @@ fn kotoriFlushStylesIfDirty() void {
     dom_api.flushStylesIfDirty();
 }
 
+/// Bridge: kotori DOM style setters → CSSOM §6.7.2 invalid-value
+/// rejection via `dom_style.isValidCssValue`. Called before writing any
+/// `el.style.X = Y`, `el.style[X] = Y`, or `el.style.setProperty(X, Y)`.
+/// Returns true to allow the write, false to silently ignore.
+fn kotoriValidateCssValue(prop: []const u8, val: []const u8) bool {
+    const dom_style_mod = @import("js/dom_style.zig");
+    return dom_style_mod.isValidCssValue(prop, val);
+}
+
 /// Bridge: kotori.getComputedStyle → resolve the CSSOM §6.5 resolved value
 /// for `prop` on `node`. Serializes into `buf` and returns the slice, or
 /// `null` if the property is not supported by the shared serializer (caller
@@ -891,6 +900,7 @@ fn navigateTo(
     // each navigation — both values are global.
     kotori_dom.setFlushCallback(&kotoriFlushStylesIfDirty);
     kotori_dom.setResolveCallback(&kotoriResolveComputedValue);
+    kotori_dom.setValidateCallback(&kotoriValidateCssValue);
 
     // Defer JavaScript execution until after first paint for faster initial render.
     page.pending_js_init = true;

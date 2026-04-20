@@ -46,6 +46,14 @@ pub var flush_fn: ?*const fn () void = null;
 pub const ResolveFn = *const fn (node: *anyopaque, prop: []const u8, buf: []u8) ?[]const u8;
 pub var resolve_fn: ?ResolveFn = null;
 
+/// CSSOM §6.7.2 invalid-value rejection callback. Returns true to accept
+/// the value for the given property, false to silently drop (preserving
+/// the pre-bracket-dispatch silent no-op behaviour that the WPT
+/// `test_invalid_value` helper relies on). Main registers a bridge to
+/// `dom_style.isValidCssValue`.
+pub const ValidateFn = *const fn (prop: []const u8, val: []const u8) bool;
+pub var validate_fn: ?ValidateFn = null;
+
 /// Register a callback invoked by getComputedStyle to flush pending
 /// restyle/layout before reading resolved values.
 pub fn setFlushCallback(cb: ?*const fn () void) void {
@@ -57,6 +65,14 @@ pub fn setFlushCallback(cb: ?*const fn () void) void {
 /// the QuickJS path (CSSOM §6.5 resolved value algorithm).
 pub fn setResolveCallback(cb: ?ResolveFn) void {
     resolve_fn = cb;
+}
+
+/// Register the CSSOM §6.7.2 invalid-value rejection bridge. Without
+/// this, setters accept any string into the inline style attribute; WPT
+/// `test_invalid_value` asserts invalid writes leave the attribute
+/// unchanged, matching browsers' specified-value rejection semantics.
+pub fn setValidateCallback(cb: ?ValidateFn) void {
+    validate_fn = cb;
 }
 
 // ── Shadow DOM Phase 1 — inline scope (no cross-module import needed) ──
@@ -1828,6 +1844,15 @@ fn domStyleSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool
     else
         "";
 
+    // CSSOM §6.7.2: invalid values must leave the inline style attribute
+    // unchanged. Return `true` so the assignment evaluates successfully
+    // (per ECMA-262 §13.15.2) but skip the write. This mirrors the
+    // pre-VM-bracket-dispatch silent no-op that WPT's `test_invalid_value`
+    // helper asserts.
+    if (validate_fn) |vf| {
+        if (!vf(css_prop, new_val_str)) return true;
+    }
+
     // Read current, update, write back
     var attr_len: usize = 0;
     const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
@@ -2609,6 +2634,11 @@ fn nativeCSSSetProperty(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     var name_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(prop_in, &name_buf);
     const new_val = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
+    // CSSOM §6.7.4: invalid values are ignored (same invariant as the
+    // `el.style.X = Y` path above).
+    if (validate_fn) |vf| {
+        if (!vf(css_prop, new_val)) return JsValue.undefined_val;
+    }
     var attr_len: usize = 0;
     const old_style = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|
         p[0..attr_len]
