@@ -3492,9 +3492,6 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .counter_reset,
         .counter_increment,
         .will_change,
-        .background_image,
-        .background_repeat,
-        .background_position,
         .background_size,
         .border_radius_top_left,
         .border_radius_top_right,
@@ -3532,6 +3529,12 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .text_overflow,
         .list_style_type,
         => true,
+        // CSS Backgrounds 3 §3 — background-image: <bg-image># where <bg-image> = <image> | none
+        .background_image => isValidBackgroundImage(trimmed),
+        // CSS Backgrounds 3 §2.2 — background-repeat: <repeat-style>#
+        .background_repeat => isValidBackgroundRepeat(trimmed),
+        // CSS Backgrounds 3 §2.3 — background-position: <bg-position>#
+        .background_position => isValidBackgroundPosition(trimmed),
         // text-align: CSS Text §7.1 keyword grammar
         .text_align => eqlIgnoreCase(trimmed, "start") or eqlIgnoreCase(trimmed, "end") or
             eqlIgnoreCase(trimmed, "left") or eqlIgnoreCase(trimmed, "right") or
@@ -3670,12 +3673,27 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
         return true;
     }
     if (eqlIgnoreCase(prop, "background-clip")) {
+        // CSS Backgrounds 3 §3.7 — <box># plus 'text' and 'border-area' (CSS Backgrounds 4).
+        // Each layer is one token, or two tokens where one is 'text' and other is a box.
+        // Reject bare 'border'/'padding'/'content' — must use -box suffix.
         var it = std.mem.splitScalar(u8, val, ',');
         while (it.next()) |part| {
-            const t = std.mem.trim(u8, part, " \t");
-            if (!(eqlIgnoreCase(t, "border-box") or eqlIgnoreCase(t, "padding-box") or
-                eqlIgnoreCase(t, "content-box") or eqlIgnoreCase(t, "text") or
-                eqlIgnoreCase(t, "border") or eqlIgnoreCase(t, "padding") or eqlIgnoreCase(t, "content"))) return false;
+            const t = std.mem.trim(u8, part, " \t\r\n");
+            // Try as two-token (e.g. "text border-area", "border-area text")
+            var toks: [3][]const u8 = undefined;
+            var n: usize = 0;
+            var tit = std.mem.tokenizeAny(u8, t, " \t\r\n");
+            while (tit.next()) |tt| {
+                if (n >= 3) return false;
+                toks[n] = tt;
+                n += 1;
+            }
+            if (n == 0 or n > 2) return false;
+            for (toks[0..n]) |tk| {
+                if (!(eqlIgnoreCase(tk, "border-box") or eqlIgnoreCase(tk, "padding-box") or
+                    eqlIgnoreCase(tk, "content-box") or eqlIgnoreCase(tk, "text") or
+                    eqlIgnoreCase(tk, "border-area"))) return false;
+            }
         }
         return true;
     }
@@ -5490,6 +5508,184 @@ pub fn isNonNegNumber(val: []const u8) bool {
     if (val[val.len - 1] == '.') return false;
     const n = std.fmt.parseFloat(f32, val) catch return false;
     return n >= 0;
+}
+
+/// Split a comma-separated value into layers at top-level commas (not inside parens).
+/// Returns slice pointing into `out` with `out_count` items.
+fn splitBgLayers(val: []const u8, out: *[16][]const u8) ?usize {
+    var count: usize = 0;
+    var depth: i32 = 0;
+    var start: usize = 0;
+    var i: usize = 0;
+    while (i < val.len) : (i += 1) {
+        const ch = val[i];
+        if (ch == '(') depth += 1;
+        if (ch == ')') {
+            depth -= 1;
+            if (depth < 0) return null;
+        }
+        if (ch == ',' and depth == 0) {
+            if (count >= 16) return null;
+            out[count] = std.mem.trim(u8, val[start..i], " \t\r\n");
+            count += 1;
+            start = i + 1;
+        }
+    }
+    if (depth != 0) return null;
+    if (count >= 16) return null;
+    out[count] = std.mem.trim(u8, val[start..], " \t\r\n");
+    count += 1;
+    return count;
+}
+
+/// CSS Backgrounds 3 §3 — <bg-image> = <image> | none.
+/// <image> = <url> | <gradient> (we accept any functional notation ending in ')').
+fn isValidBackgroundLayerImage(layer: []const u8) bool {
+    if (layer.len == 0) return false;
+    if (eqlIgnoreCase(layer, "none")) return true;
+    // URL: url(...) — accept any url( prefix ending in )
+    if (layer.len >= 5 and std.ascii.startsWithIgnoreCase(layer, "url(") and layer[layer.len - 1] == ')') return true;
+    // Gradient functions or image() — accept any fn call syntax
+    if (layer[layer.len - 1] == ')') {
+        const open = std.mem.indexOfScalar(u8, layer, '(') orelse return false;
+        if (open == 0) return false;
+        const fn_name = layer[0..open];
+        // Known <image> functions per CSS Images 3/4
+        const image_fns = [_][]const u8{
+            "linear-gradient",       "radial-gradient",        "conic-gradient",
+            "repeating-linear-gradient", "repeating-radial-gradient", "repeating-conic-gradient",
+            "image",                 "image-set",              "cross-fade",
+            "element",               "-webkit-linear-gradient", "-webkit-radial-gradient",
+            "-webkit-gradient",      "paint",
+        };
+        for (image_fns) |f| {
+            if (eqlIgnoreCase(fn_name, f)) return true;
+        }
+        return false;
+    }
+    return false;
+}
+
+pub fn isValidBackgroundImage(val: []const u8) bool {
+    var layers: [16][]const u8 = undefined;
+    const n = splitBgLayers(val, &layers) orelse return false;
+    if (n == 0) return false;
+    for (layers[0..n]) |layer| {
+        if (!isValidBackgroundLayerImage(layer)) return false;
+    }
+    return true;
+}
+
+/// CSS Backgrounds 3 §2.2 — <repeat-style> = repeat-x | repeat-y | [repeat|space|round|no-repeat]{1,2}
+fn isRepeatKeyword(tok: []const u8) bool {
+    return eqlIgnoreCase(tok, "repeat") or eqlIgnoreCase(tok, "space") or
+        eqlIgnoreCase(tok, "round") or eqlIgnoreCase(tok, "no-repeat");
+}
+
+fn isValidRepeatStyleLayer(layer: []const u8) bool {
+    if (layer.len == 0) return false;
+    // Single-token shortcuts
+    if (eqlIgnoreCase(layer, "repeat-x") or eqlIgnoreCase(layer, "repeat-y")) return true;
+    // 1 or 2 of repeat|space|round|no-repeat
+    var tokens: [3][]const u8 = undefined;
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, layer, " \t\r\n");
+    while (it.next()) |tok| {
+        if (n >= 3) return false;
+        tokens[n] = tok;
+        n += 1;
+    }
+    if (n == 0 or n > 2) return false;
+    for (tokens[0..n]) |t| {
+        if (!isRepeatKeyword(t)) return false;
+    }
+    return true;
+}
+
+pub fn isValidBackgroundRepeat(val: []const u8) bool {
+    var layers: [16][]const u8 = undefined;
+    const n = splitBgLayers(val, &layers) orelse return false;
+    if (n == 0) return false;
+    for (layers[0..n]) |layer| {
+        if (!isValidRepeatStyleLayer(layer)) return false;
+    }
+    return true;
+}
+
+/// CSS Backgrounds 3 §2.3 — <bg-position> (simplified).
+/// Reject obvious structural errors (e.g. two horizontal keywords "left right").
+/// Accept: keywords (left/right/top/bottom/center), length, %, and their 1-4 token combos.
+fn isPositionHorizontalKw(tok: []const u8) bool {
+    return eqlIgnoreCase(tok, "left") or eqlIgnoreCase(tok, "right");
+}
+fn isPositionVerticalKw(tok: []const u8) bool {
+    return eqlIgnoreCase(tok, "top") or eqlIgnoreCase(tok, "bottom");
+}
+fn isPositionCenterKw(tok: []const u8) bool {
+    return eqlIgnoreCase(tok, "center");
+}
+fn isPositionLengthOrPercent(tok: []const u8) bool {
+    if (tok.len == 0) return false;
+    if (tok[tok.len - 1] == ')') return true; // math fn
+    // percentage
+    if (tok[tok.len - 1] == '%') {
+        _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return false;
+        return true;
+    }
+    // length with unit
+    const units = [_][]const u8{ "px", "em", "rem", "ex", "ch", "cm", "mm", "in", "pc", "pt", "vh", "vw", "vmin", "vmax", "q", "cap", "ic", "lh", "rlh", "vi", "vb", "svh", "svw", "lvh", "lvw", "dvh", "dvw" };
+    for (units) |u| {
+        if (tok.len > u.len and std.ascii.endsWithIgnoreCase(tok, u)) {
+            _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - u.len]) catch return false;
+            return true;
+        }
+    }
+    // bare 0
+    if (std.mem.eql(u8, tok, "0")) return true;
+    return false;
+}
+
+fn isValidPositionLayer(layer: []const u8) bool {
+    if (layer.len == 0) return false;
+    var tokens: [5][]const u8 = undefined;
+    var n: usize = 0;
+    var it = std.mem.tokenizeAny(u8, layer, " \t\r\n");
+    while (it.next()) |tok| {
+        if (n >= 5) return false;
+        tokens[n] = tok;
+        n += 1;
+    }
+    if (n == 0 or n > 4) return false;
+
+    // Validate each token is a position component.
+    var saw_h_kw: bool = false;
+    var saw_v_kw: bool = false;
+    for (tokens[0..n]) |t| {
+        const is_h = isPositionHorizontalKw(t);
+        const is_v = isPositionVerticalKw(t);
+        const is_c = isPositionCenterKw(t);
+        const is_lp = isPositionLengthOrPercent(t);
+        if (!(is_h or is_v or is_c or is_lp)) return false;
+        if (is_h) {
+            if (saw_h_kw) return false; // e.g. "left right"
+            saw_h_kw = true;
+        }
+        if (is_v) {
+            if (saw_v_kw) return false; // e.g. "top bottom"
+            saw_v_kw = true;
+        }
+    }
+    return true;
+}
+
+pub fn isValidBackgroundPosition(val: []const u8) bool {
+    var layers: [16][]const u8 = undefined;
+    const n = splitBgLayers(val, &layers) orelse return false;
+    if (n == 0) return false;
+    for (layers[0..n]) |layer| {
+        if (!isValidPositionLayer(layer)) return false;
+    }
+    return true;
 }
 
 /// CSS Flexbox L1 §7.1: `flex: none | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`.
