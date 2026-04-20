@@ -885,6 +885,248 @@ pub fn canonicalizeUrl(
     return out.toOwnedSlice(allocator);
 }
 
+// ── Additional §2.6 / §2.4 reflection helpers (Layer 4A completion) ──
+//
+// These helpers are pure Zig utilities usable from any reflection
+// dispatcher (currently `kotori_dom.zig`, future: JS-level polyfills).
+// They intentionally add no new `ReflType` variants — doing so would
+// require expanding the exhaustive switches in `kotori_dom.zig`'s
+// `reflectionGet` / `reflectionSet`, and Layer 4A scope keeps this
+// file as a pure helper library.
+//
+// Spec references:
+// - HTML §2.4.1 "Split a string on ASCII whitespace"
+//   <https://infra.spec.whatwg.org/#split-on-ascii-whitespace>
+// - HTML §2.4.3 "Enumerated attributes"
+//   <https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#enumerated-attributes>
+// - HTML §2.4.4.3 "Rules for parsing floating-point number values"
+//   <https://html.spec.whatwg.org/multipage/common-microsyntaxes.html#rules-for-parsing-floating-point-number-values>
+// - HTML §2.6.2 "URL" / "boolean" / "long" / "unsigned long" semantics
+
+/// Public re-export of ASCII-whitespace trim (HTML §2.4 preprocessing).
+/// Leaves content untouched other than leading/trailing U+0009, U+000A,
+/// U+000C, U+000D, U+0020.
+pub fn trimAsciiWhitespace(s: []const u8) []const u8 {
+    var start: usize = 0;
+    var end: usize = s.len;
+    while (start < end and isAsciiWhitespace(s[start])) : (start += 1) {}
+    while (end > start and isAsciiWhitespace(s[end - 1])) : (end -= 1) {}
+    return s[start..end];
+}
+
+/// HTML §2.4 ASCII whitespace = TAB / LF / FF / CR / SPACE.
+/// Notably NOT the full Unicode whitespace class — `std.ascii.isWhitespace`
+/// also treats VT (0x0B) as whitespace which the HTML spec excludes.
+pub fn isAsciiWhitespace(c: u8) bool {
+    return switch (c) {
+        0x09, 0x0A, 0x0C, 0x0D, 0x20 => true,
+        else => false,
+    };
+}
+
+/// HTML §2.4.1 "Strictly split a string on ASCII whitespace".
+/// Returns a slice of tokens referencing substrings of `s`. Empty input or
+/// all-whitespace input produces an empty list. The caller owns the
+/// returned slice and must `allocator.free()` it (the token sub-slices
+/// point into `s` — they must not outlive it).
+pub fn splitOnAsciiWhitespace(
+    allocator: std.mem.Allocator,
+    s: []const u8,
+) ![]const []const u8 {
+    var out: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer out.deinit(allocator);
+
+    var i: usize = 0;
+    while (i < s.len) {
+        while (i < s.len and isAsciiWhitespace(s[i])) : (i += 1) {}
+        if (i >= s.len) break;
+        const start = i;
+        while (i < s.len and !isAsciiWhitespace(s[i])) : (i += 1) {}
+        try out.append(allocator, s[start..i]);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+/// HTML §2.4.3 "Enumerated attributes" — canonical-value getter rule.
+///
+/// Returns the canonical (lower-case) keyword from `known_values` that
+/// matches `attr_value` (ASCII case-insensitive). If no match, returns
+/// `missing_or_invalid_default` (which is `null` when the spec dictates
+/// the IDL attribute should return the empty string or reflect the
+/// "no state" default — the caller decides between the two). Per §2.6.5
+/// this is distinct from the "invalid value default": many enumerated
+/// attributes define both missing-value and invalid-value defaults, but
+/// the spec-written rule is "if either one applies, return the default"
+/// — so a single slot is sufficient.
+///
+/// The returned slice references either `known_values[i]` (so its
+/// lifetime is comptime) or `missing_or_invalid_default` — both are
+/// borrowed, never owned.
+pub fn matchEnumValue(
+    attr_value: []const u8,
+    known_values: []const []const u8,
+    missing_or_invalid_default: ?[]const u8,
+) ?[]const u8 {
+    for (known_values) |kv| {
+        if (asciiEqlIgnoreCase(attr_value, kv)) return kv;
+    }
+    return missing_or_invalid_default;
+}
+
+/// ASCII case-insensitive string equality (HTML §2.3.1).
+/// Upper-case ASCII is folded to lower-case. Non-ASCII bytes compare
+/// byte-for-byte (HTML parser already lower-cased content attribute
+/// names, so this is mainly defensive against value-side casing).
+pub fn asciiEqlIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ca, cb| {
+        const la = if (ca >= 'A' and ca <= 'Z') ca + 32 else ca;
+        const lb = if (cb >= 'A' and cb <= 'Z') cb + 32 else cb;
+        if (la != lb) return false;
+    }
+    return true;
+}
+
+/// HTML §2.6.2 "unsigned long" setter clamping.
+/// Converts a signed i64 (typically from `ToInt32` of a JS value) into
+/// the [0, 2^31-1] range that the spec requires a setter to write:
+///   * negative → use `default_int` (spec: "If the new value is negative,
+///     then set the content attribute to the default value.")
+///   * value ≤ maxInt(i32) → that value
+///   * > maxInt(i32) → clamp to `default_int` (caller serializes).
+///
+/// For plain `unsigned long` (no positive-only restriction) pass the
+/// spec-defined default (most attrs default to 0; some to a named value
+/// like `<input size>` = 20, `<col span>` = 1).
+pub fn clampUnsignedLong(value: i64, default_int: i64) u32 {
+    if (value < 0) {
+        return @intCast(@max(default_int, 0));
+    }
+    if (value > std.math.maxInt(i32)) {
+        return @intCast(@max(default_int, 0));
+    }
+    return @intCast(value);
+}
+
+/// HTML §2.6.2 "unsigned long limited to only positive numbers" setter.
+/// Like `clampUnsignedLong` but 0 is also treated as invalid and replaced
+/// with `default_int`. Examples: `<col span>`, `<td colspan>` — content
+/// attribute value 0 parses back as the default (1) per §14.2.11.
+pub fn clampUnsignedLongPositive(value: i64, default_int: i64) u32 {
+    if (value < 1) {
+        return @intCast(@max(default_int, 1));
+    }
+    if (value > std.math.maxInt(i32)) {
+        return @intCast(@max(default_int, 1));
+    }
+    return @intCast(value);
+}
+
+/// HTML §2.4.4.3 "Rules for parsing floating-point number values".
+/// Returns null on parse failure, on inf/NaN, or on empty/whitespace-only
+/// input. Accepts optional leading +/-, integer and fractional parts, and
+/// ASCII `e`/`E` exponent per the spec's state-machine. Skips leading
+/// ASCII whitespace but trailing garbage terminates the parse (the spec
+/// collects only the valid prefix).
+///
+/// Usage: caller further classifies via §2.4.4.5 (non-negative → reject
+/// negatives) or via §2.6.2 "double" reflection semantics (use default
+/// on null return).
+pub fn parseFloatingPoint(s: []const u8) ?f64 {
+    var i: usize = 0;
+    // Skip leading ASCII whitespace.
+    while (i < s.len and isAsciiWhitespace(s[i])) : (i += 1) {}
+    if (i >= s.len) return null;
+
+    const start = i;
+
+    // Optional sign.
+    if (s[i] == '+' or s[i] == '-') i += 1;
+
+    const digits_int_start = i;
+    while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
+    const had_int = i > digits_int_start;
+
+    var had_frac = false;
+    if (i < s.len and s[i] == '.') {
+        i += 1;
+        const frac_start = i;
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
+        had_frac = i > frac_start;
+    }
+
+    if (!had_int and !had_frac) return null;
+
+    // Optional exponent.
+    if (i < s.len and (s[i] == 'e' or s[i] == 'E')) {
+        const exp_mark = i;
+        i += 1;
+        if (i < s.len and (s[i] == '+' or s[i] == '-')) i += 1;
+        const exp_digits_start = i;
+        while (i < s.len and s[i] >= '0' and s[i] <= '9') : (i += 1) {}
+        if (i == exp_digits_start) {
+            // Exponent marker with no digits — back out.
+            i = exp_mark;
+        }
+    }
+
+    // Parse the collected prefix with std.fmt.
+    const parsed = std.fmt.parseFloat(f64, s[start..i]) catch return null;
+    if (std.math.isNan(parsed)) return null;
+    if (std.math.isInf(parsed)) return null;
+    return parsed;
+}
+
+/// HTML §2.4.4.5 "Rules for parsing non-negative floating-point number values".
+/// Rejects negatives (returns null) — used for `<progress max>` etc.
+pub fn parseNonNegativeFloatingPoint(s: []const u8) ?f64 {
+    const v = parseFloatingPoint(s) orelse return null;
+    if (v < 0) return null;
+    return v;
+}
+
+/// HTML §2.4.4.4-style "positive floating point" (strict > 0, rejects 0).
+/// Used for `<meter optimum>` etc. where 0 is semantically invalid.
+pub fn parsePositiveFloatingPoint(s: []const u8) ?f64 {
+    const v = parseFloatingPoint(s) orelse return null;
+    if (v <= 0) return null;
+    return v;
+}
+
+/// HTML §2.4.4.1 strict variant — integer parser with no trailing-garbage
+/// acceptance. Used for IDL attributes like `HTMLTableColElement.span`
+/// where the spec distinguishes "valid integer" from "integer with
+/// trailing junk" in the validity algorithm. Implementation piggy-backs
+/// on `parseInteger` then verifies that the consumed prefix spans the
+/// full (trimmed) input.
+pub fn parseIntegerStrict(s: []const u8) ?i64 {
+    const trimmed = trimAsciiWhitespace(s);
+    if (trimmed.len == 0) return null;
+    // Sign is valid in strict form too.
+    var i: usize = 0;
+    if (trimmed[i] == '+' or trimmed[i] == '-') i += 1;
+    if (i >= trimmed.len) return null;
+    while (i < trimmed.len) : (i += 1) {
+        if (trimmed[i] < '0' or trimmed[i] > '9') return null;
+    }
+    return parseInteger(trimmed);
+}
+
+/// HTML §2.6.2 "reflecting IDL attribute" serializer for signed longs.
+/// Writes a base-10 decimal representation of `value` into `buf` and
+/// returns the occupied slice. `buf` must be at least 12 bytes (max i32
+/// is "-2147483648" = 11 chars + sentinel). Returns the written slice.
+pub fn formatLong(buf: []u8, value: i32) []u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{value}) catch unreachable;
+}
+
+/// Same as `formatLong` but for unsigned 32-bit values. 10-byte buffer
+/// (max u32 = "4294967295") is enough but HTML always clamps to
+/// maxInt(i32) so 10 chars is the ceiling for reflection output.
+pub fn formatUnsignedLong(buf: []u8, value: u32) []u8 {
+    return std.fmt.bufPrint(buf, "{d}", .{value}) catch unreachable;
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────
 
 test "parseInteger basics" {
@@ -988,4 +1230,196 @@ test "canonicalizeUrl resolves dot-segments" {
     const resolved = try canonicalizeUrl(alloc, "../x", "http://example.com/a/b/c");
     defer alloc.free(resolved);
     try std.testing.expectEqualStrings("http://example.com/a/x", resolved);
+}
+
+// ── §2.4 helper tests (Layer 4A completion) ──────────────────────────
+
+test "isAsciiWhitespace matches HTML §2.4 whitespace class" {
+    try std.testing.expect(isAsciiWhitespace(0x09));
+    try std.testing.expect(isAsciiWhitespace(0x0A));
+    try std.testing.expect(isAsciiWhitespace(0x0C));
+    try std.testing.expect(isAsciiWhitespace(0x0D));
+    try std.testing.expect(isAsciiWhitespace(0x20));
+    // VT (0x0B) is whitespace to std.ascii but NOT to HTML §2.4.
+    try std.testing.expect(!isAsciiWhitespace(0x0B));
+    try std.testing.expect(!isAsciiWhitespace('a'));
+    try std.testing.expect(!isAsciiWhitespace(0));
+}
+
+test "trimAsciiWhitespace strips only HTML §2.4 whitespace" {
+    try std.testing.expectEqualStrings("foo", trimAsciiWhitespace("  foo  "));
+    try std.testing.expectEqualStrings("foo", trimAsciiWhitespace("\t\nfoo\r\n"));
+    try std.testing.expectEqualStrings("", trimAsciiWhitespace("   "));
+    try std.testing.expectEqualStrings("", trimAsciiWhitespace(""));
+    try std.testing.expectEqualStrings("a b", trimAsciiWhitespace(" a b "));
+    // VT must survive (not HTML whitespace).
+    try std.testing.expectEqualStrings("\x0Bfoo\x0B", trimAsciiWhitespace("\x0Bfoo\x0B"));
+}
+
+test "splitOnAsciiWhitespace returns tokens" {
+    const alloc = std.testing.allocator;
+    {
+        const toks = try splitOnAsciiWhitespace(alloc, "  foo bar\tbaz\n");
+        defer alloc.free(toks);
+        try std.testing.expectEqual(@as(usize, 3), toks.len);
+        try std.testing.expectEqualStrings("foo", toks[0]);
+        try std.testing.expectEqualStrings("bar", toks[1]);
+        try std.testing.expectEqualStrings("baz", toks[2]);
+    }
+    {
+        const toks = try splitOnAsciiWhitespace(alloc, "");
+        defer alloc.free(toks);
+        try std.testing.expectEqual(@as(usize, 0), toks.len);
+    }
+    {
+        const toks = try splitOnAsciiWhitespace(alloc, "   \t\n ");
+        defer alloc.free(toks);
+        try std.testing.expectEqual(@as(usize, 0), toks.len);
+    }
+    {
+        // Single token, no whitespace.
+        const toks = try splitOnAsciiWhitespace(alloc, "single");
+        defer alloc.free(toks);
+        try std.testing.expectEqual(@as(usize, 1), toks.len);
+        try std.testing.expectEqualStrings("single", toks[0]);
+    }
+}
+
+test "asciiEqlIgnoreCase folds only ASCII letters" {
+    try std.testing.expect(asciiEqlIgnoreCase("FOO", "foo"));
+    try std.testing.expect(asciiEqlIgnoreCase("LoRem", "loREM"));
+    try std.testing.expect(!asciiEqlIgnoreCase("foo", "fooo"));
+    try std.testing.expect(!asciiEqlIgnoreCase("foo", "bar"));
+    try std.testing.expect(asciiEqlIgnoreCase("", ""));
+    // High-bit bytes aren't folded.
+    try std.testing.expect(!asciiEqlIgnoreCase("\xC3\xA9", "\xC3\x89"));
+}
+
+test "matchEnumValue enum canonicalization per §2.4.3" {
+    const values = [_][]const u8{ "rect", "circle", "poly", "default" };
+    // Exact match
+    try std.testing.expectEqualStrings("circle", matchEnumValue("circle", &values, null).?);
+    // Case-insensitive match returns canonical (lowercase) value.
+    try std.testing.expectEqualStrings("rect", matchEnumValue("RECT", &values, null).?);
+    try std.testing.expectEqualStrings("default", matchEnumValue("Default", &values, null).?);
+    // No match + no default → null.
+    try std.testing.expect(matchEnumValue("square", &values, null) == null);
+    // No match + default → default.
+    try std.testing.expectEqualStrings(
+        "rect",
+        matchEnumValue("square", &values, "rect").?,
+    );
+    // Empty attr with a missing-value default returns that default.
+    try std.testing.expectEqualStrings(
+        "default",
+        matchEnumValue("", &values, "default").?,
+    );
+}
+
+test "clampUnsignedLong setter clamping §2.6.2" {
+    // Normal in-range.
+    try std.testing.expectEqual(@as(u32, 0), clampUnsignedLong(0, 20));
+    try std.testing.expectEqual(@as(u32, 42), clampUnsignedLong(42, 20));
+    // Negative → default.
+    try std.testing.expectEqual(@as(u32, 20), clampUnsignedLong(-1, 20));
+    try std.testing.expectEqual(@as(u32, 20), clampUnsignedLong(-1000, 20));
+    // Over i32 max → default.
+    try std.testing.expectEqual(
+        @as(u32, 20),
+        clampUnsignedLong(@as(i64, std.math.maxInt(i32)) + 1, 20),
+    );
+    // Default of -1 (seen for signed-long but defensive for unsigned) ⇒ 0.
+    try std.testing.expectEqual(@as(u32, 0), clampUnsignedLong(-5, -1));
+    // Boundary: exactly maxInt(i32) passes through.
+    try std.testing.expectEqual(
+        @as(u32, std.math.maxInt(i32)),
+        clampUnsignedLong(std.math.maxInt(i32), 0),
+    );
+}
+
+test "clampUnsignedLongPositive rejects 0" {
+    // 0 → default (spec §14.2.11: colspan=0 reflects back as 1).
+    try std.testing.expectEqual(@as(u32, 1), clampUnsignedLongPositive(0, 1));
+    try std.testing.expectEqual(@as(u32, 5), clampUnsignedLongPositive(5, 1));
+    try std.testing.expectEqual(@as(u32, 1), clampUnsignedLongPositive(-3, 1));
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        clampUnsignedLongPositive(@as(i64, std.math.maxInt(i32)) + 1, 1),
+    );
+    // default of 0 gets floored to 1 (positive-only invariant).
+    try std.testing.expectEqual(@as(u32, 1), clampUnsignedLongPositive(0, 0));
+}
+
+test "parseFloatingPoint basic numeric parse" {
+    try std.testing.expectEqual(@as(?f64, 0), parseFloatingPoint("0"));
+    try std.testing.expectEqual(@as(?f64, 1), parseFloatingPoint("1"));
+    try std.testing.expectEqual(@as(?f64, -2.5), parseFloatingPoint("-2.5"));
+    try std.testing.expectEqual(@as(?f64, 0.25), parseFloatingPoint(".25"));
+    try std.testing.expectEqual(@as(?f64, 100), parseFloatingPoint("1e2"));
+    try std.testing.expectEqual(@as(?f64, 1.5e-3), parseFloatingPoint("1.5e-3"));
+    try std.testing.expectEqual(@as(?f64, null), parseFloatingPoint(""));
+    try std.testing.expectEqual(@as(?f64, null), parseFloatingPoint("abc"));
+    try std.testing.expectEqual(@as(?f64, null), parseFloatingPoint("   "));
+    try std.testing.expectEqual(@as(?f64, null), parseFloatingPoint("-"));
+    // NaN and Inf tokens are a parse failure per §2.4.4.3.
+    try std.testing.expectEqual(@as(?f64, null), parseFloatingPoint("NaN"));
+    try std.testing.expectEqual(@as(?f64, null), parseFloatingPoint("Infinity"));
+}
+
+test "parseFloatingPoint accepts leading whitespace" {
+    try std.testing.expectEqual(@as(?f64, 1.5), parseFloatingPoint("  1.5"));
+    try std.testing.expectEqual(@as(?f64, -0.5), parseFloatingPoint("\t\n-0.5"));
+}
+
+test "parseFloatingPoint consumes valid prefix only" {
+    // Spec collects the longest valid prefix — trailing "abc" is discarded.
+    try std.testing.expectEqual(@as(?f64, 3.14), parseFloatingPoint("3.14abc"));
+    // Exponent marker with no digits — reverts prefix to "1".
+    try std.testing.expectEqual(@as(?f64, 1), parseFloatingPoint("1e"));
+    try std.testing.expectEqual(@as(?f64, 1), parseFloatingPoint("1e+"));
+}
+
+test "parseNonNegativeFloatingPoint rejects negatives" {
+    try std.testing.expectEqual(@as(?f64, 0), parseNonNegativeFloatingPoint("0"));
+    try std.testing.expectEqual(@as(?f64, 1.5), parseNonNegativeFloatingPoint("1.5"));
+    try std.testing.expectEqual(@as(?f64, null), parseNonNegativeFloatingPoint("-0.5"));
+    try std.testing.expectEqual(@as(?f64, null), parseNonNegativeFloatingPoint("-1"));
+}
+
+test "parsePositiveFloatingPoint rejects zero and negatives" {
+    try std.testing.expectEqual(@as(?f64, null), parsePositiveFloatingPoint("0"));
+    try std.testing.expectEqual(@as(?f64, null), parsePositiveFloatingPoint("-1.5"));
+    try std.testing.expectEqual(@as(?f64, 0.001), parsePositiveFloatingPoint("0.001"));
+    try std.testing.expectEqual(@as(?f64, 2.718), parsePositiveFloatingPoint("2.718"));
+}
+
+test "parseIntegerStrict rejects trailing garbage" {
+    // parseInteger accepts "12px" (returns 12). parseIntegerStrict must reject.
+    try std.testing.expectEqual(@as(?i64, 12), parseInteger("12px"));
+    try std.testing.expectEqual(@as(?i64, null), parseIntegerStrict("12px"));
+    // Leading/trailing whitespace is stripped per spec.
+    try std.testing.expectEqual(@as(?i64, 42), parseIntegerStrict("  42  "));
+    try std.testing.expectEqual(@as(?i64, -7), parseIntegerStrict("-7"));
+    try std.testing.expectEqual(@as(?i64, null), parseIntegerStrict(""));
+    try std.testing.expectEqual(@as(?i64, null), parseIntegerStrict("-"));
+    try std.testing.expectEqual(@as(?i64, null), parseIntegerStrict("+-5"));
+}
+
+test "formatLong writes signed decimal" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("0", formatLong(&buf, 0));
+    try std.testing.expectEqualStrings("42", formatLong(&buf, 42));
+    try std.testing.expectEqualStrings("-7", formatLong(&buf, -7));
+    try std.testing.expectEqualStrings("2147483647", formatLong(&buf, std.math.maxInt(i32)));
+    try std.testing.expectEqualStrings("-2147483648", formatLong(&buf, std.math.minInt(i32)));
+}
+
+test "formatUnsignedLong writes unsigned decimal" {
+    var buf: [16]u8 = undefined;
+    try std.testing.expectEqualStrings("0", formatUnsignedLong(&buf, 0));
+    try std.testing.expectEqualStrings("300", formatUnsignedLong(&buf, 300));
+    try std.testing.expectEqualStrings(
+        "2147483647",
+        formatUnsignedLong(&buf, std.math.maxInt(i32)),
+    );
 }
