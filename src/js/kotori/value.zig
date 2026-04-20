@@ -262,10 +262,58 @@ pub const JsValue = packed struct {
         return initBool(!a.isTruthy());
     }
 
+    /// ECMA-262 §13.5.4 Unary `+`: returns ToNumber(operand) with no sign flip.
+    /// Distinct from `jsNeg` (which negates) — kotori's earlier `.pos` dispatch
+    /// silently aliased to `.not`, turning `+"0"` into `false`.
+    /// Caller must handle strings (needs string-pool access) — this helper is
+    /// used for non-string operands (undefined/null/bool/number/int/object).
+    /// NaN is returned as the tagged `nan_val` so `typeof` still reports
+    /// "number" (a raw NaN float collides with the NaN-box tag space).
+    pub fn jsToNumber(a: JsValue) JsValue {
+        const n = a.toNumber();
+        if (std.math.isNan(n)) return nan_val;
+        return initNumber(n);
+    }
+
     // ── Bitwise ──────────────────────────────────────────────────────
 
+    /// ECMA-262 §7.1.6 ToInt32 (2024).
+    /// 1. Let number be ToNumber(argument).
+    /// 2. If number is NaN, +0, -0, +∞, or -∞, return +0.
+    /// 3. Let int be truncate(number).
+    /// 4. Let int32bit be int modulo 2^32.
+    /// 5. If int32bit ≥ 2^31, return int32bit - 2^32; otherwise return int32bit.
+    ///
+    /// Previous implementation used `@intFromFloat` directly which panics on
+    /// NaN/Infinity/out-of-i32-range values. This caused `x >>> 0` and related
+    /// idioms to crash the VM when called with non-finite inputs (e.g. a Proxy
+    /// `get` trap receiving a non-numeric string key). The spec-faithful
+    /// modulo-2^32 wrap-around is required for classList Proxy indexed access
+    /// and for ECMA-262-conformant bitwise arithmetic in general.
     fn toInt32(a: JsValue) i32 {
-        return @as(i32, @intFromFloat(a.toNumber()));
+        const n = a.toNumber();
+        if (std.math.isNan(n) or !std.math.isFinite(n)) return 0;
+        // Truncate toward zero, then reduce modulo 2^32 with wraparound.
+        const trunc = @trunc(n);
+        const two32: f64 = 4294967296.0; // 2^32
+        // Reduce to [0, 2^32); use @rem then fix up negatives.
+        const rem = @rem(trunc, two32);
+        const mod = if (rem < 0) rem + two32 else rem;
+        // mod is now in [0, 2^32). Map to signed i32 via wraparound.
+        const as_u32: u32 = @intFromFloat(mod);
+        return @bitCast(as_u32);
+    }
+
+    /// ECMA-262 §7.1.7 ToUint32. Same as ToInt32 but returns u32 without the
+    /// final signed conversion. Used by `>>> 0` and for array-index coercion.
+    fn toUint32(a: JsValue) u32 {
+        const n = a.toNumber();
+        if (std.math.isNan(n) or !std.math.isFinite(n)) return 0;
+        const trunc = @trunc(n);
+        const two32: f64 = 4294967296.0;
+        const rem = @rem(trunc, two32);
+        const mod = if (rem < 0) rem + two32 else rem;
+        return @intFromFloat(mod);
     }
 
     pub fn jsBitNot(a: JsValue) JsValue {
@@ -294,9 +342,14 @@ pub const JsValue = packed struct {
         return initInt(toInt32(a) >> shift);
     }
 
+    /// ECMA-262 §13.5.5.1 UnsignedRightShift ( >>> ).
+    /// Left operand coerced via ToUint32 (spec-faithful), shift count via
+    /// ToUint32 & 0x1f. Result is u32 reinterpreted as i32 so the NaN-box
+    /// can store it as a 32-bit signed int (callers that view it as unsigned
+    /// use `@bitCast` back to u32).
     pub fn jsUshr(a: JsValue, b: JsValue) JsValue {
-        const ua: u32 = @bitCast(toInt32(a));
-        const shift: u5 = @truncate(@as(u32, @bitCast(toInt32(b))));
+        const ua: u32 = toUint32(a);
+        const shift: u5 = @truncate(toUint32(b));
         return initInt(@bitCast(ua >> shift));
     }
 };

@@ -69,10 +69,10 @@ pub const KotoriRuntime = struct {
         _ = self.eval(range_polyfill_js);
 
         // DOM §7.1 DOMTokenList (Element.classList): install a live token list
-        // wrapping the element's `class` attribute. Minimal scoped polyfill:
-        // no Proxy (avoids `>>> 0` panics in kotori toInt32 on NaN inputs) and
-        // no indexed `classList[i]` access — instead a cached wrapper object
-        // with methods that re-read `class` live, plus length/value getters.
+        // wrapping the element's `class` attribute. The wrapper is returned
+        // from a Proxy so that indexed access (`classList[0]`, `"0" in list`,
+        // `list[1] = ...`) follows WebIDL indexed property rules while still
+        // delegating `.length`, `.value`, `.add()`, etc. to the DTLP accessors.
         _ = self.eval(class_list_polyfill_js);
 
         // DOM §6 (Traversal) + §4.5 (createElementNS prefix/case fixups) +
@@ -801,11 +801,16 @@ pub const KotoriRuntime = struct {
     ///  - WebIDL [PutForwards=value]: assigning `element.classList = "..."`
     ///    forwards to `element.classList.value = "..."`, i.e. sets `class`.
     ///
-    /// Known limitations (deliberate, for minimal-diff safety):
-    ///  - No Proxy wrapper → indexed access `classList[0]` returns `undefined`
-    ///    (a small number of WPT subtests exercise this; they stay failing).
-    ///    kotori's narrow `toInt32` panics on `>>> 0` of non-integer floats,
-    ///    which makes a spec-faithful Proxy/ToUint32 implementation unsafe.
+    /// Indexed access (DOM §7.1, WebIDL "supported property indices"):
+    ///  - `classList[i]` / `"i" in classList` / `classList[i] = x` go through
+    ///    a `Proxy` wrapper. String keys matching /^\d+$/ are treated as
+    ///    property indices and resolved against the live token list; all
+    ///    other keys fall through to the underlying DTLP-instance (so
+    ///    `list.add(...)`, `list.length`, `list.value`, etc. keep working).
+    ///  - The spec-faithful `Proxy`/`ToUint32` path is now safe because
+    ///    kotori's `toInt32`/`toUint32` were fixed to match ECMA-262 §7.1.6
+    ///    (NaN/Infinity/out-of-range → 0 instead of panicking).
+    /// Remaining limitation:
     ///  - No `Symbol.iterator`; the WPT classList suite does not rely on it.
     const class_list_polyfill_js =
         \\(function(){
@@ -986,6 +991,28 @@ pub const KotoriRuntime = struct {
         \\    var toks = getTokens(this._el);
         \\    for (var i=0;i<toks.length;i++) cb.call(thisArg, toks[i], i, this);
         \\  };
+        \\  /* DOM §7.1 Iterable<DOMString>: keys/values/entries/@@iterator per
+        \\   * WebIDL iterable declaration. Returned arrays snapshot the tokens
+        \\   * at call time; the WPT iteration harness iterates via for-of which
+        \\   * only needs Array.prototype[Symbol.iterator] to work. */
+        \\  DTLP.keys = function(){
+        \\    var toks = getTokens(this._el);
+        \\    var out = [];
+        \\    for (var i=0;i<toks.length;i++) out.push(i);
+        \\    return out[Symbol.iterator]();
+        \\  };
+        \\  DTLP.values = function(){
+        \\    return getTokens(this._el)[Symbol.iterator]();
+        \\  };
+        \\  DTLP.entries = function(){
+        \\    var toks = getTokens(this._el);
+        \\    var out = [];
+        \\    for (var i=0;i<toks.length;i++) out.push([i, toks[i]]);
+        \\    return out[Symbol.iterator]();
+        \\  };
+        \\  DTLP[Symbol.iterator] = function(){
+        \\    return getTokens(this._el)[Symbol.iterator]();
+        \\  };
         \\
         \\  /* Live length / value accessors — re-read the attribute on every get. */
         \\  Object.defineProperty(DTLP, 'length', {
@@ -1007,18 +1034,52 @@ pub const KotoriRuntime = struct {
         \\  /* WebIDL [SameObject]: every read of element.classList returns the
         \\   * identical wrapper object. Store on the element itself via a
         \\   * non-enumerable property rather than a WeakMap (WeakMap support
-        \\   * in kotori may be incomplete). */
+        \\   * in kotori may be incomplete).
+        \\   *
+        \\   * The stored value is a Proxy around the DTLP instance so that
+        \\   * indexed lookups (`list[0]`, `"0" in list`) return tokens and
+        \\   * bracket-writes (`list[0] = "x"`) are silently ignored per WebIDL
+        \\   * "supported property indices" semantics. All other keys (method
+        \\   * names, `length`, `value`, `constructor`, symbol well-knowns,
+        \\   * private slot `_el`) pass through to the target unchanged so the
+        \\   * existing method bodies keep working as-is. */
+        \\  var DIGITS_RE = /^(?:0|[1-9][0-9]*)$/;
         \\  function getWrapper(el){
         \\    var w = el.__clsl;
         \\    if (w) return w;
-        \\    w = Object.create(DTLP);
+        \\    var target = Object.create(DTLP);
         \\    /* Stash the element pointer on a writable-false slot so user code
-        \\     * cannot replace it. */
+        \\     * cannot replace it. Methods retrieve it via `this._el`, and the
+        \\     * Proxy `get` trap returns it untouched for that key. */
         \\    try {
-        \\      Object.defineProperty(w, '_el', {value: el, writable:false, enumerable:false, configurable:false});
+        \\      Object.defineProperty(target, '_el', {value: el, writable:false, enumerable:false, configurable:false});
         \\    } catch(e) {
-        \\      w._el = el;
+        \\      target._el = el;
         \\    }
+        \\    w = new Proxy(target, {
+        \\      get: function(t, p){
+        \\        /* Use Number() not unary `+p` — kotori's unary-plus on a
+        \\         * numeric string currently mis-coerces to boolean. */
+        \\        if (typeof p === 'string' && DIGITS_RE.test(p)) {
+        \\          var toks = getTokens(t._el);
+        \\          var i = Number(p);
+        \\          return i < toks.length ? toks[i] : undefined;
+        \\        }
+        \\        return t[p];
+        \\      },
+        \\      set: function(t, p, v){
+        \\        /* WebIDL: writes to integer indices are ignored (no setter). */
+        \\        if (typeof p === 'string' && DIGITS_RE.test(p)) return true;
+        \\        t[p] = v;
+        \\        return true;
+        \\      },
+        \\      has: function(t, p){
+        \\        if (typeof p === 'string' && DIGITS_RE.test(p)) {
+        \\          return Number(p) < getTokens(t._el).length;
+        \\        }
+        \\        return (p in t);
+        \\      }
+        \\    });
         \\    try {
         \\      Object.defineProperty(el, '__clsl', {value: w, writable:false, enumerable:false, configurable:false});
         \\    } catch(e) {
