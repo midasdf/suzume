@@ -3480,7 +3480,10 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .grid_template_areas, .grid_template_columns, .grid_template_rows => true,
         // Animation/Transition properties: accept any valid value
         .animation_delay, .animation_direction, .animation_duration, .animation_fill_mode, .animation_iteration_count, .animation_name, .animation_play_state, .animation_timing_function, .transition_property, .transition_duration, .transition_timing_function, .transition_delay => true,
-        // Other properties that accept complex values
+        // Other properties that accept complex/keyword values — lenient
+        // accept-all so inline-style writes round-trip (CSSOM §6.7.2
+        // full value grammar checking is still TODO; browsers accept
+        // broadly at setProperty time and reject later at compute time).
         .filter,
         .backdrop_filter,
         .box_shadow,
@@ -3525,16 +3528,32 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
         .border_right_style,
         .border_bottom_style,
         .border_left_style,
-        .text_align,
         .text_decoration,
-        .text_transform,
-        .white_space,
-        .word_break,
-        .overflow_wrap,
         .text_overflow,
         .list_style_type,
-        .flex_direction,
-        => eqlIgnoreCase(trimmed, "row") or eqlIgnoreCase(trimmed, "row-reverse") or
+        => true,
+        // text-align: CSS Text §7.1 keyword grammar
+        .text_align => eqlIgnoreCase(trimmed, "start") or eqlIgnoreCase(trimmed, "end") or
+            eqlIgnoreCase(trimmed, "left") or eqlIgnoreCase(trimmed, "right") or
+            eqlIgnoreCase(trimmed, "center") or eqlIgnoreCase(trimmed, "justify") or
+            eqlIgnoreCase(trimmed, "match-parent") or eqlIgnoreCase(trimmed, "justify-all"),
+        // text-transform: CSS Text §2.1 — none|capitalize|uppercase|lowercase|full-width|full-size-kana
+        .text_transform => eqlIgnoreCase(trimmed, "none") or eqlIgnoreCase(trimmed, "capitalize") or
+            eqlIgnoreCase(trimmed, "uppercase") or eqlIgnoreCase(trimmed, "lowercase") or
+            eqlIgnoreCase(trimmed, "full-width") or eqlIgnoreCase(trimmed, "full-size-kana"),
+        // white-space: CSS Text §3 — normal|pre|nowrap|pre-wrap|break-spaces|pre-line
+        .white_space => eqlIgnoreCase(trimmed, "normal") or eqlIgnoreCase(trimmed, "pre") or
+            eqlIgnoreCase(trimmed, "nowrap") or eqlIgnoreCase(trimmed, "pre-wrap") or
+            eqlIgnoreCase(trimmed, "break-spaces") or eqlIgnoreCase(trimmed, "pre-line"),
+        // word-break: CSS Text §5.2 — normal|keep-all|break-all|break-word|auto-phrase
+        .word_break => eqlIgnoreCase(trimmed, "normal") or eqlIgnoreCase(trimmed, "keep-all") or
+            eqlIgnoreCase(trimmed, "break-all") or eqlIgnoreCase(trimmed, "break-word") or
+            eqlIgnoreCase(trimmed, "auto-phrase"),
+        // overflow-wrap: CSS Text §5.3 — normal|break-word|anywhere
+        .overflow_wrap => eqlIgnoreCase(trimmed, "normal") or eqlIgnoreCase(trimmed, "break-word") or
+            eqlIgnoreCase(trimmed, "anywhere"),
+        // flex-direction: keyword-only grammar (CSS Flexbox §5.1)
+        .flex_direction => eqlIgnoreCase(trimmed, "row") or eqlIgnoreCase(trimmed, "row-reverse") or
             eqlIgnoreCase(trimmed, "column") or eqlIgnoreCase(trimmed, "column-reverse"),
         .flex_basis => isValidFlexBasis(trimmed),
         .gap,
@@ -3598,6 +3617,83 @@ pub fn isValidShorthandValue(prop: []const u8, val: []const u8) bool {
     }
     if (eqlIgnoreCase(prop, "flex")) {
         return isValidFlexValue(val);
+    }
+    // CSS Fonts Level 4 — keyword-only properties (spec-driven)
+    if (eqlIgnoreCase(prop, "font-kerning")) {
+        return eqlIgnoreCase(val, "auto") or eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "none");
+    }
+    if (eqlIgnoreCase(prop, "font-optical-sizing")) {
+        return eqlIgnoreCase(val, "auto") or eqlIgnoreCase(val, "none");
+    }
+    if (eqlIgnoreCase(prop, "font-variant-caps")) {
+        return eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "small-caps") or
+            eqlIgnoreCase(val, "all-small-caps") or eqlIgnoreCase(val, "petite-caps") or
+            eqlIgnoreCase(val, "all-petite-caps") or eqlIgnoreCase(val, "unicase") or
+            eqlIgnoreCase(val, "titling-caps");
+    }
+    if (eqlIgnoreCase(prop, "font-variant-position")) {
+        return eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "sub") or eqlIgnoreCase(val, "super");
+    }
+    if (eqlIgnoreCase(prop, "font-variant-emoji")) {
+        return eqlIgnoreCase(val, "auto") or eqlIgnoreCase(val, "text") or
+            eqlIgnoreCase(val, "emoji") or eqlIgnoreCase(val, "unicode");
+    }
+    // CSS Text Level 3/4 — keyword-only properties
+    if (eqlIgnoreCase(prop, "hyphens")) {
+        return eqlIgnoreCase(val, "none") or eqlIgnoreCase(val, "manual") or eqlIgnoreCase(val, "auto");
+    }
+    if (eqlIgnoreCase(prop, "line-break")) {
+        return eqlIgnoreCase(val, "auto") or eqlIgnoreCase(val, "loose") or
+            eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "strict") or
+            eqlIgnoreCase(val, "anywhere");
+    }
+    if (eqlIgnoreCase(prop, "overflow-wrap") or eqlIgnoreCase(prop, "word-wrap")) {
+        return eqlIgnoreCase(val, "normal") or eqlIgnoreCase(val, "break-word") or
+            eqlIgnoreCase(val, "anywhere");
+    }
+    // CSS Backgrounds Level 3/4 — single-keyword longhands
+    if (eqlIgnoreCase(prop, "background-attachment")) {
+        // comma-list of scroll|fixed|local
+        var it = std.mem.splitScalar(u8, val, ',');
+        while (it.next()) |part| {
+            const t = std.mem.trim(u8, part, " \t");
+            if (!(eqlIgnoreCase(t, "scroll") or eqlIgnoreCase(t, "fixed") or eqlIgnoreCase(t, "local"))) return false;
+        }
+        return true;
+    }
+    if (eqlIgnoreCase(prop, "background-origin")) {
+        var it = std.mem.splitScalar(u8, val, ',');
+        while (it.next()) |part| {
+            const t = std.mem.trim(u8, part, " \t");
+            if (!(eqlIgnoreCase(t, "border-box") or eqlIgnoreCase(t, "padding-box") or eqlIgnoreCase(t, "content-box"))) return false;
+        }
+        return true;
+    }
+    if (eqlIgnoreCase(prop, "background-clip")) {
+        var it = std.mem.splitScalar(u8, val, ',');
+        while (it.next()) |part| {
+            const t = std.mem.trim(u8, part, " \t");
+            if (!(eqlIgnoreCase(t, "border-box") or eqlIgnoreCase(t, "padding-box") or
+                eqlIgnoreCase(t, "content-box") or eqlIgnoreCase(t, "text") or
+                eqlIgnoreCase(t, "border") or eqlIgnoreCase(t, "padding") or eqlIgnoreCase(t, "content"))) return false;
+        }
+        return true;
+    }
+    // CSS Fonts Level 4 — font-size-adjust: none | [ex-height|cap-height|ch-width|ic-width|ic-height]? <number>|from-font
+    if (eqlIgnoreCase(prop, "font-size-adjust")) {
+        if (eqlIgnoreCase(val, "none") or eqlIgnoreCase(val, "from-font")) return true;
+        // Strip optional metric keyword prefix
+        var rest = val;
+        const metrics = [_][]const u8{ "ex-height", "cap-height", "ch-width", "ic-width", "ic-height" };
+        for (metrics) |m| {
+            if (val.len > m.len and std.ascii.startsWithIgnoreCase(val, m) and (val[m.len] == ' ' or val[m.len] == '\t')) {
+                rest = std.mem.trim(u8, val[m.len..], " \t");
+                break;
+            }
+        }
+        if (eqlIgnoreCase(rest, "from-font")) return true;
+        // Remainder must be a non-negative number
+        return isNonNegNumber(rest);
     }
     // CSS Transforms Level 2: individual transform properties
     if (eqlIgnoreCase(prop, "rotate")) {
