@@ -8,9 +8,52 @@ const api = @import("dom_api.zig");
 extern fn lxb_dom_element_get_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize, value_len: *usize) ?[*]const u8;
 extern fn lxb_dom_element_local_name(element: *lxb.lxb_dom_element_t, len: *usize) ?[*]const u8;
 extern fn lxb_dom_element_has_attribute(element: *lxb.lxb_dom_element_t, qualified_name: [*]const u8, qn_len: usize) bool;
+extern fn lxb_dom_element_first_attribute_noi(element: *lxb.lxb_dom_element_t) ?*anyopaque;
+extern fn lxb_dom_element_next_attribute_noi(attr: *anyopaque) ?*anyopaque;
+extern fn lxb_dom_attr_qualified_name(attr: *anyopaque, len: *usize) ?[*]const u8;
+extern fn lxb_dom_attr_value_noi(attr: *anyopaque, len: *usize) ?[*]const u8;
 extern fn lxb_dom_node_last_child_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_prev_noi(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t;
 extern fn lxb_dom_node_insert_child(to: *lxb.lxb_dom_node_t, node: *lxb.lxb_dom_node_t) void;
+
+// ── Namespace-aware attribute helpers (CSS Selectors L4 §6.2) ─────────
+// Extract the local-name portion of a qualified attribute name (i.e. the
+// substring after the last ':' separator). For unprefixed names, returns
+// the whole name. Lexbor stores SVG attributes like `xlink:href` with the
+// full qualified name, so `[*|href]` must match by local name.
+fn attrLocalName(qn: []const u8) []const u8 {
+    if (std.mem.lastIndexOfScalar(u8, qn, ':')) |colon| {
+        return qn[colon + 1 ..];
+    }
+    return qn;
+}
+
+/// Find the first attribute whose local name matches `local` (ASCII
+/// case-insensitive), irrespective of any namespace prefix.
+/// Used for `[*|attr]` namespace-wildcard attribute selectors.
+fn findAttrByLocalName(elem: *lxb.lxb_dom_element_t, local: []const u8) ?*anyopaque {
+    var attr = lxb_dom_element_first_attribute_noi(elem);
+    while (attr) |a| {
+        var qn_len: usize = 0;
+        if (lxb_dom_attr_qualified_name(a, &qn_len)) |qn_ptr| {
+            const qn = qn_ptr[0..qn_len];
+            const ln = attrLocalName(qn);
+            if (ln.len == local.len and std.ascii.eqlIgnoreCase(ln, local)) {
+                return a;
+            }
+        }
+        attr = lxb_dom_element_next_attribute_noi(a);
+    }
+    return null;
+}
+
+/// Read attribute value from an opaque attribute pointer. Returns empty slice
+/// (non-null) if the attribute has no value set, matching Lexbor semantics.
+fn attrValue(attr: *anyopaque) []const u8 {
+    var len: usize = 0;
+    if (lxb_dom_attr_value_noi(attr, &len)) |ptr| return ptr[0..len];
+    return &[_]u8{};
+}
 
 // ── Namespace prefix validation (CSS Selectors §3) ─────────────────
 // In HTML, no @namespace declarations exist, so any `prefix|element`
@@ -1242,10 +1285,13 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     }
     if (op_pos == null) {
         // [attr] — existence check
-        // Handle *|attr (any namespace) prefix — strip *| and match by local name
+        // Detect namespace-wildcard form `*|attr` (CSS Selectors L4 §6.2):
+        // it matches `attr` in ANY namespace — iterate the attribute list and
+        // compare by local name so that e.g. `[*|href]` matches an `xlink:href`.
         var check_name = trimmed;
         if (check_name.len > 2 and check_name[0] == '*' and check_name[1] == '|') {
-            check_name = check_name[2..];
+            const local = check_name[2..];
+            return findAttrByLocalName(elem, local) != null;
         }
         // Case-insensitive check for HTML attributes
         var lower_buf: [128]u8 = undefined;
@@ -1257,8 +1303,13 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
         return lxb_dom_element_has_attribute(elem, check_name.ptr, check_name.len);
     }
     var attr_name = std.mem.trim(u8, trimmed[0..op_pos.?], " \t");
-    // Handle *|attr prefix for namespace wildcard
+    // Detect `*|attr` namespace wildcard (CSS Selectors L4 §6.2): when present,
+    // the attribute lookup must iterate all attributes and compare local names
+    // (ignoring the namespace prefix). The actual comparison is handled below
+    // via `ns_wildcard` after value-slot parsing.
+    var ns_wildcard = false;
     if (attr_name.len > 2 and attr_name[0] == '*' and attr_name[1] == '|') {
+        ns_wildcard = true;
         attr_name = attr_name[2..];
     }
     const val_start = if (op_type == '=') op_pos.? + 1 else op_pos.? + 2;
@@ -1280,10 +1331,19 @@ pub fn matchAttributeSelector(elem: *lxb.lxb_dom_element_t, expr: []const u8) bo
     // Decode CSS escapes in expected value
     var esc_buf: [512]u8 = undefined;
     const decoded_exp = decodeCssEscapes(expected, &esc_buf);
-    var val_len: usize = 0;
-    const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
-    if (val == null) return false;
-    const actual = val.?[0..val_len];
+    // For `[*|attr=val]` we must locate the attribute by local name across
+    // namespaces. For regular `[attr=val]` we use Lexbor's qualified-name
+    // lookup (respects HTML case semantics via earlier lowercasing).
+    var actual: []const u8 = undefined;
+    if (ns_wildcard) {
+        const a = findAttrByLocalName(elem, attr_name) orelse return false;
+        actual = attrValue(a);
+    } else {
+        var val_len: usize = 0;
+        const val = lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
+        if (val == null) return false;
+        actual = val.?[0..val_len];
+    }
 
     if (case_insensitive) {
         // Case-insensitive comparison using lowercased copies
