@@ -2334,6 +2334,9 @@ fn binaryOpToOpCode(op: BinaryOp) OpCode {
 fn unaryOpToOpCode(op: UnaryOp) OpCode {
     return switch (op) {
         .neg => .neg,
+        // ECMA-262 §13.5.4 Unary `+`: ToNumber coercion. Prior versions
+        // dropped to the default `.not` which turned `+"0"` into `false`.
+        .pos => .to_number,
         .not => .not,
         .bit_not => .bit_not,
         .typeof_ => .typeof_,

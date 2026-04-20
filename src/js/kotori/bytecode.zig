@@ -22,6 +22,10 @@ pub const OpCode = enum(u8) {
     div,
     mod,
     neg,
+    /// ECMA-262 §13.5.4 Unary `+`. Coerces via ToNumber with no sign flip.
+    /// Separate opcode (rather than reusing `neg` twice) so the hot path stays
+    /// a single-step conversion and matches the spec semantics precisely.
+    to_number,
     power,
 
     // Comparison

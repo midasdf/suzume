@@ -369,6 +369,24 @@ pub const VM = struct {
                     self.push(JsValue.jsPow(a, b));
                 },
                 .neg => self.push(JsValue.jsNeg(self.pop())),
+                .to_number => {
+                    // ECMA-262 §13.5.4 Unary `+` → ToNumber(operand). Strings
+                    // need the full ToNumber(string) algorithm (trim + parse)
+                    // which requires the VM's string pool, so the opcode body
+                    // calls `toNumberForConstructor` (shared with `Number()`).
+                    // Non-string values delegate to the static `jsToNumber`.
+                    const v = self.pop();
+                    if (v.isString()) {
+                        const n = try toNumberForConstructor(self, v);
+                        if (std.math.isNan(n)) {
+                            self.push(JsValue.nan_val);
+                        } else {
+                            self.push(JsValue.initNumber(n));
+                        }
+                    } else {
+                        self.push(JsValue.jsToNumber(v));
+                    }
+                },
 
                 // ── Comparison ───────────────────────────────────────
                 .eq => {
@@ -526,7 +544,16 @@ pub const VM = struct {
                                 continue;
                             } else |_| {}
                         }
-                        self.push(JsValue.initBool(obj.getProperty(lhs.asStringId()) != null));
+                        // ECMA-262 §13.10.2 `in`: true if HasProperty(obj, key)
+                        // returns true. Data props + accessor descriptors on
+                        // the prototype chain both count; `getProperty` returns
+                        // null for accessors by design, so probe both.
+                        const name_id = lhs.asStringId();
+                        if (obj.getProperty(name_id) != null or obj.findAccessorDescriptor(name_id) != null) {
+                            self.push(JsValue.initBool(true));
+                        } else {
+                            self.push(JsValue.initBool(false));
+                        }
                     } else if (lhs.isInt() or lhs.isNumber()) {
                         const num: i64 = if (lhs.isInt()) lhs.asInt() else @intFromFloat(lhs.asNumber());
                         var buf: [20]u8 = undefined;
@@ -1359,11 +1386,48 @@ pub const VM = struct {
                                 }
                             }
                         }
-                        // Fall back to property access for string keys
-                        if (key.isString()) {
-                            if (obj.getProperty(key.asStringId())) |val| {
+                        // Fall back to property access for string keys.
+                        // ECMA-262 §10.1.8 [[Get]] walks the prototype chain
+                        // looking for data properties AND accessor descriptors;
+                        // bracket access `obj[k]` must be semantically identical
+                        // to dot access `obj.k` when `k` is a string key. Mirror
+                        // the accessor-lookup + Object.prototype fallback from
+                        // `.get_prop` above so Proxy default `get` traps that do
+                        // `t[p]` resolve getters defined on a shared prototype
+                        // (e.g. DTLP.length / DTLP.value on DOMTokenList).
+                        //
+                        // Integer keys on a plain object (`obj[0]`) are coerced
+                        // to their string form per §7.1.19 ToPropertyKey so the
+                        // value stored via `obj[0] = x` (which set_elem also
+                        // coerces) is findable. Without this, Proxy `get` traps
+                        // for numeric indices on non-array targets return
+                        // `undefined` even when the trap itself matched.
+                        const name_id_opt: ?StringId = if (key.isString())
+                            key.asStringId()
+                        else if (key.isInt() or key.isNumber())
+                            try self.keyToStringId(key)
+                        else
+                            null;
+                        if (name_id_opt) |name_id| {
+                            if (obj.findAccessorDescriptor(name_id)) |acc| {
+                                if (!acc.get.isUndefined()) {
+                                    const result = try self.callJsFunction(acc.get, obj_val, &.{});
+                                    self.push(result);
+                                    continue;
+                                }
+                                self.push(JsValue.undefined_val);
+                                continue;
+                            }
+                            if (obj.getProperty(name_id)) |val| {
                                 self.push(val);
                                 continue;
+                            }
+                            // Object.prototype fallback for string keys.
+                            if (self.object_proto) |obj_p| {
+                                if (obj_p.getProperty(name_id)) |val| {
+                                    self.push(val);
+                                    continue;
+                                }
                             }
                         }
                     }
@@ -1445,6 +1509,13 @@ pub const VM = struct {
                             }
                         } else if (key.isString()) {
                             try obj.setProperty(self.allocator, key.asStringId(), val);
+                        } else if (key.isInt() or key.isNumber()) {
+                            // ECMA-262 §7.1.19 ToPropertyKey: numeric bracket
+                            // keys on plain objects stringify (e.g. `obj[0] = x`
+                            // stores under `"0"`). Paired with the get_elem
+                            // int-key stringification so round-trips work.
+                            const sid = try self.keyToStringId(key);
+                            try obj.setProperty(self.allocator, sid, val);
                         }
                     }
                     self.push(val);
@@ -2494,7 +2565,65 @@ pub const VM = struct {
 
     // ── String helpers ────────────────────────────────────────────────
 
+    /// ECMA-262 §7.1.18 ToString for object operands: if the object exposes a
+    /// user-defined `toString()` that returns a primitive string, use that
+    /// return value; otherwise fall back to `formatValue`'s intrinsic tag.
+    /// Keeps `String(classList)` and `"" + classList` consistent with spec
+    /// semantics for wrapper objects (DOMTokenList polyfill, etc.).
+    fn toStringValue(self: *VM, val: JsValue, buf: *[64]u8) ![]const u8 {
+        if (!val.isObject()) return formatValue(self.pool, val, buf);
+        const obj = val.asJsObject();
+        // Skip native "container" types that already have correct
+        // formatValue output to avoid calling spec `Array.prototype.toString`
+        // which would recurse via jsStringify and risk loops.
+        if (obj.obj_type == .array or obj.obj_type == .regexp) {
+            return formatValue(self.pool, val, buf);
+        }
+        const toString_id = try self.pool.intern("toString");
+        const fn_val: ?JsValue = blk: {
+            if (obj.obj_type == .proxy) {
+                // Proxy get trap may synthesize `toString` dynamically.
+                const result = self.proxyGet(obj, toString_id, val) catch break :blk null;
+                if (result.isObject() and
+                    (result.asJsObject().obj_type == .function or result.asJsObject().obj_type == .native_function))
+                {
+                    break :blk result;
+                }
+                break :blk null;
+            }
+            if (obj.findAccessorDescriptor(toString_id)) |acc| {
+                if (!acc.get.isUndefined()) {
+                    const got = self.callJsFunction(acc.get, val, &.{}) catch break :blk null;
+                    if (got.isObject()) break :blk got;
+                }
+                break :blk null;
+            }
+            if (obj.getProperty(toString_id)) |v| break :blk v;
+            break :blk null;
+        };
+        if (fn_val) |fv| {
+            if (fv.isObject()) {
+                const fo = fv.asJsObject();
+                if (fo.obj_type == .function or fo.obj_type == .native_function) {
+                    const result = self.callJsFunction(fv, val, &.{}) catch {
+                        return formatValue(self.pool, val, buf);
+                    };
+                    if (result.isString()) {
+                        return self.pool.get(result.asStringId()) orelse "";
+                    }
+                    return formatValue(self.pool, result, buf);
+                }
+            }
+        }
+        return formatValue(self.pool, val, buf);
+    }
+
     fn stringConcat(self: *VM, a: JsValue, b: JsValue) !JsValue {
+        // Keep this path on the cheap formatValue fast-path; the user-toString
+        // ToPrimitive route lives in `nativeStringConstructor` (the explicit
+        // `String()` call). Mixing the toString dispatch into every `+`
+        // regression-bombs because the Proxy get trap can itself perform
+        // concatenation and recurse during WPT harness setup.
         var buf_a: [64]u8 = undefined;
         var buf_b: [64]u8 = undefined;
         const a_str = formatValue(self.pool, a, &buf_a);
@@ -5931,11 +6060,50 @@ pub const VM = struct {
         const vm = vmFromCtx(ctx);
         if (this.isNull()) return JsValue.initString(try vm.pool.intern("[object Null]"));
         if (this.isUndefined()) return JsValue.initString(try vm.pool.intern("[object Undefined]"));
+        // ECMA-262 §20.1.3.6 Object.prototype.toString: primitives coerce via
+        // ToObject and pick up their wrapper's @@toStringTag. We short-circuit
+        // to the intrinsic tag for the common boxed-primitive cases so
+        // `{}.toString.call("abc")` → `"[object String]"` etc.
+        if (this.isString()) return JsValue.initString(try vm.pool.intern("[object String]"));
+        if (this.isNumber() or this.isInt()) return JsValue.initString(try vm.pool.intern("[object Number]"));
+        if (this.isBool()) return JsValue.initString(try vm.pool.intern("[object Boolean]"));
         if (!this.isObject()) return JsValue.initString(try vm.pool.intern("[object Object]"));
         const obj = this.asJsObject();
+        // ECMA-262 §20.1.3.6 Object.prototype.toString step 15:
+        // If `Type(Get(O, @@toStringTag))` is String, use its value instead
+        // of the intrinsic default tag. Covers `classList → "DOMTokenList"`
+        // and similar polyfill/wrapper cases that set `Symbol.toStringTag`.
+        if (vm.findSymbolProp(obj, SYMBOL_TO_STRING_TAG)) |tag_val| {
+            if (tag_val.isString()) {
+                const tag_str = vm.pool.get(tag_val.asStringId()) orelse "";
+                var buf: std.ArrayListUnmanaged(u8) = .empty;
+                defer buf.deinit(vm.allocator);
+                try buf.appendSlice(vm.allocator, "[object ");
+                try buf.appendSlice(vm.allocator, tag_str);
+                try buf.append(vm.allocator, ']');
+                return JsValue.initString(try vm.pool.intern(buf.items));
+            }
+        }
         const tag = switch (obj.obj_type) {
             .array => "[object Array]",
             .regexp => "[object RegExp]",
+            .proxy => blk: {
+                // For Proxies, walk the target's @@toStringTag first; if the
+                // target is a plain object we fall through to the default.
+                const pd = obj.data.proxy_data;
+                if (vm.findSymbolProp(pd.target, SYMBOL_TO_STRING_TAG)) |tv| {
+                    if (tv.isString()) {
+                        const ts = vm.pool.get(tv.asStringId()) orelse "";
+                        var buf: std.ArrayListUnmanaged(u8) = .empty;
+                        defer buf.deinit(vm.allocator);
+                        try buf.appendSlice(vm.allocator, "[object ");
+                        try buf.appendSlice(vm.allocator, ts);
+                        try buf.append(vm.allocator, ']');
+                        return JsValue.initString(try vm.pool.intern(buf.items));
+                    }
+                }
+                break :blk "[object Object]";
+            },
             else => switch (obj.data) {
                 .function, .native_fn => "[object Function]",
                 .date_ms => "[object Date]",
@@ -6027,8 +6195,12 @@ pub const VM = struct {
     fn nativeStringConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         if (args.len == 0) return JsValue.initString(try vm.pool.intern(""));
+        // ECMA-262 §21.1.1.1 String(value): invoke ToString(value), which for
+        // objects walks toString() via ToPrimitive. `toStringValue` handles the
+        // object → user-toString case and falls back to `formatValue` for
+        // primitives and container types.
         var buf: [64]u8 = undefined;
-        return JsValue.initString(try vm.pool.intern(formatValue(vm.pool, args[0], &buf)));
+        return JsValue.initString(try vm.pool.intern(try vm.toStringValue(args[0], &buf)));
     }
 
     // ── Function.prototype ─────────────────────────────────────────
