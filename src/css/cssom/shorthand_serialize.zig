@@ -110,6 +110,108 @@ pub fn serializeStartEndShorthand(
     return std.fmt.bufPrint(buf, "{s} {s}", .{ s, e }) catch null;
 }
 
+/// Serialize a width/style/color triple (border-top, border-right,
+/// border-bottom, border-left, outline).  Per CSS Backgrounds 3 §4.9 and
+/// CSS UI 4 §3.1, the canonical form is `<width> <style> <color>` with a
+/// single space separator; all three components are always emitted.
+pub fn serializeWidthStyleColor(
+    comptime width_prop: []const u8,
+    comptime style_prop: []const u8,
+    comptime color_prop: []const u8,
+    ctx: LookupCtx,
+    buf: []u8,
+) ?[]const u8 {
+    const w = std.mem.trim(u8, lhGet(ctx, width_prop) orelse return null, " \t\r\n");
+    const s = std.mem.trim(u8, lhGet(ctx, style_prop) orelse return null, " \t\r\n");
+    const c = std.mem.trim(u8, lhGet(ctx, color_prop) orelse return null, " \t\r\n");
+    if (w.len == 0 or s.len == 0 or c.len == 0) return null;
+    return std.fmt.bufPrint(buf, "{s} {s} {s}", .{ w, s, c }) catch null;
+}
+
+/// Serialize the `border` shorthand (CSS Backgrounds 3 §4.9).
+/// Only emits a value when all four sides (top/right/bottom/left) share
+/// the same width, style and color — otherwise returns null so the
+/// caller falls back to individual side serialization.
+pub fn serializeBorder(ctx: LookupCtx, buf: []u8) ?[]const u8 {
+    const tw = std.mem.trim(u8, lhGet(ctx, "border-top-width") orelse return null, " \t\r\n");
+    const rw = std.mem.trim(u8, lhGet(ctx, "border-right-width") orelse return null, " \t\r\n");
+    const bw = std.mem.trim(u8, lhGet(ctx, "border-bottom-width") orelse return null, " \t\r\n");
+    const lw = std.mem.trim(u8, lhGet(ctx, "border-left-width") orelse return null, " \t\r\n");
+    const ts = std.mem.trim(u8, lhGet(ctx, "border-top-style") orelse return null, " \t\r\n");
+    const rs = std.mem.trim(u8, lhGet(ctx, "border-right-style") orelse return null, " \t\r\n");
+    const bs = std.mem.trim(u8, lhGet(ctx, "border-bottom-style") orelse return null, " \t\r\n");
+    const ls = std.mem.trim(u8, lhGet(ctx, "border-left-style") orelse return null, " \t\r\n");
+    const tc = std.mem.trim(u8, lhGet(ctx, "border-top-color") orelse return null, " \t\r\n");
+    const rc = std.mem.trim(u8, lhGet(ctx, "border-right-color") orelse return null, " \t\r\n");
+    const bc = std.mem.trim(u8, lhGet(ctx, "border-bottom-color") orelse return null, " \t\r\n");
+    const lc = std.mem.trim(u8, lhGet(ctx, "border-left-color") orelse return null, " \t\r\n");
+    if (tw.len == 0 or ts.len == 0 or tc.len == 0) return null;
+    // All four sides must match for the shorthand to round-trip.
+    if (!std.mem.eql(u8, tw, rw) or !std.mem.eql(u8, tw, bw) or !std.mem.eql(u8, tw, lw)) return null;
+    if (!std.mem.eql(u8, ts, rs) or !std.mem.eql(u8, ts, bs) or !std.mem.eql(u8, ts, ls)) return null;
+    if (!std.mem.eql(u8, tc, rc) or !std.mem.eql(u8, tc, bc) or !std.mem.eql(u8, tc, lc)) return null;
+    return std.fmt.bufPrint(buf, "{s} {s} {s}", .{ tw, ts, tc }) catch null;
+}
+
+/// Serialize the `gap` shorthand from row-gap + column-gap.
+/// Per CSS Box Alignment 3 §8.3: `<row-gap> <column-gap>`, collapsing to
+/// a single value when both components are equal.
+pub fn serializeGap(ctx: LookupCtx, buf: []u8) ?[]const u8 {
+    const row = std.mem.trim(u8, lhGet(ctx, "row-gap") orelse return null, " \t\r\n");
+    const col = std.mem.trim(u8, lhGet(ctx, "column-gap") orelse return null, " \t\r\n");
+    if (row.len == 0 or col.len == 0) return null;
+    if (std.mem.eql(u8, row, col)) return std.fmt.bufPrint(buf, "{s}", .{row}) catch null;
+    return std.fmt.bufPrint(buf, "{s} {s}", .{ row, col }) catch null;
+}
+
+/// Serialize the `font` shorthand (CSS Fonts 4 §10.6) — basic subset.
+/// Canonical form: `[<style>] [<weight>] <size>[/<line-height>] <family>`.
+/// We omit style/weight when they are at their initial value ("normal"),
+/// and include the `/<line-height>` segment only when line-height is not
+/// "normal".  font-variant is not modelled separately by the parser so it
+/// is never emitted.  If font-size or font-family are missing the
+/// shorthand is not serializable (returns null).
+pub fn serializeFont(ctx: LookupCtx, buf: []u8) ?[]const u8 {
+    const size = std.mem.trim(u8, lhGet(ctx, "font-size") orelse return null, " \t\r\n");
+    const family = std.mem.trim(u8, lhGet(ctx, "font-family") orelse return null, " \t\r\n");
+    if (size.len == 0 or family.len == 0) return null;
+
+    // Optional components — absent or "normal" means omit.
+    const style_raw = lhGet(ctx, "font-style") orelse "normal";
+    const weight_raw = lhGet(ctx, "font-weight") orelse "normal";
+    const lh_raw = lhGet(ctx, "line-height") orelse "normal";
+    const style = std.mem.trim(u8, style_raw, " \t\r\n");
+    const weight = std.mem.trim(u8, weight_raw, " \t\r\n");
+    const lh = std.mem.trim(u8, lh_raw, " \t\r\n");
+
+    const has_style = style.len > 0 and !std.ascii.eqlIgnoreCase(style, "normal");
+    const has_weight = weight.len > 0 and !std.ascii.eqlIgnoreCase(weight, "normal");
+    const has_lh = lh.len > 0 and !std.ascii.eqlIgnoreCase(lh, "normal");
+
+    if (has_style and has_weight and has_lh) {
+        return std.fmt.bufPrint(buf, "{s} {s} {s}/{s} {s}", .{ style, weight, size, lh, family }) catch null;
+    }
+    if (has_style and has_weight) {
+        return std.fmt.bufPrint(buf, "{s} {s} {s} {s}", .{ style, weight, size, family }) catch null;
+    }
+    if (has_style and has_lh) {
+        return std.fmt.bufPrint(buf, "{s} {s}/{s} {s}", .{ style, size, lh, family }) catch null;
+    }
+    if (has_weight and has_lh) {
+        return std.fmt.bufPrint(buf, "{s} {s}/{s} {s}", .{ weight, size, lh, family }) catch null;
+    }
+    if (has_style) {
+        return std.fmt.bufPrint(buf, "{s} {s} {s}", .{ style, size, family }) catch null;
+    }
+    if (has_weight) {
+        return std.fmt.bufPrint(buf, "{s} {s} {s}", .{ weight, size, family }) catch null;
+    }
+    if (has_lh) {
+        return std.fmt.bufPrint(buf, "{s}/{s} {s}", .{ size, lh, family }) catch null;
+    }
+    return std.fmt.bufPrint(buf, "{s} {s}", .{ size, family }) catch null;
+}
+
 /// Dispatch: given a shorthand name and a LookupCtx, return the canonical string.
 pub fn serializeShorthand(shorthand: []const u8, ctx: LookupCtx, buf: []u8) ?[]const u8 {
     if (std.ascii.eqlIgnoreCase(shorthand, "margin")) {
@@ -159,6 +261,37 @@ pub fn serializeShorthand(shorthand: []const u8, ctx: LookupCtx, buf: []u8) ?[]c
     }
     if (std.ascii.eqlIgnoreCase(shorthand, "inset-inline")) {
         return serializeStartEndShorthand("left", "right", ctx, buf);
+    }
+    // Border side shorthands (CSS Backgrounds 3 §4.9): width + style + color
+    if (std.ascii.eqlIgnoreCase(shorthand, "border-top")) {
+        return serializeWidthStyleColor("border-top-width", "border-top-style", "border-top-color", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "border-right")) {
+        return serializeWidthStyleColor("border-right-width", "border-right-style", "border-right-color", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "border-bottom")) {
+        return serializeWidthStyleColor("border-bottom-width", "border-bottom-style", "border-bottom-color", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "border-left")) {
+        return serializeWidthStyleColor("border-left-width", "border-left-style", "border-left-color", ctx, buf);
+    }
+    // Four-sided border shorthand (CSS Backgrounds 3 §4.9)
+    if (std.ascii.eqlIgnoreCase(shorthand, "border")) {
+        return serializeBorder(ctx, buf);
+    }
+    // outline shorthand (CSS UI 4 §3.1): width + style + color
+    if (std.ascii.eqlIgnoreCase(shorthand, "outline")) {
+        return serializeWidthStyleColor("outline-width", "outline-style", "outline-color", ctx, buf);
+    }
+    // Gap shorthand (CSS Box Alignment 3 §8.3): row-gap + column-gap
+    if (std.ascii.eqlIgnoreCase(shorthand, "gap") or
+        std.ascii.eqlIgnoreCase(shorthand, "grid-gap"))
+    {
+        return serializeGap(ctx, buf);
+    }
+    // Font shorthand (CSS Fonts 4 §10.6) — basic subset
+    if (std.ascii.eqlIgnoreCase(shorthand, "font")) {
+        return serializeFont(ctx, buf);
     }
     return null;
 }
@@ -404,4 +537,180 @@ test "serializeShorthand inset-block — equal (reads top/bottom)" {
     var buf: [64]u8 = undefined;
     const r = serializeShorthand("inset-block", makeCtx(&slice), &buf);
     try std.testing.expectEqualStrings("4px", r.?);
+}
+
+// ── Wave 9 shorthands ────────────────────────────────────────────────
+
+test "serializeShorthand border-top — width/style/color triple" {
+    const arr = [_]Entry{
+        .{ .name = "border-top-width", .value = "1px" },
+        .{ .name = "border-top-style", .value = "solid" },
+        .{ .name = "border-top-color", .value = "red" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("border-top", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("1px solid red", r.?);
+}
+
+test "serializeShorthand border-left — width/style/color triple" {
+    const arr = [_]Entry{
+        .{ .name = "border-left-width", .value = "2px" },
+        .{ .name = "border-left-style", .value = "dashed" },
+        .{ .name = "border-left-color", .value = "blue" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("border-left", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("2px dashed blue", r.?);
+}
+
+test "serializeShorthand border-right — missing longhand returns null" {
+    const arr = [_]Entry{
+        .{ .name = "border-right-width", .value = "1px" },
+        .{ .name = "border-right-style", .value = "solid" },
+        // missing color
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("border-right", makeCtx(&slice), &buf);
+    try std.testing.expect(r == null);
+}
+
+test "serializeShorthand border — all four sides equal" {
+    const arr = [_]Entry{
+        .{ .name = "border-top-width", .value = "1px" },
+        .{ .name = "border-right-width", .value = "1px" },
+        .{ .name = "border-bottom-width", .value = "1px" },
+        .{ .name = "border-left-width", .value = "1px" },
+        .{ .name = "border-top-style", .value = "solid" },
+        .{ .name = "border-right-style", .value = "solid" },
+        .{ .name = "border-bottom-style", .value = "solid" },
+        .{ .name = "border-left-style", .value = "solid" },
+        .{ .name = "border-top-color", .value = "red" },
+        .{ .name = "border-right-color", .value = "red" },
+        .{ .name = "border-bottom-color", .value = "red" },
+        .{ .name = "border-left-color", .value = "red" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("border", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("1px solid red", r.?);
+}
+
+test "serializeShorthand border — sides differ returns null" {
+    const arr = [_]Entry{
+        .{ .name = "border-top-width", .value = "1px" },
+        .{ .name = "border-right-width", .value = "2px" }, // differs
+        .{ .name = "border-bottom-width", .value = "1px" },
+        .{ .name = "border-left-width", .value = "1px" },
+        .{ .name = "border-top-style", .value = "solid" },
+        .{ .name = "border-right-style", .value = "solid" },
+        .{ .name = "border-bottom-style", .value = "solid" },
+        .{ .name = "border-left-style", .value = "solid" },
+        .{ .name = "border-top-color", .value = "red" },
+        .{ .name = "border-right-color", .value = "red" },
+        .{ .name = "border-bottom-color", .value = "red" },
+        .{ .name = "border-left-color", .value = "red" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("border", makeCtx(&slice), &buf);
+    try std.testing.expect(r == null);
+}
+
+test "serializeShorthand outline — width/style/color triple" {
+    const arr = [_]Entry{
+        .{ .name = "outline-width", .value = "2px" },
+        .{ .name = "outline-style", .value = "dotted" },
+        .{ .name = "outline-color", .value = "green" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("outline", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("2px dotted green", r.?);
+}
+
+test "serializeShorthand outline — missing width returns null" {
+    const arr = [_]Entry{
+        // missing outline-width
+        .{ .name = "outline-style", .value = "solid" },
+        .{ .name = "outline-color", .value = "black" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("outline", makeCtx(&slice), &buf);
+    try std.testing.expect(r == null);
+}
+
+test "serializeShorthand gap — equal components collapse" {
+    const arr = [_]Entry{
+        .{ .name = "row-gap", .value = "10px" },
+        .{ .name = "column-gap", .value = "10px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("gap", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("10px", r.?);
+}
+
+test "serializeShorthand gap — unequal components stay as pair (row before column)" {
+    const arr = [_]Entry{
+        .{ .name = "row-gap", .value = "10px" },
+        .{ .name = "column-gap", .value = "20px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("gap", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("10px 20px", r.?);
+}
+
+test "serializeShorthand grid-gap alias routes to gap" {
+    const arr = [_]Entry{
+        .{ .name = "row-gap", .value = "5px" },
+        .{ .name = "column-gap", .value = "5px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("grid-gap", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("5px", r.?);
+}
+
+test "serializeShorthand font — size + family only (normals omitted)" {
+    const arr = [_]Entry{
+        .{ .name = "font-style", .value = "normal" },
+        .{ .name = "font-weight", .value = "normal" },
+        .{ .name = "font-size", .value = "14px" },
+        .{ .name = "line-height", .value = "normal" },
+        .{ .name = "font-family", .value = "sans-serif" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [128]u8 = undefined;
+    const r = serializeShorthand("font", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("14px sans-serif", r.?);
+}
+
+test "serializeShorthand font — italic bold with size/line-height" {
+    const arr = [_]Entry{
+        .{ .name = "font-style", .value = "italic" },
+        .{ .name = "font-weight", .value = "bold" },
+        .{ .name = "font-size", .value = "16px" },
+        .{ .name = "line-height", .value = "1.5" },
+        .{ .name = "font-family", .value = "serif" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [128]u8 = undefined;
+    const r = serializeShorthand("font", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("italic bold 16px/1.5 serif", r.?);
+}
+
+test "serializeShorthand font — missing family returns null" {
+    const arr = [_]Entry{
+        .{ .name = "font-size", .value = "12px" },
+        // missing font-family
+    };
+    const slice: []const Entry = &arr;
+    var buf: [128]u8 = undefined;
+    const r = serializeShorthand("font", makeCtx(&slice), &buf);
+    try std.testing.expect(r == null);
 }
