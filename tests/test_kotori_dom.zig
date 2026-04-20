@@ -2190,3 +2190,115 @@ test "attributes map named properties sweep removed qnames" {
     try std.testing.expect(result.isBool());
     try std.testing.expect(result.asBool());
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Wave 6 Phase 6.1 + 6.2 — Bracket dispatch + deep semantic validator
+// ══════════════════════════════════════════════════════════════════════
+// The bracket-access (`el.style[prop] = val`) path routes through the same
+// DOM hook as `el.style.prop = val` (VM `.set_elem` dispatch). Invalid
+// values (per CSSOM §6.7.2) must leave the inline style attribute
+// unchanged. These tests exercise the full path: VM bracket dispatch →
+// kotori_dom.domStyleSetProp → validate_fn bridge → css_validator.
+
+const css_validator = @import("css_validator");
+
+fn phase62ValidateBridge(prop: []const u8, val: []const u8) bool {
+    return css_validator.isValidPropertyValue(prop, val);
+}
+
+fn installPhase62Validator() void {
+    kotori_dom.setValidateCallback(&phase62ValidateBridge);
+}
+
+fn uninstallPhase62Validator() void {
+    kotori_dom.setValidateCallback(null);
+}
+
+test "Phase 6.2: bracket SET rejects clamp(none, 1px, 1px)" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style["width"] = "clamp(none, 1px, 1px)";
+        \\el.style.getPropertyValue("width");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("", v);
+}
+
+test "Phase 6.2: bracket SET rejects linear-gradient(calc(sign(%)...))" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style["background-image"] = "linear-gradient(calc(sign(50%) * 1turn), red, blue)";
+        \\el.style.getPropertyValue("background-image");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("", v);
+}
+
+test "Phase 6.2: bracket SET accepts clamp(10px, 20px, 30px)" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style["width"] = "clamp(10px, 20px, 30px)";
+        \\el.style.getPropertyValue("width");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("clamp(10px, 20px, 30px)", v);
+}
+
+test "Phase 6.2: bracket GET returns inline style value" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\" style=\"color: blue;\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style["color"];
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("blue", v);
+}
+
+test "Phase 6.2: calc-size basis in second arg rejected" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style["width"] = "calc-size(100px, auto)";
+        \\el.style.getPropertyValue("width");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("", v);
+}
+
+test "Phase 6.2: calc-size basis in first arg accepted" {
+    installPhase62Validator();
+    defer uninstallPhase62Validator();
+    var ctx = try TestCtx.init(
+        "<html><body><div id=\"t\"></div></body></html>",
+        \\var el = document.getElementById("t");
+        \\el.style["width"] = "calc-size(auto, 100px + 10%)";
+        \\el.style.getPropertyValue("width");
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    const v = ctx.getResultStr(result) orelse unreachable;
+    try std.testing.expectEqualStrings("calc-size(auto, 100px + 10%)", v);
+}

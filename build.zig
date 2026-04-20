@@ -726,6 +726,23 @@ pub fn build(b: *std.Build) void {
     kotori_dom_mod.addImport("dom_names", dom_names_shared_mod);
     kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
 
+    const css_validator_mod = b.createModule(.{
+        .root_source_file = b.path("src/js/css_validator.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Standalone test target for css_validator's embedded unit tests.
+    // Runs as part of `zig build test` so Wave 6 Phase 6.2 regressions
+    // surface without needing the full VM / DOM harness.
+    const css_validator_tests = b.addTest(.{
+        .root_module = css_validator_mod,
+    });
+    const run_css_validator_tests = b.addRunArtifact(css_validator_tests);
+    const test_css_validator_step = b.step("test-css-validator", "Run CSS validator unit tests");
+    test_css_validator_step.dependOn(&run_css_validator_tests.step);
+    test_step.dependOn(&run_css_validator_tests.step);
+
     const test_kotori_dom_mod = b.createModule(.{
         .root_source_file = b.path("tests/test_kotori_dom.zig"),
         .target = target,
@@ -733,6 +750,7 @@ pub fn build(b: *std.Build) void {
     });
     test_kotori_dom_mod.addImport("kotori", kotori_mod);
     test_kotori_dom_mod.addImport("kotori_dom", kotori_dom_mod);
+    test_kotori_dom_mod.addImport("css_validator", css_validator_mod);
     test_kotori_dom_mod.addIncludePath(lexbor_dep.path("lib"));
 
     const kotori_dom_tests = b.addTest(.{

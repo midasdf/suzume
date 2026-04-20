@@ -1807,6 +1807,25 @@ fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     var kebab_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(name, &kebab_buf);
 
+    // CSSOM §6.5: computed-style objects (marked by the `__element`
+    // internal slot set in nativeGetComputedStyle) must route property
+    // reads through the cascade resolver so bracket-access
+    // `getComputedStyle(el)[prop]` returns the same resolved value as
+    // `getComputedStyle(el).getPropertyValue(prop)`. Inline-style objects
+    // (no `__element` slot) keep raw style-attribute semantics per CSSOM
+    // §6.7.2 so `el.style[prop]` mirrors `el.style.prop`.
+    const elem_marker_sid = vm.pool.intern("__element") catch null;
+    const is_computed = if (elem_marker_sid) |em| obj.getProperty(em) != null else false;
+    if (is_computed) {
+        if (resolve_fn) |rf| {
+            var val_buf: [160]u8 = undefined;
+            if (rf(@ptrCast(elem), css_prop, &val_buf)) |slice| {
+                const sid = vm.pool.intern(slice) catch return null;
+                return JsValue.initString(sid);
+            }
+        }
+    }
+
     // Read from style attribute
     var attr_len: usize = 0;
     const style_str = if (dom_b.lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |p|

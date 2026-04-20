@@ -1306,6 +1306,20 @@ pub const VM = struct {
                             self.push(JsValue.undefined_val);
                             continue;
                         }
+                        // Wave 6 Phase 6.1: DOM node/style property interception
+                        // via bracket access. Mirrors the dot-access dispatch at
+                        // `.get_prop` (line ~1024) so WPT helpers using
+                        // `el.style[prop]` / `gcs[prop]` reach the same DOM hooks
+                        // as `el.style.prop` / `gcs.prop`. Paired with the deep
+                        // setter-time validator in `css_validator.zig` so the
+                        // CSSOM §6.7.2 invalid-value rejection semantics that
+                        // `test_invalid_value` relies on are preserved.
+                        if (key.isString() and (obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_get_prop != null) {
+                            if (self.dom_get_prop.?(self, obj, key.asStringId())) |val_hit| {
+                                self.push(val_hit);
+                                continue;
+                            }
+                        }
                         if (obj.obj_type == .array) {
                             const idx = self.toArrayIndex(key);
                             if (idx) |i| {
@@ -1395,6 +1409,17 @@ pub const VM = struct {
                             try obj.symbol_props.?.put(self.allocator, sym_id, val);
                             self.push(val);
                             continue;
+                        }
+                        // Wave 6 Phase 6.1: DOM node/style property interception
+                        // via bracket assignment. See `.get_elem` above for
+                        // rationale. The setter dispatch returns true on
+                        // handled, false to fall through to the generic
+                        // property store.
+                        if (key.isString() and (obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_set_prop != null) {
+                            if (self.dom_set_prop.?(self, obj, key.asStringId(), val)) {
+                                self.push(val);
+                                continue;
+                            }
                         }
                         if (obj.obj_type == .array) {
                             if (self.toArrayIndex(key)) |i| {
