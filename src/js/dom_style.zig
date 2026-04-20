@@ -844,34 +844,16 @@ pub fn computedStyleToStringWithBoxInner(c: *qjs.JSContext, style: *const Comput
 
 // ── CSS Value Formatting ───────────────────────────────────────────
 
-/// Format an ARGB u32 as "rgb(r, g, b)" or "rgba(r, g, b, a)" string.
+/// Format an ARGB u32 as "rgb(r, g, b)" or "rgba(r, g, b, a)" string per
+/// CSS Color 4 §15 / CSSOM §7.6 canonical legacy-sRGB serialization.
+/// Delegates to the JS-engine-agnostic `color_serialize` helper so the
+/// kotori path (via computed_slice) can share identical logic once its
+/// cascade plumbing lands.
 pub fn argbToCssColor(c: *qjs.JSContext, argb: u32, buf: *[128]u8) qjs.JSValue {
-    const a = (argb >> 24) & 0xFF;
-    const r = (argb >> 16) & 0xFF;
-    const g_val = (argb >> 8) & 0xFF;
-    const b_val = argb & 0xFF;
-    if (a == 255) {
-        const result = std.fmt.bufPrint(buf, "rgb({d}, {d}, {d})", .{ r, g_val, b_val }) catch return qjs.JS_NewStringLen(c, "", 0);
-        return qjs.JS_NewStringLen(c, result.ptr, result.len);
-    } else if (a == 0 and r == 0 and g_val == 0 and b_val == 0) {
-        const s = "rgba(0, 0, 0, 0)";
-        return qjs.JS_NewStringLen(c, s.ptr, s.len);
-    } else {
-        // Round alpha to common fractions to match browser serialization
-        const alpha_raw: f32 = @as(f32, @floatFromInt(a)) / 255.0;
-        const alpha = @round(alpha_raw * 1000.0) / 1000.0;
-        // Use minimal decimal places
-        if (alpha == @round(alpha * 10.0) / 10.0) {
-            const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.1})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, result.ptr, result.len);
-        } else if (alpha == @round(alpha * 100.0) / 100.0) {
-            const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.2})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, result.ptr, result.len);
-        } else {
-            const result = std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d:.3})", .{ r, g_val, b_val, alpha }) catch return qjs.JS_NewStringLen(c, "", 0);
-            return qjs.JS_NewStringLen(c, result.ptr, result.len);
-        }
-    }
+    const color_serialize = @import("color_serialize.zig");
+    const result = color_serialize.argbToBuf(argb, buf) orelse
+        return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, result.ptr, result.len);
 }
 
 /// Format a px value as "Npx" string.
