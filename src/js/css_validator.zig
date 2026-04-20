@@ -370,6 +370,158 @@ fn mathKindOf(name: []const u8) ?MathKind {
     return null;
 }
 
+/// Validate calc-style arithmetic expression for operator well-formedness.
+/// Rejects:
+///   - trailing operators: `1 +`, `1 + )` (inner ends with op)
+///   - doubled operators: `1 ++ 2`, `1 */ 2`
+///   - leading binary operators: `+ 1` (unary `+`/`-` handled by consumer)
+///   - empty expressions between parens
+///   - bare idents that aren't var()/function calls or math constants
+///     (e.g. `auto`, `none`, `content` inside a calc)
+///
+/// This is a structural (not type) check; type mismatches are caught by
+/// `classifyCalcSum` + `typesCompatible` in the caller.
+fn validateCalcArithmetic(expr: []const u8) bool {
+    const t = trimWs(expr);
+    if (t.len == 0) return false;
+    var depth: i32 = 0;
+    var i: usize = 0;
+    // State machine: after-op means the next non-space non-paren token must
+    // be an operand (not another binary op, not the end, not a closing paren).
+    // start state counts as "after-op" (expression must begin with operand).
+    var after_op: bool = true;
+    while (i < t.len) : (i += 1) {
+        const ch = t[i];
+        if (ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n') continue;
+        if (ch == '"' or ch == '\'') {
+            // String literals aren't valid in calc — reject.
+            return false;
+        }
+        if (ch == '(') {
+            depth += 1;
+            after_op = true; // inside new sub-expr, need operand
+            continue;
+        }
+        if (ch == ')') {
+            depth -= 1;
+            if (depth < 0) return false;
+            if (after_op) return false; // empty sub-expr or trailing op
+            continue;
+        }
+        if (depth == 0 and (ch == '+' or ch == '-' or ch == '*' or ch == '/')) {
+            // Unary +/- only valid when directly adjacent to the next operand
+            // (no intervening whitespace). `calc(+1px + 2px)` OK, but
+            // `calc(1px ++ 2px)` is two binary ops in a row — reject.
+            if (after_op) {
+                if (ch == '*' or ch == '/') return false;
+                // `+`/`-` only valid as sign when immediately followed by a
+                // digit / dot / ident-start character (no space).
+                const nxt_idx = i + 1;
+                if (nxt_idx >= t.len) return false;
+                const nxt = t[nxt_idx];
+                if (nxt == ' ' or nxt == '\t' or nxt == '\r' or nxt == '\n' or
+                    nxt == '+' or nxt == '-' or nxt == '*' or nxt == '/' or nxt == ')')
+                    return false;
+                // Consume the sign; leave `after_op` true so the following
+                // operand flips it to false.
+                continue;
+            }
+            after_op = true;
+            continue;
+        }
+        // Regular operand character: mark state as "saw operand".
+        after_op = false;
+    }
+    if (depth != 0) return false;
+    if (after_op) return false; // trailing operator at end
+    // Walk the tokens and reject bare-ident operands that aren't whitelisted.
+    var tok_start: usize = 0;
+    var in_tok: bool = false;
+    var tdepth: i32 = 0;
+    var j: usize = 0;
+    while (j < t.len) : (j += 1) {
+        const ch = t[j];
+        if (ch == '(') tdepth += 1;
+        if (ch == ')') tdepth -= 1;
+        const is_sep = tdepth == 0 and (ch == ' ' or ch == '\t' or ch == '\r' or ch == '\n' or
+            ch == '+' or ch == '-' or ch == '*' or ch == '/');
+        if (!in_tok and !is_sep) {
+            in_tok = true;
+            tok_start = j;
+        } else if (in_tok and is_sep) {
+            const tok = t[tok_start..j];
+            if (!tokenAllowedInCalc(tok)) return false;
+            in_tok = false;
+        }
+    }
+    if (in_tok) {
+        const tok = t[tok_start..];
+        if (!tokenAllowedInCalc(tok)) return false;
+    }
+    return true;
+}
+
+/// True if `s` contains a `+`/`-`/`*`/`/` operator at depth 0 in a position
+/// that implies arithmetic (i.e. surrounded by whitespace or followed by a
+/// closing paren). Used to decide whether a math-function arg should be
+/// passed through the calc-arithmetic check.
+fn hasTopLevelArithmetic(s: []const u8) bool {
+    var depth: i32 = 0;
+    var i: usize = 0;
+    var saw_operand = false;
+    while (i < s.len) : (i += 1) {
+        const ch = s[i];
+        if (ch == '"' or ch == '\'') {
+            const quote = ch;
+            i += 1;
+            while (i < s.len and s[i] != quote) : (i += 1) {
+                if (s[i] == '\\' and i + 1 < s.len) i += 1;
+            }
+            continue;
+        }
+        if (ch == '(') {
+            depth += 1;
+            continue;
+        }
+        if (ch == ')') {
+            depth -= 1;
+            continue;
+        }
+        if (depth == 0 and (ch == '+' or ch == '-' or ch == '*' or ch == '/')) {
+            // Treat as arithmetic only when preceded by whitespace or end of
+            // operand — avoids classifying `-50%` (leading sign) as arithmetic.
+            if (saw_operand and i > 0) {
+                const prev = s[i - 1];
+                if (prev == ' ' or prev == '\t') return true;
+            }
+            continue;
+        }
+        if (depth == 0 and ch != ' ' and ch != '\t' and ch != '\r' and ch != '\n') {
+            saw_operand = true;
+        }
+    }
+    return false;
+}
+
+fn tokenAllowedInCalc(tok: []const u8) bool {
+    const t = trimWs(tok);
+    if (t.len == 0) return true;
+    // Single-char operator leftover shouldn't reach here, but be defensive.
+    if (t.len == 1 and (t[0] == '+' or t[0] == '-' or t[0] == '*' or t[0] == '/')) return true;
+    // Nested function call: classifier will validate further upstream.
+    if (t[t.len - 1] == ')') return true;
+    const cls = classifySimple(t);
+    if (cls == .ident) {
+        // Allowed bare idents in calc: CSS-wide keywords + math constants.
+        return eqlIgnoreCase(t, "inherit") or eqlIgnoreCase(t, "initial") or
+            eqlIgnoreCase(t, "unset") or eqlIgnoreCase(t, "revert") or
+            eqlIgnoreCase(t, "pi") or eqlIgnoreCase(t, "e") or
+            eqlIgnoreCase(t, "infinity") or eqlIgnoreCase(t, "-infinity") or
+            eqlIgnoreCase(t, "nan");
+    }
+    return cls != .unknown;
+}
+
 /// Basic parens-balanced + non-empty args check.
 fn hasBalancedArgs(inner: []const u8) bool {
     if (trimWs(inner).len == 0) return false;
@@ -426,9 +578,15 @@ fn isNumericType(t: ArgType) bool {
 
 fn typesCompatible(a: ArgType, b: ArgType) bool {
     if (a == b) return true;
-    // number is compatible with any numeric type in math functions.
-    if (a == .number or b == .number) return isNumericType(a) and isNumericType(b);
-    if (a == .integer or b == .integer) return isNumericType(a) and isNumericType(b);
+    // integer is a subset of number.
+    if ((a == .number and b == .integer) or (a == .integer and b == .number)) return true;
+    // number / integer are NOT implicitly compatible with dimensioned types
+    // in math-function arg-pairs. CSS Values 4 §10 requires `round(A, B)` /
+    // `mod` / `rem` / `clamp` args to share a type (or both be numbers).
+    // `round(1, 1%)` must reject because `1` (number) is not compatible
+    // with `1%` (percentage) here.
+    if (a == .number or a == .integer) return b == .number or b == .integer;
+    if (b == .number or b == .integer) return a == .number or a == .integer;
     // length + percentage → length-percentage.
     const is_lp_a = a == .length or a == .percentage or a == .length_percentage;
     const is_lp_b = b == .length or b == .percentage or b == .length_percentage;
@@ -446,6 +604,13 @@ fn validateMathFn(name: []const u8, inner: []const u8) bool {
     // Validate each arg: recursive isValid-like check.
     for (args) |a| {
         if (a.len == 0) return false;
+        // If the arg carries top-level arithmetic operators (implicit calc
+        // sum), verify operator well-formedness first. Catches patterns
+        // like `abs(1 + )` or `min(1 + , 2)`.
+        const trimmed_arg = trimWs(a);
+        if (hasTopLevelArithmetic(trimmed_arg)) {
+            if (!validateCalcArithmetic(trimmed_arg)) return false;
+        }
         // Reject bare idents that aren't CSS-wide keywords, var(), or
         // math constants. This catches `clamp(none, 1px, 1px)`.
         const t = argTypeOf(a);
@@ -483,6 +648,7 @@ fn validateMathFn(name: []const u8, inner: []const u8) bool {
     switch (kind) {
         .calc => {
             if (args.len != 1) return false;
+            if (!validateCalcArithmetic(args[0])) return false;
         },
         .min_max, .hypot => {
             if (args.len < 1) return false;
@@ -783,6 +949,16 @@ pub fn isValidPropertyValue(prop: []const u8, val: []const u8) bool {
         eqlIgnoreCase(trimmed, "unset") or eqlIgnoreCase(trimmed, "revert") or
         eqlIgnoreCase(trimmed, "revert-layer")) return true;
     if (trimmed.len >= 4 and startsWithIgnoreCase(trimmed[0..4], "var(")) return true;
+    // Layer 0b: `attr()` pass-through. CSS Values 5 `attr(<ident> type(<syntax>))`
+    // and `attr(<ident>, <fallback>)`. Evaluation is deferred to computed-value
+    // time; the validator only checks the outer shape is balanced + non-empty.
+    if (trimmed.len >= 5 and startsWithIgnoreCase(trimmed[0..5], "attr(") and
+        trimmed[trimmed.len - 1] == ')')
+    {
+        const inner = funcInner(trimmed) orelse return false;
+        if (trimWs(inner).len == 0) return false;
+        return hasBalancedArgs(inner);
+    }
 
     // Layer 2: classify shape. Focus on function-call validation — bare
     // idents and dimensions fall through to `true` here; the caller's
@@ -872,13 +1048,40 @@ pub fn isValidPropertyValue(prop: []const u8, val: []const u8) bool {
 }
 
 fn validateTransformFn(name: []const u8, inner: []const u8) bool {
+    // Per-function expected argument count. `min`/`max` entries are [min,max].
+    const expected: struct { min: usize, max: usize } = blk: {
+        if (eqlIgnoreCase(name, "translateX") or eqlIgnoreCase(name, "translateY") or
+            eqlIgnoreCase(name, "translateZ") or eqlIgnoreCase(name, "scaleX") or
+            eqlIgnoreCase(name, "scaleY") or eqlIgnoreCase(name, "scaleZ") or
+            eqlIgnoreCase(name, "rotateX") or eqlIgnoreCase(name, "rotateY") or
+            eqlIgnoreCase(name, "rotateZ") or eqlIgnoreCase(name, "rotate") or
+            eqlIgnoreCase(name, "skewX") or eqlIgnoreCase(name, "skewY") or
+            eqlIgnoreCase(name, "perspective"))
+            break :blk .{ .min = 1, .max = 1 };
+        if (eqlIgnoreCase(name, "translate") or eqlIgnoreCase(name, "scale") or
+            eqlIgnoreCase(name, "skew"))
+            break :blk .{ .min = 1, .max = 2 };
+        if (eqlIgnoreCase(name, "translate3d") or eqlIgnoreCase(name, "scale3d"))
+            break :blk .{ .min = 3, .max = 3 };
+        if (eqlIgnoreCase(name, "rotate3d")) break :blk .{ .min = 4, .max = 4 };
+        if (eqlIgnoreCase(name, "matrix")) break :blk .{ .min = 6, .max = 6 };
+        if (eqlIgnoreCase(name, "matrix3d")) break :blk .{ .min = 16, .max = 16 };
+        break :blk .{ .min = 1, .max = 16 };
+    };
+
     if (!hasBalancedArgs(inner)) return false;
     var buf: [16][]const u8 = undefined;
     const n = splitTopLevelCommas(inner, &buf) orelse return false;
+    if (n < expected.min or n > expected.max) return false;
     const args = buf[0..n];
     for (args) |a| {
         const at = trimWs(a);
         if (at.len == 0) return false;
+        // Implicit calc-sum inside transform arg (e.g. `translateX(50% + 10px)`)
+        // — validate arithmetic well-formedness.
+        if (hasTopLevelArithmetic(at)) {
+            if (!validateCalcArithmetic(at)) return false;
+        }
         const t = argTypeOf(at);
         // Transform args may be length, percentage, number, angle (rotate),
         // or calc-based expressions. Reject bare unknown idents like
@@ -889,7 +1092,7 @@ fn validateTransformFn(name: []const u8, inner: []const u8) bool {
                 return false;
         }
         if (t == .unknown) {
-            // var() / nested math accepted.
+            // var() / nested math accepted (e.g. `translateX(calc(50%))`).
             if (startsWithIgnoreCase(at, "var(")) continue;
             if (at[at.len - 1] == ')') {
                 const nn = funcName(at) orelse return false;
@@ -902,7 +1105,6 @@ fn validateTransformFn(name: []const u8, inner: []const u8) bool {
             return false;
         }
     }
-    _ = name;
     return true;
 }
 
@@ -1003,4 +1205,192 @@ test "background: linear-gradient() rejected in layer" {
 test "hwb: space syntax accepted, comma syntax rejected" {
     try testing.expect(isValidPropertyValue("color", "hwb(0 0% 0%)"));
     try testing.expect(!isValidPropertyValue("color", "hwb(0, 0%, 0%)"));
+}
+
+// ── Phase 6.3 additions ─────────────────────────────────────────────
+// Regression coverage for the over-rejection patterns that forced the
+// Wave 6 Phase 6.2 narrow-fallback (commit b6cbaa5), plus new
+// under-rejection fixes (round/mod/rem/clamp type-mismatch, calc
+// arithmetic malformedness, transform arity, gradient direction).
+
+test "regression: rotate accepts acos(1)" {
+    // atrig on a unitless number resolves to an angle — valid for `rotate`.
+    try testing.expect(isValidPropertyValue("rotate", "acos(1)"));
+}
+
+test "regression: rotate accepts asin(0.5)" {
+    try testing.expect(isValidPropertyValue("rotate", "asin(0.5)"));
+}
+
+test "regression: transform accepts translateX(calc(50%))" {
+    // Nested math inside a transform arg is idiomatic — must not reject.
+    try testing.expect(isValidPropertyValue("transform", "translateX(calc(50%))"));
+}
+
+test "regression: transform accepts translateY(calc(50% + 10px))" {
+    try testing.expect(isValidPropertyValue("transform", "translateY(calc(50% + 10px))"));
+}
+
+test "regression: background accepts linear-gradient with multi-stop" {
+    try testing.expect(isValidPropertyValue(
+        "background",
+        "linear-gradient(90deg, red 0%, green 50%, blue 100%)",
+    ));
+}
+
+test "regression: shorthand background with function call component" {
+    try testing.expect(isValidPropertyValue(
+        "background",
+        "linear-gradient(to right, red, blue) center/cover no-repeat",
+    ));
+}
+
+test "attr: pass-through single ident" {
+    try testing.expect(isValidPropertyValue("content", "attr(data-foo)"));
+}
+
+test "attr: pass-through with fallback" {
+    try testing.expect(isValidPropertyValue("color", "attr(data-color, red)"));
+}
+
+test "attr: pass-through with type(<syntax>) and fallback" {
+    // CSS Values 5 — evaluation deferred, validator accepts shape.
+    try testing.expect(isValidPropertyValue("color", "attr(data-color type(<color>), red)"));
+}
+
+test "attr: empty arg list rejected" {
+    try testing.expect(!isValidPropertyValue("color", "attr()"));
+}
+
+test "math: round(1, 1%) type mismatch rejected" {
+    // number + percentage — type-incompatible per CSS Values 4 §10.
+    try testing.expect(!isValidPropertyValue("opacity", "round(1, 1%)"));
+}
+
+test "math: round(1px, 1%) accepted (length + percentage)" {
+    try testing.expect(isValidPropertyValue("width", "round(1px, 1%)"));
+}
+
+test "math: mod(1, 1%) type mismatch rejected" {
+    try testing.expect(!isValidPropertyValue("width", "mod(1, 1%)"));
+}
+
+test "math: rem(1px, 2px) accepted" {
+    try testing.expect(isValidPropertyValue("width", "rem(10px, 3px)"));
+}
+
+test "math: atan2(1, 1%) type mismatch rejected" {
+    try testing.expect(!isValidPropertyValue("rotate", "atan2(1, 1%)"));
+}
+
+test "math: clamp(1, 1px, 1px) type mismatch rejected" {
+    // First arg number, others length — number is not compatible with length.
+    try testing.expect(!isValidPropertyValue("width", "clamp(1, 1px, 1px)"));
+}
+
+test "calc-arith: trailing operator rejected (abs)" {
+    try testing.expect(!isValidPropertyValue("font-weight", "abs(1 + )"));
+}
+
+test "calc-arith: trailing operator rejected (calc)" {
+    try testing.expect(!isValidPropertyValue("width", "calc(100px +)"));
+}
+
+test "calc-arith: doubled operator rejected" {
+    try testing.expect(!isValidPropertyValue("width", "calc(100px ++ 20px)"));
+}
+
+test "calc-arith: empty sub-expr rejected" {
+    try testing.expect(!isValidPropertyValue("width", "calc(100px + ())"));
+}
+
+test "calc-arith: leading binary operator rejected (no operand)" {
+    try testing.expect(!isValidPropertyValue("width", "calc(* 2px)"));
+}
+
+test "calc-arith: bare auto inside calc rejected" {
+    try testing.expect(!isValidPropertyValue("width", "calc(auto + 10px)"));
+}
+
+test "calc-arith: bare none inside calc rejected" {
+    try testing.expect(!isValidPropertyValue("width", "calc(none + 10px)"));
+}
+
+test "calc-arith: math constant pi allowed" {
+    try testing.expect(isValidPropertyValue("rotate", "calc(pi * 1rad)"));
+}
+
+test "calc-arith: var() inside calc allowed" {
+    try testing.expect(isValidPropertyValue("width", "calc(var(--x) + 10px)"));
+}
+
+test "gradient: width with ident 'none' inside clamp rejected" {
+    try testing.expect(!isValidPropertyValue("width", "clamp(none, 1px, 1px)"));
+}
+
+test "transform: scale(1.5) accepted" {
+    try testing.expect(isValidPropertyValue("transform", "scale(1.5)"));
+}
+
+test "transform: scale() with no args rejected" {
+    try testing.expect(!isValidPropertyValue("transform", "scale()"));
+}
+
+test "transform: scale(1, 2) 2-arg accepted" {
+    try testing.expect(isValidPropertyValue("transform", "scale(1, 2)"));
+}
+
+test "transform: scale(1, 2, 3) too many args rejected" {
+    try testing.expect(!isValidPropertyValue("transform", "scale(1, 2, 3)"));
+}
+
+test "transform: rotate(45deg) accepted" {
+    try testing.expect(isValidPropertyValue("transform", "rotate(45deg)"));
+}
+
+test "transform: matrix(1,2,3,4,5) 5 args rejected" {
+    try testing.expect(!isValidPropertyValue("transform", "matrix(1, 2, 3, 4, 5)"));
+}
+
+test "transform: matrix(1,2,3,4,5,6) 6 args accepted" {
+    try testing.expect(isValidPropertyValue("transform", "matrix(1, 2, 3, 4, 5, 6)"));
+}
+
+test "transform: matrix3d needs exactly 16 args" {
+    try testing.expect(!isValidPropertyValue("transform", "matrix3d(1,2,3)"));
+    try testing.expect(isValidPropertyValue(
+        "transform",
+        "matrix3d(1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1)",
+    ));
+}
+
+test "transform: rotate3d needs exactly 4 args" {
+    try testing.expect(!isValidPropertyValue("transform", "rotate3d(1, 0, 0)"));
+    try testing.expect(isValidPropertyValue("transform", "rotate3d(1, 0, 0, 45deg)"));
+}
+
+test "transform: translate3d needs 3 args" {
+    try testing.expect(!isValidPropertyValue("transform", "translate3d(1px, 2px)"));
+    try testing.expect(isValidPropertyValue("transform", "translate3d(1px, 2px, 3px)"));
+}
+
+test "gradient: invalid inner direction with sign(%) rejected" {
+    try testing.expect(!isValidPropertyValue(
+        "background-image",
+        "linear-gradient(calc(sign(50%) * 1turn), red, blue)",
+    ));
+}
+
+test "gradient: 'to right' direction accepted" {
+    try testing.expect(isValidPropertyValue(
+        "background-image",
+        "linear-gradient(to right, red, blue)",
+    ));
+}
+
+test "gradient: 45deg direction accepted" {
+    try testing.expect(isValidPropertyValue(
+        "background-image",
+        "linear-gradient(45deg, red, blue)",
+    ));
 }
