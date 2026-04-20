@@ -3681,6 +3681,7 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     _ = dom_b.lxb_dom_element_remove_attribute(elem, attr_name.ptr, attr_name.len);
     // DOM §4.9.2 NamedNodeMap live-map version bump.
     bumpElemAttrVersion(elem);
+    setDomDirty();
     // MO: queue attribute mutation record with captured old value.
     if (g_mo_list.items.len > 0) {
         recordAttributeMutation(vm, node, attr_name, old_val);
@@ -5070,6 +5071,7 @@ fn nativeNnmRemoveNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValu
     invalidateAttrWrapper(lxb_attr);
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
     bumpElemAttrVersion(elem);
+    setDomDirty();
     return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
 }
 
@@ -5118,6 +5120,7 @@ fn nativeNnmRemoveNamedItemNS(ctx: *anyopaque, this: JsValue, args: []const JsVa
     invalidateAttrWrapper(lxb_attr);
     _ = dom_b.lxb_dom_element_remove_attribute(elem, qn.ptr, qn.len);
     bumpElemAttrVersion(elem);
+    setDomDirty();
     return if (attr_obj_opt) |o| JsValue.initObject(o) else JsValue.null_val;
 }
 
@@ -5699,6 +5702,7 @@ fn nativeNnmSetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     if (old_lxb_opt) |ol| invalidateAttrWrapper(ol);
     _ = dom_b.lxb_dom_element_set_attribute(elem, qn_str.ptr, qn_str.len, value_str.ptr, value_str.len);
     bumpElemAttrVersion(elem);
+    setDomDirty();
 
     // Re-resolve the just-written lexbor record and re-key g_attr_wrappers
     // so future `el.attributes.getNamedItem(...)` returns the **same**
