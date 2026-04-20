@@ -75,6 +75,11 @@ pub const KotoriRuntime = struct {
         // delegating `.length`, `.value`, `.add()`, etc. to the DTLP accessors.
         _ = self.eval(class_list_polyfill_js);
 
+        // HTML §4.6.1/§4.8.4/§4.2.4 relList polyfill for <a>, <area>, <link>.
+        // Mirrors classList but bound to the `rel` attribute. Depends on
+        // class_list_polyfill_js (DOMTokenList constructor) running first.
+        _ = self.eval(rel_list_polyfill_js);
+
         // DOM §6 (Traversal) + §4.5 (createElementNS prefix/case fixups) +
         // §4.7 (importNode) + §4.2.3 (NonElementParentNode.getElementById for
         // DocumentFragment) + HTML §4.12.3 (template.content). Pure-JS
@@ -1000,10 +1005,17 @@ pub const KotoriRuntime = struct {
         \\    var toks = getTokens(this._el);
         \\    for (var i=0;i<toks.length;i++) cb.call(thisArg, toks[i], i, this);
         \\  };
-        \\  /* DOM §7.1 Iterable<DOMString>: keys/values/entries/@@iterator per
-        \\   * WebIDL iterable declaration. Returned arrays snapshot the tokens
-        \\   * at call time; the WPT iteration harness iterates via for-of which
-        \\   * only needs Array.prototype[Symbol.iterator] to work. */
+        \\  /* DOM §7.1 Iterable<DOMString>: keys/values/entries/@@iterator.
+        \\   * WPT DOMTokenList-iteration.html test "classList inheritance from
+        \\   * Array.prototype" requires list[Symbol.iterator] === the exact same
+        \\   * function object as Array.prototype[Symbol.iterator].  We assign the
+        \\   * Array.prototype reference to DTLP so both accesses return the same
+        \\   * JsObject (arr_iter_fn) — strict equality passes.
+        \\   *
+        \\   * keys/values/entries keep custom implementations that return real
+        \\   * iterator objects (obj_type==.iterator) rather than arrays, so that
+        \\   * `keys instanceof Array === false` and `[...keys()]` spread works. */
+        \\  DTLP[Symbol.iterator] = Array.prototype[Symbol.iterator];
         \\  DTLP.keys = function(){
         \\    var toks = getTokens(this._el);
         \\    var out = [];
@@ -1018,9 +1030,6 @@ pub const KotoriRuntime = struct {
         \\    var out = [];
         \\    for (var i=0;i<toks.length;i++) out.push([i, toks[i]]);
         \\    return out[Symbol.iterator]();
-        \\  };
-        \\  DTLP[Symbol.iterator] = function(){
-        \\    return getTokens(this._el)[Symbol.iterator]();
         \\  };
         \\
         \\  /* Live length / value accessors — re-read the attribute on every get. */
@@ -1051,7 +1060,18 @@ pub const KotoriRuntime = struct {
         \\   * "supported property indices" semantics. All other keys (method
         \\   * names, `length`, `value`, `constructor`, symbol well-knowns,
         \\   * private slot `_el`) pass through to the target unchanged so the
-        \\   * existing method bodies keep working as-is. */
+        \\   * existing method bodies keep working as-is.
+        \\   *
+        \\   * kotori VM Symbol-key limitations and workarounds:
+        \\   * - `in` operator with Symbol lhs: VM converts Symbol to "undefined"
+        \\   *   before invoking the Proxy `has` trap (keyToStringId fallback).
+        \\   *   We return true for p==="undefined" so `Symbol.iterator in list`
+        \\   *   passes (WPT DOMTokenList-Iterable.html §5).
+        \\   * - `proxy[Symbol.iterator]`: VM converts Symbol to "undefined" before
+        \\   *   invoking the Proxy `get` trap. We detect p==="undefined" and return
+        \\   *   t[Symbol.iterator] (resolved on the non-proxy target via
+        \\   *   findSymbolProp) so `list[Symbol.iterator] === Array.prototype[Symbol.iterator]`
+        \\   *   passes (WPT DOMTokenList-iteration.html "classList inheritance"). */
         \\  var DIGITS_RE = /^(?:0|[1-9][0-9]*)$/;
         \\  function getWrapper(el){
         \\    var w = el.__clsl;
@@ -1074,6 +1094,14 @@ pub const KotoriRuntime = struct {
         \\          var i = Number(p);
         \\          return i < toks.length ? toks[i] : undefined;
         \\        }
+        \\        /* kotori VM converts Symbol keys to "undefined" before calling
+        \\         * the Proxy get trap (keyToStringId fallback). Detect this and
+        \\         * return t[Symbol.iterator] so `list[Symbol.iterator]` resolves
+        \\         * to the correct function for identity checks. */
+        \\        if (p === 'undefined') {
+        \\          var sym = t[Symbol.iterator];
+        \\          if (typeof sym === 'function') return sym;
+        \\        }
         \\        return t[p];
         \\      },
         \\      set: function(t, p, v){
@@ -1083,6 +1111,10 @@ pub const KotoriRuntime = struct {
         \\        return true;
         \\      },
         \\      has: function(t, p){
+        \\        /* kotori VM converts Symbol keys to the string "undefined" before
+        \\         * invoking the Proxy `has` trap. Return true for "undefined" so
+        \\         * `Symbol.iterator in list` passes (WPT DOMTokenList-Iterable.html). */
+        \\        if (p === 'undefined') return true;
         \\        if (typeof p === 'string' && DIGITS_RE.test(p)) {
         \\          return Number(p) < getTokens(t._el).length;
         \\        }
@@ -1103,6 +1135,252 @@ pub const KotoriRuntime = struct {
         \\    set: function(v){ this.setAttribute('class', String(v)); },
         \\    configurable: true, enumerable: true
         \\  });
+        \\})();
+    ;
+
+    /// HTML §4.6.1 (HTMLAnchorElement.relList), §4.8.4 (HTMLAreaElement.relList),
+    /// §4.2.4 (HTMLLinkElement.relList) — DOMTokenList bound to the `rel` attribute.
+    ///
+    /// Mirrors classList but bound to `rel` rather than `class`.  The same
+    /// DOMTokenList constructor / shared infrastructure from classList is reused
+    /// (it is injected first), so this polyfill depends on class_list_polyfill_js
+    /// having run first.
+    const rel_list_polyfill_js =
+        \\(function(){
+        \\  /* Reuse the DOMTokenList constructor & shared helpers already installed
+        \\   * by the classList polyfill.  If for any reason DOMTokenList is absent
+        \\   * we bail out gracefully. */
+        \\  var DTL = globalThis.DOMTokenList;
+        \\  if (!DTL) return;
+        \\  var DTLP = DTL.prototype;
+        \\
+        \\  /* ASCII whitespace per DOM §2.3 / §4.9 ordered-set parser. */
+        \\  var WS_RE = /[\x09\x0A\x0C\x0D\x20]+/;
+        \\  var HAS_WS_RE = /[\x09\x0A\x0C\x0D\x20]/;
+        \\  function parseOrderedSet(s){
+        \\    if (s==null || s==='') return [];
+        \\    var raw = String(s).split(WS_RE);
+        \\    var seen = {}, out = [];
+        \\    for (var i=0;i<raw.length;i++){
+        \\      var t = raw[i]; if (t==='') continue;
+        \\      var k = ':'+t; if (seen[k]) continue;
+        \\      seen[k] = 1; out.push(t);
+        \\    }
+        \\    return out;
+        \\  }
+        \\  function serializeOrderedSet(arr){
+        \\    var seen = {}, out = [];
+        \\    for (var i=0;i<arr.length;i++){
+        \\      var t = String(arr[i]); var k = ':'+t;
+        \\      if (seen[k]) continue; seen[k] = 1; out.push(t);
+        \\    }
+        \\    return out.join(' ');
+        \\  }
+        \\  function validateToken(t){
+        \\    if (t==='') throw new DOMException("The token provided must not be empty.","SyntaxError");
+        \\    if (HAS_WS_RE.test(t)) throw new DOMException("The token provided ('"+t+"') contains HTML space characters, which are not valid in tokens.","InvalidCharacterError");
+        \\  }
+        \\  function getRelTokens(el){
+        \\    var v = el.getAttribute('rel'); return parseOrderedSet(v);
+        \\  }
+        \\  function writeRelTokens(el, toks){
+        \\    el.setAttribute('rel', serializeOrderedSet(toks));
+        \\  }
+        \\  function toIntIndex(v){
+        \\    if (v===undefined||v===null) return -1;
+        \\    var n=Number(v); if(n!==n||n===Infinity||n===-Infinity||n<0) return -1;
+        \\    n=Math.floor(n); if(n>2147483647) return -1; return n;
+        \\  }
+        \\
+        \\  /* Build a relList wrapper for `el`, backed by the `rel` attribute. */
+        \\  var DIGITS_RE = /^(?:0|[1-9][0-9]*)$/;
+        \\  function getRelWrapper(el){
+        \\    var w = el.__rlsl; if (w) return w;
+        \\    var target = Object.create(DTLP);
+        \\    try {
+        \\      Object.defineProperty(target,'_el',{value:el,writable:false,enumerable:false,configurable:false});
+        \\    } catch(e){ target._el = el; }
+        \\    /* Override methods that read/write `class` to use `rel` instead. */
+        \\    target.item = function(idx){
+        \\      var n=toIntIndex(idx); if(n<0) return null;
+        \\      var toks=getRelTokens(this._el); return n<toks.length?toks[n]:null;
+        \\    };
+        \\    target.contains = function(token){
+        \\      var t=String(token), toks=getRelTokens(this._el);
+        \\      for(var i=0;i<toks.length;i++) if(toks[i]===t) return true;
+        \\      return false;
+        \\    };
+        \\    target.add = function(){
+        \\      var args=[]; for(var i=0;i<arguments.length;i++){args.push(String(arguments[i]));validateToken(args[i]);}
+        \\      var toks=getRelTokens(this._el),seen={};
+        \\      for(var j=0;j<toks.length;j++) seen[':'+toks[j]]=1;
+        \\      var changed=false;
+        \\      for(var k=0;k<args.length;k++){var key=':'+args[k];if(!seen[key]){seen[key]=1;toks.push(args[k]);changed=true;}}
+        \\      if(changed||this._el.getAttribute('rel')==null) writeRelTokens(this._el,toks);
+        \\    };
+        \\    target.remove = function(){
+        \\      var args=[]; for(var i=0;i<arguments.length;i++){args.push(String(arguments[i]));validateToken(args[i]);}
+        \\      var toks=getRelTokens(this._el),drop={};
+        \\      for(var k=0;k<args.length;k++) drop[':'+args[k]]=1;
+        \\      var out=[]; for(var j=0;j<toks.length;j++){if(drop[':'+toks[j]])continue;out.push(toks[j]);}
+        \\      if(this._el.getAttribute('rel')!=null) writeRelTokens(this._el,out);
+        \\    };
+        \\    target.toggle = function(token,force){
+        \\      var t=String(token); validateToken(t);
+        \\      var toks=getRelTokens(this._el),idx=-1;
+        \\      for(var i=0;i<toks.length;i++) if(toks[i]===t){idx=i;break;}
+        \\      var hasForce=(arguments.length>=2);
+        \\      if(idx!==-1){
+        \\        if(!hasForce||!force){toks.splice(idx,1);writeRelTokens(this._el,toks);return false;}
+        \\        return true;
+        \\      }
+        \\      if(hasForce&&!force) return false;
+        \\      toks.push(t); writeRelTokens(this._el,toks); return true;
+        \\    };
+        \\    target.replace = function(token,newToken){
+        \\      var t=String(token),nt=String(newToken); validateToken(t); validateToken(nt);
+        \\      var toks=getRelTokens(this._el),idx=-1;
+        \\      for(var i=0;i<toks.length;i++) if(toks[i]===t){idx=i;break;}
+        \\      if(idx===-1) return false;
+        \\      toks[idx]=nt; writeRelTokens(this._el,toks); return true;
+        \\    };
+        \\    target.supports = function(){
+        \\      /* HTML spec: rel supports "noopener","noreferrer","nofollow", etc.
+        \\       * For simplicity throw TypeError as unsupported-tokens path. */
+        \\      throw new TypeError("DOMTokenList has no supported tokens for the 'rel' attribute.");
+        \\    };
+        \\    target.toString = function(){
+        \\      if(!this._el) return '';
+        \\      var v=this._el.getAttribute('rel'); return v==null?'':v;
+        \\    };
+        \\    target.forEach = Array.prototype.forEach;
+        \\    target[Symbol.iterator] = Array.prototype[Symbol.iterator];
+        \\    target.keys    = Array.prototype.keys;
+        \\    target.entries = Array.prototype.entries;
+        \\    if(Array.prototype.values) target.values = Array.prototype.values;
+        \\    Object.defineProperty(target,'length',{
+        \\      get:function(){return getRelTokens(this._el).length;},configurable:true,enumerable:true
+        \\    });
+        \\    Object.defineProperty(target,'value',{
+        \\      get:function(){if(!this._el)return'';var v=this._el.getAttribute('rel');return v==null?'':v;},
+        \\      set:function(v){this._el.setAttribute('rel',String(v));},configurable:true,enumerable:true
+        \\    });
+        \\    w = new Proxy(target, {
+        \\      get: function(t,p){
+        \\        if(typeof p==='string'&&DIGITS_RE.test(p)){
+        \\          var toks=getRelTokens(t._el),i=Number(p);
+        \\          return i<toks.length?toks[i]:undefined;
+        \\        }
+        \\        return t[p];
+        \\      },
+        \\      set: function(t,p,v){
+        \\        if(typeof p==='string'&&DIGITS_RE.test(p)) return true;
+        \\        t[p]=v; return true;
+        \\      },
+        \\      has: function(t,p){
+        \\        if(typeof p==='symbol') return (p in t);
+        \\        if(typeof p==='string'&&DIGITS_RE.test(p)) return Number(p)<getRelTokens(t._el).length;
+        \\        return (p in t);
+        \\      }
+        \\    });
+        \\    try {
+        \\      Object.defineProperty(el,'__rlsl',{value:w,writable:false,enumerable:false,configurable:false});
+        \\    } catch(e){ el.__rlsl = w; }
+        \\    return w;
+        \\  }
+        \\
+        \\  /* Install relList / htmlFor / sandbox / sizes on Element.prototype.
+        \\   * The specific HTML interface prototypes (HTMLAnchorElement.prototype,
+        \\   * etc.) are frozen by the kotori DOM init and cannot accept new
+        \\   * properties.  We install on Element.prototype (not frozen) with a
+        \\   * localName + namespace guard so unsupported elements return undefined.
+        \\   *
+        \\   * relList: XHTML <a>, <area>, <link> + SVG <a>  (HTML §4.6.1/§4.8.4/§4.2.4)
+        \\   * htmlFor: XHTML <output>                        (HTML §4.10.5.4)
+        \\   * sandbox: XHTML <iframe>                        (HTML §4.8.5)
+        \\   * sizes:   XHTML <link>                          (HTML §4.2.4)
+        \\   */
+        \\  var XHTML_NS = 'http://www.w3.org/1999/xhtml';
+        \\  var SVG_NS   = 'http://www.w3.org/2000/svg';
+        \\  /* Helper: per-element DOMTokenList wrapper keyed by slot name. */
+        \\  function makeTokenListGetter(attrName, slotName){
+        \\    return function(){
+        \\      var cacheKey = '__tl_' + slotName;
+        \\      var cached = this[cacheKey];
+        \\      if (cached) return cached;
+        \\      /* Build a minimal DOMTokenList-like object for the attribute. */
+        \\      var el = this;
+        \\      var tl = Object.create(DTLP);
+        \\      try {
+        \\        Object.defineProperty(tl,'_el',{value:el,writable:false,enumerable:false,configurable:false});
+        \\        Object.defineProperty(tl,'_attr',{value:attrName,writable:false,enumerable:false,configurable:false});
+        \\      } catch(e){ tl._el=el; tl._attr=attrName; }
+        \\      /* Override methods to use the correct attribute. */
+        \\      function getToks(){ return parseOrderedSet(el.getAttribute(attrName)); }
+        \\      function writeToks(t){ el.setAttribute(attrName, serializeOrderedSet(t)); }
+        \\      tl.item = function(i){ var n=toIntIndex(i); if(n<0)return null; var t=getToks(); return n<t.length?t[n]:null; };
+        \\      tl.contains = function(tk){ var t=getToks(); for(var i=0;i<t.length;i++) if(t[i]===String(tk)) return true; return false; };
+        \\      tl.add = function(){ var args=[]; for(var i=0;i<arguments.length;i++){args.push(String(arguments[i]));validateToken(args[i]);} var t=getToks(),s={}; for(var j=0;j<t.length;j++)s[':'+t[j]]=1; var c=false; for(var k=0;k<args.length;k++){var kk=':'+args[k];if(!s[kk]){s[kk]=1;t.push(args[k]);c=true;}} if(c||el.getAttribute(attrName)==null)writeToks(t); };
+        \\      tl.remove = function(){ var args=[]; for(var i=0;i<arguments.length;i++){args.push(String(arguments[i]));validateToken(args[i]);} var t=getToks(),d={}; for(var k=0;k<args.length;k++)d[':'+args[k]]=1; var o=[]; for(var j=0;j<t.length;j++){if(d[':'+t[j]])continue;o.push(t[j]);} if(el.getAttribute(attrName)!=null)writeToks(o); };
+        \\      tl.toggle = function(tk,f){ var t=String(tk); validateToken(t); var ts=getToks(),idx=-1; for(var i=0;i<ts.length;i++) if(ts[i]===t){idx=i;break;} var hf=(arguments.length>=2); if(idx!==-1){if(!hf||!f){ts.splice(idx,1);writeToks(ts);return false;}return true;} if(hf&&!f)return false; ts.push(t);writeToks(ts);return true; };
+        \\      tl.replace = function(tk,nk){ var t=String(tk),n=String(nk); validateToken(t);validateToken(n); var ts=getToks(),idx=-1; for(var i=0;i<ts.length;i++) if(ts[i]===t){idx=i;break;} if(idx===-1)return false; ts[idx]=n;writeToks(ts);return true; };
+        \\      tl.supports = function(){ throw new TypeError("DOMTokenList has no supported tokens for the '"+attrName+"' attribute."); };
+        \\      tl.toString = function(){ var v=el.getAttribute(attrName); return v==null?'':v; };
+        \\      tl.forEach = function(cb,ta){ var t=getToks(); for(var i=0;i<t.length;i++) cb.call(ta,t[i],i,this); };
+        \\      tl.keys = function(){ var t=getToks(),o=[]; for(var i=0;i<t.length;i++) o.push(i); return o[Symbol.iterator](); };
+        \\      tl.values = function(){ return getToks()[Symbol.iterator](); };
+        \\      tl.entries = function(){ var t=getToks(),o=[]; for(var i=0;i<t.length;i++) o.push([i,t[i]]); return o[Symbol.iterator](); };
+        \\      tl[Symbol.iterator] = Array.prototype[Symbol.iterator];
+        \\      Object.defineProperty(tl,'length',{get:function(){return getToks().length;},configurable:true,enumerable:true});
+        \\      Object.defineProperty(tl,'value',{get:function(){var v=el.getAttribute(attrName);return v==null?'':v;},set:function(v){el.setAttribute(attrName,String(v));},configurable:true,enumerable:true});
+        \\      try { Object.defineProperty(el,cacheKey,{value:tl,writable:false,enumerable:false,configurable:false}); } catch(e){ el[cacheKey]=tl; }
+        \\      return tl;
+        \\    };
+        \\  }
+        \\  function parseOrderedSet(s){ if(s==null||s==='')return[]; var WS=/[\x09\x0A\x0C\x0D\x20]+/,raw=String(s).split(WS),seen={},out=[]; for(var i=0;i<raw.length;i++){var t=raw[i];if(t==='')continue;var k=':'+t;if(seen[k])continue;seen[k]=1;out.push(t);} return out; }
+        \\  function serializeOrderedSet(arr){ var seen={},out=[]; for(var i=0;i<arr.length;i++){var t=String(arr[i]),k=':'+t;if(seen[k])continue;seen[k]=1;out.push(t);} return out.join(' '); }
+        \\  function validateToken(t){ if(t==='')throw new DOMException("The token provided must not be empty.","SyntaxError"); if(/[\x09\x0A\x0C\x0D\x20]/.test(t))throw new DOMException("The token provided ('"+t+"') contains HTML space characters, which are not valid in tokens.","InvalidCharacterError"); }
+        \\  function toIntIndex(v){ if(v===undefined||v===null)return -1; var n=Number(v); if(n!==n||n===Infinity||n===-Infinity||n<0)return -1; n=Math.floor(n); if(n>2147483647)return -1; return n; }
+        \\  if (typeof Element !== 'undefined' && Element.prototype) {
+        \\    var EP = Element.prototype;
+        \\    Object.defineProperty(EP, 'relList', {
+        \\      get: function(){
+        \\        var ns=this.namespaceURI, ln=this.localName;
+        \\        if ((ns===XHTML_NS&&(ln==='a'||ln==='area'||ln==='link'))||(ns===SVG_NS&&ln==='a'))
+        \\          return getRelWrapper(this);
+        \\        return undefined;
+        \\      },
+        \\      set: function(v){ this.setAttribute('rel',String(v)); },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    var htmlForGetter = makeTokenListGetter('for','htmlFor');
+        \\    Object.defineProperty(EP, 'htmlFor', {
+        \\      get: function(){
+        \\        if (this.namespaceURI===XHTML_NS && this.localName==='output') return htmlForGetter.call(this);
+        \\        return undefined;
+        \\      },
+        \\      set: function(v){ this.setAttribute('for',String(v)); },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    var sandboxGetter = makeTokenListGetter('sandbox','sandbox');
+        \\    Object.defineProperty(EP, 'sandbox', {
+        \\      get: function(){
+        \\        if (this.namespaceURI===XHTML_NS && this.localName==='iframe') return sandboxGetter.call(this);
+        \\        return undefined;
+        \\      },
+        \\      set: function(v){ this.setAttribute('sandbox',String(v)); },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\    var sizesGetter = makeTokenListGetter('sizes','sizes');
+        \\    Object.defineProperty(EP, 'sizes', {
+        \\      get: function(){
+        \\        if (this.namespaceURI===XHTML_NS && this.localName==='link') return sizesGetter.call(this);
+        \\        return undefined;
+        \\      },
+        \\      set: function(v){ this.setAttribute('sizes',String(v)); },
+        \\      configurable: true, enumerable: true
+        \\    });
+        \\  }
         \\})();
     ;
 
