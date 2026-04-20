@@ -1216,6 +1216,86 @@ test "webkit alias: -webkit-flex-flow shorthand upsertShorthand round-trip" {
     try std.testing.expect(result != null);
 }
 
+// ── Wave 9: border/outline/gap/font shorthand round-trip ───────────────────
+
+test "Wave9: border shorthand — all four sides equal round-trips" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{
+        "border-top-width", "border-right-width", "border-bottom-width", "border-left-width",
+        "border-top-style", "border-right-style", "border-bottom-style", "border-left-style",
+        "border-top-color", "border-right-color", "border-bottom-color", "border-left-color",
+    };
+    const vals = [_][]const u8{
+        "1px", "1px", "1px", "1px",
+        "solid", "solid", "solid", "solid",
+        "red", "red", "red", "red",
+    };
+    try list.upsertShorthand(alloc, "border", &names, &vals, false);
+
+    var buf: [128]u8 = undefined;
+    const result = list.getPropertyValueShorthand("border", &buf);
+    try std.testing.expectEqualStrings("1px solid red", result.?);
+}
+
+test "Wave9: border-top shorthand — width/style/color round-trips" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "border-top-width", "border-top-style", "border-top-color" };
+    const vals  = [_][]const u8{ "2px", "dashed", "blue" };
+    try list.upsertShorthand(alloc, "border-top", &names, &vals, false);
+
+    var buf: [128]u8 = undefined;
+    const result = list.getPropertyValueShorthand("border-top", &buf);
+    try std.testing.expectEqualStrings("2px dashed blue", result.?);
+}
+
+test "Wave9: outline shorthand — width/style/color round-trips" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "outline-width", "outline-style", "outline-color" };
+    const vals  = [_][]const u8{ "3px", "dotted", "green" };
+    try list.upsertShorthand(alloc, "outline", &names, &vals, false);
+
+    var buf: [128]u8 = undefined;
+    const result = list.getPropertyValueShorthand("outline", &buf);
+    try std.testing.expectEqualStrings("3px dotted green", result.?);
+}
+
+test "Wave9: gap shorthand — equal values collapse to one" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "row-gap", "column-gap" };
+    const vals  = [_][]const u8{ "12px", "12px" };
+    try list.upsertShorthand(alloc, "gap", &names, &vals, false);
+
+    var buf: [64]u8 = undefined;
+    const result = list.getPropertyValueShorthand("gap", &buf);
+    try std.testing.expectEqualStrings("12px", result.?);
+}
+
+test "Wave9: font shorthand — size + family basic round-trip" {
+    const alloc = std.testing.allocator;
+    var list = StyleDeclList.init(alloc);
+    defer list.deinit(alloc);
+
+    const names = [_][]const u8{ "font-style", "font-weight", "font-size", "line-height", "font-family" };
+    const vals  = [_][]const u8{ "normal", "normal", "16px", "normal", "Arial" };
+    try list.upsertShorthand(alloc, "font", &names, &vals, false);
+
+    var buf: [128]u8 = undefined;
+    const result = list.getPropertyValueShorthand("font", &buf);
+    try std.testing.expectEqualStrings("16px Arial", result.?);
+}
+
 // ── CSSOM §6.7.3 setProperty / getPropertyPriority semantics ────────────────
 
 test "CSSOM §6.7.3: setProperty with priority 'important' sets important flag" {
