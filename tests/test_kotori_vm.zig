@@ -6081,3 +6081,41 @@ test "Layer 0D: instruction budget exhaustion throws RangeError" {
     const range_sid = try compiler.parser.pool.intern("RangeError");
     try std.testing.expectEqual(range_sid, name_val.asStringId());
 }
+
+// ── Layer 0F: direct eval() local scope capture (ECMA-262 §19.2.1.1) ──
+// PerformEval: a direct call to the intrinsic %eval% sees the calling
+// frame's lexical/var bindings. kotori's nativeEval synthesizes a fake
+// outer scope, and the compiler emits load_upvalue/store_upvalue against
+// cells pointing into the caller's stack slots.
+
+test "eval: read local from enclosing function" {
+    const result = try evalWithMicrotasks(
+        \\var out = (function() { var x = 1; return eval("x + 1"); })();
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 2.0), result.asNumber(), 0.001);
+}
+
+test "eval: write local in enclosing function" {
+    const result = try evalWithMicrotasks(
+        \\var out = (function() { var x = 1; eval("x = 42"); return x; })();
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 42.0), result.asNumber(), 0.001);
+}
+
+test "eval: direct eval still sees globals" {
+    const result = try evalWithMicrotasks(
+        \\var g = 10;
+        \\var out = (function() { return eval("g"); })();
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 10.0), result.asNumber(), 0.001);
+}
+
+test "eval: indirect eval falls back to globals without crashing" {
+    // Indirect call via comma expression — kotori's eval always applies
+    // the calling-frame capture path, but global-only references must still
+    // resolve correctly (no crash, correct value).
+    const result = try evalWithMicrotasks(
+        \\var out = (0, eval)("var y = 20; y");
+    , "out");
+    try std.testing.expectApproxEqAbs(@as(f64, 20.0), result.asNumber(), 0.001);
+}

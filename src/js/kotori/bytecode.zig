@@ -4,7 +4,9 @@
 
 const std = @import("std");
 const value = @import("value.zig");
+const string_pool = @import("string_pool.zig");
 pub const JsValue = value.JsValue;
+pub const StringId = string_pool.StringId;
 
 pub const OpCode = enum(u8) {
     // Stack
@@ -152,6 +154,14 @@ pub const Bytecode = struct {
     param_count: u16,
     max_stack: u16,
     has_rest: bool = false,
+    /// Names of locals (by slot index). Populated by the compiler for top-level
+    /// script and function bytecode so that `eval(...)` at runtime can map
+    /// identifiers in the eval source to the calling frame's local slots
+    /// (ECMA-262 §19.2.1.1 PerformEval — direct eval local scope capture).
+    /// Empty when no locals or not populated. Owned by the bytecode when
+    /// `owns_local_names` is true.
+    local_names: []StringId = &.{},
+    owns_local_names: bool = false,
 
     pub fn init() Bytecode {
         return .{
@@ -166,6 +176,11 @@ pub const Bytecode = struct {
     pub fn deinit(self: *Bytecode, allocator: std.mem.Allocator) void {
         self.code.deinit(allocator);
         self.constants.deinit(allocator);
+        if (self.owns_local_names and self.local_names.len > 0) {
+            allocator.free(self.local_names);
+            self.local_names = &.{};
+            self.owns_local_names = false;
+        }
     }
 
     /// Append a single opcode byte.

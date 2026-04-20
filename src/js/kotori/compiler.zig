@@ -64,7 +64,7 @@ const ClassField = struct {
     init: NodeIndex,
 };
 
-const FunctionScope = struct {
+pub const FunctionScope = struct {
     locals: FixedArray(Local, 4096) = .{},
     upvalues: FixedArray(UpvalueInfo, 512) = .{},
     scope_depth: i32 = 0,
@@ -84,6 +84,17 @@ pub const Compiler = struct {
     functions: std.ArrayListUnmanaged(*object_mod.JsObject) = .empty,
     /// Instance field initializers for current class constructor
     pending_class_fields: ?[]const ClassField = null,
+    /// ECMA-262 §19.2.1.1 PerformEval — direct eval local scope capture.
+    /// When compiling source for `eval(...)`, this points at a synthetic
+    /// FunctionScope whose locals mirror the calling frame's local names.
+    /// compileIdentifierLoad/Store falls through to this scope after local
+    /// and regular upvalue resolution fail, emitting load_upvalue/store_upvalue
+    /// against eval_outer_captures.
+    eval_outer_scope: ?*FunctionScope = null,
+    /// Slots in the calling frame captured by the eval source (by parent local
+    /// index). Index in this list == upvalue index emitted into eval bytecode.
+    /// Consumed by nativeEval to allocate UpvalueCells for the eval frame.
+    eval_outer_captures: std.ArrayListUnmanaged(u16) = .empty,
 
     pub fn init(allocator: std.mem.Allocator, source: []const u8) Compiler {
         return .{
@@ -107,6 +118,8 @@ pub const Compiler = struct {
         try self.compileNode(program_idx);
         try self.emitOp(.halt);
         self.current.bc.local_count = @intCast(self.current.locals.len);
+        try self.populateLocalNames(&self.current.bc);
+        // Ownership of local_names moves to the returned bytecode.
         const result = self.current.bc;
         self.current.bc = Bytecode.init();
         return result;
@@ -120,6 +133,46 @@ pub const Compiler = struct {
             self.allocator.destroy(obj);
         }
         self.functions.deinit(self.allocator);
+        self.eval_outer_captures.deinit(self.allocator);
+    }
+
+    /// Copy the current scope's local names into `bc.local_names` so that
+    /// runtime `eval(...)` can map identifiers back to the calling frame's
+    /// local slots (ECMA-262 §19.2.1.1).
+    fn populateLocalNames(self: *Compiler, bc: *Bytecode) !void {
+        const count = self.current.locals.len;
+        if (count == 0) return;
+        const names = try self.allocator.alloc(StringId, count);
+        for (self.current.locals.buffer[0..count], 0..) |local, i| {
+            names[i] = local.name;
+        }
+        bc.local_names = names;
+        bc.owns_local_names = true;
+    }
+
+    /// Install a synthetic outer scope for direct eval (ECMA-262 §19.2.1.1).
+    /// `names[i]` is the name of local slot `i` in the calling frame.
+    /// The compiler holds an internal pointer to this scope for the duration
+    /// of the next `compile()` call, after which it should be considered
+    /// consumed. Must be called before `compile()`.
+    pub fn setEvalOuterLocals(self: *Compiler, scope: *FunctionScope, names: []const StringId) !void {
+        for (names) |name| {
+            scope.locals.append(.{
+                .name = name,
+                .depth = 0,
+                .is_captured = false,
+            }) catch break;
+        }
+        self.eval_outer_scope = scope;
+    }
+
+    /// Captured parent-local slots produced by the most recent `compile()`
+    /// invocation with an eval outer scope set. Index in the returned slice
+    /// equals the upvalue index emitted into the eval bytecode; the caller
+    /// uses this to allocate UpvalueCells referencing the calling frame's
+    /// stack slots.
+    pub fn evalOuterCaptures(self: *const Compiler) []const u16 {
+        return self.eval_outer_captures.items;
     }
 
     const CompileError = error{ OutOfMemory, Overflow, ParseError };
@@ -930,6 +983,11 @@ pub const Compiler = struct {
             try self.emitOpU16(.load_upvalue, uv_idx);
             return;
         }
+        // Direct-eval outer scope capture (ECMA-262 §19.2.1.1)
+        if (try self.resolveEvalOuterUpvalue(name_id)) |uv_idx| {
+            try self.emitOpU16(.load_upvalue, uv_idx);
+            return;
+        }
         // Global
         const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
         try self.emitOpU16(.load_global, ci);
@@ -944,8 +1002,29 @@ pub const Compiler = struct {
             try self.emitOpU16(.store_upvalue, uv_idx);
             return;
         }
+        if (try self.resolveEvalOuterUpvalue(name_id)) |uv_idx| {
+            try self.emitOpU16(.store_upvalue, uv_idx);
+            return;
+        }
         const ci = try self.current.bc.addConstant(self.allocator, JsValue.initInt(@bitCast(name_id)));
         try self.emitOpU16(.store_global, ci);
+    }
+
+    /// Direct-eval outer scope capture (ECMA-262 §19.2.1.1 PerformEval).
+    /// When compiling eval source with `eval_outer_scope` set, resolves an
+    /// identifier against the calling frame's locals. On hit, records the
+    /// parent-local slot in `eval_outer_captures` (dedup'd) and returns the
+    /// corresponding upvalue index for emission. Returns null on miss so the
+    /// caller can fall through to the global lookup path.
+    fn resolveEvalOuterUpvalue(self: *Compiler, name_id: StringId) CompileError!?u16 {
+        const outer = self.eval_outer_scope orelse return null;
+        const parent_slot = self.resolveLocal(outer, name_id) orelse return null;
+        for (self.eval_outer_captures.items, 0..) |existing, i| {
+            if (existing == parent_slot) return @intCast(i);
+        }
+        const idx: u16 = @intCast(self.eval_outer_captures.items.len);
+        try self.eval_outer_captures.append(self.allocator, parent_slot);
+        return idx;
     }
 
     fn compileAssignment(self: *Compiler, lhs: NodeIndex, rhs: NodeIndex, op: BinaryOp) CompileError!void {
@@ -1249,6 +1328,7 @@ pub const Compiler = struct {
         // Build the FunctionObj
         self.current.bc.local_count = @intCast(self.current.locals.len);
         self.current.bc.param_count = @intCast(params.len);
+        try self.populateLocalNames(&self.current.bc);
 
         const fn_bc = self.current.bc;
         const upvalue_count: u16 = @intCast(self.current.upvalues.len);
