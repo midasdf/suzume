@@ -24,6 +24,18 @@ pub const ReflType = enum(u8) {
     unsigned_long,
     /// §2.6.2 "URL": stored/returned as DOMString (Layer 4B will canonicalize).
     url,
+    /// §2.6.2 "DOMString?" — like DOMString but missing attribute returns `null`.
+    /// Example: HTMLImageElement.crossOrigin (returns null when missing, canonical
+    /// keyword otherwise).
+    nullable_domstring,
+    /// §2.4.3 / §2.6.5 "enumerated attribute" — canonicalizes to one of a
+    /// known set of keywords. `default_str` holds the missing-or-invalid-value
+    /// default (null means "empty string when missing"). `keywords` lists all
+    /// valid canonical values (comptime slice).
+    enumerated_ascii,
+    /// §2.6.2 "double" — floating point parse via §2.4.4.3, with `default_double`
+    /// substituted on miss/parse-fail.
+    double_with_fallback,
 };
 
 /// Single reflection entry. Comptime-only; never mutated at runtime.
@@ -35,6 +47,77 @@ pub const ReflectedAttr = struct {
     /// Default for numeric types when the content attribute is absent or
     /// unparseable. Ignored for DOMString / boolean / url.
     default_int: i64 = 0,
+    /// Default for §2.4.3 enumerated attributes: the canonical keyword
+    /// returned when the content attribute is missing OR its value does not
+    /// match any known keyword (ASCII-case-insensitive). `null` means the
+    /// IDL attribute returns "" in that case. Only consulted for
+    /// `.enumerated_ascii` rows.
+    default_str: ?[]const u8 = null,
+    /// For `.enumerated_ascii`: the comptime list of canonical keywords.
+    /// Ignored otherwise.
+    keywords: []const []const u8 = &.{},
+    /// For `.double_with_fallback`: default returned when content attribute
+    /// is absent or fails §2.4.4.3 parse. Ignored otherwise.
+    default_double: f64 = 0.0,
+};
+
+/// HTML §2.5.3 "referrer policy" keywords.
+/// Missing-value default is "" (empty string → IDL returns "").
+pub const referrer_policy_keywords = [_][]const u8{
+    "no-referrer",
+    "no-referrer-when-downgrade",
+    "same-origin",
+    "origin",
+    "strict-origin",
+    "origin-when-cross-origin",
+    "strict-origin-when-cross-origin",
+    "unsafe-url",
+};
+
+/// HTML §4.10.21.6 form-submission-encoding keywords.
+/// Invalid-default + missing-default: "application/x-www-form-urlencoded".
+pub const form_enctype_keywords = [_][]const u8{
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+    "text/plain",
+};
+
+/// HTML §4.10.21.7 form-submission-method keywords.
+/// Invalid-default + missing-default: "get".
+pub const form_method_keywords = [_][]const u8{ "get", "post", "dialog" };
+
+/// HTML §4.8.3 image-decoding-hint keywords.
+/// Invalid-default + missing-default: "auto".
+pub const image_decoding_keywords = [_][]const u8{ "sync", "async", "auto" };
+
+/// HTML §2.6.6 / §4.8.5 lazy-loading keywords.
+/// Invalid-default + missing-default: "eager".
+pub const lazy_loading_keywords = [_][]const u8{ "lazy", "eager" };
+
+/// HTML §4.10.5 input-type keywords. Invalid-default + missing-default: "text".
+pub const input_type_keywords = [_][]const u8{
+    "hidden",
+    "text",
+    "search",
+    "tel",
+    "url",
+    "email",
+    "password",
+    "date",
+    "month",
+    "week",
+    "time",
+    "datetime-local",
+    "number",
+    "range",
+    "color",
+    "checkbox",
+    "radio",
+    "file",
+    "submit",
+    "image",
+    "reset",
+    "button",
 };
 
 /// Reflection table — one row per IDL attribute.
@@ -76,7 +159,9 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLAnchorElement", .idl = "rel",            .content = "rel",            .type = .domstring },
     .{ .iface = "HTMLAnchorElement", .idl = "hreflang",       .content = "hreflang",       .type = .domstring },
     .{ .iface = "HTMLAnchorElement", .idl = "type",           .content = "type",           .type = .domstring },
-    .{ .iface = "HTMLAnchorElement", .idl = "referrerPolicy", .content = "referrerpolicy", .type = .domstring },
+    // HTML §2.5.3 "referrer policy" keywords — missing default "" (empty string).
+    .{ .iface = "HTMLAnchorElement", .idl = "referrerPolicy", .content = "referrerpolicy", .type = .enumerated_ascii,
+       .default_str = "", .keywords = &referrer_policy_keywords },
     .{ .iface = "HTMLAnchorElement", .idl = "text",           .content = "text",           .type = .domstring },
 
     // ── HTMLAreaElement (HTML §4.8.14) ────────────────────────────────
@@ -87,7 +172,8 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLAreaElement", .idl = "download",      .content = "download",      .type = .domstring },
     .{ .iface = "HTMLAreaElement", .idl = "ping",          .content = "ping",          .type = .domstring },
     .{ .iface = "HTMLAreaElement", .idl = "rel",           .content = "rel",           .type = .domstring },
-    .{ .iface = "HTMLAreaElement", .idl = "referrerPolicy",.content = "referrerpolicy",.type = .domstring },
+    .{ .iface = "HTMLAreaElement", .idl = "referrerPolicy",.content = "referrerpolicy",.type = .enumerated_ascii,
+       .default_str = "", .keywords = &referrer_policy_keywords },
     .{ .iface = "HTMLAreaElement", .idl = "href",          .content = "href",          .type = .url       },
 
     // ── HTMLBaseElement (HTML §4.2.3) ─────────────────────────────────
@@ -149,9 +235,16 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLFormElement", .idl = "acceptCharset", .content = "accept-charset", .type = .domstring },
     .{ .iface = "HTMLFormElement", .idl = "action",        .content = "action",         .type = .url       },
     .{ .iface = "HTMLFormElement", .idl = "autocomplete",  .content = "autocomplete",   .type = .domstring },
-    .{ .iface = "HTMLFormElement", .idl = "enctype",       .content = "enctype",        .type = .domstring },
-    .{ .iface = "HTMLFormElement", .idl = "encoding",      .content = "enctype",        .type = .domstring },
-    .{ .iface = "HTMLFormElement", .idl = "method",        .content = "method",         .type = .domstring },
+    // HTML §4.10.21.6 form-submission-encoding enum: invalid-default +
+    // missing-default are both "application/x-www-form-urlencoded".
+    .{ .iface = "HTMLFormElement", .idl = "enctype",       .content = "enctype",        .type = .enumerated_ascii,
+       .default_str = "application/x-www-form-urlencoded", .keywords = &form_enctype_keywords },
+    .{ .iface = "HTMLFormElement", .idl = "encoding",      .content = "enctype",        .type = .enumerated_ascii,
+       .default_str = "application/x-www-form-urlencoded", .keywords = &form_enctype_keywords },
+    // HTML §4.10.21.7 form-submission-method enum: keywords get/post/dialog,
+    // invalid-default + missing-default "get".
+    .{ .iface = "HTMLFormElement", .idl = "method",        .content = "method",         .type = .enumerated_ascii,
+       .default_str = "get", .keywords = &form_method_keywords },
     .{ .iface = "HTMLFormElement", .idl = "name",          .content = "name",           .type = .domstring },
     .{ .iface = "HTMLFormElement", .idl = "noValidate",    .content = "novalidate",     .type = .boolean   },
     .{ .iface = "HTMLFormElement", .idl = "target",        .content = "target",         .type = .domstring },
@@ -176,8 +269,11 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLIFrameElement", .idl = "allowFullscreen", .content = "allowfullscreen", .type = .boolean   },
     .{ .iface = "HTMLIFrameElement", .idl = "width",           .content = "width",           .type = .domstring },
     .{ .iface = "HTMLIFrameElement", .idl = "height",          .content = "height",          .type = .domstring },
-    .{ .iface = "HTMLIFrameElement", .idl = "referrerPolicy",  .content = "referrerpolicy",  .type = .domstring },
-    .{ .iface = "HTMLIFrameElement", .idl = "loading",         .content = "loading",         .type = .domstring },
+    .{ .iface = "HTMLIFrameElement", .idl = "referrerPolicy",  .content = "referrerpolicy",  .type = .enumerated_ascii,
+       .default_str = "", .keywords = &referrer_policy_keywords },
+    // HTML §4.8.5 lazy-loading enum: keywords eager/lazy, missing-default "eager".
+    .{ .iface = "HTMLIFrameElement", .idl = "loading",         .content = "loading",         .type = .enumerated_ascii,
+       .default_str = "eager", .keywords = &lazy_loading_keywords },
     .{ .iface = "HTMLIFrameElement", .idl = "align",           .content = "align",           .type = .domstring },
     .{ .iface = "HTMLIFrameElement", .idl = "scrolling",       .content = "scrolling",       .type = .domstring },
     .{ .iface = "HTMLIFrameElement", .idl = "frameBorder",     .content = "frameborder",     .type = .domstring },
@@ -190,14 +286,20 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLImageElement", .idl = "src",             .content = "src",             .type = .url       },
     .{ .iface = "HTMLImageElement", .idl = "srcset",          .content = "srcset",          .type = .domstring },
     .{ .iface = "HTMLImageElement", .idl = "sizes",           .content = "sizes",           .type = .domstring },
-    .{ .iface = "HTMLImageElement", .idl = "crossOrigin",     .content = "crossorigin",     .type = .domstring },
+    // HTML §2.8.6 CORS enum: keywords anonymous/use-credentials, invalid-default
+    // "anonymous", missing-default null (IDL attribute returns null).
+    .{ .iface = "HTMLImageElement", .idl = "crossOrigin",     .content = "crossorigin",     .type = .nullable_domstring },
     .{ .iface = "HTMLImageElement", .idl = "useMap",          .content = "usemap",          .type = .domstring },
     .{ .iface = "HTMLImageElement", .idl = "isMap",           .content = "ismap",           .type = .boolean   },
     .{ .iface = "HTMLImageElement", .idl = "width",           .content = "width",           .type = .unsigned_long },
     .{ .iface = "HTMLImageElement", .idl = "height",          .content = "height",          .type = .unsigned_long },
-    .{ .iface = "HTMLImageElement", .idl = "referrerPolicy",  .content = "referrerpolicy",  .type = .domstring },
-    .{ .iface = "HTMLImageElement", .idl = "decoding",        .content = "decoding",        .type = .domstring },
-    .{ .iface = "HTMLImageElement", .idl = "loading",         .content = "loading",         .type = .domstring },
+    .{ .iface = "HTMLImageElement", .idl = "referrerPolicy",  .content = "referrerpolicy",  .type = .enumerated_ascii,
+       .default_str = "", .keywords = &referrer_policy_keywords },
+    // HTML §4.8.3 image decoding hint: sync/async/auto, invalid+missing-default "auto".
+    .{ .iface = "HTMLImageElement", .idl = "decoding",        .content = "decoding",        .type = .enumerated_ascii,
+       .default_str = "auto", .keywords = &image_decoding_keywords },
+    .{ .iface = "HTMLImageElement", .idl = "loading",         .content = "loading",         .type = .enumerated_ascii,
+       .default_str = "eager", .keywords = &lazy_loading_keywords },
     .{ .iface = "HTMLImageElement", .idl = "fetchPriority",   .content = "fetchpriority",   .type = .domstring },
     .{ .iface = "HTMLImageElement", .idl = "name",            .content = "name",            .type = .domstring },
     .{ .iface = "HTMLImageElement", .idl = "align",           .content = "align",           .type = .domstring },
@@ -214,8 +316,10 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLInputElement", .idl = "dirName",        .content = "dirname",        .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "disabled",       .content = "disabled",       .type = .boolean   },
     .{ .iface = "HTMLInputElement", .idl = "formAction",     .content = "formaction",     .type = .url       },
-    .{ .iface = "HTMLInputElement", .idl = "formEnctype",    .content = "formenctype",    .type = .domstring },
-    .{ .iface = "HTMLInputElement", .idl = "formMethod",     .content = "formmethod",     .type = .domstring },
+    .{ .iface = "HTMLInputElement", .idl = "formEnctype",    .content = "formenctype",    .type = .enumerated_ascii,
+       .default_str = "application/x-www-form-urlencoded", .keywords = &form_enctype_keywords },
+    .{ .iface = "HTMLInputElement", .idl = "formMethod",     .content = "formmethod",     .type = .enumerated_ascii,
+       .default_str = "get", .keywords = &form_method_keywords },
     .{ .iface = "HTMLInputElement", .idl = "formNoValidate", .content = "formnovalidate", .type = .boolean   },
     .{ .iface = "HTMLInputElement", .idl = "formTarget",     .content = "formtarget",     .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "height",         .content = "height",         .type = .unsigned_long },
@@ -233,7 +337,9 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLInputElement", .idl = "size",           .content = "size",           .type = .unsigned_long, .default_int = 20 },
     .{ .iface = "HTMLInputElement", .idl = "src",            .content = "src",            .type = .url       },
     .{ .iface = "HTMLInputElement", .idl = "step",           .content = "step",           .type = .domstring },
-    .{ .iface = "HTMLInputElement", .idl = "type",           .content = "type",           .type = .domstring },
+    // HTML §4.10.5 input-type enum, invalid+missing-default "text".
+    .{ .iface = "HTMLInputElement", .idl = "type",           .content = "type",           .type = .enumerated_ascii,
+       .default_str = "text", .keywords = &input_type_keywords },
     .{ .iface = "HTMLInputElement", .idl = "defaultValue",   .content = "value",          .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "width",          .content = "width",          .type = .unsigned_long },
     .{ .iface = "HTMLInputElement", .idl = "align",          .content = "align",          .type = .domstring },
@@ -363,8 +469,11 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLPreElement", .idl = "width", .content = "width", .type = .long },
 
     // ── HTMLProgressElement (HTML §4.10.13) ──────────────────────────
-    .{ .iface = "HTMLProgressElement", .idl = "value", .content = "value", .type = .domstring },
-    .{ .iface = "HTMLProgressElement", .idl = "max",   .content = "max",   .type = .domstring },
+    // value: double, default 0. max: double, default 1.
+    .{ .iface = "HTMLProgressElement", .idl = "value", .content = "value", .type = .double_with_fallback,
+       .default_double = 0.0 },
+    .{ .iface = "HTMLProgressElement", .idl = "max",   .content = "max",   .type = .double_with_fallback,
+       .default_double = 1.0 },
 
     // ── HTMLQuoteElement (blockquote/q) (HTML §4.7.1) ─────────────────
     .{ .iface = "HTMLQuoteElement", .idl = "cite", .content = "cite", .type = .url },
