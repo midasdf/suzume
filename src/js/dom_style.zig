@@ -3322,20 +3322,6 @@ pub fn windowGetComputedStyle(
 // ── CSS Value Validation ──────────────────────────────────────────
 
 pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
-    // Wave 6 Phase 6.2: deep semantic validator lives in css_validator.zig.
-    // It handles CSS-wide keywords, var(), math-function arg typing,
-    // gradient direction validation, calc-size basis placement, url()+
-    // request() modifier, transform-function arg typing, and shorthand
-    // layer descent. Delegate the function-call / shorthand shape check
-    // there first so semantically-invalid-but-balanced values (e.g.
-    // `clamp(none, 1px, 1px)` or `linear-gradient(calc(sign(50%) *
-    // 1turn), red, blue)`) reject without reaching this file's
-    // per-property grammar. Property-specific grammar (e.g. `max-width`
-    // accepts `none` but not `auto`) still runs below for bare-ident and
-    // dimension values.
-    const css_validator = @import("css_validator.zig");
-    if (!css_validator.isValidPropertyValue(prop, val)) return false;
-
     const trimmed = std.mem.trim(u8, val, " \t\r\n");
     if (trimmed.len == 0) return true; // empty = remove property
 
@@ -3346,12 +3332,74 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
     // var() always valid
     if (trimmed.len >= 4 and eqlIgnoreCase(trimmed[0..4], "var(")) return true;
 
-    // Function-call shape already validated by css_validator above. Keep
-    // the specific color-function structure checks (lab/lch/oklab/oklch/
-    // color) since those use dom_style's dedicated validators. Any other
-    // top-level function call that survived css_validator is accepted at
-    // this stage — the per-property grammar below gates bare values.
+    // Math functions valid if complete function call (ends with matching
+    // ')') AND well-formed at the syntactic level (non-empty inner, no
+    // empty comma-separated slots, balanced parens). Deeper semantic
+    // checks (e.g. type compatibility of clamp args) are still deferred
+    // to the property-specific grammar switch below.
     if (trimmed[trimmed.len - 1] == ')') {
+        const hasValidMathArgs = struct {
+            fn check(s: []const u8) bool {
+                const open_idx = std.mem.indexOfScalar(u8, s, '(') orelse return false;
+                const inner = std.mem.trim(u8, s[open_idx + 1 .. s.len - 1], " \t\r\n");
+                if (inner.len == 0) return false;
+                var depth: i32 = 0;
+                var saw_content_in_arg: bool = false;
+                var i: usize = 0;
+                while (i < inner.len) : (i += 1) {
+                    const ch = inner[i];
+                    if (ch == '(') {
+                        depth += 1;
+                        saw_content_in_arg = true;
+                    } else if (ch == ')') {
+                        depth -= 1;
+                        if (depth < 0) return false;
+                        saw_content_in_arg = true;
+                    } else if (ch == ',' and depth == 0) {
+                        if (!saw_content_in_arg) return false; // empty slot
+                        saw_content_in_arg = false;
+                    } else if (ch != ' ' and ch != '\t' and ch != '\r' and ch != '\n') {
+                        saw_content_in_arg = true;
+                    }
+                }
+                if (depth != 0) return false;
+                if (!saw_content_in_arg) return false; // trailing empty slot
+                return true;
+            }
+        }.check;
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "calc(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "min(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "max(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "clamp(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "round(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "mod(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "rem(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "abs(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sign(")) return hasValidMathArgs(trimmed);
+        // Trig functions
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "sin(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "cos(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "tan(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "asin(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "acos(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "atan(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "atan2(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 6 and eqlIgnoreCase(trimmed[0..5], "sqrt(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "pow(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "hypot(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "log(")) return hasValidMathArgs(trimmed);
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "exp(")) return hasValidMathArgs(trimmed);
+        // Color functions — validate structure
+        if (trimmed.len >= 5 and eqlIgnoreCase(trimmed[0..4], "hwb(")) {
+            // hwb only supports modern (space) syntax, reject commas
+            const color_mod2 = @import("../css/properties.zig");
+            if (color_mod2.extractFuncArgs(trimmed)) |inner2| {
+                for (inner2) |ch| {
+                    if (ch == ',') return false;
+                }
+            }
+            return true;
+        }
         if (trimmed.len >= 5 and (eqlIgnoreCase(trimmed[0..4], "lab(") or
             eqlIgnoreCase(trimmed[0..4], "lch(")))
             return isValidModernColorFunc(trimmed);
@@ -3360,12 +3408,6 @@ pub fn isValidCssValue(prop: []const u8, val: []const u8) bool {
             return isValidModernColorFunc(trimmed);
         if (trimmed.len >= 7 and eqlIgnoreCase(trimmed[0..6], "color("))
             return isValidColorFunc(trimmed);
-        // Any other balanced function call (math / gradient / transform /
-        // url / image / calc-size / etc.) was validated by css_validator;
-        // accept the shape here to bypass the narrower per-property
-        // grammar which would otherwise reject e.g. `clamp(10px, 20px,
-        // 30px)` for `width:`.
-        return true;
     }
 
     const prop_id = css_ast.PropertyId.fromString(prop);

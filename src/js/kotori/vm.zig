@@ -1410,17 +1410,16 @@ pub const VM = struct {
                             self.push(val);
                             continue;
                         }
-                        // Wave 6 Phase 6.1: DOM node/style property interception
-                        // via bracket assignment. See `.get_elem` above for
-                        // rationale. The setter dispatch returns true on
-                        // handled, false to fall through to the generic
-                        // property store.
-                        if (key.isString() and (obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_set_prop != null) {
-                            if (self.dom_set_prop.?(self, obj, key.asStringId(), val)) {
-                                self.push(val);
-                                continue;
-                            }
-                        }
+                        // Wave 6 Phase 6.2 NARROW: bracket SET intentionally
+                        // falls through to generic property store (baseline
+                        // Phase 6.0 behavior). Rationale: enabling bracket SET
+                        // through domStyleSetProp requires a complete deep
+                        // validator for `*-invalid.html` tests — surface check
+                        // accepts round(1, 1%) / abs(1 + ) / attr() / etc.
+                        // Bracket GET still routes through DOM for
+                        // computed-style access (see .get_elem above).
+                        // Re-enable once validator covers calc-arithmetic
+                        // and full type-compat checks (future Phase 6.4+).
                         if (obj.obj_type == .array) {
                             if (self.toArrayIndex(key)) |i| {
                                 // Grow array if needed
