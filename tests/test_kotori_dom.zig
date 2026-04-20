@@ -2416,3 +2416,41 @@ test "MO attributeOldValue captured in removeAttribute" {
     const v = ctx.getResultStr(result) orelse unreachable;
     try std.testing.expectEqualStrings("42", v);
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// Native bug regressions (DOM §4.4, §4.9)
+// ══════════════════════════════════════════════════════════════════════
+
+test "createDocument ownerDocument slot — el.ownerDocument === doc2 not globalThis.document (DOM §4.4)" {
+    // Regression: ownerDocument getter must read the per-node _ownerDoc slot,
+    // not return globalThis.document. For elements created in an XML document
+    // returned by createDocument(), ownerDocument must be that XML doc.
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var doc2 = document.implementation.createDocument(null, 'root', null);
+        \\var el = doc2.createElement('foo');
+        \\(el.ownerDocument === doc2) && (el.ownerDocument !== document);
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}
+
+test "buildAttributesMap lexbor iteration — all 3 attrs accessible by index (DOM §4.9)" {
+    // Regression: attribute iteration must use lxb_dom_element_next_attribute_noi,
+    // not at.node.next which only exposes the first attribute (walks sibling chain).
+    var ctx = try TestCtx.init(
+        "<html><body></body></html>",
+        \\var el = document.createElement('div');
+        \\el.setAttribute('a', '1');
+        \\el.setAttribute('b', '2');
+        \\el.setAttribute('c', '3');
+        \\(el.attributes.length === 3) &&
+        \\  (el.attributes[0].name === 'a') &&
+        \\  (el.attributes[1].name === 'b') &&
+        \\  (el.attributes[2].name === 'c');
+    );
+    defer ctx.deinit();
+    const result = try ctx.run();
+    try std.testing.expect(result.isBool() and result.asBool());
+}

@@ -6013,11 +6013,10 @@ fn attrsEqual(a: *lxb.lxb_dom_element_t, b: *lxb.lxb_dom_element_t) bool {
     const a_count = countAttrs(a);
     const b_count = countAttrs(b);
     if (a_count != b_count) return false;
-    // Check each attribute of a exists in b with same value
-    const a_node: *lxb.lxb_dom_node_t = @ptrCast(a);
-    _ = a_node;
-    // Use lexbor attribute iteration
-    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(a.first_attr);
+    // Check each attribute of a exists in b with same value.
+    // DOM §4.9: use lexbor's proper attribute iterator — lxb_dom_element_next_attribute_noi
+    // — NOT at.node.next which walks the generic DOM sibling chain instead.
+    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(a)));
     while (attr) |at| {
         var name_len: usize = 0;
         const name_ptr = lxb.lxb_dom_attr_qualified_name(at, &name_len);
@@ -6034,17 +6033,19 @@ fn attrsEqual(a: *lxb.lxb_dom_element_t, b: *lxb.lxb_dom_element_t) bool {
                 if (!std.mem.eql(u8, val_ptr.?[0..val_len], b_val_ptr.?[0..b_val_len])) return false;
             } else return false;
         }
-        attr = @ptrCast(at.node.next);
+        attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(at)));
     }
     return true;
 }
 
 fn countAttrs(elem: *lxb.lxb_dom_element_t) usize {
     var count: usize = 0;
-    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(elem.first_attr);
+    // DOM §4.9: use lexbor's proper attribute iterator — lxb_dom_element_next_attribute_noi
+    // — NOT at.node.next which walks the generic DOM sibling chain instead.
+    var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(elem)));
     while (attr) |at| {
         count += 1;
-        attr = @ptrCast(at.node.next);
+        attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(at)));
     }
     return count;
 }
