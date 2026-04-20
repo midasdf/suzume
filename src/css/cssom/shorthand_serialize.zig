@@ -94,6 +94,22 @@ pub fn serializeFlexFlow(ctx: LookupCtx, buf: []u8) ?[]const u8 {
     return std.fmt.bufPrint(buf, "{s} {s}", .{ dir, wrap }) catch null;
 }
 
+/// Serialize a two-value logical shorthand from its start/end longhands
+/// (e.g. margin-block, margin-inline, padding-block, padding-inline,
+/// inset-block, inset-inline).  Canonical compression: "A A" → "A".
+pub fn serializeStartEndShorthand(
+    comptime start: []const u8,
+    comptime end: []const u8,
+    ctx: LookupCtx,
+    buf: []u8,
+) ?[]const u8 {
+    const s = std.mem.trim(u8, lhGet(ctx, start) orelse return null, " \t\r\n");
+    const e = std.mem.trim(u8, lhGet(ctx, end) orelse return null, " \t\r\n");
+    if (s.len == 0 or e.len == 0) return null;
+    if (std.mem.eql(u8, s, e)) return std.fmt.bufPrint(buf, "{s}", .{s}) catch null;
+    return std.fmt.bufPrint(buf, "{s} {s}", .{ s, e }) catch null;
+}
+
 /// Dispatch: given a shorthand name and a LookupCtx, return the canonical string.
 pub fn serializeShorthand(shorthand: []const u8, ctx: LookupCtx, buf: []u8) ?[]const u8 {
     if (std.ascii.eqlIgnoreCase(shorthand, "margin")) {
@@ -116,6 +132,33 @@ pub fn serializeShorthand(shorthand: []const u8, ctx: LookupCtx, buf: []u8) ?[]c
     }
     if (std.ascii.eqlIgnoreCase(shorthand, "flex-flow")) {
         return serializeFlexFlow(ctx, buf);
+    }
+    // Physical TRBL positioning shorthand (CSS Position 3 §2.1)
+    if (std.ascii.eqlIgnoreCase(shorthand, "inset")) {
+        return serializeBoxShorthand("top", "right", "bottom", "left", ctx, buf);
+    }
+    // Logical start/end shorthands (CSS Logical 1 §4).  The suzume parser
+    // currently expands logical properties to physical ones (LTR assumed in
+    // src/css/properties.zig), so we reverse that mapping here:
+    //   block-start/end → top/bottom
+    //   inline-start/end → left/right
+    if (std.ascii.eqlIgnoreCase(shorthand, "margin-block")) {
+        return serializeStartEndShorthand("margin-top", "margin-bottom", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "margin-inline")) {
+        return serializeStartEndShorthand("margin-left", "margin-right", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "padding-block")) {
+        return serializeStartEndShorthand("padding-top", "padding-bottom", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "padding-inline")) {
+        return serializeStartEndShorthand("padding-left", "padding-right", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "inset-block")) {
+        return serializeStartEndShorthand("top", "bottom", ctx, buf);
+    }
+    if (std.ascii.eqlIgnoreCase(shorthand, "inset-inline")) {
+        return serializeStartEndShorthand("left", "right", ctx, buf);
     }
     return null;
 }
@@ -280,4 +323,85 @@ test "serializeFlexFlow — row wrap (wrap non-initial)" {
     var buf: [64]u8 = undefined;
     const r = serializeFlexFlow(makeCtx(&slice), &buf);
     try std.testing.expectEqualStrings("row wrap", r.?);
+}
+
+test "serializeShorthand inset — all equal compresses to 1 value" {
+    const arr = [_]Entry{
+        .{ .name = "top", .value = "5px" },
+        .{ .name = "right", .value = "5px" },
+        .{ .name = "bottom", .value = "5px" },
+        .{ .name = "left", .value = "5px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("inset", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("5px", r.?);
+}
+
+test "serializeShorthand inset — 4-value" {
+    const arr = [_]Entry{
+        .{ .name = "top", .value = "1px" },
+        .{ .name = "right", .value = "2px" },
+        .{ .name = "bottom", .value = "3px" },
+        .{ .name = "left", .value = "4px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("inset", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("1px 2px 3px 4px", r.?);
+}
+
+test "serializeShorthand margin-block — equal compresses (reads margin-top/bottom)" {
+    const arr = [_]Entry{
+        .{ .name = "margin-top", .value = "10px" },
+        .{ .name = "margin-bottom", .value = "10px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("margin-block", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("10px", r.?);
+}
+
+test "serializeShorthand margin-inline — unequal stays as pair (reads margin-left/right)" {
+    const arr = [_]Entry{
+        .{ .name = "margin-left", .value = "5px" },
+        .{ .name = "margin-right", .value = "10px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("margin-inline", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("5px 10px", r.?);
+}
+
+test "serializeShorthand padding-block — equal compresses (reads padding-top/bottom)" {
+    const arr = [_]Entry{
+        .{ .name = "padding-top", .value = "3px" },
+        .{ .name = "padding-bottom", .value = "3px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("padding-block", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("3px", r.?);
+}
+
+test "serializeShorthand inset-inline — missing longhand returns null" {
+    const arr = [_]Entry{
+        .{ .name = "left", .value = "5px" },
+        // missing right
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("inset-inline", makeCtx(&slice), &buf);
+    try std.testing.expect(r == null);
+}
+
+test "serializeShorthand inset-block — equal (reads top/bottom)" {
+    const arr = [_]Entry{
+        .{ .name = "top", .value = "4px" },
+        .{ .name = "bottom", .value = "4px" },
+    };
+    const slice: []const Entry = &arr;
+    var buf: [64]u8 = undefined;
+    const r = serializeShorthand("inset-block", makeCtx(&slice), &buf);
+    try std.testing.expectEqualStrings("4px", r.?);
 }
