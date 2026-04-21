@@ -1697,7 +1697,8 @@ pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue
             vals[i] = 0;
             is_none[i] = true;
         } else if (resolveCalcComponent(tok)) |v| {
-            vals[i] = v; // pct_base=1.0 already handles % → 0-1
+            // NaN from calc(NaN) or calc(0/0) resolves to 0 per CSS Values 4 §10.9
+            vals[i] = if (std.math.isNan(v)) 0.0 else v;
         } else {
             vals[i] = color_mod.parseColorComponent(tok, 1.0) orelse return qjs.JS_NewStringLen(c, input.ptr, input.len);
         }
@@ -1729,12 +1730,14 @@ pub fn formatColorFuncComputed(c: *qjs.JSContext, input: []const u8) qjs.JSValue
     }
 
     // Serialize with none preservation
+    // CSS Color 4 §6: `xyz` is a synonym for `xyz-d65` in serialization
+    const out_space = if (eqlIgnoreCase(space, "xyz")) "xyz-d65" else space;
     var buf: [128]u8 = undefined;
     var pos: usize = 0;
     @memcpy(buf[pos..][0..6], "color(");
     pos += 6;
-    @memcpy(buf[pos..][0..space.len], space);
-    pos += space.len;
+    @memcpy(buf[pos..][0..out_space.len], out_space);
+    pos += out_space.len;
 
     for (0..3) |i| {
         buf[pos] = ' ';
@@ -5730,7 +5733,8 @@ fn isValidColorFunc(val: []const u8) bool {
     // Validate colorspace name
     const cs = tokens[0];
     if (!(eqlIgnoreCase(cs, "srgb") or eqlIgnoreCase(cs, "srgb-linear") or
-        eqlIgnoreCase(cs, "display-p3") or eqlIgnoreCase(cs, "a98-rgb") or
+        eqlIgnoreCase(cs, "display-p3") or eqlIgnoreCase(cs, "display-p3-linear") or
+        eqlIgnoreCase(cs, "a98-rgb") or
         eqlIgnoreCase(cs, "prophoto-rgb") or eqlIgnoreCase(cs, "rec2020") or
         eqlIgnoreCase(cs, "xyz") or eqlIgnoreCase(cs, "xyz-d50") or
         eqlIgnoreCase(cs, "xyz-d65")))
