@@ -636,6 +636,121 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             }
             return false;
         }
+        // :default — matches default submit button, default option, default checked input
+        if (std.ascii.eqlIgnoreCase(sel, ":default")) {
+            var name_len_df: usize = 0;
+            const name_ptr_df = lxb_dom_element_local_name(elem, &name_len_df);
+            if (name_ptr_df == null) return false;
+            const tag_df = name_ptr_df.?[0..name_len_df];
+            // <input type=checkbox|radio checked> or <option selected>
+            if (std.ascii.eqlIgnoreCase(tag_df, "input")) {
+                var itype_len: usize = 0;
+                const itype_ptr = lxb_dom_element_get_attribute(elem, "type", 4, &itype_len);
+                if (itype_ptr != null and itype_len > 0) {
+                    const itype = itype_ptr.?[0..itype_len];
+                    if (std.ascii.eqlIgnoreCase(itype, "checkbox") or std.ascii.eqlIgnoreCase(itype, "radio")) {
+                        return lxb_dom_element_has_attribute(elem, "checked", 7);
+                    }
+                    // <input type=submit|image> — default submit button: first in form
+                    if (std.ascii.eqlIgnoreCase(itype, "submit") or std.ascii.eqlIgnoreCase(itype, "image")) {
+                        // Find owning form: walk ancestors for <form>
+                        const node_df: *lxb.lxb_dom_node_t = @ptrCast(elem);
+                        var anc_df: ?*lxb.lxb_dom_node_t = node_df.parent;
+                        while (anc_df) |a| {
+                            if (a.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                                var anc_tag_len: usize = 0;
+                                const anc_tag_ptr = lxb_dom_element_local_name(@ptrCast(a), &anc_tag_len);
+                                if (anc_tag_ptr != null and std.ascii.eqlIgnoreCase(anc_tag_ptr.?[0..anc_tag_len], "form")) {
+                                    // Check if this element is the first submit button in the form
+                                    const first_sub = findFirstSubmitInForm(a);
+                                    return first_sub != null and @intFromPtr(first_sub.?) == @intFromPtr(elem);
+                                }
+                            }
+                            anc_df = a.parent;
+                        }
+                        return false;
+                    }
+                }
+                return false;
+            }
+            if (std.ascii.eqlIgnoreCase(tag_df, "button")) {
+                // <button type=submit> (or no type attr = submit by default)
+                var btype_len: usize = 0;
+                const btype_ptr = lxb_dom_element_get_attribute(elem, "type", 4, &btype_len);
+                const is_submit = (btype_ptr == null or btype_len == 0 or
+                    std.ascii.eqlIgnoreCase(btype_ptr.?[0..btype_len], "submit"));
+                if (!is_submit) return false;
+                const node_df: *lxb.lxb_dom_node_t = @ptrCast(elem);
+                var anc_df: ?*lxb.lxb_dom_node_t = node_df.parent;
+                while (anc_df) |a| {
+                    if (a.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+                        var anc_tag_len: usize = 0;
+                        const anc_tag_ptr = lxb_dom_element_local_name(@ptrCast(a), &anc_tag_len);
+                        if (anc_tag_ptr != null and std.ascii.eqlIgnoreCase(anc_tag_ptr.?[0..anc_tag_len], "form")) {
+                            const first_sub = findFirstSubmitInForm(a);
+                            return first_sub != null and @intFromPtr(first_sub.?) == @intFromPtr(elem);
+                        }
+                    }
+                    anc_df = a.parent;
+                }
+                return false;
+            }
+            if (std.ascii.eqlIgnoreCase(tag_df, "option")) {
+                return lxb_dom_element_has_attribute(elem, "selected", 8);
+            }
+            return false;
+        }
+        // :user-valid / :user-invalid — only match after user interaction (HTML §4.16.20).
+        // Since we have no interaction tracking, these never match (conservative / spec-correct default).
+        if (std.ascii.eqlIgnoreCase(sel, ":user-valid")) return false;
+        if (std.ascii.eqlIgnoreCase(sel, ":user-invalid")) return false;
+        // :in-range / :out-of-range — numeric/date input with min/max (HTML §4.16.19)
+        if (std.ascii.eqlIgnoreCase(sel, ":in-range") or std.ascii.eqlIgnoreCase(sel, ":out-of-range")) {
+            const want_in_range = std.ascii.eqlIgnoreCase(sel, ":in-range");
+            var name_len_ir: usize = 0;
+            const name_ptr_ir = lxb_dom_element_local_name(elem, &name_len_ir);
+            if (name_ptr_ir == null) return false;
+            const tag_ir = name_ptr_ir.?[0..name_len_ir];
+            if (!std.ascii.eqlIgnoreCase(tag_ir, "input")) return false;
+            // Only numeric/range types support min/max
+            var itype_len_ir: usize = 0;
+            const itype_ptr_ir = lxb_dom_element_get_attribute(elem, "type", 4, &itype_len_ir);
+            if (itype_ptr_ir != null and itype_len_ir > 0) {
+                const itype_ir = itype_ptr_ir.?[0..itype_len_ir];
+                if (!std.ascii.eqlIgnoreCase(itype_ir, "number") and
+                    !std.ascii.eqlIgnoreCase(itype_ir, "range") and
+                    !std.ascii.eqlIgnoreCase(itype_ir, "date") and
+                    !std.ascii.eqlIgnoreCase(itype_ir, "month") and
+                    !std.ascii.eqlIgnoreCase(itype_ir, "week") and
+                    !std.ascii.eqlIgnoreCase(itype_ir, "time") and
+                    !std.ascii.eqlIgnoreCase(itype_ir, "datetime-local")) return false;
+            } else {
+                // Default input type=text does not support range
+                return false;
+            }
+            // Need at least one of min/max
+            var min_len: usize = 0;
+            const min_ptr = lxb_dom_element_get_attribute(elem, "min", 3, &min_len);
+            var max_len: usize = 0;
+            const max_ptr = lxb_dom_element_get_attribute(elem, "max", 3, &max_len);
+            if (min_ptr == null and max_ptr == null) return false;
+            // Get current value
+            var val_len_ir: usize = 0;
+            const val_ptr_ir = lxb_dom_element_get_attribute(elem, "value", 5, &val_len_ir);
+            if (val_ptr_ir == null or val_len_ir == 0) return false;
+            const val_str = val_ptr_ir.?[0..val_len_ir];
+            const val_num = std.fmt.parseFloat(f64, val_str) catch return false;
+            var out_of = false;
+            if (min_ptr != null and min_len > 0) {
+                const min_num = std.fmt.parseFloat(f64, min_ptr.?[0..min_len]) catch 0;
+                if (val_num < min_num) out_of = true;
+            }
+            if (max_ptr != null and max_len > 0) {
+                const max_num = std.fmt.parseFloat(f64, max_ptr.?[0..max_len]) catch 0;
+                if (val_num > max_num) out_of = true;
+            }
+            return if (want_in_range) !out_of else out_of;
+        }
         // :closed — opposite of :open
         if (std.ascii.eqlIgnoreCase(sel, ":closed")) {
             var name_len_c: usize = 0;
@@ -969,6 +1084,58 @@ fn findOptionInSelect(select_node: *lxb.lxb_dom_node_t, comptime check_selected:
             }
         }
         child = ch.next;
+    }
+    return null;
+}
+
+/// CSS Selectors 4 §6.5: find the first submit button descendant of a form node.
+/// Returns the element pointer or null. Used by :default matching.
+fn findFirstSubmitInForm(form_node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_element_t {
+    var current: ?*lxb.lxb_dom_node_t = form_node.first_child;
+    while (current) |n| {
+        if (n.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const el: *lxb.lxb_dom_element_t = @ptrCast(n);
+            var tag_len: usize = 0;
+            const tag_ptr = lxb_dom_element_local_name(el, &tag_len);
+            if (tag_ptr != null) {
+                const tag = tag_ptr.?[0..tag_len];
+                if (std.ascii.eqlIgnoreCase(tag, "input")) {
+                    var itype_len: usize = 0;
+                    const itype_ptr = lxb_dom_element_get_attribute(el, "type", 4, &itype_len);
+                    if (itype_ptr != null and itype_len > 0) {
+                        const itype = itype_ptr.?[0..itype_len];
+                        if (std.ascii.eqlIgnoreCase(itype, "submit") or std.ascii.eqlIgnoreCase(itype, "image"))
+                            return el;
+                    }
+                } else if (std.ascii.eqlIgnoreCase(tag, "button")) {
+                    var btype_len: usize = 0;
+                    const btype_ptr = lxb_dom_element_get_attribute(el, "type", 4, &btype_len);
+                    const is_submit = (btype_ptr == null or btype_len == 0 or
+                        std.ascii.eqlIgnoreCase(btype_ptr.?[0..btype_len], "submit"));
+                    if (is_submit) return el;
+                }
+            }
+        }
+        // DFS traversal
+        if (n.first_child) |fc| {
+            current = fc;
+        } else {
+            var cur = n;
+            while (true) {
+                if (cur.next) |nxt| {
+                    current = nxt;
+                    break;
+                }
+                cur = cur.parent orelse {
+                    current = null;
+                    break;
+                };
+                if (cur == form_node) {
+                    current = null;
+                    break;
+                }
+            }
+        }
     }
     return null;
 }

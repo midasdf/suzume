@@ -96,6 +96,16 @@ pub const PseudoClass = enum {
     dir,
     // CSS Selectors L4 §14.2: :lang(xx[,yy]*) — language pseudo-class
     lang,
+    // HTML §4.16.20: :user-valid / :user-invalid (post-interaction validity)
+    user_valid,
+    user_invalid,
+    // HTML §4.16.19: :in-range / :out-of-range
+    in_range,
+    out_of_range,
+    // CSS Selectors 4 §6.5: :default
+    default_,
+    // CSS Selectors 4 §14.1: :scope
+    scope,
     // Internal-only: used by :has()/:not()/:is()/:where() selectors
     has,
     not,
@@ -130,6 +140,12 @@ pub const PseudoClass = enum {
         .{ "read-only", .read_only },
         .{ "read-write", .read_write },
         .{ "indeterminate", .indeterminate },
+        .{ "user-valid", .user_valid },
+        .{ "user-invalid", .user_invalid },
+        .{ "in-range", .in_range },
+        .{ "out-of-range", .out_of_range },
+        .{ "default", .default_ },
+        .{ "scope", .scope },
     });
 
     pub fn fromString(name: []const u8) ?PseudoClass {
@@ -1289,6 +1305,80 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             // BCP-47 prefix match: :lang(en) matches "en", "en-US", "en-GB", etc.
             for (args) |range| {
                 if (langMatches(range, el)) return true;
+            }
+            return false;
+        },
+        // :scope — matches context element (querySelector) or document root
+        .scope => return false, // handled in dom_selector.zig string path
+        // :default — matches default submit button, checked checkbox/radio, selected option
+        .default_ => {
+            const tag = element.tagName() orelse return false;
+            if (eqlIgnoreCase(tag, "input")) {
+                if (element.getAttribute("type")) |itype| {
+                    if (eqlIgnoreCase(itype, "checkbox") or eqlIgnoreCase(itype, "radio"))
+                        return element.hasAttribute("checked");
+                    if (eqlIgnoreCase(itype, "submit") or eqlIgnoreCase(itype, "image"))
+                        return false; // can't determine "first" submit via ElementAdapter
+                }
+                return false;
+            }
+            if (eqlIgnoreCase(tag, "button")) {
+                const btype = element.getAttribute("type") orelse "";
+                return btype.len == 0 or eqlIgnoreCase(btype, "submit");
+            }
+            if (eqlIgnoreCase(tag, "option"))
+                return element.hasAttribute("selected");
+            return false;
+        },
+        // :user-valid / :user-invalid — only match after user interaction (HTML §4.16.20).
+        // No interaction tracking → never matches.
+        .user_valid => return false,
+        .user_invalid => return false,
+        // :in-range — numeric input within min/max bounds
+        .in_range => {
+            const tag = element.tagName() orelse return false;
+            if (!eqlIgnoreCase(tag, "input")) return false;
+            const itype = element.getAttribute("type") orelse return false;
+            if (!eqlIgnoreCase(itype, "number") and !eqlIgnoreCase(itype, "range") and
+                !eqlIgnoreCase(itype, "date") and !eqlIgnoreCase(itype, "month") and
+                !eqlIgnoreCase(itype, "week") and !eqlIgnoreCase(itype, "time") and
+                !eqlIgnoreCase(itype, "datetime-local")) return false;
+            const min_str = element.getAttribute("min");
+            const max_str = element.getAttribute("max");
+            if (min_str == null and max_str == null) return false;
+            const val_str = element.getAttribute("value") orelse return false;
+            const val = std.fmt.parseFloat(f64, val_str) catch return false;
+            if (min_str) |mn| {
+                const min_v = std.fmt.parseFloat(f64, mn) catch 0;
+                if (val < min_v) return false;
+            }
+            if (max_str) |mx| {
+                const max_v = std.fmt.parseFloat(f64, mx) catch 0;
+                if (val > max_v) return false;
+            }
+            return true;
+        },
+        // :out-of-range — numeric input outside min/max bounds
+        .out_of_range => {
+            const tag = element.tagName() orelse return false;
+            if (!eqlIgnoreCase(tag, "input")) return false;
+            const itype = element.getAttribute("type") orelse return false;
+            if (!eqlIgnoreCase(itype, "number") and !eqlIgnoreCase(itype, "range") and
+                !eqlIgnoreCase(itype, "date") and !eqlIgnoreCase(itype, "month") and
+                !eqlIgnoreCase(itype, "week") and !eqlIgnoreCase(itype, "time") and
+                !eqlIgnoreCase(itype, "datetime-local")) return false;
+            const min_str = element.getAttribute("min");
+            const max_str = element.getAttribute("max");
+            if (min_str == null and max_str == null) return false;
+            const val_str = element.getAttribute("value") orelse return false;
+            const val = std.fmt.parseFloat(f64, val_str) catch return false;
+            if (min_str) |mn| {
+                const min_v = std.fmt.parseFloat(f64, mn) catch 0;
+                if (val < min_v) return true;
+            }
+            if (max_str) |mx| {
+                const max_v = std.fmt.parseFloat(f64, mx) catch 0;
+                if (val > max_v) return true;
             }
             return false;
         },
