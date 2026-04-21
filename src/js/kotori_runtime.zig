@@ -120,6 +120,11 @@ pub const KotoriRuntime = struct {
         // addEventListener/removeEventListener bindings in kotori_dom.zig.
         _ = self.eval(abort_controller_polyfill_js);
 
+        // HTML §3.2.6 / §3.2.6.1: dataset (DOMStringMap) polyfill. Exposes
+        // data-* attributes as a proxy object on Element.prototype.dataset.
+        // Camelcase ↔ kebab-case conversion per the spec algorithm.
+        _ = self.eval(dataset_polyfill_js);
+
         // HTML §7.3.3: Named access on the Window object. Browsers expose
         // elements with `id` attributes as properties of the window/global object
         // (e.g. `<div id="foo">` → `window.foo === document.getElementById('foo')`).
@@ -2738,6 +2743,120 @@ pub const KotoriRuntime = struct {
         \\      globalThis[id]=el;
         \\    }
         \\  } catch(e) {}
+        \\})();
+    ;
+
+    /// HTML §3.2.6 / §3.2.6.1 DOMStringMap (dataset) polyfill for kotori.
+    ///
+    /// Installs `Element.prototype.dataset` as a getter returning a Proxy
+    /// that maps camelCase property access to data-* content attributes.
+    ///
+    /// Name conversion rules (HTML §3.2.6.1):
+    ///   - camelCase → kebab:  insert '-' before each uppercase letter, lowercase it
+    ///     e.g.  fooBar  → data-foo-bar
+    ///   - kebab → camelCase:  strip 'data-', convert -x → X
+    ///     e.g.  data-foo-bar → fooBar
+    ///
+    /// Supported operations:
+    ///   - get  dataset.fooBar     → getAttribute('data-foo-bar') ?? undefined
+    ///   - set  dataset.fooBar='v' → setAttribute('data-foo-bar', 'v')
+    ///   - has  'fooBar' in dataset → hasAttribute('data-foo-bar')
+    ///   - delete dataset.fooBar  → removeAttribute('data-foo-bar')
+    ///   - ownKeys / enumerate    → all data-* attribute names converted to camelCase
+    ///
+    /// Identity cache: the same Proxy object is returned on repeated accesses
+    /// (WebIDL [SameObject]) using a hidden `__datasetProxy` slot.
+    const dataset_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  // Convert camelCase key → data-* attribute name.
+        \\  // HTML §3.2.6.1 step 2: for each uppercase letter U, insert '-'+lowercase(U).
+        \\  function toAttr(key){
+        \\    var s='data-';
+        \\    for(var i=0;i<key.length;i++){
+        \\      var c=key[i];
+        \\      if(c>='A'&&c<='Z'){s+='-'+c.toLowerCase();}
+        \\      else{s+=c;}
+        \\    }
+        \\    return s;
+        \\  }
+        \\  // Convert data-* attribute name → camelCase key.
+        \\  // HTML §3.2.6.1 step 1: strip 'data-', for each '-x' → uppercase(x).
+        \\  function toKey(attr){
+        \\    var s=attr.slice(5); // strip 'data-'
+        \\    var out='';
+        \\    var i=0;
+        \\    while(i<s.length){
+        \\      var c=s[i];
+        \\      if(c==='-'&&i+1<s.length){
+        \\        var nx=s[i+1];
+        \\        if(nx>='a'&&nx<='z'){out+=nx.toUpperCase();i+=2;continue;}
+        \\      }
+        \\      out+=c;i++;
+        \\    }
+        \\    return out;
+        \\  }
+        \\  // Check if an attribute name is a valid data-* name (lowercase only after 'data-').
+        \\  function isDataAttr(name){
+        \\    if(name.length<=5||name.slice(0,5)!=='data-')return false;
+        \\    // data-* names must not contain uppercase letters per HTML §3.2.6.1
+        \\    var rest=name.slice(5);
+        \\    for(var i=0;i<rest.length;i++){
+        \\      var c=rest[i];
+        \\      if(c>='A'&&c<='Z')return false;
+        \\    }
+        \\    return true;
+        \\  }
+        \\  var SLOT='__datasetProxy';
+        \\  var handler={
+        \\    get:function(el,key){
+        \\      if(typeof key!=='string')return undefined;
+        \\      var v=el.getAttribute(toAttr(key));
+        \\      return v===null?undefined:v;
+        \\    },
+        \\    set:function(el,key,value){
+        \\      if(typeof key!=='string')return true;
+        \\      el.setAttribute(toAttr(key),''+value);
+        \\      return true;
+        \\    },
+        \\    has:function(el,key){
+        \\      if(typeof key!=='string')return false;
+        \\      return el.hasAttribute(toAttr(key));
+        \\    },
+        \\    deleteProperty:function(el,key){
+        \\      if(typeof key!=='string')return true;
+        \\      el.removeAttribute(toAttr(key));
+        \\      return true;
+        \\    },
+        \\    ownKeys:function(el){
+        \\      var keys=[];
+        \\      var attrs=el.attributes;
+        \\      if(!attrs)return keys;
+        \\      for(var i=0;i<attrs.length;i++){
+        \\        var a=attrs[i];
+        \\        var nm=a?a.name:null;
+        \\        if(nm&&isDataAttr(nm))keys.push(toKey(nm));
+        \\      }
+        \\      return keys;
+        \\    },
+        \\    getOwnPropertyDescriptor:function(el,key){
+        \\      if(typeof key!=='string')return undefined;
+        \\      var attr=toAttr(key);
+        \\      if(!el.hasAttribute(attr))return undefined;
+        \\      return{value:el.getAttribute(attr),writable:true,enumerable:true,configurable:true};
+        \\    }
+        \\  };
+        \\  Object.defineProperty(Element.prototype,'dataset',{
+        \\    get:function(){
+        \\      var cached=this[SLOT];
+        \\      if(cached)return cached;
+        \\      var p=new Proxy(this,handler);
+        \\      try{Object.defineProperty(this,SLOT,{value:p,writable:false,enumerable:false,configurable:false});}catch(e){}
+        \\      return p;
+        \\    },
+        \\    configurable:true,
+        \\    enumerable:true
+        \\  });
         \\})();
     ;
 
