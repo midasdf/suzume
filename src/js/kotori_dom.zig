@@ -1490,6 +1490,60 @@ fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue 
             }
             return JsValue.initNumber(row.default_double);
         },
+        .limited_long => {
+            // HTML §2.6.2 "limited long" — non-negative parse, default -1 on
+            // miss/fail/negative. Same getter logic as unsigned_long but uses
+            // parseNonNegativeInteger and falls back to default_int.
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseNonNegativeInteger(p[0..val_len])) |v| {
+                    return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+        .limited_unsigned_long => {
+            // HTML §2.6.2 "limited unsigned long" (> 0): parse non-negative,
+            // reject zero, return default_int (typically 1) on miss/fail/zero.
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseNonNegativeInteger(p[0..val_len])) |v| {
+                    if (v > 0) return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+        .limited_unsigned_long_with_fallback => {
+            // HTML §2.6.2 "limited unsigned long with fallback": like
+            // limited_unsigned_long but invalid → default_int (not -1).
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseNonNegativeInteger(p[0..val_len])) |v| {
+                    if (v > 0) return JsValue.initNumber(@floatFromInt(v));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
+        .clamped_unsigned_long => {
+            // HTML §2.6.2 "clamped unsigned long": parse non-negative, clamp
+            // to [clamp_min, clamp_max]. Return default_int on miss/parse-fail.
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, row.content.ptr, row.content.len, &val_len);
+            if (val_ptr) |p| {
+                if (refl.parseNonNegativeInteger(p[0..val_len])) |v| {
+                    const clamped = @max(row.clamp_min, @min(row.clamp_max, v));
+                    return JsValue.initNumber(@floatFromInt(clamped));
+                }
+            }
+            return JsValue.initNumber(@floatFromInt(row.default_int));
+        },
     }
 }
 
@@ -1544,10 +1598,10 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
         .nullable_domstring, .enumerated_ascii => {
             // Both of these serialize through the DOMString setter — the
             // getter side does the canonicalization. HTML §2.6.2 nullable
-            // setter rule treats `null` specially (removes attribute); the
-            // enumerated setter just writes the value verbatim and lets the
-            // getter's canonicalization handle invalid values.
-            if (row.type == .nullable_domstring and val.isNull()) {
+            // setter rule treats `null` and `undefined` as attribute removal
+            // (per ARIAMixin spec: "Setting to undefined results in same state
+            // as setting to null"). The enumerated setter writes verbatim.
+            if (row.type == .nullable_domstring and (val.isNull() or val.isUndefined())) {
                 _ = dom_b.lxb_dom_element_remove_attribute(elem, row.content.ptr, row.content.len);
                 return true;
             }
@@ -1566,6 +1620,68 @@ fn reflectionSet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8, val: JsVa
             if (!std.math.isFinite(n)) return true;
             var buf: [32]u8 = undefined;
             const s = std.fmt.bufPrint(&buf, "{d}", .{n}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .limited_long => {
+            // HTML §2.6.2 "limited long" setter: throw IndexSizeError for
+            // negative values (WebIDL §3.2.4.1 "limited to non-negative numbers").
+            const n = val.toNumber();
+            const i32v: i32 = if (std.math.isFinite(n)) blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                if (n < @as(f64, std.math.minInt(i32))) break :blk std.math.minInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            } else 0;
+            if (i32v < 0) {
+                vm.pending_throw = createDOMExceptionObj(vm, "IndexSizeError") catch null;
+                return true;
+            }
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{i32v}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .limited_unsigned_long => {
+            // HTML §2.6.2 "limited unsigned long" setter: throw IndexSizeError
+            // for zero (value must be > 0). Non-finite → default.
+            const n = val.toNumber();
+            const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            };
+            if (out == 0) {
+                vm.pending_throw = createDOMExceptionObj(vm, "IndexSizeError") catch null;
+                return true;
+            }
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{out}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .limited_unsigned_long_with_fallback => {
+            // HTML §2.6.2 "limited unsigned long with fallback" setter:
+            // if value is 0 or out-of-range, use default_int instead of throwing.
+            const n = val.toNumber();
+            const raw: i64 = if (!std.math.isFinite(n) or n < 0) 0 else blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            };
+            const out: i64 = if (raw < 1) row.default_int else raw;
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{out}) catch "0";
+            _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
+            return true;
+        },
+        .clamped_unsigned_long => {
+            // HTML §2.6.2 "clamped unsigned long" setter: same as unsigned_long
+            // setter (writes value as-is; clamping only applies on get).
+            const n = val.toNumber();
+            const out: i64 = if (!std.math.isFinite(n) or n < 0) row.default_int else blk: {
+                if (n > @as(f64, std.math.maxInt(i32))) break :blk std.math.maxInt(i32);
+                break :blk @intFromFloat(@trunc(n));
+            };
+            var buf: [16]u8 = undefined;
+            const s = std.fmt.bufPrint(&buf, "{d}", .{out}) catch "0";
             _ = dom_b.lxb_dom_element_set_attribute(elem, row.content.ptr, row.content.len, s.ptr, s.len);
             return true;
         },
