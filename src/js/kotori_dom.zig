@@ -3069,11 +3069,13 @@ fn nativeCSSGetPropertyValue(ctx: *anyopaque, this: JsValue, args: []const JsVal
     var name_buf: [128]u8 = undefined;
     const css_prop = camelToKebab(prop_in, &name_buf);
 
-    // CSSOM §6.5 (resolved value) / §6.7 (getPropertyValue): query the
-    // cascade-resolved ComputedStyle (which already folds in inline style at
-    // highest specificity), preferring layout box used values where
-    // available. Falls back to raw inline-style lookup only when no cascade
-    // entry exists (e.g. disconnected element, tests without layout).
+    // CSSOM §6.5 (resolved value) / §6.7 (getPropertyValue): re-cascade if
+    // DOM was mutated since the computed-style object was created (live reads).
+    if (flush_fn) |f| f();
+
+    // Query cascade-resolved ComputedStyle (folds in inline style at highest
+    // specificity), preferring layout box used values where available.
+    // Falls back to raw inline-style lookup when no cascade entry exists.
     if (resolve_fn) |rf| {
         var val_buf: [160]u8 = undefined;
         if (rf(@ptrCast(elem), css_prop, &val_buf)) |slice| {

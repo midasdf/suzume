@@ -6309,15 +6309,50 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Object.defineProperty(document,'styleSheets',{get:function(){
             \\    var styles=document.querySelectorAll('style');
             \\    var sheets=[];
-            \\    for(var i=0;i<styles.length;i++){if(styles[i].sheet)sheets.push(styles[i].sheet);}
+            \\    for(var i=0;i<styles.length;i++){
+            \\      var el=styles[i];
+            \\      if(el&&el.getAttribute&&el.getAttribute('data-adopted')==='1')continue;
+            \\      if(el&&el.sheet)sheets.push(el.sheet);
+            \\    }
             \\    sheets.item=function(i){return this[i]||null;};
             \\    return sheets;
             \\  },configurable:true,enumerable:true});
             \\
+            \\  // ── _validateSheets: throw TypeError/NotAllowedError for invalid entries ──
+            \\  function _validateSheets(items){
+            \\    for(var i=0;i<items.length;i++){
+            \\      var s=items[i];
+            \\      if(typeof s!=='object'||s===null||!(s instanceof _Sheet))throw new TypeError('Each member of adoptedStyleSheets must be a CSSStyleSheet.');
+            \\      if(!s._constructed)throw new DOMException('Each member of adoptedStyleSheets must be a constructed CSSStyleSheet.','NotAllowedError');
+            \\    }
+            \\  }
+            \\  // ── _makeObservableArray: intercept mutations to trigger cascade sync ──
+            \\  function _makeObservableArray(arr,root){
+            \\    var _push=arr.push.bind(arr),_pop=arr.pop.bind(arr),_shift=arr.shift.bind(arr);
+            \\    var _unshift=arr.unshift.bind(arr),_splice=arr.splice.bind(arr);
+            \\    var _reverse=arr.reverse.bind(arr),_sort=arr.sort.bind(arr),_fill=arr.fill.bind(arr);
+            \\    arr.push=function(){_validateSheets(arguments);var r=_push.apply(arr,arguments);_syncAdoptedSheets(root);return r;};
+            \\    arr.pop=function(){var r=_pop.apply(arr,arguments);_syncAdoptedSheets(root);return r;};
+            \\    arr.shift=function(){var r=_shift.apply(arr,arguments);_syncAdoptedSheets(root);return r;};
+            \\    arr.unshift=function(){_validateSheets(arguments);var r=_unshift.apply(arr,arguments);_syncAdoptedSheets(root);return r;};
+            \\    arr.splice=function(){
+            \\      var inserts=Array.prototype.slice.call(arguments,2);
+            \\      if(inserts.length>0)_validateSheets(inserts);
+            \\      var r=_splice.apply(arr,arguments);_syncAdoptedSheets(root);return r;
+            \\    };
+            \\    arr.reverse=function(){var r=_reverse.apply(arr,arguments);_syncAdoptedSheets(root);return r;};
+            \\    arr.sort=function(){var r=_sort.apply(arr,arguments);_syncAdoptedSheets(root);return r;};
+            \\    arr.fill=function(){
+            \\      var inserts=Array.prototype.slice.call(arguments,0,1);
+            \\      if(inserts.length>0)_validateSheets(inserts);
+            \\      var r=_fill.apply(arr,arguments);_syncAdoptedSheets(root);return r;
+            \\    };
+            \\    return arr;
+            \\  }
             \\  // ── document.adoptedStyleSheets (CSSOM §6.5) ──
             \\  // Each document/shadowRoot gets its own _adoptedStyleSheets array.
             \\  // Setter validates: each entry must be a constructed CSSStyleSheet from same realm.
-            \\  document._adoptedStyleSheets=[];
+            \\  document._adoptedStyleSheets=_makeObservableArray([],document);
             \\  Object.defineProperty(document,'adoptedStyleSheets',{
             \\    get:function(){return this._adoptedStyleSheets;},
             \\    set:function(list){
@@ -6330,7 +6365,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\      // remove this document from old sheets' adopter lists
             \\      var old=this._adoptedStyleSheets||[];
             \\      for(var i=0;i<old.length;i++){var idx=old[i]._adopters.indexOf(this);if(idx>=0)old[i]._adopters.splice(idx,1);}
-            \\      this._adoptedStyleSheets=arr;
+            \\      this._adoptedStyleSheets=_makeObservableArray(arr,this);
             \\      // register this document in each sheet's adopter list
             \\      for(var i=0;i<arr.length;i++){if(arr[i]._adopters.indexOf(this)<0)arr[i]._adopters.push(this);}
             \\      _syncAdoptedSheets(this);
@@ -6344,7 +6379,8 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    Element.prototype.attachShadow=function(init){
             \\      var sr=_origAttachShadow.call(this,init);
             \\      if(sr&&!Object.getOwnPropertyDescriptor(sr,'adoptedStyleSheets')){
-            \\        sr._adoptedStyleSheets=[];
+            \\        var srRef=sr;
+            \\        sr._adoptedStyleSheets=_makeObservableArray([],srRef);
             \\        Object.defineProperty(sr,'adoptedStyleSheets',{
             \\          get:function(){return this._adoptedStyleSheets;},
             \\          set:function(list){
@@ -6354,11 +6390,29 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\              var s=arr[i];
             \\              if(!(s instanceof _Sheet)||!s._constructed)throw new DOMException('Each member of adoptedStyleSheets must be a constructed CSSStyleSheet.','NotAllowedError');
             \\            }
+            \\            var root2=this;
             \\            var old=this._adoptedStyleSheets||[];
             \\            for(var i=0;i<old.length;i++){var idx2=old[i]._adopters.indexOf(this);if(idx2>=0)old[i]._adopters.splice(idx2,1);}
-            \\            this._adoptedStyleSheets=arr;
+            \\            this._adoptedStyleSheets=_makeObservableArray(arr,root2);
             \\            for(var i=0;i<arr.length;i++){if(arr[i]._adopters.indexOf(this)<0)arr[i]._adopters.push(this);}
             \\            _syncAdoptedSheets(this);
+            \\          },
+            \\          configurable:true,enumerable:true
+            \\        });
+            \\        // styleSheets: live list of non-adopted <style> in this shadow root
+            \\        Object.defineProperty(sr,'styleSheets',{
+            \\          get:function(){
+            \\            var sheets=[];
+            \\            if(!this.querySelectorAll)return sheets;
+            \\            var styles=this.getElementsByTagName?this.getElementsByTagName('style'):[];
+            \\            for(var i=0;i<styles.length;i++){
+            \\              var el=styles[i];
+            \\              if(!el)continue;
+            \\              if(el.getAttribute&&el.getAttribute('data-adopted')==='1')continue;
+            \\              if(el.sheet)sheets.push(el.sheet);
+            \\            }
+            \\            sheets.item=function(i){return this[i]||null;};
+            \\            return sheets;
             \\          },
             \\          configurable:true,enumerable:true
             \\        });
