@@ -6327,8 +6327,7 @@ pub fn serializeColorMixToBuf(val: []const u8, buf: []u8) ?[]const u8 {
         break :blk s;
     } else colorspace;
 
-    var fbs = std.io.fixedBufferStream(buf);
-    const w = fbs.writer();
+    var w = std.Io.Writer.fixed(buf);
 
     w.print("color-mix(in {s}, {s}", .{ space_str, c1_str }) catch return null;
     if (!both_50 and p1 >= 0) {
@@ -6340,7 +6339,6 @@ pub fn serializeColorMixToBuf(val: []const u8, buf: []u8) ?[]const u8 {
     }
     w.print(", {s}", .{c2_str}) catch return null;
     if (!both_50 and p2 >= 0) {
-        // p2 was explicitly specified
         if (p2 == @round(p2)) {
             w.print(" {d:.0}%", .{p2}) catch return null;
         } else {
@@ -6349,7 +6347,7 @@ pub fn serializeColorMixToBuf(val: []const u8, buf: []u8) ?[]const u8 {
     }
     w.print(")", .{}) catch return null;
 
-    return fbs.getWritten();
+    return w.buffered();
 }
 
 fn isColorFuncWithCalc(val: []const u8) bool {
