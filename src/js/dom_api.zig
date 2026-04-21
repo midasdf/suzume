@@ -6133,19 +6133,81 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  globalThis.CSSNestedDeclarations=CSSNestedDeclarations;
             \\
             \\  // ── CSSStyleSheet ──
-            \\  function _Sheet(){this.cssRules=[];this.disabled=false;this.ownerNode=null;this.type='text/css';}
+            \\  // MediaList minimal implementation
+            \\  function _MediaList(mediaStr){
+            \\    this._items=mediaStr?mediaStr.split(',').map(function(s){return s.trim();}).filter(function(s){return s.length>0;}):[];
+            \\    this.mediaText=this._items.join(', ');
+            \\  }
+            \\  Object.defineProperty(_MediaList.prototype,'length',{get:function(){return this._items.length;},enumerable:true,configurable:true});
+            \\  _MediaList.prototype.item=function(i){return this._items[i]||null;};
+            \\  _MediaList.prototype.toString=function(){return this.mediaText;};
+            \\
+            \\  // CSSOM §6.4.1: CSSStyleSheet constructor
+            \\  function _Sheet(opts){
+            \\    this.cssRules=[];
+            \\    this.type='text/css';
+            \\    this.ownerNode=null;
+            \\    this.ownerRule=null;
+            \\    this.parentStyleSheet=null;
+            \\    this.href=null;
+            \\    this.title=null;
+            \\    this._constructed=true;
+            \\    this._adopters=[];
+            \\    if(opts&&typeof opts==='object'){
+            \\      this.disabled=opts.disabled===true;
+            \\      this.media=new _MediaList(typeof opts.media==='string'?opts.media:'');
+            \\    }else{
+            \\      this.disabled=false;
+            \\      this.media=new _MediaList('');
+            \\    }
+            \\  }
+            \\  function _sheetCSS(sheet){
+            \\    if(sheet.disabled)return '';
+            \\    var css='';
+            \\    for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.cssText)css+=r.cssText+'\n';}
+            \\    return css;
+            \\  }
             \\  function _syncToDOM(sheet){
             \\    for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.style&&r.style._sheet===null)r.style._sheet=sheet;}
-            \\    if(!sheet.ownerNode)return;
-            \\    var css='';
-            \\    for(var i=0;i<sheet.cssRules.length;i++){
-            \\      var r=sheet.cssRules[i];
-            \\      if(r.cssText)css+=r.cssText+'\n';
+            \\    if(sheet.ownerNode){
+            \\      var css='';
+            \\      for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.cssText)css+=r.cssText+'\n';}
+            \\      sheet.ownerNode.textContent=css;
             \\    }
-            \\    sheet.ownerNode.textContent=css;
+            \\    // sync to adopters (document/shadowRoot adoptedStyleSheets)
+            \\    if(sheet._adopters){
+            \\      for(var ai=0;ai<sheet._adopters.length;ai++){
+            \\        var adopter=sheet._adopters[ai];
+            \\        _syncAdoptedSheets(adopter);
+            \\      }
+            \\    }
+            \\  }
+            \\  // _adoptedStyleElem: WeakMap from root to style element used for adopted sheets
+            \\  var _adoptedStyleElem=new WeakMap();
+            \\  function _getAdoptedStyleNode(root){
+            \\    var el=_adoptedStyleElem.get(root);
+            \\    if(!el){
+            \\      el=document.createElement('style');
+            \\      el.setAttribute('data-adopted','1');
+            \\      if(root===document){document.head?document.head.appendChild(el):document.documentElement.appendChild(el);}
+            \\      else{root.appendChild(el);}
+            \\      _adoptedStyleElem.set(root,el);
+            \\    }
+            \\    return el;
+            \\  }
+            \\  function _syncAdoptedSheets(root){
+            \\    var sheets=root._adoptedStyleSheets||[];
+            \\    if(sheets.length===0){var el=_adoptedStyleElem.get(root);if(el&&el.parentNode)el.parentNode.removeChild(el);_adoptedStyleElem.delete(root);return;}
+            \\    var css='';
+            \\    for(var i=0;i<sheets.length;i++){css+=_sheetCSS(sheets[i]);}
+            \\    var el=_getAdoptedStyleNode(root);
+            \\    el.textContent=css;
             \\  }
             \\  _Sheet.prototype.insertRule=function(rule,index){
             \\    if(index===void 0)index=0;
+            \\    // CSSOM §6.4: @import not allowed in constructed sheets
+            \\    var ruleT=rule.replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+            \\    if(/^@import\b/i.test(ruleT)){throw new DOMException("@import rules are not allowed in constructed stylesheets.",'SyntaxError');}
             \\    var bi=rule.indexOf('{');
             \\    if(bi===-1){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
             \\    var sel=rule.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
@@ -6165,8 +6227,21 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    this.cssRules.splice(index,1);
             \\    _syncToDOM(this);
             \\  };
-            \\  _Sheet.prototype.replaceSync=function(css){this._css=css;this.cssRules=_parseStyleRules(css);_syncToDOM(this);};
-            \\  _Sheet.prototype.replace=function(css){this._css=css;this.cssRules=_parseStyleRules(css);_syncToDOM(this);return Promise.resolve(this);};
+            \\  // Mutate in-place to preserve [SameObject] identity of cssRules
+            \\  function _replaceRules(arr,newRules){arr.length=0;for(var i=0;i<newRules.length;i++)arr.push(newRules[i]);}
+            \\  // CSSOM §6.4.2: replaceSync — throws NotAllowedError for non-constructed, drops @import
+            \\  _Sheet.prototype.replaceSync=function(css){
+            \\    if(!this._constructed)throw new DOMException("replaceSync can only be called on constructed CSSStyleSheet.",'NotAllowedError');
+            \\    _replaceRules(this.cssRules,_parseStyleRules(css));
+            \\    _syncToDOM(this);
+            \\  };
+            \\  // CSSOM §6.4.3: replace — rejects for non-constructed, drops @import, resolves with sheet
+            \\  _Sheet.prototype.replace=function(css){
+            \\    if(!this._constructed)return Promise.reject(new DOMException("replace can only be called on constructed CSSStyleSheet.",'NotAllowedError'));
+            \\    _replaceRules(this.cssRules,_parseStyleRules(css));
+            \\    _syncToDOM(this);
+            \\    return Promise.resolve(this);
+            \\  };
             \\  globalThis.CSSStyleSheet=_Sheet;
             \\
             \\  // ── style.sheet property via Element prototype getter ──
@@ -6224,7 +6299,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  Object.defineProperty(Element.prototype,'sheet',{get:function(){
             \\    if(!this.tagName||this.tagName.toUpperCase()!=='STYLE')return void 0;
             \\    var sh=_sheetMap.get(this);
-            \\    if(!sh){sh=new _Sheet();sh.ownerNode=this;_sheetMap.set(this,sh);sh._lastText=null;}
+            \\    if(!sh){sh=new _Sheet();sh._constructed=false;sh.ownerNode=this;_sheetMap.set(this,sh);sh._lastText=null;}
             \\    var txt=this.textContent||'';
             \\    if(txt!==sh._lastText){sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;for(var _i=0;_i<sh.cssRules.length;_i++){var _r=sh.cssRules[_i];if(_r.style)_r.style._sheet=sh;}}
             \\    return sh;
@@ -6238,6 +6313,59 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    sheets.item=function(i){return this[i]||null;};
             \\    return sheets;
             \\  },configurable:true,enumerable:true});
+            \\
+            \\  // ── document.adoptedStyleSheets (CSSOM §6.5) ──
+            \\  // Each document/shadowRoot gets its own _adoptedStyleSheets array.
+            \\  // Setter validates: each entry must be a constructed CSSStyleSheet from same realm.
+            \\  document._adoptedStyleSheets=[];
+            \\  Object.defineProperty(document,'adoptedStyleSheets',{
+            \\    get:function(){return this._adoptedStyleSheets;},
+            \\    set:function(list){
+            \\      if(!Array.isArray(list)&&!(list&&typeof list[Symbol.iterator]==='function'))throw new TypeError('adoptedStyleSheets must be an array');
+            \\      var arr=Array.from(list);
+            \\      for(var i=0;i<arr.length;i++){
+            \\        var s=arr[i];
+            \\        if(!(s instanceof _Sheet)||!s._constructed)throw new DOMException('Each member of adoptedStyleSheets must be a constructed CSSStyleSheet.','NotAllowedError');
+            \\      }
+            \\      // remove this document from old sheets' adopter lists
+            \\      var old=this._adoptedStyleSheets||[];
+            \\      for(var i=0;i<old.length;i++){var idx=old[i]._adopters.indexOf(this);if(idx>=0)old[i]._adopters.splice(idx,1);}
+            \\      this._adoptedStyleSheets=arr;
+            \\      // register this document in each sheet's adopter list
+            \\      for(var i=0;i<arr.length;i++){if(arr[i]._adopters.indexOf(this)<0)arr[i]._adopters.push(this);}
+            \\      _syncAdoptedSheets(this);
+            \\    },
+            \\    configurable:true,enumerable:true
+            \\  });
+            \\  // ── ShadowRoot.adoptedStyleSheets ──
+            \\  // Patched on attachShadow so each shadow root gets the same getter/setter.
+            \\  var _origAttachShadow=Element.prototype.attachShadow;
+            \\  if(_origAttachShadow){
+            \\    Element.prototype.attachShadow=function(init){
+            \\      var sr=_origAttachShadow.call(this,init);
+            \\      if(sr&&!Object.getOwnPropertyDescriptor(sr,'adoptedStyleSheets')){
+            \\        sr._adoptedStyleSheets=[];
+            \\        Object.defineProperty(sr,'adoptedStyleSheets',{
+            \\          get:function(){return this._adoptedStyleSheets;},
+            \\          set:function(list){
+            \\            if(!Array.isArray(list)&&!(list&&typeof list[Symbol.iterator]==='function'))throw new TypeError('adoptedStyleSheets must be an array');
+            \\            var arr=Array.from(list);
+            \\            for(var i=0;i<arr.length;i++){
+            \\              var s=arr[i];
+            \\              if(!(s instanceof _Sheet)||!s._constructed)throw new DOMException('Each member of adoptedStyleSheets must be a constructed CSSStyleSheet.','NotAllowedError');
+            \\            }
+            \\            var old=this._adoptedStyleSheets||[];
+            \\            for(var i=0;i<old.length;i++){var idx2=old[i]._adopters.indexOf(this);if(idx2>=0)old[i]._adopters.splice(idx2,1);}
+            \\            this._adoptedStyleSheets=arr;
+            \\            for(var i=0;i<arr.length;i++){if(arr[i]._adopters.indexOf(this)<0)arr[i]._adopters.push(this);}
+            \\            _syncAdoptedSheets(this);
+            \\          },
+            \\          configurable:true,enumerable:true
+            \\        });
+            \\      }
+            \\      return sr;
+            \\    };
+            \\  }
             \\
             \\  // ── CSS.supports("selector(...)") ──
             \\  if(typeof CSS!=='undefined'&&CSS.supports){
