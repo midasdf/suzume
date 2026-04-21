@@ -2275,8 +2275,12 @@ pub const KotoriRuntime = struct {
         \\      var ch=css.charAt(i);
         \\      while(i<clen&&(ch===' '||ch==='\n'||ch==='\r'||ch==='\t')){i++;ch=css.charAt(i);}
         \\      if(i>=clen)break;
-        \\      // skip @import and other @-rules silently
-        \\      if(ch==='@'){var bi=css.indexOf('{',i);if(bi===-1)break;var d=1,j=bi+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}i=j;continue;}
+        \\      // skip @-rules silently: @import (no braces) or @media etc (with braces)
+        \\      if(ch==='@'){
+        \\        var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);
+        \\        if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?clen:si2+1;continue;}
+        \\        var d=1,j=bi2+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}i=j;continue;
+        \\      }
         \\      var bi=css.indexOf('{',i);if(bi===-1)break;
         \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
         \\      var d2=1,j2=bi+1;while(j2<clen&&d2>0){var cj2=css.charAt(j2);if(cj2==='{')d2++;if(cj2==='}')d2--;j2++;}

@@ -6286,7 +6286,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    while(i<css.length){
             \\      while(i<css.length&&' \n\r\t'.indexOf(css[i])!==-1)i++;
             \\      if(i>=css.length)break;
-            \\      if(css[i]==='@'){var bi=css.indexOf('{',i);if(bi===-1)break;var d=1,j=bi+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}i=j;continue;}
+            \\      if(css[i]==='@'){var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?css.length:si2+1;continue;}var d=1,j=bi2+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}i=j;continue;}
             \\      var bi=css.indexOf('{',i);if(bi===-1)break;
             \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
             \\      var d2=1,j2=bi+1;while(j2<css.length&&d2>0){if(css[j2]==='{')d2++;if(css[j2]==='}')d2--;j2++;}
