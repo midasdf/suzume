@@ -664,6 +664,11 @@ fn parseColorFunc(text: []const u8) ?values.Color {
         r = gammaCorrect(sr);
         g = gammaCorrect(sg);
         b = gammaCorrect(sb);
+    } else if (eqlIgnoreCase(space_name, "display-p3-linear")) {
+        // Linear Display P3 → XYZ D65 → linear sRGB → sRGB (approximate: treat as linear sRGB)
+        r = gammaCorrect(r);
+        g = gammaCorrect(g);
+        b = gammaCorrect(b);
     } else if (eqlIgnoreCase(space_name, "a98-rgb")) {
         // Adobe RGB → sRGB (approximate)
         r = gammaCorrect(std.math.pow(f32, @max(r, 0), 563.0 / 256.0));
