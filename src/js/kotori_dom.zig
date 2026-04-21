@@ -1370,59 +1370,43 @@ fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
     return iface_mod.resolveInterface("http://www.w3.org/1999/xhtml", local_name);
 }
 
-/// Reflection getter dispatch. Returns null if no reflection applies and
-/// the caller should continue with its fallback.
-///
-/// HTML §2.6 — one of:
-///   - DOMString → getAttribute-or-"" (§2.6.2 "DOMString")
-///   - boolean → hasAttribute (§2.6.2 "boolean")
-///   - long → rules-for-parsing-integers §2.4.4.1, default on fail
-///   - unsigned long → rules-for-parsing-non-negative §2.4.4.2
-/// HTML §2.6.2 URL reflection getter for kotori path.
-/// Reads a URL-type content attribute (e.g. "href"), percent-encodes any
-/// non-ASCII or special query characters per the WHATWG URL special-query
-/// encode set, then returns the result. Falls back to raw attribute value
-/// if the attribute is absent. Returns null if the interface has no URL row
-/// or if the attribute is absent (caller should fall through).
+/// HTML §2.6.5 URL reflection getter for kotori path.
+/// Reads a URL-type content attribute (e.g. "href"), resolves it against the
+/// document base URL per the WHATWG URL Standard, and returns the absolute
+/// serialized URL. Falls back to raw attribute value on parse error.
+/// Returns empty string when the attribute is absent.
+/// Returns null if the interface has no URL row or the node is not an element.
 fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const iface = resolveHtmlIfaceForNode(node) orelse return null;
     const attr_name = refl.lookupUrlAttr(iface, name) orelse return null;
-    // Attribute absent → return empty string (HTML §2.6.2).
+    // Attribute absent → return empty string (HTML §2.6.5).
     var val_len: usize = 0;
     const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
     const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
-    // Fast path: if value is already ASCII-clean and has a scheme, return as-is.
-    // Otherwise percent-encode non-ASCII bytes (UTF-8) in the query component.
-    const needs_encode = blk: {
-        for (raw) |c| {
-            if (c > 0x7E or (c < 0x20 and c != '\t' and c != '\n' and c != '\r')) {
-                break :blk true;
-            }
-        }
-        break :blk false;
+    // HTML §2.6.5: resolve the attribute value against the document base URL.
+    // Get base URL from document.URL (stored as a string property on the doc object).
+    const base_url: ?[]const u8 = blk: {
+        const doc_sid = vm.pool.intern("document") catch break :blk null;
+        const doc_val = vm.globals.get(doc_sid) orelse break :blk null;
+        if (!doc_val.isObject()) break :blk null;
+        const doc_obj = doc_val.asJsObject();
+        const url_sid = vm.pool.intern("URL") catch break :blk null;
+        const url_val = doc_obj.getProperty(url_sid) orelse break :blk null;
+        if (!url_val.isString()) break :blk null;
+        break :blk vm.pool.get(url_val.asStringId());
     };
-    if (!needs_encode) {
+    // Canonicalize: resolve relative → absolute using document base URL.
+    const resolved = refl.canonicalizeUrl(vm.allocator, raw, base_url) catch {
         return JsValue.initString(vm.pool.intern(raw) catch return null);
-    }
-    // Percent-encode: copy bytes, encoding any non-ASCII or C0 control byte
-    // as %XX (WHATWG URL special-query encode set covers non-ASCII).
-    var out: std.ArrayListUnmanaged(u8) = .empty;
-    defer out.deinit(vm.allocator);
-    for (raw) |c| {
-        if (c > 0x7E or c < 0x20) {
-            const hi: u8 = "0123456789ABCDEF"[c >> 4];
-            const lo: u8 = "0123456789ABCDEF"[c & 0x0F];
-            out.appendSlice(vm.allocator, &[_]u8{ '%', hi, lo }) catch return JsValue.initString(vm.pool.intern(raw) catch return null);
-        } else {
-            out.append(vm.allocator, c) catch return JsValue.initString(vm.pool.intern(raw) catch return null);
-        }
-    }
-    return JsValue.initString(vm.pool.intern(out.items) catch return null);
+    };
+    defer vm.allocator.free(resolved);
+    return JsValue.initString(vm.pool.intern(resolved) catch return null);
 }
 
-///   - url → DOMString for now (Layer 4B will canonicalize)
+/// HTML §2.6 reflection getter for non-URL types (DOMString, boolean, long, etc.).
+/// URL-type attributes are handled by urlReflectionGet which canonicalizes them.
 fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
     const iface = resolveHtmlIfaceForNode(node) orelse return null;
     const row = refl.lookup(iface, name) orelse return null;
