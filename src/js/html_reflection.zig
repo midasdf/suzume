@@ -220,6 +220,7 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLElement", .idl = "ariaRowIndexText",              .content = "aria-rowindextext",             .type = .nullable_domstring },
 
     // ── HTMLAnchorElement (HTML §4.6.1) ──────────────────────────────
+    .{ .iface = "HTMLAnchorElement", .idl = "name",           .content = "name",           .type = .domstring },
     .{ .iface = "HTMLAnchorElement", .idl = "href",           .content = "href",           .type = .url       },
     .{ .iface = "HTMLAnchorElement", .idl = "target",         .content = "target",         .type = .domstring },
     .{ .iface = "HTMLAnchorElement", .idl = "download",       .content = "download",       .type = .domstring },
