@@ -1383,6 +1383,14 @@ pub fn resolveInlineForComputed(c: *qjs.JSContext, prop: []const u8, val: []cons
                 return qjs.JS_NewStringLen(c, result.ptr, result.len);
             }
         }
+        // CSS Values 4 §5.3: bare absolute-unit lengths (in/cm/mm/pt/pc/Q) must
+        // resolve to px at computed-value time.
+        if (parseNumUnit(trimmed)) |parsed| {
+            if (std.mem.eql(u8, parsed.unit, "px")) {
+                var buf: [128]u8 = undefined;
+                return fmtPx(c, @floatCast(parsed.value), &buf);
+            }
+        }
         return qjs.JS_NewStringLen(c, val.ptr, val.len);
     }
 
