@@ -2391,6 +2391,83 @@ pub const KotoriRuntime = struct {
         \\  Object.defineProperty(_MediaList.prototype,'length',{get:function(){return this._items.length;},enumerable:true,configurable:true});
         \\  _MediaList.prototype.item=function(i){return this._items[i]||null;};
         \\  _MediaList.prototype.toString=function(){return this.mediaText;};
+        \\  // ── CSSRule hierarchy (CSSOM §6.4) ──
+        \\  function _CSSRuleBase(){}
+        \\  // Expose Object.prototype methods explicitly so 'in' operator finds them (kotori setPrototypeOf compat)
+        \\  _CSSRuleBase.prototype.hasOwnProperty=function(p){return Object.prototype.hasOwnProperty.call(this,p);};
+        \\  _CSSRuleBase.prototype.UNKNOWN_RULE=0;_CSSRuleBase.prototype.STYLE_RULE=1;_CSSRuleBase.prototype.CHARSET_RULE=2;_CSSRuleBase.prototype.IMPORT_RULE=3;
+        \\  _CSSRuleBase.prototype.MEDIA_RULE=4;_CSSRuleBase.prototype.FONT_FACE_RULE=5;_CSSRuleBase.prototype.PAGE_RULE=6;
+        \\  _CSSRuleBase.prototype.KEYFRAMES_RULE=7;_CSSRuleBase.prototype.KEYFRAME_RULE=8;_CSSRuleBase.prototype.MARGIN_RULE=9;
+        \\  _CSSRuleBase.prototype.NAMESPACE_RULE=10;_CSSRuleBase.prototype.COUNTER_STYLE_RULE=11;_CSSRuleBase.prototype.SUPPORTS_RULE=12;
+        \\  Object.defineProperty(_CSSRuleBase.prototype,'parentRule',{get:function(){return this._parentRule||null;},enumerable:true,configurable:true});
+        \\  Object.defineProperty(_CSSRuleBase.prototype,'parentStyleSheet',{get:function(){return this._parentStyleSheet||null;},enumerable:true,configurable:true});
+        \\  Object.defineProperty(_CSSRuleBase.prototype,'type',{get:function(){return this._type||0;},enumerable:true,configurable:true});
+        \\  globalThis.CSSRule=_CSSRuleBase;
+        \\  globalThis.CSSRule.UNKNOWN_RULE=0;globalThis.CSSRule.STYLE_RULE=1;globalThis.CSSRule.CHARSET_RULE=2;globalThis.CSSRule.IMPORT_RULE=3;
+        \\  globalThis.CSSRule.MEDIA_RULE=4;globalThis.CSSRule.FONT_FACE_RULE=5;globalThis.CSSRule.PAGE_RULE=6;
+        \\  globalThis.CSSRule.KEYFRAMES_RULE=7;globalThis.CSSRule.KEYFRAME_RULE=8;globalThis.CSSRule.MARGIN_RULE=9;
+        \\  globalThis.CSSRule.NAMESPACE_RULE=10;globalThis.CSSRule.COUNTER_STYLE_RULE=11;globalThis.CSSRule.SUPPORTS_RULE=12;
+        \\  function _CSSGroupingRuleBase(){}
+        \\  Object.setPrototypeOf(_CSSGroupingRuleBase.prototype,_CSSRuleBase.prototype);
+        \\  _CSSGroupingRuleBase.prototype.insertRule=function(rule,index){
+        \\    if(index===void 0)index=this.cssRules.length;
+        \\    if(index<0||index>this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
+        \\    var parsed=_parseStyleRulesK(rule);if(!parsed.length)throw new DOMException('Invalid rule','SyntaxError');
+        \\    this.cssRules.splice(index,0,parsed[0]);return index;
+        \\  };
+        \\  _CSSGroupingRuleBase.prototype.deleteRule=function(index){
+        \\    if(index<0||index>=this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
+        \\    this.cssRules.splice(index,1);
+        \\  };
+        \\  globalThis.CSSGroupingRule=_CSSGroupingRuleBase;
+        \\  function _CSSConditionRuleBase(){}
+        \\  Object.setPrototypeOf(_CSSConditionRuleBase.prototype,_CSSGroupingRuleBase.prototype);
+        \\  Object.defineProperty(_CSSConditionRuleBase.prototype,'conditionText',{get:function(){return this._conditionText||'';},set:function(){},enumerable:true,configurable:true});
+        \\  globalThis.CSSConditionRule=_CSSConditionRuleBase;
+        \\  function _CSSMediaRuleImpl(mediaText,innerRules){
+        \\    this._type=4;this._conditionText=mediaText||'';this.cssRules=_addItem(innerRules||[]);
+        \\    this.media=new _MediaList(mediaText);
+        \\  }
+        \\  Object.setPrototypeOf(_CSSMediaRuleImpl.prototype,_CSSConditionRuleBase.prototype);
+        \\  Object.defineProperty(_CSSMediaRuleImpl.prototype,'cssText',{get:function(){
+        \\    var inner='';for(var i=0;i<this.cssRules.length;i++)inner+='\n  '+this.cssRules[i].cssText;
+        \\    return '@media '+this._conditionText+' {'+inner+'\n}';
+        \\  },enumerable:true,configurable:true});
+        \\  globalThis.CSSMediaRule=_CSSMediaRuleImpl;
+        \\  function _CSSSupportsRuleImpl(condText,innerRules){
+        \\    this._type=12;this._conditionText=condText||'';this.cssRules=_addItem(innerRules||[]);
+        \\  }
+        \\  Object.setPrototypeOf(_CSSSupportsRuleImpl.prototype,_CSSConditionRuleBase.prototype);
+        \\  Object.defineProperty(_CSSSupportsRuleImpl.prototype,'cssText',{get:function(){
+        \\    var inner='';for(var i=0;i<this.cssRules.length;i++)inner+='\n  '+this.cssRules[i].cssText;
+        \\    return '@supports '+this._conditionText+' {'+inner+'\n}';
+        \\  },enumerable:true,configurable:true});
+        \\  globalThis.CSSSupportsRule=_CSSSupportsRuleImpl;
+        \\  // CSSStyleRule
+        \\  function CSSStyleRule(sel,body,children){
+        \\    this._type=1;this._sel=sel;this._body=body||'';this.cssRules=_addItem(children||[]);
+        \\  }
+        \\  Object.setPrototypeOf(CSSStyleRule.prototype,_CSSGroupingRuleBase.prototype);
+        \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{
+        \\    get:function(){return this._sel;},
+        \\    set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=c;}catch(e){}},
+        \\    enumerable:true,configurable:true
+        \\  });
+        \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{
+        \\    get:function(){return this._sel+' { '+this._body+' }';},
+        \\    enumerable:true,configurable:true
+        \\  });
+        \\  // style: [SameObject,PutForwards=cssText] — getter returns same proxy, setter forwards to cssText
+        \\  Object.defineProperty(CSSStyleRule.prototype,'style',{
+        \\    get:function(){return this._style;},
+        \\    set:function(v){if(this._style)this._style.cssText=v;},
+        \\    enumerable:true,configurable:true
+        \\  });
+        \\  globalThis.CSSStyleRule=CSSStyleRule;
+        \\  // CSSStyleDeclaration stub (actual style objects are Proxy-based, see _makeStyle)
+        \\  if(typeof CSSStyleDeclaration==='undefined'){globalThis.CSSStyleDeclaration=function CSSStyleDeclaration(){};}
+        \\  // CSSNestedDeclarations stub
+        \\  if(typeof CSSNestedDeclarations==='undefined'){globalThis.CSSNestedDeclarations=function CSSNestedDeclarations(decls){this._type=32;this._decls=decls||'';};}
         \\  // Minimal CSSStyleDeclaration-like object with individual property access
         \\  // Note: kotori does not support s[i] string indexing; use s.charAt(i)
         \\  function _parseDecls(text){
@@ -2420,19 +2497,34 @@ pub const KotoriRuntime = struct {
         \\  function _makeStyle(declText){
         \\    var decls=_parseDecls(declText);
         \\    // target holds __rule back-ref (set by rule creation code)
-        \\    var target={__rule:null,__sheet:null};
+        \\    var target=Object.create(CSSStyleDeclaration.prototype);
+        \\    target.__rule=null;target.__sheet=null;
         \\    target.cssText=declText;
         \\    // Copy each parsed declaration onto target for direct property access
         \\    var keys=Object.keys(decls);
         \\    for(var ki=0;ki<keys.length;ki++){target[keys[ki]]=decls[keys[ki]];}
         \\    var proxy=new Proxy(target,{
         \\      set:function(t,k,v){
+        \\        if(k==='cssText'){
+        \\          // PutForwards: reparse entire declaration block
+        \\          var newDecls=_parseDecls(v||'');
+        \\          // Clear old keys from target
+        \\          var oldKeys=Object.keys(decls);
+        \\          for(var _oi=0;_oi<oldKeys.length;_oi++){delete t[oldKeys[_oi]];delete decls[oldKeys[_oi]];}
+        \\          // Copy new keys
+        \\          var newKeys=Object.keys(newDecls);
+        \\          for(var _ni=0;_ni<newKeys.length;_ni++){decls[newKeys[_ni]]=newDecls[newKeys[_ni]];t[newKeys[_ni]]=newDecls[newKeys[_ni]];}
+        \\          t.cssText=_declsToText(decls);
+        \\          if(t.__rule){t.__rule._body=t.cssText;}
+        \\          if(t.__sheet)_syncSheetAdopters(t.__sheet);
+        \\          return true;
+        \\        }
         \\        t[k]=v;
-        \\        if(typeof k==='string'&&k!=='__rule'&&k!=='__sheet'&&k!=='cssText'){
+        \\        if(typeof k==='string'&&k!=='__rule'&&k!=='__sheet'){
         \\          var kb=k.replace(/([A-Z])/g,function(m){return '-'+m.toLowerCase();});
         \\          decls[kb]=v;
         \\          t.cssText=_declsToText(decls);
-        \\          if(t.__rule){t.__rule._body=t.cssText;t.__rule.cssText=t.__rule.selectorText+' { '+t.cssText+' }';}
+        \\          if(t.__rule){t.__rule._body=t.cssText;}
         \\          if(t.__sheet)_syncSheetAdopters(t.__sheet);
         \\        }
         \\        return true;
@@ -2442,39 +2534,55 @@ pub const KotoriRuntime = struct {
         \\        if(k==='setProperty')return function(n,v){
         \\          var kb=n.toLowerCase();decls[kb]=v;t[kb]=v;
         \\          t.cssText=_declsToText(decls);
-        \\          if(t.__rule){t.__rule._body=t.cssText;t.__rule.cssText=t.__rule.selectorText+' { '+t.cssText+' }';}
+        \\          if(t.__rule){t.__rule._body=t.cssText;}
         \\          if(t.__sheet)_syncSheetAdopters(t.__sheet);
         \\        };
         \\        if(k==='removeProperty')return function(n){
         \\          var kb=n.toLowerCase();delete decls[kb];delete t[kb];
         \\          t.cssText=_declsToText(decls);
-        \\          if(t.__rule){t.__rule._body=t.cssText;t.__rule.cssText=t.__rule.selectorText+' { '+t.cssText+' }';}
+        \\          if(t.__rule){t.__rule._body=t.cssText;}
         \\          if(t.__sheet)_syncSheetAdopters(t.__sheet);
         \\        };
         \\        return t[k];
-        \\      }
+        \\      },
+        \\      getPrototypeOf:function(t){return CSSStyleDeclaration.prototype;}
         \\    });
         \\    return proxy;
         \\  }
-        \\  // CSS rule parsers (minimal, for replaceSync/replace)
+        \\  // CSS rule parsers (minimal, for replaceSync/replace/insertRule)
         \\  // Uses charAt() not [] indexing (kotori string-index limitation)
-        \\  function _parseStyleRules(css){
+        \\  // kotori bug: String.indexOf(ch,from) ignores from — use substring workaround
+        \\  function _idxOf(s,ch,from){var t=s.substring(from).indexOf(ch);return t===-1?-1:from+t;}
+        \\  function _parseAtRuleK(atHead,innerBody){
+        \\    var m=atHead.match(/^@(media|supports)\s*([\s\S]*)$/i);
+        \\    if(!m)return null;
+        \\    var keyword=m[1].toLowerCase(),cond=m[2].trim();
+        \\    var innerRules=_parseStyleRulesK(innerBody);
+        \\    if(keyword==='media')return new _CSSMediaRuleImpl(cond,innerRules);
+        \\    if(keyword==='supports')return new _CSSSupportsRuleImpl(cond,innerRules);
+        \\    return null;
+        \\  }
+        \\  function _parseStyleRulesK(css){
         \\    var rules=[],i=0,clen=css.length;
         \\    while(i<clen){
         \\      var ch=css.charAt(i);
         \\      while(i<clen&&(ch===' '||ch==='\n'||ch==='\r'||ch==='\t')){i++;ch=css.charAt(i);}
         \\      if(i>=clen)break;
-        \\      // skip @-rules silently: @import (no braces) or @media etc (with braces)
         \\      if(ch==='@'){
-        \\        var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);
+        \\        var si2=_idxOf(css,';',i),bi2=_idxOf(css,'{',i);
         \\        if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?clen:si2+1;continue;}
-        \\        var d=1,j=bi2+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}i=j;continue;
+        \\        var atHead2=css.substring(i,bi2).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+        \\        var d=1,j=bi2+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}
+        \\        var innerBody2=css.substring(bi2+1,j-1).trim();
+        \\        var atRule=_parseAtRuleK(atHead2,innerBody2);
+        \\        if(atRule)rules.push(atRule);
+        \\        i=j;continue;
         \\      }
-        \\      var bi=css.indexOf('{',i);if(bi===-1)break;
+        \\      var bi=_idxOf(css,'{',i);if(bi===-1)break;
         \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
         \\      var d2=1,j2=bi+1;while(j2<clen&&d2>0){var cj2=css.charAt(j2);if(cj2==='{')d2++;if(cj2==='}')d2--;j2++;}
         \\      var body=css.substring(bi+1,j2-1).trim();
-        \\      if(sel){rules.push({selectorText:sel,_body:body,cssText:sel+' { '+body+' }',style:_makeStyle(body),type:1});}
+        \\      if(sel){var r=new CSSStyleRule(sel,body,[]);r._style=_makeStyle(body);r._style.__rule=r;rules.push(r);}
         \\      i=j2;
         \\    }
         \\    return rules;
@@ -2510,7 +2618,7 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  // CSSOM §6.4.1: constructable CSSStyleSheet
         \\  function CSSStyleSheet(opts){
-        \\    this.cssRules=[];
+        \\    this.cssRules=_addItem([]);
         \\    this.type='text/css';
         \\    this.ownerNode=null;
         \\    this.ownerRule=null;
@@ -2533,7 +2641,7 @@ pub const KotoriRuntime = struct {
         \\    if(index===void 0)index=0;
         \\    var rt=rule.replace(/\/\*[\s\S]*?\*\//g,' ').trim();
         \\    if(/^@import\b/i.test(rt))throw new DOMException("@import rules are not allowed in constructed stylesheets.",'SyntaxError');
-        \\    var rules=_parseStyleRules(rule);
+        \\    var rules=_parseStyleRulesK(rule);
         \\    if(!rules.length)throw new DOMException("Invalid rule",'SyntaxError');
         \\    if(index<0||index>this.cssRules.length)throw new DOMException("Index out of bounds",'IndexSizeError');
         \\    this.cssRules.splice(index,0,rules[0]);
@@ -2549,24 +2657,26 @@ pub const KotoriRuntime = struct {
         \\  // Mutate array in-place to preserve [SameObject] identity of cssRules
         \\  // Note: arr.length=0 does not work in kotori; use splice instead
         \\  function _replaceRules(arr,newRules){arr.splice(0,arr.length);for(var i=0;i<newRules.length;i++)arr.push(newRules[i]);}
-        \\  // Set __rule and __sheet back-references on each rule's style proxy
+        \\  // Set __rule, __sheet back-refs on style proxy and _parentStyleSheet on rules
         \\  function _linkRules(rules,sheet){
         \\    for(var i=0;i<rules.length;i++){
         \\      var r=rules[i];
-        \\      if(r&&r.style){r.style.__rule=r;r.style.__sheet=sheet;}
+        \\      if(r){r._parentStyleSheet=sheet;if(r._style){r._style.__rule=r;r._style.__sheet=sheet;}}
         \\    }
         \\  }
+        \\  // Add .item() to a plain cssRules array (CSSRuleList interface)
+        \\  function _addItem(arr){if(!arr.item)arr.item=function(i){return(i>=0&&i<this.length)?this[i]:null;};return arr;}
         \\  // CSSOM §6.4.2: replaceSync
         \\  CSSStyleSheet.prototype.replaceSync=function(css){
         \\    if(!this._constructed)throw new DOMException("replaceSync can only be called on constructed CSSStyleSheet.",'NotAllowedError');
-        \\    _replaceRules(this.cssRules,_parseStyleRules(css));
+        \\    _replaceRules(this.cssRules,_parseStyleRulesK(css));
         \\    _linkRules(this.cssRules,this);
         \\    _syncSheetAdopters(this);
         \\  };
         \\  // CSSOM §6.4.3: replace
         \\  CSSStyleSheet.prototype.replace=function(css){
         \\    if(!this._constructed)return Promise.reject(new DOMException("replace can only be called on constructed CSSStyleSheet.",'NotAllowedError'));
-        \\    _replaceRules(this.cssRules,_parseStyleRules(css));
+        \\    _replaceRules(this.cssRules,_parseStyleRulesK(css));
         \\    _linkRules(this.cssRules,this);
         \\    _syncSheetAdopters(this);
         \\    return Promise.resolve(this);
@@ -2633,14 +2743,14 @@ pub const KotoriRuntime = struct {
         \\    while(i<body.length){
         \\      while(i<body.length&&' \n\r\t'.indexOf(body.charAt(i))!==-1)i++;
         \\      if(i>=body.length)break;
-        \\      if(body.charAt(i)==='@'){var bi3=body.indexOf('{',i);if(bi3===-1)break;var d3=1,j3=bi3+1;while(j3<body.length&&d3>0){if(body.charAt(j3)==='{')d3++;if(body.charAt(j3)==='}')d3--;j3++;}i=j3;continue;}
-        \\      var bi4=body.indexOf('{',i);var si4=body.indexOf(';',i);
+        \\      if(body.charAt(i)==='@'){var bi3=_idxOf(body,'{',i);if(bi3===-1)break;var d3=1,j3=bi3+1;while(j3<body.length&&d3>0){if(body.charAt(j3)==='{')d3++;if(body.charAt(j3)==='}')d3--;j3++;}i=j3;continue;}
+        \\      var bi4=_idxOf(body,'{',i);var si4=_idxOf(body,';',i);
         \\      if(bi4!==-1&&(si4===-1||bi4<si4)){
         \\        var sel4=body.substring(i,bi4).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
         \\        var d4=1,j4=bi4+1;while(j4<body.length&&d4>0){if(body.charAt(j4)==='{')d4++;if(body.charAt(j4)==='}')d4--;j4++;}
         \\        var inner4=body.substring(bi4+1,j4-1).trim();
-        \\        if(pendingDecls){children.push({cssText:pendingDecls,style:_makeStyle(pendingDecls),type:1,selectorText:''});pendingDecls='';}
-        \\        if(sel4){var inn4=_parseBodyK(inner4);children.push({selectorText:sel4,_body:inn4.decls,cssText:sel4+' { '+inn4.decls+' }',style:_makeStyle(inn4.decls),type:1});}
+        \\        if(pendingDecls){var pdR=new CSSStyleRule('',pendingDecls,[]);pdR._style=_makeStyle(pendingDecls);pdR._style.__rule=pdR;children.push(pdR);pendingDecls='';}
+        \\        if(sel4){var inn4=_parseBodyK(inner4);var r4=new CSSStyleRule(sel4,inn4.decls,inn4.children);r4._style=_makeStyle(inn4.decls);r4._style.__rule=r4;children.push(r4);}
         \\        i=j4;
         \\      }else if(si4!==-1){
         \\        var d5=body.substring(i,si4+1).trim();
@@ -2661,19 +2771,22 @@ pub const KotoriRuntime = struct {
         \\      while(i<clen&&(ch===' '||ch==='\n'||ch==='\r'||ch==='\t')){i++;ch=css.charAt(i);}
         \\      if(i>=clen)break;
         \\      if(ch==='@'){
-        \\        var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);
+        \\        var si2=_idxOf(css,';',i),bi2=_idxOf(css,'{',i);
         \\        if(bi2===-1||(si2!==-1&&si2<bi2)){
-        \\          var atText=css.substring(i,si2===-1?clen:si2+1).trim();
-        \\          rules.push({cssText:atText,type:3,styleSheet:null});
         \\          i=si2===-1?clen:si2+1;continue;
         \\        }
-        \\        var d=1,j=bi2+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}i=j;continue;
+        \\        var atHead2=css.substring(i,bi2).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+        \\        var d=1,j=bi2+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}
+        \\        var innerBody2=css.substring(bi2+1,j-1).trim();
+        \\        var atRule=_parseAtRuleK(atHead2,innerBody2);
+        \\        if(atRule)rules.push(atRule);
+        \\        i=j;continue;
         \\      }
-        \\      var bi=css.indexOf('{',i);if(bi===-1)break;
+        \\      var bi=_idxOf(css,'{',i);if(bi===-1)break;
         \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
         \\      var d2=1,j2=bi+1;while(j2<clen&&d2>0){var cj2=css.charAt(j2);if(cj2==='{')d2++;if(cj2==='}')d2--;j2++;}
         \\      var body=css.substring(bi+1,j2-1).trim();
-        \\      if(sel){var parsed=_parseBodyK(body);rules.push({selectorText:sel,_body:parsed.decls,cssText:sel+' { '+parsed.decls+' }',style:_makeStyle(parsed.decls),type:1});}
+        \\      if(sel){var parsed=_parseBodyK(body);var r2=new CSSStyleRule(sel,parsed.decls,parsed.children);r2._style=_makeStyle(parsed.decls);r2._style.__rule=r2;rules.push(r2);}
         \\      i=j2;
         \\    }
         \\    return rules;
@@ -2693,6 +2806,8 @@ pub const KotoriRuntime = struct {
         \\      var newRules=_parseSheetRules(txt);
         \\      sh.cssRules.splice(0,sh.cssRules.length);
         \\      for(var _i=0;_i<newRules.length;_i++)sh.cssRules.push(newRules[_i]);
+        \\      _addItem(sh.cssRules);
+        \\      _linkRules(sh.cssRules,sh);
         \\      sh._lastText=txt;
         \\    }
         \\    return sh;
