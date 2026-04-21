@@ -104,6 +104,13 @@ pub const KotoriRuntime = struct {
         // "Cannot read properties of undefined (reading 'supports')".
         _ = self.eval(css_global_polyfill_js);
 
+        // CSSOM §6.4: CSSStyleSheet constructable API for kotori. The QJS
+        // path installs CSSStyleSheet via dom_api.zig cssom_js block which
+        // only runs in the QuickJS context; kotori globals need their own
+        // polyfill. Provides new CSSStyleSheet(opts), replaceSync, replace,
+        // document.adoptedStyleSheets, and shadowRoot.adoptedStyleSheets.
+        _ = self.eval(cssom_polyfill_js);
+
         // DOM §3.1: AbortController / AbortSignal polyfill for kotori. The QJS
         // path installs these via `src/js/web_api.zig:2677-2691`; kotori has no
         // visibility into that registration, so without this polyfill every
@@ -2209,6 +2216,209 @@ pub const KotoriRuntime = struct {
         \\    return r;
         \\  };
         \\  globalThis.CSS = CSS_obj;
+        \\})();
+    ;
+
+    /// CSSOM §6.4 — Constructable CSSStyleSheet polyfill for kotori.
+    /// Provides: new CSSStyleSheet(opts), replaceSync(text), replace(text),
+    /// document.adoptedStyleSheets getter/setter, shadowRoot.adoptedStyleSheets.
+    /// Mirrors the QJS cssom_js block in dom_api.zig which only runs in the
+    /// QuickJS context.
+    const cssom_polyfill_js =
+        \\(function(){
+        \\  if (typeof globalThis.CSSStyleSheet !== 'undefined' && globalThis.CSSStyleSheet._constructed_polyfill) return;
+        \\  // MediaList minimal impl
+        \\  function _MediaList(mediaStr){
+        \\    this._items=mediaStr?mediaStr.split(',').map(function(s){return s.trim();}).filter(function(s){return s.length>0;}):[];
+        \\    this.mediaText=this._items.join(', ');
+        \\  }
+        \\  Object.defineProperty(_MediaList.prototype,'length',{get:function(){return this._items.length;},enumerable:true,configurable:true});
+        \\  _MediaList.prototype.item=function(i){return this._items[i]||null;};
+        \\  _MediaList.prototype.toString=function(){return this.mediaText;};
+        \\  // Minimal CSSStyleDeclaration-like object with individual property access
+        \\  // Note: kotori does not support s[i] string indexing; use s.charAt(i)
+        \\  function _parseDecls(text){
+        \\    var entries={},pos=0,len=text?text.length:0;
+        \\    while(pos<len){
+        \\      var ch;
+        \\      ch=text.charAt(pos);while(pos<len&&(ch===' '||ch==='\t'||ch==='\r'||ch==='\n')){pos++;ch=text.charAt(pos);}
+        \\      if(pos>=len)break;
+        \\      var ns=pos;
+        \\      ch=text.charAt(pos);while(pos<len&&ch!==':'&&ch!==';'){pos++;ch=text.charAt(pos);}
+        \\      if(pos>=len||ch!==':'){ch=text.charAt(pos);while(pos<len&&ch!==';'){pos++;ch=text.charAt(pos);}if(pos<len)pos++;continue;}
+        \\      var nm=text.substring(ns,pos).trim().toLowerCase();pos++;
+        \\      var vs=pos;
+        \\      ch=text.charAt(pos);while(pos<len&&ch!==';'){pos++;ch=text.charAt(pos);}
+        \\      var val=text.substring(vs,pos).trim().replace(/\s*!important\s*$/i,'').trim();
+        \\      if(nm&&val)entries[nm]=val;
+        \\      if(pos<len)pos++;
+        \\    }
+        \\    return entries;
+        \\  }
+        \\  function _makeStyle(declText){
+        \\    var decls=_parseDecls(declText);
+        \\    var style={};
+        \\    style.cssText=declText;
+        \\    style.getPropertyValue=function(n){return decls[n.toLowerCase()]||'';};
+        \\    style.setProperty=function(n,v){decls[n.toLowerCase()]=v;style[n.toLowerCase()]=v;};
+        \\    style.removeProperty=function(n){delete decls[n.toLowerCase()];delete style[n.toLowerCase()];};
+        \\    // Copy each parsed declaration directly onto style object for property access
+        \\    var keys=Object.keys(decls);
+        \\    for(var ki=0;ki<keys.length;ki++){style[keys[ki]]=decls[keys[ki]];}
+        \\    return style;
+        \\  }
+        \\  // CSS rule parsers (minimal, for replaceSync/replace)
+        \\  // Uses charAt() not [] indexing (kotori string-index limitation)
+        \\  function _parseStyleRules(css){
+        \\    var rules=[],i=0,clen=css.length;
+        \\    while(i<clen){
+        \\      var ch=css.charAt(i);
+        \\      while(i<clen&&(ch===' '||ch==='\n'||ch==='\r'||ch==='\t')){i++;ch=css.charAt(i);}
+        \\      if(i>=clen)break;
+        \\      // skip @-rules silently: @import (no braces) or @media etc (with braces)
+        \\      if(ch==='@'){
+        \\        var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);
+        \\        if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?clen:si2+1;continue;}
+        \\        var d=1,j=bi2+1;while(j<clen&&d>0){var cj=css.charAt(j);if(cj==='{')d++;if(cj==='}')d--;j++;}i=j;continue;
+        \\      }
+        \\      var bi=css.indexOf('{',i);if(bi===-1)break;
+        \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+        \\      var d2=1,j2=bi+1;while(j2<clen&&d2>0){var cj2=css.charAt(j2);if(cj2==='{')d2++;if(cj2==='}')d2--;j2++;}
+        \\      var body=css.substring(bi+1,j2-1).trim();
+        \\      if(sel){rules.push({selectorText:sel,_body:body,cssText:sel+' { '+body+' }',style:_makeStyle(body),type:1});}
+        \\      i=j2;
+        \\    }
+        \\    return rules;
+        \\  }
+        \\  // Adopted sheet style injection via a hidden <style> element
+        \\  var _adoptedElem=new WeakMap();
+        \\  function _sheetCSS(sheet){
+        \\    if(sheet.disabled)return '';
+        \\    var css='';
+        \\    for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.cssText)css+=r.cssText+'\n';}
+        \\    return css;
+        \\  }
+        \\  function _getAdoptedNode(root){
+        \\    var el=_adoptedElem.get(root);
+        \\    if(!el){
+        \\      el=document.createElement('style');
+        \\      el.setAttribute('data-adopted','1');
+        \\      if(root===document){document.head?document.head.appendChild(el):document.documentElement.appendChild(el);}
+        \\      else if(root&&root.appendChild){root.appendChild(el);}
+        \\      _adoptedElem.set(root,el);
+        \\    }
+        \\    return el;
+        \\  }
+        \\  function _syncAdopted(root){
+        \\    var sheets=root._adoptedStyleSheets||[];
+        \\    if(sheets.length===0){var el=_adoptedElem.get(root);if(el&&el.parentNode)el.parentNode.removeChild(el);_adoptedElem.delete(root);return;}
+        \\    var css='';
+        \\    for(var i=0;i<sheets.length;i++){css+=_sheetCSS(sheets[i]);}
+        \\    _getAdoptedNode(root).textContent=css;
+        \\  }
+        \\  function _syncSheetAdopters(sheet){
+        \\    if(sheet._adopters){for(var i=0;i<sheet._adopters.length;i++)_syncAdopted(sheet._adopters[i]);}
+        \\  }
+        \\  // CSSOM §6.4.1: constructable CSSStyleSheet
+        \\  function CSSStyleSheet(opts){
+        \\    this.cssRules=[];
+        \\    this.type='text/css';
+        \\    this.ownerNode=null;
+        \\    this.ownerRule=null;
+        \\    this.parentStyleSheet=null;
+        \\    this.href=null;
+        \\    this.title=null;
+        \\    this._constructed=true;
+        \\    this._adopters=[];
+        \\    if(opts&&typeof opts==='object'){
+        \\      this.disabled=opts.disabled===true;
+        \\      this.media=new _MediaList(typeof opts.media==='string'?opts.media:'');
+        \\    }else{
+        \\      this.disabled=false;
+        \\      this.media=new _MediaList('');
+        \\    }
+        \\  }
+        \\  CSSStyleSheet._constructed_polyfill=true;
+        \\  // insertRule — @import throws SyntaxError
+        \\  CSSStyleSheet.prototype.insertRule=function(rule,index){
+        \\    if(index===void 0)index=0;
+        \\    var rt=rule.replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+        \\    if(/^@import\b/i.test(rt))throw new DOMException("@import rules are not allowed in constructed stylesheets.",'SyntaxError');
+        \\    var rules=_parseStyleRules(rule);
+        \\    if(!rules.length)throw new DOMException("Invalid rule",'SyntaxError');
+        \\    if(index<0||index>this.cssRules.length)throw new DOMException("Index out of bounds",'IndexSizeError');
+        \\    this.cssRules.splice(index,0,rules[0]);
+        \\    _syncSheetAdopters(this);
+        \\    return index;
+        \\  };
+        \\  CSSStyleSheet.prototype.deleteRule=function(index){
+        \\    if(index<0||index>=this.cssRules.length)throw new DOMException("Index out of bounds",'IndexSizeError');
+        \\    this.cssRules.splice(index,1);
+        \\    _syncSheetAdopters(this);
+        \\  };
+        \\  // Mutate array in-place to preserve [SameObject] identity of cssRules
+        \\  // Note: arr.length=0 does not work in kotori; use splice instead
+        \\  function _replaceRules(arr,newRules){arr.splice(0,arr.length);for(var i=0;i<newRules.length;i++)arr.push(newRules[i]);}
+        \\  // CSSOM §6.4.2: replaceSync
+        \\  CSSStyleSheet.prototype.replaceSync=function(css){
+        \\    if(!this._constructed)throw new DOMException("replaceSync can only be called on constructed CSSStyleSheet.",'NotAllowedError');
+        \\    _replaceRules(this.cssRules,_parseStyleRules(css));
+        \\    _syncSheetAdopters(this);
+        \\  };
+        \\  // CSSOM §6.4.3: replace
+        \\  CSSStyleSheet.prototype.replace=function(css){
+        \\    if(!this._constructed)return Promise.reject(new DOMException("replace can only be called on constructed CSSStyleSheet.",'NotAllowedError'));
+        \\    _replaceRules(this.cssRules,_parseStyleRules(css));
+        \\    _syncSheetAdopters(this);
+        \\    return Promise.resolve(this);
+        \\  };
+        \\  globalThis.CSSStyleSheet=CSSStyleSheet;
+        \\  // Mark existing non-constructed sheets
+        \\  // document.adoptedStyleSheets getter/setter (CSSOM §6.5)
+        \\  if(!document._adoptedStyleSheets)document._adoptedStyleSheets=[];
+        \\  Object.defineProperty(document,'adoptedStyleSheets',{
+        \\    get:function(){return this._adoptedStyleSheets;},
+        \\    set:function(list){
+        \\      var arr=Array.isArray(list)?list:Array.from(list);
+        \\      for(var i=0;i<arr.length;i++){
+        \\        if(!(arr[i] instanceof CSSStyleSheet)||!arr[i]._constructed)
+        \\          throw new DOMException('Each member of adoptedStyleSheets must be a constructed CSSStyleSheet.','NotAllowedError');
+        \\      }
+        \\      var old=this._adoptedStyleSheets||[];
+        \\      for(var i=0;i<old.length;i++){var idx=old[i]._adopters.indexOf(this);if(idx>=0)old[i]._adopters.splice(idx,1);}
+        \\      this._adoptedStyleSheets=arr;
+        \\      for(var i=0;i<arr.length;i++){if(arr[i]._adopters.indexOf(this)<0)arr[i]._adopters.push(this);}
+        \\      _syncAdopted(this);
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  // ShadowRoot.adoptedStyleSheets via attachShadow patch
+        \\  var _origAS=Element.prototype.attachShadow;
+        \\  if(_origAS){
+        \\    Element.prototype.attachShadow=function(init){
+        \\      var sr=_origAS.call(this,init);
+        \\      if(sr&&!Object.getOwnPropertyDescriptor(sr,'adoptedStyleSheets')){
+        \\        sr._adoptedStyleSheets=[];
+        \\        Object.defineProperty(sr,'adoptedStyleSheets',{
+        \\          get:function(){return this._adoptedStyleSheets;},
+        \\          set:function(list){
+        \\            var arr=Array.isArray(list)?list:Array.from(list);
+        \\            for(var i=0;i<arr.length;i++){
+        \\              if(!(arr[i] instanceof CSSStyleSheet)||!arr[i]._constructed)
+        \\                throw new DOMException('Each member of adoptedStyleSheets must be a constructed CSSStyleSheet.','NotAllowedError');
+        \\            }
+        \\            var old=this._adoptedStyleSheets||[];
+        \\            for(var i=0;i<old.length;i++){var idx2=old[i]._adopters.indexOf(this);if(idx2>=0)old[i]._adopters.splice(idx2,1);}
+        \\            this._adoptedStyleSheets=arr;
+        \\            for(var i=0;i<arr.length;i++){if(arr[i]._adopters.indexOf(this)<0)arr[i]._adopters.push(this);}
+        \\            _syncAdopted(this);
+        \\          },
+        \\          configurable:true,enumerable:true
+        \\        });
+        \\      }
+        \\      return sr;
+        \\    };
+        \\  }
         \\})();
     ;
 
