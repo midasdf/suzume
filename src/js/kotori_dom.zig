@@ -2358,8 +2358,8 @@ fn nativeIsDefaultNamespace(ctx: *anyopaque, this: JsValue, args: []const JsValu
 
 fn nativeGetElementById(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const id_str = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
+    const id_str = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.null_val;
     if (findElementById(root, id_str)) |elem|
         return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
@@ -2368,8 +2368,8 @@ fn nativeGetElementById(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
 
 fn nativeDocQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
+    const sel = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.null_val;
     if (findFirstMatch(root, sel)) |found|
         return wrapNode(vm, found) orelse JsValue.null_val;
@@ -2378,8 +2378,8 @@ fn nativeDocQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue)
 
 fn nativeDocQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
+    const sel = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.null_val;
     const matches = findAllMatches(root, sel, vm.allocator);
     defer vm.allocator.free(matches);
@@ -2395,8 +2395,8 @@ fn nativeDocQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsVal
 
 fn nativeQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
+    const sel = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.null_val;
     const matches = findAllMatches(root, sel, vm.allocator);
     defer vm.allocator.free(matches);
@@ -2411,17 +2411,13 @@ fn nativeQuerySelectorAll(ctx: *anyopaque, this: JsValue, args: []const JsValue)
 
 fn nativeGetElementsByTagName(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) {
+    if (args.len == 0) {
         // Return empty array
         const arr = try vm.createObj(.{ .obj_type = .array });
         arr.data = .{ .array = .empty };
         return JsValue.initObject(arr);
     }
-    const tag = vm.pool.get(args[0].asStringId()) orelse {
-        const arr = try vm.createObj(.{ .obj_type = .array });
-        arr.data = .{ .array = .empty };
-        return JsValue.initObject(arr);
-    };
+    const tag = argToString(vm, args[0]);
     const root = getThisNode(this) orelse {
         const arr = try vm.createObj(.{ .obj_type = .array });
         arr.data = .{ .array = .empty };
@@ -2463,8 +2459,8 @@ fn nativeGetElementsByClassName(ctx: *anyopaque, this: JsValue, args: []const Js
     const vm = VM.vmFromCtx(ctx);
     const arr_obj = try vm.createObj(.{ .obj_type = .array });
     arr_obj.data = .{ .array = .empty };
-    if (args.len == 0 or !args[0].isString()) return JsValue.initObject(arr_obj);
-    const cls = vm.pool.get(args[0].asStringId()) orelse return JsValue.initObject(arr_obj);
+    if (args.len == 0) return JsValue.initObject(arr_obj);
+    const cls = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.initObject(arr_obj);
     // Delegate to querySelectorAll with "." + className
     var sel_buf: [256]u8 = undefined;
@@ -3325,11 +3321,11 @@ fn resolveCreateEventInterface(input: []const u8) ?[]const u8 {
 
 fn nativeCreateEvent(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) {
+    if (args.len == 0) {
         vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
         return JsValue.undefined_val;
     }
-    const input = vm.pool.get(args[0].asStringId()) orelse "";
+    const input = argToString(vm, args[0]);
     const ctor_name = resolveCreateEventInterface(input) orelse {
         // DOM §5.1: throw "NotSupportedError" DOMException for unsupported interfaces
         vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
@@ -3832,11 +3828,11 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
 
 fn nativeGetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
     const node = getThisNode(this) orelse return JsValue.null_val;
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.null_val;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    const attr_name = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    const attr_name = argToString(vm, args[0]);
     var val_len: usize = 0;
     if (dom_b.lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len)) |ptr| {
         const sid = try vm.pool.intern(ptr[0..val_len]);
@@ -3847,11 +3843,11 @@ fn nativeGetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
 
 fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
+    if (args.len == 0) return JsValue.undefined_val;
     const node = getThisNode(this) orelse return JsValue.undefined_val;
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    const attr_name = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    const attr_name = argToString(vm, args[0]);
     // DOM §4.9.1: invalidate the cached Attr wrapper *before* lexbor frees
     // the attribute struct, otherwise the cache would hold a dangling key.
     // MO: capture old value BEFORE removal so attributeOldValue is correct (DOM §4.3.3).
@@ -3894,7 +3890,7 @@ fn nativeRemoveAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 
 fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
     const callback = args[1];
 
     // Parse options: boolean (capture) or object {capture, once, passive, signal}
@@ -3953,7 +3949,7 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     // Resolve the target node pointer (DOM node, window, or standalone EventTarget).
     const node_ptr: *anyopaque = resolveEventTarget(vm, this) orelse return JsValue.undefined_val;
 
-    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    const event_type = argToString(vm, args[0]);
 
     // DOM §2.7.1 step 4: if target's event listener list already contains a
     // listener with the same (type, callback, capture) triple, do NOT append
@@ -4116,8 +4112,8 @@ fn removeAbortHookBinding(handler_obj: *JsObject) void {
 fn nativeWindowRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     _ = this;
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
-    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
+    const event_type = argToString(vm, args[0]);
     const callback = args[1];
     const sentinel_ptr = @intFromPtr(&g_window_sentinel);
     var i: usize = 0;
@@ -4138,8 +4134,8 @@ fn nativeWindowRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const
 
 fn nativeQuerySelector(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
+    const sel = argToString(vm, args[0]);
     const node = getThisNode(this) orelse return JsValue.null_val;
     if (findFirstMatch(node, sel)) |found|
         return wrapNode(vm, found) orelse JsValue.null_val;
@@ -4153,8 +4149,8 @@ extern fn suzume_element_matches(node: *lxb.lxb_dom_node_t, sel_ptr: [*]const u8
 
 fn nativeMatches(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.undefined_val;
-    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    if (args.len == 0) return JsValue.undefined_val;
+    const sel = argToString(vm, args[0]);
     const node = getThisNode(this) orelse return JsValue.initBool(false);
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
     return JsValue.initBool(suzume_element_matches(node, sel.ptr, sel.len));
@@ -4162,8 +4158,8 @@ fn nativeMatches(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
 
 fn nativeClosest(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
-    const sel = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
+    const sel = argToString(vm, args[0]);
     var cur: ?*lxb.lxb_dom_node_t = getThisNode(this);
     while (cur) |n| {
         if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -5187,8 +5183,8 @@ fn nativeCancelBubbleSet(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
 /// Works for DOM nodes (via getThisNode) and standalone EventTargets (via _et_ptr).
 fn nativeRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
-    const event_type = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
+    const event_type = argToString(vm, args[0]);
     const callback = args[1];
     // Parse capture: boolean or object {capture}
     var capture = false;
@@ -5582,9 +5578,9 @@ fn nativeNnmItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror
 /// before lookup.
 fn nativeNnmGetNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.null_val;
+    if (args.len == 0) return JsValue.null_val;
     const elem = nnmElem(this) orelse return JsValue.null_val;
-    const qn_raw = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    const qn_raw = argToString(vm, args[0]);
     var lower_buf: [256]u8 = undefined;
     const qn: []const u8 = blk: {
         if (!elementInHtmlDoc(vm, elem)) break :blk qn_raw;
@@ -5701,7 +5697,7 @@ fn setAttrOwnerElement(vm: *VM, attr_obj: *JsObject, owner: JsValue) void {
 /// qualified name doesn't resolve on the live attribute list.
 fn nativeNnmRemoveNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) {
+    if (args.len == 0) {
         vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
         return JsValue.undefined_val;
     }
@@ -5709,10 +5705,7 @@ fn nativeNnmRemoveNamedItem(ctx: *anyopaque, this: JsValue, args: []const JsValu
         vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
         return JsValue.undefined_val;
     };
-    const qn_raw = vm.pool.get(args[0].asStringId()) orelse {
-        vm.pending_throw = try createDOMExceptionObj(vm, "NotFoundError");
-        return JsValue.undefined_val;
-    };
+    const qn_raw = argToString(vm, args[0]);
     var lower_buf: [256]u8 = undefined;
     const qn: []const u8 = blk: {
         if (!elementInHtmlDoc(vm, elem)) break :blk qn_raw;
@@ -7503,11 +7496,11 @@ fn normalizeChildren(vm: *VM, node: *lxb.lxb_dom_node_t) void {
 
 fn nativeHasAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return JsValue.initBool(false);
+    if (args.len == 0) return JsValue.initBool(false);
     const node = getThisNode(this) orelse return JsValue.initBool(false);
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    const name = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
+    const name = argToString(vm, args[0]);
     return JsValue.initBool(dom_b.lxb_dom_element_has_attribute(elem, name.ptr, name.len));
 }
 
@@ -7524,11 +7517,11 @@ fn nativeHasAttributes(_: *anyopaque, this: JsValue, _: []const JsValue) anyerro
 
 fn nativeToggleAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len == 0 or !args[0].isString()) return error.TypeError;
+    if (args.len == 0) return error.TypeError;
     const node = getThisNode(this) orelse return JsValue.initBool(false);
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.initBool(false);
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    const name_raw = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
+    const name_raw = argToString(vm, args[0]);
 
     // Step 1: validate Name production via Layer 1A's dom_names helper.
     // Parity with setAttribute / setAttributeNS (1D.1 §QName validation
@@ -7616,10 +7609,10 @@ fn nativeRemove(_: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsVal
 
 fn nativeInsertAdjacentElement(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !args[0].isString()) return JsValue.null_val;
+    if (args.len < 2) return JsValue.null_val;
     const node = getThisNode(this) orelse return JsValue.null_val;
     const elem_node = getArgNode(args[1]) orelse return JsValue.null_val;
-    const position = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
+    const position = argToString(vm, args[0]);
     dom_b.lxb_dom_node_remove(elem_node);
     if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
         // Insert before this node in parent
@@ -7652,7 +7645,7 @@ fn nativeInsertAdjacentElement(ctx: *anyopaque, this: JsValue, args: []const JsV
 
 fn nativeInsertAdjacentText(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !args[0].isString()) return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
     const doc = g_document orelse return JsValue.undefined_val;
     const text_str = argToString(vm, args[1]);
     const text_node = dom_b.lxb_dom_document_create_text_node(doc, text_str.ptr, text_str.len) orelse return JsValue.undefined_val;
