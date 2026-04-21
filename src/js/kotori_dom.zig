@@ -3751,12 +3751,14 @@ fn nativeInsertBefore(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
 
 fn nativeSetAttribute(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
-    if (args.len < 2 or !args[0].isString() or !args[1].isString()) return JsValue.undefined_val;
+    if (args.len < 2) return JsValue.undefined_val;
     const node = getThisNode(this) orelse return JsValue.undefined_val;
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
-    const n = vm.pool.get(args[0].asStringId()) orelse return JsValue.undefined_val;
-    const v = vm.pool.get(args[1].asStringId()) orelse return JsValue.undefined_val;
+    // DOM §4.9.2 / WebIDL §3.2.6.4: both name and value are DOMString —
+    // coerce via ToString (not require pre-existing string).
+    const n = argToString(vm, args[0]);
+    const v = argToString(vm, args[1]);
     // DOM §4.9.2 step 1: if qualifiedName does not match the Name production
     // → InvalidCharacterError. Use the permissive attr-name grammar that
     // matches WPT productions.js `valid_names` (lenient: only empty +
