@@ -667,6 +667,24 @@ pub fn lookup(iface: []const u8, idl: []const u8) ?*const ReflectedAttr {
     return null;
 }
 
+/// Like lookup() but returns ONLY .url-type rows. Used by the kotori-path
+/// URL canonicalization handler (HTML §2.6.2) which needs to know the content
+/// attribute name so it can read the raw value and percent-encode it.
+/// Returns the content attribute name (e.g. "href", "src") or null if no
+/// .url row matches.
+pub fn lookupUrlAttr(iface: []const u8, idl: []const u8) ?[]const u8 {
+    for (table) |*row| {
+        if (row.type == .url and
+            std.mem.eql(u8, row.idl, idl) and
+            (std.mem.eql(u8, row.iface, iface) or
+             std.mem.eql(u8, row.iface, "HTMLElement")))
+        {
+            return row.content;
+        }
+    }
+    return null;
+}
+
 /// HTML §2.4.4.1 rules-for-parsing-integers.
 /// Returns null on parse failure OR on out-of-range values (< -2^31 or > 2^31-1)
 /// so the caller can substitute the spec-defined default. Per the reflection

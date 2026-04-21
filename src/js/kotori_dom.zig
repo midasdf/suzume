@@ -1095,6 +1095,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const elem_ctor = try vm.createObj(.{ .obj_type = .native_function });
     elem_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
     elem_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ep)) catch {};
+    // WebIDL §3.7.1: prototype.constructor must point back at the interface object.
+    ep.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(elem_ctor)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("Element"), JsValue.initObject(elem_ctor));
     // EventTarget constructor (DOM 2.7 -- standalone new EventTarget())
     const et_ctor = try vm.createObj(.{ .obj_type = .native_function });
@@ -1117,6 +1119,8 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
         hctor.data = .{ .native_fn = &nativeNoOpConstructor };
         const ctor_proto = getHtmlProto(ename) orelse g_html_element_proto.?;
         hctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(ctor_proto)) catch {};
+        // WebIDL §3.7.1: prototype.constructor back-link
+        ctor_proto.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(hctor)) catch {};
         try vm.globals.put(vm.allocator, try vm.pool.intern(ename), JsValue.initObject(hctor));
     }
 
@@ -1370,6 +1374,50 @@ fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
 ///   - boolean → hasAttribute (§2.6.2 "boolean")
 ///   - long → rules-for-parsing-integers §2.4.4.1, default on fail
 ///   - unsigned long → rules-for-parsing-non-negative §2.4.4.2
+/// HTML §2.6.2 URL reflection getter for kotori path.
+/// Reads a URL-type content attribute (e.g. "href"), percent-encodes any
+/// non-ASCII or special query characters per the WHATWG URL special-query
+/// encode set, then returns the result. Falls back to raw attribute value
+/// if the attribute is absent. Returns null if the interface has no URL row
+/// or if the attribute is absent (caller should fall through).
+fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const iface = resolveHtmlIfaceForNode(node) orelse return null;
+    const attr_name = refl.lookupUrlAttr(iface, name) orelse return null;
+    // Attribute absent → return empty string (HTML §2.6.2).
+    var val_len: usize = 0;
+    const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
+    const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
+    // Fast path: if value is already ASCII-clean and has a scheme, return as-is.
+    // Otherwise percent-encode non-ASCII bytes (UTF-8) in the query component.
+    const needs_encode = blk: {
+        for (raw) |c| {
+            if (c > 0x7E or (c < 0x20 and c != '\t' and c != '\n' and c != '\r')) {
+                break :blk true;
+            }
+        }
+        break :blk false;
+    };
+    if (!needs_encode) {
+        return JsValue.initString(vm.pool.intern(raw) catch return null);
+    }
+    // Percent-encode: copy bytes, encoding any non-ASCII or C0 control byte
+    // as %XX (WHATWG URL special-query encode set covers non-ASCII).
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    defer out.deinit(vm.allocator);
+    for (raw) |c| {
+        if (c > 0x7E or c < 0x20) {
+            const hi: u8 = "0123456789ABCDEF"[c >> 4];
+            const lo: u8 = "0123456789ABCDEF"[c & 0x0F];
+            out.appendSlice(vm.allocator, &[_]u8{ '%', hi, lo }) catch return JsValue.initString(vm.pool.intern(raw) catch return null);
+        } else {
+            out.append(vm.allocator, c) catch return JsValue.initString(vm.pool.intern(raw) catch return null);
+        }
+    }
+    return JsValue.initString(vm.pool.intern(out.items) catch return null);
+}
+
 ///   - url → DOMString for now (Layer 4B will canonicalize)
 fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
     const iface = resolveHtmlIfaceForNode(node) orelse return null;
@@ -1603,6 +1651,9 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // HTML §2.6 reflected attributes (Layer 4A). Dispatches via the
     // table in html_reflection.zig. Early-return on hit; fall through
     // to the remaining hard-coded properties on miss.
+    // URL-type attributes are handled separately with full WHATWG URL
+    // serialization (percent-encode non-ASCII, resolve relative, etc.).
+    if (urlReflectionGet(vm, node, name)) |v| return v;
     if (reflectionGet(vm, node, name)) |v| return v;
 
     // Element.attributes (DOM §4.9.2 — NamedNodeMap, identity-cached).
@@ -1827,9 +1878,10 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     }
 
     // document-specific: body, head, documentElement, doctype
-    if (eql(name, "body")) return findByTag(vm, node, "body");
-    if (eql(name, "head")) return findByTag(vm, node, "head");
-    if (eql(name, "documentElement")) return findByTag(vm, node, "html");
+    if (eql(name, "body")) return findByTag(vm, node, "body") orelse JsValue.null_val;
+    if (eql(name, "head")) return findByTag(vm, node, "head") orelse JsValue.null_val;
+    // DOM §4.5: documentElement is null (not undefined) when document has no root element
+    if (eql(name, "documentElement")) return findByTag(vm, node, "html") orelse JsValue.null_val;
     if (eql(name, "doctype") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
         // Return first DocumentType child node
         var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
@@ -1930,6 +1982,22 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
     if (reflectionSet(vm, node, name, val)) {
         setDomDirty();
         return true;
+    }
+    // HTML §2.6.2 URL-type attributes: store raw value as lexbor attribute
+    // (canonicalization happens in the getter). refl.lookup skips .url rows
+    // so we need a separate path here.
+    if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem_u: *lxb.lxb_dom_element_t = @ptrCast(node);
+        const iface_u = resolveHtmlIfaceForNode(node);
+        if (iface_u) |iface| {
+            if (refl.lookupUrlAttr(iface, name)) |attr_name| {
+                var buf: [64]u8 = undefined;
+                const s = valueToString(vm, val, &buf);
+                _ = dom_b.lxb_dom_element_set_attribute(elem_u, attr_name.ptr, attr_name.len, s.ptr, s.len);
+                setDomDirty();
+                return true;
+            }
+        }
     }
     // CSSOM View §6.5: scrollTop / scrollLeft setters (clamp to ≥ 0)
     if (eql(name, "scrollTop")) {
@@ -3134,8 +3202,38 @@ fn nativeCreateDocumentFragment(ctx: *anyopaque, this: JsValue, _: []const JsVal
 }
 
 /// DOM §4.4: document.adoptNode(node) — removes from current parent, returns node.
-fn nativeAdoptNode(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+fn nativeAdoptNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
     if (args.len == 0) return JsValue.null_val;
+    // DOM §4.5.3 step 1: if node is a Document, throw NotSupportedError.
+    if (args[0].isObject()) {
+        const arg_obj = args[0].asJsObject();
+        if (arg_obj.obj_type == .dom_node) {
+            const arg_node: ?*lxb.lxb_dom_node_t = @ptrCast(@alignCast(arg_obj.data.dom_node));
+            if (arg_node) |n| {
+                if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+                    vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
+                    return JsValue.undefined_val;
+                }
+            }
+        }
+        // Also detect JS-only document objects (created via new Document())
+        const ct_sid = vm.pool.intern("contentType") catch null;
+        if (ct_sid) |sid| {
+            if (arg_obj.getProperty(sid)) |_| {
+                // Has contentType property — check if it also has nodeType == 9
+                const nt_sid = vm.pool.intern("nodeType") catch null;
+                if (nt_sid) |nsid| {
+                    if (arg_obj.getProperty(nsid)) |ntv| {
+                        if (ntv.isNumber() and ntv.asNumber() == 9.0) {
+                            vm.pending_throw = try createDOMExceptionObj(vm, "NotSupportedError");
+                            return JsValue.undefined_val;
+                        }
+                    }
+                }
+            }
+        }
+    }
     const node = getArgNode(args[0]) orelse return args[0]; // JS-only node: return as-is
     // Remove from current parent
     dom_b.lxb_dom_node_remove(node);
@@ -4746,6 +4844,10 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
     }
     const ctor_loc_sid = try vm.pool.intern("location");
     doc_obj.setProperty(vm.allocator, ctor_loc_sid, JsValue.null_val) catch {};
+    // DOM §4.5: new Document() creates an XML document — mark it so
+    // createElement preserves case (no lowercasing).
+    const xml_flag_sid2 = try vm.pool.intern("_isXmlDoc");
+    doc_obj.setProperty(vm.allocator, xml_flag_sid2, JsValue.initBool(true)) catch {};
     vm.registerNativeMethod(doc_obj, "createElement", &nativeCreateElement) catch {};
     vm.registerNativeMethod(doc_obj, "createElementNS", &nativeCreateElementNS) catch {};
     vm.registerNativeMethod(doc_obj, "createAttribute", &nativeCreateAttribute) catch {};
