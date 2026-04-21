@@ -4413,7 +4413,38 @@ fn runListenersForTarget(
             if (rv_sid) |s| saved_rv = ev_obj.getProperty(s) orelse JsValue.undefined_val;
         }
 
-        _ = vm.callJsFunction(cb, JsValue.initObject(ev_obj), &.{JsValue.initObject(ev_obj)}) catch {};
+        // DOM §2.9 "inner invoke": the `this` for the callback is the currentTarget
+        // (the node/EventTarget the listener is registered on), not the event object.
+        // If the callback is a plain object (not a function), treat it as an
+        // EventListener interface object and call its handleEvent method with
+        // the object as `this` (DOM §2.7 EventListener interface).
+        const ct_sid_invoke = vm.pool.intern("currentTarget") catch null;
+        const current_target_val = if (ct_sid_invoke) |s| (ev_obj.getProperty(s) orelse JsValue.initObject(ev_obj)) else JsValue.initObject(ev_obj);
+        const ev_val = JsValue.initObject(ev_obj);
+        const is_fn_type = cb.isObject() and (cb.asJsObject().obj_type == .function or cb.asJsObject().obj_type == .native_function);
+        if (!is_fn_type and cb.isObject()) {
+            // Object with handleEvent method (DOM EventListener interface)
+            const cb_obj = cb.asJsObject();
+            const he_sid = vm.pool.intern("handleEvent") catch null;
+            // Use getProperty first; for accessor properties (getters), fall back to
+            // findAccessorDescriptor + call the getter (object.zig returns null for accessors).
+            var he_fn: JsValue = JsValue.undefined_val;
+            if (he_sid) |sid| {
+                if (cb_obj.getProperty(sid)) |v| {
+                    he_fn = v;
+                } else if (cb_obj.findAccessorDescriptor(sid)) |acc| {
+                    if (acc.get.isObject()) {
+                        he_fn = vm.callJsFunction(acc.get, cb, &.{}) catch JsValue.undefined_val;
+                    }
+                }
+            }
+            if (he_fn.isObject() and (he_fn.asJsObject().obj_type == .function or he_fn.asJsObject().obj_type == .native_function)) {
+                _ = vm.callJsFunction(he_fn, cb, &.{ev_val}) catch {};
+            }
+            // else: falsy/non-callable handleEvent — silently skip per DOM §2.9
+        } else {
+            _ = vm.callJsFunction(cb, current_target_val, &.{ev_val}) catch {};
+        }
 
         if (is_passive_val) {
             if (cancel_sid) |s| ev_obj.setProperty(vm.allocator, s, saved_cancelable) catch {};
@@ -4622,15 +4653,15 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     const bubbles_sid = vm.pool.intern("bubbles") catch return JsValue.initBool(false);
     if (ev_obj.getProperty(bubbles_sid)) |bv| event_bubbles = bv.isTruthy();
 
-    // Reset per-dispatch flags on the event object so a re-used Event follows
-    // §2.9 state. initEvent/new Event set these to false, but an Event that
-    // was already dispatched once may carry them.
+    // Intern the stop/cancelBubble sids for use during and after dispatch.
     const stopped_sid = vm.pool.intern("_stopped") catch return JsValue.initBool(false);
     const stop_imm_sid = vm.pool.intern("_stopImmediate") catch return JsValue.initBool(false);
     const cancel_bubble_sid = vm.pool.intern("_cancelBubble") catch return JsValue.initBool(false);
-    ev_obj.setProperty(vm.allocator, stopped_sid, JsValue.initBool(false)) catch {};
-    ev_obj.setProperty(vm.allocator, stop_imm_sid, JsValue.initBool(false)) catch {};
-    ev_obj.setProperty(vm.allocator, cancel_bubble_sid, JsValue.initBool(false)) catch {};
+    // NOTE: per DOM §2.9, stop-propagation flags are NOT reset at the START of
+    // dispatch. They are reset AFTER dispatch completes so that a pre-dispatch
+    // stopPropagation() call prevents listeners from firing (tested by
+    // dom/events/Event-propagation.html "After stopPropagation()").
+    // The reset occurs at the end of this function.
 
     const target_sid = vm.pool.intern("target") catch return JsValue.initBool(false);
     const ct_sid = vm.pool.intern("currentTarget") catch return JsValue.initBool(false);
@@ -4673,11 +4704,19 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
 
     // ── Target phase: path_buf[0]. eventPhase = AT_TARGET (2). ──
     // §2.9 step 10: at the target, both capture and non-capture listeners fire.
+    // Per DOM §2.9 step 9 (inner invoke), listeners fire in registration order
+    // but capture=true listeners are invoked before capture=false listeners at
+    // AT_TARGET. We achieve this with two passes: capture first, then bubbling.
     if (!isStopped(ev_obj, stopped_sid)) {
         ev_obj.setProperty(vm.allocator, phase_sid, JsValue.initNumber(2)) catch {};
         ev_obj.setProperty(vm.allocator, target_sid, target_wrap) catch {};
         ev_obj.setProperty(vm.allocator, ct_sid, target_wrap) catch {};
-        _ = runListenersForTarget(vm, @intFromPtr(target_node), type_str, ev_obj, false, true);
+        // Pass 1: capture=true listeners (registration order)
+        _ = runListenersForTarget(vm, @intFromPtr(target_node), type_str, ev_obj, true, false);
+        // Pass 2: capture=false listeners (registration order), unless stopped
+        if (!isStopped(ev_obj, stopped_sid)) {
+            _ = runListenersForTarget(vm, @intFromPtr(target_node), type_str, ev_obj, false, false);
+        }
     }
 
     // ── Bubble phase: walk path from path_buf[1] up to path_buf[N-1]. ──
@@ -4703,6 +4742,12 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     ev_obj.setProperty(vm.allocator, target_sid, target_wrap) catch {};
     // DOM §2.9: clear dispatch flag so initEvent works again after dispatch
     ev_obj.setProperty(vm.allocator, dispatching_sid, JsValue.initBool(false)) catch {};
+    // DOM §2.9: reset stop-propagation flags AFTER dispatch so that:
+    //   (a) a pre-dispatch stopPropagation() prevented listeners from firing, and
+    //   (b) re-dispatching the same event works normally the second time.
+    ev_obj.setProperty(vm.allocator, stopped_sid, JsValue.initBool(false)) catch {};
+    ev_obj.setProperty(vm.allocator, stop_imm_sid, JsValue.initBool(false)) catch {};
+    ev_obj.setProperty(vm.allocator, cancel_bubble_sid, JsValue.initBool(false)) catch {};
 
     // §2.7: dispatchEvent returns false if the event is canceled
     // (defaultPrevented), true otherwise.
@@ -5057,11 +5102,34 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     if (!vm.native_call_is_construct) return error.TypeError;
     const obj = try vm.createObj(.{});
 
-    // type argument (required by spec but we tolerate missing)
+    // DOM §2.5: first argument (type) is required.
+    // document.createEvent() passes empty_args directly (args.len==0) to create
+    // an uninitialised event — allow this. When called from script as `new Event()`
+    // the VM supplies at least one argument (undefined), so args.len>0 and
+    // args[0].isUndefined() means the caller omitted the required type.
     var type_str: []const u8 = "";
-    if (args.len > 0 and args[0].isString()) {
+    if (args.len == 0) {
+        // createEvent internal call — proceed with empty type ""
+    } else if (args[0].isUndefined()) {
+        // new Event() with no args from script — type is required per DOM §2.5
+        return error.TypeError;
+    } else if (args[0].isString()) {
         type_str = vm.pool.get(args[0].asStringId()) orelse "";
+    } else if (args[0].isObject()) {
+        // Call .toString() on the object (WebIDL DOMString coercion) — may throw
+        const ts_sid = vm.pool.intern("toString") catch null;
+        if (ts_sid) |sid| {
+            if (args[0].asJsObject().getProperty(sid)) |ts_fn| {
+                if (ts_fn.isObject()) {
+                    const result = try vm.callJsFunction(ts_fn, args[0], &.{});
+                    if (result.isString()) {
+                        type_str = vm.pool.get(result.asStringId()) orelse "";
+                    }
+                }
+            }
+        }
     }
+    // numbers, bools etc coerce to "" (acceptable approximation)
     const type_sid = try vm.pool.intern("type");
     obj.setProperty(vm.allocator, type_sid, JsValue.initString(try vm.pool.intern(type_str))) catch {};
 
@@ -5091,7 +5159,10 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     // _trusted backing field (false for script-created events per DOM §2.6.2)
     obj.setProperty(vm.allocator, try vm.pool.intern("_trusted"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("eventPhase"), JsValue.initNumber(0)) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("timeStamp"), JsValue.initNumber(0)) catch {};
+    // DOM §2.5: timeStamp is DOMHighResTimeStamp (ms since page load / time origin).
+    // Use milliseconds since Unix epoch as an approximation so timeStamp > 0.
+    const ts_ms: f64 = @floatFromInt(kotori.io.nowMs());
+    obj.setProperty(vm.allocator, try vm.pool.intern("timeStamp"), JsValue.initNumber(ts_ms)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("currentTarget"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("srcElement"), JsValue.null_val) catch {};
