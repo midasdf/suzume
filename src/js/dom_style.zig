@@ -212,6 +212,9 @@ pub fn computedStyleGetPropertyValue(
     if (argc < 1) return qjs.JS_NewStringLen(c, "", 0);
     const args = argv orelse return qjs.JS_NewStringLen(c, "", 0);
 
+    // Re-cascade if DOM was mutated since last flush (makes getPropertyValue live)
+    api.flushStylesIfDirty();
+
     const elem_val = qjs.JS_GetPropertyStr(c, this_val, "__element");
     defer qjs.JS_FreeValue(c, elem_val);
 
