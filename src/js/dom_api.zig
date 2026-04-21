@@ -6026,19 +6026,71 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  }
             \\  function _canonSel(s){var parts=_splitTop(s.trim(),',');for(var i=0;i<parts.length;i++)parts[i]=_canonOne(parts[i].trim());return parts.join(', ');}
             \\
+            \\  // ── CSSRule base (CSSOM §6.4) ──
+            \\  // Use _CSSRuleBase internally to avoid name collision with globalThis export
+            \\  function _CSSRuleBase(){}
+            \\  // Legacy type constants on prototype (instances inherit them)
+            \\  _CSSRuleBase.prototype.UNKNOWN_RULE=0;_CSSRuleBase.prototype.STYLE_RULE=1;_CSSRuleBase.prototype.CHARSET_RULE=2;_CSSRuleBase.prototype.IMPORT_RULE=3;
+            \\  _CSSRuleBase.prototype.MEDIA_RULE=4;_CSSRuleBase.prototype.FONT_FACE_RULE=5;_CSSRuleBase.prototype.PAGE_RULE=6;
+            \\  _CSSRuleBase.prototype.KEYFRAMES_RULE=7;_CSSRuleBase.prototype.KEYFRAME_RULE=8;_CSSRuleBase.prototype.MARGIN_RULE=9;
+            \\  _CSSRuleBase.prototype.NAMESPACE_RULE=10;_CSSRuleBase.prototype.COUNTER_STYLE_RULE=11;_CSSRuleBase.prototype.SUPPORTS_RULE=12;
+            \\  _CSSRuleBase.prototype.DOCUMENT_RULE=13;_CSSRuleBase.prototype.FONT_FEATURE_VALUES_RULE=14;_CSSRuleBase.prototype.VIEWPORT_RULE=15;_CSSRuleBase.prototype.REGION_STYLE_RULE=16;
+            \\  // parentRule, parentStyleSheet, type readonly with default null/0
+            \\  Object.defineProperty(_CSSRuleBase.prototype,'parentRule',{get:function(){return this._parentRule||null;},set:function(){},enumerable:true,configurable:true});
+            \\  Object.defineProperty(_CSSRuleBase.prototype,'parentStyleSheet',{get:function(){return this._parentStyleSheet||null;},set:function(){},enumerable:true,configurable:true});
+            \\  Object.defineProperty(_CSSRuleBase.prototype,'type',{get:function(){return this._type||0;},set:function(){},enumerable:true,configurable:true});
+            \\  globalThis.CSSRule=_CSSRuleBase;
+            \\  // Also set static constants on the exported CSSRule
+            \\  globalThis.CSSRule.UNKNOWN_RULE=0;globalThis.CSSRule.STYLE_RULE=1;globalThis.CSSRule.CHARSET_RULE=2;globalThis.CSSRule.IMPORT_RULE=3;
+            \\  globalThis.CSSRule.MEDIA_RULE=4;globalThis.CSSRule.FONT_FACE_RULE=5;globalThis.CSSRule.PAGE_RULE=6;
+            \\  globalThis.CSSRule.KEYFRAMES_RULE=7;globalThis.CSSRule.KEYFRAME_RULE=8;globalThis.CSSRule.MARGIN_RULE=9;
+            \\  globalThis.CSSRule.NAMESPACE_RULE=10;globalThis.CSSRule.COUNTER_STYLE_RULE=11;globalThis.CSSRule.SUPPORTS_RULE=12;
+            \\  globalThis.CSSRule.DOCUMENT_RULE=13;globalThis.CSSRule.FONT_FEATURE_VALUES_RULE=14;globalThis.CSSRule.VIEWPORT_RULE=15;globalThis.CSSRule.REGION_STYLE_RULE=16;
+            \\
             \\  // ── CSSGroupingRule base ──
-            \\  function CSSGroupingRule(){}
-            \\  CSSGroupingRule.prototype.insertRule=function(rule,index){
+            \\  function _CSSGroupingRuleBase(){}
+            \\  Object.setPrototypeOf(_CSSGroupingRuleBase.prototype,_CSSRuleBase.prototype);
+            \\  _CSSGroupingRuleBase.prototype.insertRule=function(rule,index){
             \\    if(index===void 0)index=this.cssRules.length;
             \\    if(index<0||index>this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
             \\    var parsed=_parseOneRule(rule);if(!parsed)throw new DOMException('Invalid rule','SyntaxError');
             \\    this.cssRules.splice(index,0,parsed);return index;
             \\  };
-            \\  CSSGroupingRule.prototype.deleteRule=function(index){
+            \\  _CSSGroupingRuleBase.prototype.deleteRule=function(index){
             \\    if(index<0||index>=this.cssRules.length)throw new DOMException('Index out of bounds','IndexSizeError');
             \\    this.cssRules.splice(index,1);
             \\  };
-            \\  globalThis.CSSGroupingRule=CSSGroupingRule;
+            \\  globalThis.CSSGroupingRule=_CSSGroupingRuleBase;
+            \\
+            \\  // ── CSSConditionRule (CSSOM Conditional §3.4) ──
+            \\  function _CSSConditionRuleBase(){}
+            \\  Object.setPrototypeOf(_CSSConditionRuleBase.prototype,_CSSGroupingRuleBase.prototype);
+            \\  // conditionText is readonly (setter is no-op per spec)
+            \\  Object.defineProperty(_CSSConditionRuleBase.prototype,'conditionText',{get:function(){return this._conditionText||'';},set:function(){},enumerable:true,configurable:true});
+            \\  globalThis.CSSConditionRule=_CSSConditionRuleBase;
+            \\
+            \\  // ── CSSMediaRule (CSSOM §6.4.3) ──
+            \\  function _CSSMediaRuleImpl(mediaText,innerRules){
+            \\    this._type=4;this._conditionText=mediaText||'';this.cssRules=innerRules||[];
+            \\    this.media=new _MediaList(mediaText);
+            \\  }
+            \\  Object.setPrototypeOf(_CSSMediaRuleImpl.prototype,_CSSConditionRuleBase.prototype);
+            \\  Object.defineProperty(_CSSMediaRuleImpl.prototype,'cssText',{get:function(){
+            \\    var inner='';for(var i=0;i<this.cssRules.length;i++)inner+='\n  '+this.cssRules[i].cssText;
+            \\    return '@media '+this._conditionText+' {'+inner+'\n}';
+            \\  },enumerable:true,configurable:true});
+            \\  globalThis.CSSMediaRule=_CSSMediaRuleImpl;
+            \\
+            \\  // ── CSSSupportsRule (CSSOM §6.4.4) ──
+            \\  function _CSSSupportsRuleImpl(condText,innerRules){
+            \\    this._type=12;this._conditionText=condText||'';this.cssRules=innerRules||[];
+            \\  }
+            \\  Object.setPrototypeOf(_CSSSupportsRuleImpl.prototype,_CSSConditionRuleBase.prototype);
+            \\  Object.defineProperty(_CSSSupportsRuleImpl.prototype,'cssText',{get:function(){
+            \\    var inner='';for(var i=0;i<this.cssRules.length;i++)inner+='\n  '+this.cssRules[i].cssText;
+            \\    return '@supports '+this._conditionText+' {'+inner+'\n}';
+            \\  },enumerable:true,configurable:true});
+            \\  globalThis.CSSSupportsRule=_CSSSupportsRuleImpl;
             \\
             \\  // ── CSSStyleDeclaration (shared backing store for rule.style) ──
             \\  // Parses a CSS declaration block string into { name, value, important } entries.
@@ -6111,10 +6163,9 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  globalThis.CSSStyleDeclaration=CSSStyleDeclaration;
             \\
             \\  // ── CSSStyleRule ──
-            \\  function CSSStyleRule(sel,decls,childRules){this.type=1;this._sel=sel;this._decls=decls||'';this.cssRules=childRules||[];this.style=new CSSStyleDeclaration(this,null);}
-            \\  CSSStyleRule.prototype=Object.create(CSSGroupingRule.prototype);
-            \\  CSSStyleRule.prototype.constructor=CSSStyleRule;
-            \\  CSSStyleRule.__proto__=CSSGroupingRule;
+            \\  function CSSStyleRule(sel,decls,childRules){this._type=1;this._sel=sel;this._decls=decls||'';this.cssRules=childRules||[];this.style=new CSSStyleDeclaration(this,null);}
+            \\  Object.setPrototypeOf(CSSStyleRule.prototype,_CSSGroupingRuleBase.prototype);
+            \\  globalThis.CSSStyleRule=CSSStyleRule;
             \\  Object.defineProperty(CSSStyleRule.prototype,'selectorText',{get:function(){return this._sel;},set:function(v){var c=v.replace(/\/\*[\s\S]*?\*\//g,' ').trim();try{document.querySelector(c);this._sel=_canonSel(c);}catch(e){}},enumerable:true,configurable:true});
             \\  Object.defineProperty(CSSStyleRule.prototype,'cssText',{get:function(){
             \\    if(this.cssRules.length===0){return this._sel+' { '+(this._decls||'')+' }';}
@@ -6167,8 +6218,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.cssText)css+=r.cssText+'\n';}
             \\    return css;
             \\  }
+            \\  function _setParentSheet(rules,sheet){
+            \\    for(var i=0;i<rules.length;i++){
+            \\      var r=rules[i];r._parentStyleSheet=sheet;
+            \\      if(r.style&&r.style._sheet===null)r.style._sheet=sheet;
+            \\      if(r.cssRules&&r.cssRules.length)_setParentSheet(r.cssRules,sheet);
+            \\    }
+            \\  }
             \\  function _syncToDOM(sheet){
-            \\    for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.style&&r.style._sheet===null)r.style._sheet=sheet;}
+            \\    _setParentSheet(sheet.cssRules,sheet);
             \\    if(sheet.ownerNode){
             \\      var css='';
             \\      for(var i=0;i<sheet.cssRules.length;i++){var r=sheet.cssRules[i];if(r.cssText)css+=r.cssText+'\n';}
@@ -6210,14 +6268,22 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(/^@import\b/i.test(ruleT)){throw new DOMException("@import rules are not allowed in constructed stylesheets.",'SyntaxError');}
             \\    var bi=rule.indexOf('{');
             \\    if(bi===-1){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
-            \\    var sel=rule.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+            \\    var head=rule.substring(0,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
             \\    var ei=rule.lastIndexOf('}');
             \\    var body=ei>bi?rule.substring(bi+1,ei).trim():'';
-            \\    if(!sel){var ex=new DOMException("Invalid selector",'SyntaxError');ex.code=12;throw ex;}
-            \\    try{document.querySelector(sel);}catch(e){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+sel+"' is not a valid selector.",'SyntaxError');ex.code=12;throw ex;}
-            \\    var canon=_canonSel(sel);
-            \\    var ro=new CSSStyleRule(canon,body);
+            \\    if(!head){var ex=new DOMException("Invalid rule",'SyntaxError');ex.code=12;throw ex;}
             \\    if(index<0||index>this.cssRules.length){throw new DOMException("Index out of bounds",'IndexSizeError');}
+            \\    var ro;
+            \\    if(/^@(media|supports)\b/i.test(head)){
+            \\      var innerRules=_parseStyleRules(body);
+            \\      ro=_parseAtRule(head,body);
+            \\      if(!ro){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+rule+"' is not a valid rule.",'SyntaxError');ex.code=12;throw ex;}
+            \\    } else {
+            \\      var sel=head;
+            \\      try{document.querySelector(sel);}catch(e){var ex=new DOMException("Failed to execute 'insertRule' on 'CSSStyleSheet': '"+sel+"' is not a valid selector.",'SyntaxError');ex.code=12;throw ex;}
+            \\      var canon=_canonSel(sel);
+            \\      ro=new CSSStyleRule(canon,body);
+            \\    }
             \\    this.cssRules.splice(index,0,ro);
             \\    _syncToDOM(this);
             \\    return index;
@@ -6281,12 +6347,30 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(pendingDecls)children.push(new CSSNestedDeclarations(pendingDecls.replace(/;\s*$/,'').trim()));
             \\    return{decls:decls,children:children};
             \\  }
+            \\  function _parseAtRule(atHead,innerBody){
+            \\    var m=atHead.match(/^@(media|supports)\s*([\s\S]*)$/i);
+            \\    if(!m)return null;
+            \\    var keyword=m[1].toLowerCase(),cond=m[2].trim();
+            \\    var innerRules=_parseStyleRules(innerBody);
+            \\    if(keyword==='media')return new _CSSMediaRuleImpl(cond,innerRules);
+            \\    if(keyword==='supports')return new _CSSSupportsRuleImpl(cond,innerRules);
+            \\    return null;
+            \\  }
             \\  function _parseStyleRules(css){
             \\    var rules=[],i=0;
             \\    while(i<css.length){
             \\      while(i<css.length&&' \n\r\t'.indexOf(css[i])!==-1)i++;
             \\      if(i>=css.length)break;
-            \\      if(css[i]==='@'){var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?css.length:si2+1;continue;}var d=1,j=bi2+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}i=j;continue;}
+            \\      if(css[i]==='@'){
+            \\        var si2=css.indexOf(';',i),bi2=css.indexOf('{',i);
+            \\        if(bi2===-1||(si2!==-1&&si2<bi2)){i=si2===-1?css.length:si2+1;continue;}
+            \\        var atHead2=css.substring(i,bi2).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
+            \\        var d=1,j=bi2+1;while(j<css.length&&d>0){if(css[j]==='{')d++;if(css[j]==='}')d--;j++;}
+            \\        var innerBody2=css.substring(bi2+1,j-1).trim();
+            \\        var atRule=_parseAtRule(atHead2,innerBody2);
+            \\        if(atRule)rules.push(atRule);
+            \\        i=j;continue;
+            \\      }
             \\      var bi=css.indexOf('{',i);if(bi===-1)break;
             \\      var sel=css.substring(i,bi).replace(/\/\*[\s\S]*?\*\//g,' ').trim();
             \\      var d2=1,j2=bi+1;while(j2<css.length&&d2>0){if(css[j2]==='{')d2++;if(css[j2]==='}')d2--;j2++;}
@@ -6301,7 +6385,7 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    var sh=_sheetMap.get(this);
             \\    if(!sh){sh=new _Sheet();sh._constructed=false;sh.ownerNode=this;_sheetMap.set(this,sh);sh._lastText=null;}
             \\    var txt=this.textContent||'';
-            \\    if(txt!==sh._lastText){sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;for(var _i=0;_i<sh.cssRules.length;_i++){var _r=sh.cssRules[_i];if(_r.style)_r.style._sheet=sh;}}
+            \\    if(txt!==sh._lastText){sh.cssRules=_parseStyleRules(txt);sh._lastText=txt;_setParentSheet(sh.cssRules,sh);}
             \\    return sh;
             \\  },configurable:true,enumerable:true});
             \\
