@@ -36,6 +36,21 @@ pub const ReflType = enum(u8) {
     /// §2.6.2 "double" — floating point parse via §2.4.4.3, with `default_double`
     /// substituted on miss/parse-fail.
     double_with_fallback,
+    /// §2.6.2 "limited long" (non-negative only): getter parses non-negative
+    /// integer per §2.4.4.2, returns default_int (-1) on miss/fail/negative.
+    /// Setter throws IndexSizeError for negative values.
+    limited_long,
+    /// §2.6.2 "limited unsigned long" (> 0): getter parses non-negative int,
+    /// returns default_int (1) if missing/fail/zero. Setter throws
+    /// IndexSizeError for zero.
+    limited_unsigned_long,
+    /// §2.6.2 "limited unsigned long with fallback": like limited_unsigned_long
+    /// but setter uses default_int instead of throwing on invalid values.
+    limited_unsigned_long_with_fallback,
+    /// §2.6.2 "clamped unsigned long": getter parses, then clamps to
+    /// [clamp_min, clamp_max]. Uses default_int on miss/parse-fail.
+    /// clamp_min/clamp_max stored in the ReflectedAttr.
+    clamped_unsigned_long,
 };
 
 /// Single reflection entry. Comptime-only; never mutated at runtime.
@@ -59,6 +74,10 @@ pub const ReflectedAttr = struct {
     /// For `.double_with_fallback`: default returned when content attribute
     /// is absent or fails §2.4.4.3 parse. Ignored otherwise.
     default_double: f64 = 0.0,
+    /// For `.clamped_unsigned_long`: lower clamp bound (inclusive).
+    clamp_min: i64 = 0,
+    /// For `.clamped_unsigned_long`: upper clamp bound (inclusive).
+    clamp_max: i64 = std.math.maxInt(i32),
 };
 
 /// HTML §2.5.3 "referrer policy" keywords.
@@ -150,6 +169,55 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLElement", .idl = "enterKeyHint",    .content = "enterkeyhint",    .type = .domstring },
     .{ .iface = "HTMLElement", .idl = "inputMode",       .content = "inputmode",       .type = .domstring },
     .{ .iface = "HTMLElement", .idl = "popover",         .content = "popover",         .type = .domstring },
+
+    // ── ARIAMixin (ARIA §6.6.1) — nullable DOMString IDL attributes ──
+    // All apply to every HTML element (via HTMLElement). Setting to null
+    // removes the content attribute; setting to a string sets it.
+    .{ .iface = "HTMLElement", .idl = "role",                          .content = "role",                          .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaAtomic",                    .content = "aria-atomic",                   .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaAutoComplete",              .content = "aria-autocomplete",             .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaBrailleLabel",              .content = "aria-braillelabel",             .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaBrailleRoleDescription",    .content = "aria-brailleroledescription",   .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaBusy",                      .content = "aria-busy",                     .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaChecked",                   .content = "aria-checked",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaColCount",                  .content = "aria-colcount",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaColIndex",                  .content = "aria-colindex",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaColSpan",                   .content = "aria-colspan",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaCurrent",                   .content = "aria-current",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaDisabled",                  .content = "aria-disabled",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaExpanded",                  .content = "aria-expanded",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaHasPopup",                  .content = "aria-haspopup",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaHidden",                    .content = "aria-hidden",                   .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaInvalid",                   .content = "aria-invalid",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaKeyShortcuts",              .content = "aria-keyshortcuts",             .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaLabel",                     .content = "aria-label",                    .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaLevel",                     .content = "aria-level",                    .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaLive",                      .content = "aria-live",                     .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaModal",                     .content = "aria-modal",                    .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaMultiLine",                 .content = "aria-multiline",                .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaMultiSelectable",           .content = "aria-multiselectable",          .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaOrientation",               .content = "aria-orientation",              .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaPlaceholder",               .content = "aria-placeholder",              .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaPosInSet",                  .content = "aria-posinset",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaPressed",                   .content = "aria-pressed",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaReadOnly",                  .content = "aria-readonly",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRelevant",                  .content = "aria-relevant",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRequired",                  .content = "aria-required",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRoleDescription",           .content = "aria-roledescription",          .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRowCount",                  .content = "aria-rowcount",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRowIndex",                  .content = "aria-rowindex",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRowSpan",                   .content = "aria-rowspan",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaSelected",                  .content = "aria-selected",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaSetSize",                   .content = "aria-setsize",                  .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaSort",                      .content = "aria-sort",                     .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaValueMax",                  .content = "aria-valuemax",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaValueMin",                  .content = "aria-valuemin",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaValueNow",                  .content = "aria-valuenow",                 .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaValueText",                 .content = "aria-valuetext",                .type = .nullable_domstring },
+    // ARIAMixin tentative additions (ARIA §6.6.1 newer attrs)
+    .{ .iface = "HTMLElement", .idl = "ariaColIndexText",              .content = "aria-colindextext",             .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaDescription",               .content = "aria-description",              .type = .nullable_domstring },
+    .{ .iface = "HTMLElement", .idl = "ariaRowIndexText",              .content = "aria-rowindextext",             .type = .nullable_domstring },
 
     // ── HTMLAnchorElement (HTML §4.6.1) ──────────────────────────────
     .{ .iface = "HTMLAnchorElement", .idl = "href",           .content = "href",           .type = .url       },
@@ -324,17 +392,17 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLInputElement", .idl = "formTarget",     .content = "formtarget",     .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "height",         .content = "height",         .type = .unsigned_long },
     .{ .iface = "HTMLInputElement", .idl = "max",            .content = "max",            .type = .domstring },
-    .{ .iface = "HTMLInputElement", .idl = "maxLength",      .content = "maxlength",      .type = .long,          .default_int = -1 },
+    .{ .iface = "HTMLInputElement", .idl = "maxLength",      .content = "maxlength",      .type = .limited_long,  .default_int = -1 },
     .{ .iface = "HTMLInputElement", .idl = "min",            .content = "min",            .type = .domstring },
-    .{ .iface = "HTMLInputElement", .idl = "minLength",      .content = "minlength",      .type = .long,          .default_int = -1 },
+    .{ .iface = "HTMLInputElement", .idl = "minLength",      .content = "minlength",      .type = .limited_long,  .default_int = -1 },
     .{ .iface = "HTMLInputElement", .idl = "multiple",       .content = "multiple",       .type = .boolean   },
     .{ .iface = "HTMLInputElement", .idl = "name",           .content = "name",           .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "pattern",        .content = "pattern",        .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "placeholder",    .content = "placeholder",    .type = .domstring },
     .{ .iface = "HTMLInputElement", .idl = "readOnly",       .content = "readonly",       .type = .boolean   },
     .{ .iface = "HTMLInputElement", .idl = "required",       .content = "required",       .type = .boolean   },
-    // size: unsigned long, default 20 per HTML §4.10.18
-    .{ .iface = "HTMLInputElement", .idl = "size",           .content = "size",           .type = .unsigned_long, .default_int = 20 },
+    // size: limited unsigned long, default 20 per HTML §4.10.18
+    .{ .iface = "HTMLInputElement", .idl = "size",           .content = "size",           .type = .limited_unsigned_long, .default_int = 20 },
     .{ .iface = "HTMLInputElement", .idl = "src",            .content = "src",            .type = .url       },
     .{ .iface = "HTMLInputElement", .idl = "step",           .content = "step",           .type = .domstring },
     // HTML §4.10.5 input-type enum, invalid+missing-default "text".
@@ -524,8 +592,8 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLTableCaptionElement", .idl = "align", .content = "align", .type = .domstring },
 
     // ── HTMLTableCellElement (td/th) (HTML §4.9.9–10) ────────────────
-    .{ .iface = "HTMLTableCellElement", .idl = "colSpan", .content = "colspan", .type = .unsigned_long, .default_int = 1 },
-    .{ .iface = "HTMLTableCellElement", .idl = "rowSpan", .content = "rowspan", .type = .unsigned_long, .default_int = 1 },
+    .{ .iface = "HTMLTableCellElement", .idl = "colSpan", .content = "colspan", .type = .clamped_unsigned_long, .default_int = 1, .clamp_min = 1,  .clamp_max = 1000  },
+    .{ .iface = "HTMLTableCellElement", .idl = "rowSpan", .content = "rowspan", .type = .clamped_unsigned_long, .default_int = 1, .clamp_min = 0,  .clamp_max = 65534 },
     .{ .iface = "HTMLTableCellElement", .idl = "headers", .content = "headers", .type = .domstring },
     .{ .iface = "HTMLTableCellElement", .idl = "scope",   .content = "scope",   .type = .domstring },
     .{ .iface = "HTMLTableCellElement", .idl = "abbr",    .content = "abbr",    .type = .domstring },
@@ -540,7 +608,7 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLTableCellElement", .idl = "vAlign",  .content = "valign",  .type = .domstring },
 
     // ── HTMLTableColElement (col/colgroup) (HTML §4.9.3) ─────────────
-    .{ .iface = "HTMLTableColElement", .idl = "span",   .content = "span",    .type = .unsigned_long, .default_int = 1 },
+    .{ .iface = "HTMLTableColElement", .idl = "span",   .content = "span",    .type = .clamped_unsigned_long, .default_int = 1, .clamp_min = 1, .clamp_max = 1000 },
     .{ .iface = "HTMLTableColElement", .idl = "align",  .content = "align",   .type = .domstring },
     .{ .iface = "HTMLTableColElement", .idl = "ch",     .content = "char",    .type = .domstring },
     .{ .iface = "HTMLTableColElement", .idl = "chOff",  .content = "charoff", .type = .domstring },
@@ -574,16 +642,16 @@ pub const table = &[_]ReflectedAttr{
 
     // ── HTMLTextAreaElement (HTML §4.10.11) ──────────────────────────
     .{ .iface = "HTMLTextAreaElement", .idl = "autocomplete", .content = "autocomplete", .type = .domstring },
-    .{ .iface = "HTMLTextAreaElement", .idl = "cols",         .content = "cols",         .type = .unsigned_long, .default_int = 20 },
+    .{ .iface = "HTMLTextAreaElement", .idl = "cols",         .content = "cols",         .type = .limited_unsigned_long_with_fallback, .default_int = 20 },
     .{ .iface = "HTMLTextAreaElement", .idl = "dirName",      .content = "dirname",      .type = .domstring },
     .{ .iface = "HTMLTextAreaElement", .idl = "disabled",     .content = "disabled",     .type = .boolean   },
-    .{ .iface = "HTMLTextAreaElement", .idl = "maxLength",    .content = "maxlength",    .type = .long,          .default_int = -1 },
-    .{ .iface = "HTMLTextAreaElement", .idl = "minLength",    .content = "minlength",    .type = .long,          .default_int = -1 },
+    .{ .iface = "HTMLTextAreaElement", .idl = "maxLength",    .content = "maxlength",    .type = .limited_long,  .default_int = -1 },
+    .{ .iface = "HTMLTextAreaElement", .idl = "minLength",    .content = "minlength",    .type = .limited_long,  .default_int = -1 },
     .{ .iface = "HTMLTextAreaElement", .idl = "name",         .content = "name",         .type = .domstring },
     .{ .iface = "HTMLTextAreaElement", .idl = "placeholder",  .content = "placeholder",  .type = .domstring },
     .{ .iface = "HTMLTextAreaElement", .idl = "readOnly",     .content = "readonly",     .type = .boolean   },
     .{ .iface = "HTMLTextAreaElement", .idl = "required",     .content = "required",     .type = .boolean   },
-    .{ .iface = "HTMLTextAreaElement", .idl = "rows",         .content = "rows",         .type = .unsigned_long, .default_int = 2 },
+    .{ .iface = "HTMLTextAreaElement", .idl = "rows",         .content = "rows",         .type = .limited_unsigned_long_with_fallback, .default_int = 2 },
     .{ .iface = "HTMLTextAreaElement", .idl = "wrap",         .content = "wrap",         .type = .domstring },
 
     // ── HTMLTimeElement (HTML §4.6.14) ───────────────────────────────
