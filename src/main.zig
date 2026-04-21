@@ -113,20 +113,55 @@ fn kotoriValidateCssValue(prop: []const u8, val: []const u8) bool {
 /// for `prop` on `node`. Serializes into `buf` and returns the slice, or
 /// `null` if the property is not supported by the shared serializer (caller
 /// falls back to inline-style attribute lookup).
+extern fn lxb_dom_element_get_attribute(element: *lxb.lxb_dom_element_t, qn: [*]const u8, qn_len: usize, value_len: *usize) ?[*]const u8;
+
 fn kotoriResolveComputedValue(
     node_opaque: *anyopaque,
     prop: []const u8,
     buf: []u8,
 ) ?[]const u8 {
     const computed_slice = @import("css/cssom/computed_slice.zig");
+    const dom_style_mod = @import("js/dom_style.zig");
     const node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(node_opaque));
-    const styles_map = dom_api.g_styles orelse return null;
-    const computed = styles_map.get(@intFromPtr(node)) orelse return null;
-    const box_opt = if (dom_api.g_root_box) |root|
-        dom_api.findBoxForNode(root, node)
-    else
-        null;
-    return computed_slice.computedStyleToSlice(&computed, prop, box_opt, buf);
+
+    // Try cascade-resolved value first.
+    if (dom_api.g_styles) |styles_map| {
+        if (styles_map.get(@intFromPtr(node))) |computed| {
+            const box_opt = if (dom_api.g_root_box) |root|
+                dom_api.findBoxForNode(root, node)
+            else
+                null;
+            if (computed_slice.computedStyleToSlice(&computed, prop, box_opt, buf)) |slice| {
+                return slice;
+            }
+        }
+    }
+
+    // For color properties with a color-mix() inline value, serialize it
+    // according to CSS Color 5 §3.2 specified-value rules (normalize percentages,
+    // omit default "shorter hue" method). This covers WPT getPropertyValue tests
+    // that run without a full cascade (disconnected elements / no layout).
+    if (dom_style_mod.isColorProperty(prop) and
+        node.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT)
+    {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        var attr_len: usize = 0;
+        if (lxb_dom_element_get_attribute(elem, "style", 5, &attr_len)) |style_ptr| {
+            const style_str = style_ptr[0..attr_len];
+            if (dom_style_mod.getStyleProperty(style_str, prop)) |raw_val| {
+                if (raw_val.len >= 10 and
+                    (raw_val[0] == 'c' or raw_val[0] == 'C') and
+                    std.ascii.startsWithIgnoreCase(raw_val, "color-mix("))
+                {
+                    if (dom_style_mod.serializeColorMixToBuf(raw_val, buf)) |serialized| {
+                        return serialized;
+                    }
+                }
+            }
+        }
+    }
+
+    return null;
 }
 
 /// After `tab_mgr` switches the active tab, restore scroll/URL bar and lazy-load an empty page if needed.

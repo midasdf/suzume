@@ -736,9 +736,16 @@ fn parseColorMixFunc(raw: []const u8) ?values.Color {
     if (!startsWithIgnoreCase(args, "in ")) return null;
     var rest = args[3..]; // after "in "
 
-    // Find comma after colorspace
+    // Find comma after colorspace (may include hue-interpolation method)
     const comma1 = findTopLevelComma(rest) orelse return null;
-    const colorspace = std.mem.trim(u8, rest[0..comma1], " \t");
+    const method_part = std.mem.trim(u8, rest[0..comma1], " \t");
+    // Extract just the colorspace name (first space-separated token)
+    const colorspace = blk: {
+        if (std.mem.indexOfScalar(u8, method_part, ' ')) |sp| {
+            break :blk method_part[0..sp];
+        }
+        break :blk method_part;
+    };
     rest = std.mem.trim(u8, rest[comma1 + 1 ..], " \t");
 
     // Split remaining into two color+percentage parts
