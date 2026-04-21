@@ -1453,28 +1453,54 @@ pub const KotoriRuntime = struct {
         \\    };
         \\  }
         \\
+        \\  /* DOM §6.2 InvalidStateError helper */
+        \\  function makeInvalidStateError(msg){
+        \\    try {
+        \\      return new DOMException(msg, 'InvalidStateError');
+        \\    } catch(e) {
+        \\      var err = new Error(msg);
+        \\      err.name = 'InvalidStateError';
+        \\      return err;
+        \\    }
+        \\  }
+        \\
         \\  /* Run the filter (DOM §6.2 "filter a node"). Returns the filter
         \\   * result constant (ACCEPT/REJECT/SKIP).
-        \\   * Per spec: Get(filter, 'acceptNode') on every traverse, throw
+        \\   * Per spec: If active flag is set, throw InvalidStateError.
+        \\   * Get(filter, 'acceptNode') on every traverse, throw
         \\   * TypeError if missing / not callable. */
         \\  function filterNode(walker, node){
         \\    if (!node) return FILTER_REJECT;
+        \\    /* DOM §6.2: "If the active flag is set, then throw an
+        \\     * 'InvalidStateError' DOMException." */
+        \\    if (walker._active) throw makeInvalidStateError('The object is in an invalid state.');
         \\    var bit = showBit(node.nodeType);
         \\    if ((walker._whatToShow & bit) === 0) return FILTER_SKIP;
         \\    var filter = walker._filter;
         \\    if (filter == null) return FILTER_ACCEPT;
-        \\    var r;
+        \\    /* Call filter with active=true; reset active before returning/throwing.
+        \\     * kotori does not support try/finally, so we use a catch-rethrow pattern. */
+        \\    var _NO_ERR = {};
+        \\    walker._active = true;
+        \\    var r, _filterErr = _NO_ERR;
         \\    if (typeof filter === 'function') {
-        \\      r = filter.call(null, node);
+        \\      try { r = filter.call(null, node); } catch(fe) { _filterErr = fe; }
         \\    } else {
         \\      /* DOM §6.2 "filter a node": perform Get(filter, 'acceptNode')
-        \\       * on every traverse. Throw TypeError if not callable. */
-        \\      var accept = filter.acceptNode;
-        \\      if (typeof accept !== 'function') {
-        \\        throw new TypeError("Failed to execute 'acceptNode' on 'NodeFilter': acceptNode is not a function");
+        \\       * on every traverse. Throw TypeError if not callable.
+        \\       * The getter itself may throw (e.g. via Proxy or accessor). */
+        \\      var accept;
+        \\      try { accept = filter.acceptNode; } catch(fe) { _filterErr = fe; }
+        \\      if (_filterErr === _NO_ERR) {
+        \\        if (typeof accept !== 'function') {
+        \\          walker._active = false;
+        \\          throw new TypeError("Failed to execute 'acceptNode' on 'NodeFilter': acceptNode is not a function");
+        \\        }
+        \\        try { r = accept.call(filter, node); } catch(fe) { _filterErr = fe; }
         \\      }
-        \\      r = accept.call(filter, node);
         \\    }
+        \\    walker._active = false;
+        \\    if (_filterErr !== _NO_ERR) throw _filterErr;
         \\    var ri = Number(r);
         \\    if (ri === FILTER_ACCEPT || ri === FILTER_REJECT || ri === FILTER_SKIP) return ri;
         \\    return FILTER_REJECT;  /* invalid numeric result → REJECT */
@@ -1511,6 +1537,7 @@ pub const KotoriRuntime = struct {
         \\  /* DOM §6.1 parentNode: find nearest inclusive ancestor that is
         \\   * an inclusive descendant of root and ACCEPT. */
         \\  TWP.parentNode = function(){
+        \\    if (this._active) throw makeInvalidStateError('The object is in an invalid state.');
         \\    var n = this._current;
         \\    while (n != null && n !== this._root) {
         \\      n = n.parentNode;
@@ -1524,6 +1551,7 @@ pub const KotoriRuntime = struct {
         \\  };
         \\  /* First child / last child traversal helper (§6.1). */
         \\  function twChild(walker, first){
+        \\    if (walker._active) throw makeInvalidStateError('The object is in an invalid state.');
         \\    var node = walker._current;
         \\    var child = first ? node.firstChild : node.lastChild;
         \\    while (child != null) {
@@ -1553,6 +1581,7 @@ pub const KotoriRuntime = struct {
         \\
         \\  /* Sibling helper (§6.1). */
         \\  function twSibling(walker, next){
+        \\    if (walker._active) throw makeInvalidStateError('The object is in an invalid state.');
         \\    var node = walker._current;
         \\    if (node === walker._root) return null;
         \\    while (true) {
@@ -1581,6 +1610,7 @@ pub const KotoriRuntime = struct {
         \\
         \\  /* nextNode (DOM §6.1): pre-order traversal. */
         \\  TWP.nextNode = function(){
+        \\    if (this._active) throw makeInvalidStateError('The object is in an invalid state.');
         \\    var node = this._current;
         \\    var result = FILTER_ACCEPT;
         \\    while (true) {
@@ -1604,6 +1634,7 @@ pub const KotoriRuntime = struct {
         \\  };
         \\  /* previousNode (§6.1) */
         \\  TWP.previousNode = function(){
+        \\    if (this._active) throw makeInvalidStateError('The object is in an invalid state.');
         \\    var node = this._current;
         \\    while (node !== this._root) {
         \\      var sib = node.previousSibling;
@@ -1689,24 +1720,132 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\  }
-        \\  NIP.nextNode     = function(){ return niTraverse(this, true); };
-        \\  NIP.previousNode = function(){ return niTraverse(this, false); };
+        \\  NIP.nextNode     = function(){
+        \\    if (this._active) throw makeInvalidStateError('The object is in an invalid state.');
+        \\    return niTraverse(this, true);
+        \\  };
+        \\  NIP.previousNode = function(){
+        \\    if (this._active) throw makeInvalidStateError('The object is in an invalid state.');
+        \\    return niTraverse(this, false);
+        \\  };
         \\  globalThis.NodeIterator = NodeIterator;
         \\
+        \\  /* -------- NodeIterator removal tracking (DOM §6.2) ----------- */
+        \\  /* Global registry of all live NodeIterators. Weak references would
+        \\   * be ideal but are not universally supported; we use a plain array
+        \\   * and accept that detached iterators are never GC'd from the list.
+        \\   * This matches the spec's "node iterator list" on the Document. */
+        \\  var _niRegistry = [];
+        \\
+        \\  /* DOM §6.2 "notifying iteration" algorithm.
+        \\   * Called *before* the node is removed (parent still set). */
+        \\  function _niNotifyRemoval(removedNode){
+        \\    /* "For each NodeIterator iter:" */
+        \\    for (var i = 0; i < _niRegistry.length; i++) {
+        \\      var iter = _niRegistry[i];
+        \\      /* "If root is not an inclusive ancestor of node, continue." */
+        \\      var n = removedNode;
+        \\      var inRoot = false;
+        \\      while (n) {
+        \\        if (n === iter._root) { inRoot = true; break; }
+        \\        n = n.parentNode;
+        \\      }
+        \\      if (!inRoot) continue;
+        \\
+        \\      /* "If referenceNode is not an inclusive descendant of node, continue." */
+        \\      var ref = iter._ref;
+        \\      var refInNode = false;
+        \\      n = ref;
+        \\      while (n) {
+        \\        if (n === removedNode) { refInNode = true; break; }
+        \\        n = n.parentNode;
+        \\      }
+        \\      if (!refInNode) continue;
+        \\
+        \\      /* "If pointerBeforeReferenceNode is false:" */
+        \\      if (!iter._before) {
+        \\        /* "Set referenceNode to the first node preceding removedNode." */
+        \\        var prev = _previousNode(removedNode);
+        \\        if (prev) iter._ref = prev;
+        \\        /* pointer stays false, done. */
+        \\        continue;
+        \\      }
+        \\
+        \\      /* "If there is a node following the last inclusive descendant:" */
+        \\      var nextAfter = _nextNodeAfterSubtree(removedNode);
+        \\      if (nextAfter) {
+        \\        iter._ref = nextAfter;
+        \\        /* pointer stays true */
+        \\        continue;
+        \\      }
+        \\
+        \\      /* "Set referenceNode to the first node preceding removedNode,
+        \\       *  set pointerBeforeReferenceNode to false." */
+        \\      var prev2 = _previousNode(removedNode);
+        \\      if (prev2) iter._ref = prev2;
+        \\      iter._before = false;
+        \\    }
+        \\  }
+        \\
+        \\  /* Return the node immediately preceding removedNode in pre-order
+        \\   * (including its last inclusive descendant). */
+        \\  function _previousNode(node){
+        \\    var prev = node.previousSibling;
+        \\    if (prev) {
+        \\      while (prev.lastChild) prev = prev.lastChild;
+        \\      return prev;
+        \\    }
+        \\    return node.parentNode || null;
+        \\  }
+        \\
+        \\  /* Return the first node following the last inclusive descendant of
+        \\   * removedNode, still within the document (i.e. nextSibling or
+        \\   * ancestor's nextSibling). The removedNode has not yet been removed. */
+        \\  function _nextNodeAfterSubtree(node){
+        \\    /* Walk to the last inclusive descendant */
+        \\    var last = node;
+        \\    while (last.lastChild) last = last.lastChild;
+        \\    /* Find next sibling walking up */
+        \\    var cur = last;
+        \\    while (cur) {
+        \\      if (cur.nextSibling) return cur.nextSibling;
+        \\      cur = cur.parentNode;
+        \\    }
+        \\    return null;
+        \\  }
+        \\
+        \\  /* Patch removeChild to notify iterators before removal. */
+        \\  (function(){
+        \\    if (typeof Node === 'undefined' || !Node.prototype) return;
+        \\    var _origRemoveChild = Node.prototype.removeChild;
+        \\    Node.prototype.removeChild = function(child){
+        \\      if (child && _niRegistry.length > 0) {
+        \\        _niNotifyRemoval(child);
+        \\      }
+        \\      return _origRemoveChild.call(this, child);
+        \\    };
+        \\  })();
+        \\
         \\  /* -------- document.createTreeWalker / createNodeIterator ----- */
+        \\  function isNode(v){
+        \\    /* Accept any object with a numeric nodeType — works across realms
+        \\     * (iframes) where instanceof Node would fail. */
+        \\    return v != null && typeof v === 'object' && typeof v.nodeType === 'number';
+        \\  }
         \\  function createTreeWalker(root, whatToShow, filter){
-        \\    if (arguments.length < 1 || root == null || typeof root.nodeType !== 'number') {
+        \\    if (arguments.length < 1 || !isNode(root)) {
         \\      throw new TypeError('createTreeWalker requires a Node');
         \\    }
         \\    var w = Object.create(TWP);
         \\    w._root = root;
         \\    w._current = root;
         \\    w._whatToShow = toWhatToShow(whatToShow);
-        \\    w._filter = (filter === undefined) ? null : filter;
+        \\    w._filter = (filter === undefined || filter === null) ? null : filter;
+        \\    w._active = false;
         \\    return w;
         \\  }
         \\  function createNodeIterator(root, whatToShow, filter){
-        \\    if (arguments.length < 1 || root == null || typeof root.nodeType !== 'number') {
+        \\    if (arguments.length < 1 || !isNode(root)) {
         \\      throw new TypeError('createNodeIterator requires a Node');
         \\    }
         \\    var it = Object.create(NIP);
@@ -1714,7 +1853,10 @@ pub const KotoriRuntime = struct {
         \\    it._ref = root;
         \\    it._before = true;
         \\    it._whatToShow = toWhatToShow(whatToShow);
-        \\    it._filter = (filter === undefined) ? null : filter;
+        \\    it._filter = (filter === undefined || filter === null) ? null : filter;
+        \\    it._active = false;
+        \\    /* Register for removal notification (DOM §6.2 node iterator list). */
+        \\    _niRegistry.push(it);
         \\    return it;
         \\  }
         \\  if (typeof Document !== 'undefined' && Document.prototype) {
