@@ -92,6 +92,10 @@ pub const PseudoClass = enum {
     indeterminate,
     // CSS Scoping L1 §3.3: shadow host pseudo-classes
     host,
+    // CSS Selectors L4 §14.3: :dir(ltr|rtl) — directionality pseudo-class
+    dir,
+    // CSS Selectors L4 §14.2: :lang(xx[,yy]*) — language pseudo-class
+    lang,
     // Internal-only: used by :has()/:not()/:is()/:where() selectors
     has,
     not,
@@ -153,6 +157,9 @@ pub const NthParams = struct {
     b: i32 = 0,
 };
 
+/// CSS Selectors L4 §14.3: directionality kind for :dir()
+pub const DirKind = enum { ltr, rtl };
+
 pub const PseudoClassSel = struct {
     pc: PseudoClass,
     nth: ?NthParams = null,
@@ -161,6 +168,8 @@ pub const PseudoClassSel = struct {
     is_inner: ?[]const u8 = null, // Raw inner selector string for :is()
     where_inner: ?[]const u8 = null, // Raw inner selector string for :where()
     host_inner: ?[]const u8 = null, // Raw inner selector string for :host(<compound>)
+    dir_arg: ?DirKind = null, // :dir(ltr|rtl) argument (CSS Selectors L4 §14.3)
+    lang_args: ?[]const []const u8 = null, // :lang(xx[,yy]*) arguments (CSS Selectors L4 §14.2)
 };
 
 pub const SimpleSelector = union(enum) {
@@ -563,6 +572,64 @@ const SelectorParser = struct {
                         } } });
                         self.specificity.b += 1;
                     }
+                } else if (self.peek() == '(' and eqlIgnoreCase(name, "dir")) {
+                    // CSS Selectors L4 §14.3: :dir(ltr|rtl)
+                    self.advance(); // skip '('
+                    const dir_inner_start = self.pos;
+                    var paren_depth_dir: u32 = 1;
+                    while (self.pos < self.source.len and paren_depth_dir > 0) {
+                        if (self.source[self.pos] == '(') paren_depth_dir += 1;
+                        if (self.source[self.pos] == ')') paren_depth_dir -= 1;
+                        if (paren_depth_dir > 0) self.pos += 1;
+                    }
+                    const dir_inner = std.mem.trim(u8, self.source[dir_inner_start..self.pos], " \t");
+                    if (self.pos < self.source.len) self.advance(); // skip ')'
+                    const dir_kind: ?DirKind = if (eqlIgnoreCase(dir_inner, "ltr"))
+                        .ltr
+                    else if (eqlIgnoreCase(dir_inner, "rtl"))
+                        .rtl
+                    else
+                        null;
+                    if (dir_kind == null) return null; // invalid :dir() arg — invalidate selector
+                    try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                        .pc = .dir,
+                        .dir_arg = dir_kind,
+                    } } });
+                    self.specificity.b += 1;
+                } else if (self.peek() == '(' and eqlIgnoreCase(name, "lang")) {
+                    // CSS Selectors L4 §14.2: :lang(xx[,yy]*)
+                    self.advance(); // skip '('
+                    const lang_inner_start = self.pos;
+                    var paren_depth_lang: u32 = 1;
+                    while (self.pos < self.source.len and paren_depth_lang > 0) {
+                        if (self.source[self.pos] == '(') paren_depth_lang += 1;
+                        if (self.source[self.pos] == ')') paren_depth_lang -= 1;
+                        if (paren_depth_lang > 0) self.pos += 1;
+                    }
+                    const lang_inner = std.mem.trim(u8, self.source[lang_inner_start..self.pos], " \t");
+                    if (self.pos < self.source.len) self.advance(); // skip ')'
+                    if (lang_inner.len == 0) return null; // empty :lang() is invalid
+                    // Count comma-separated args
+                    var arg_count: usize = 1;
+                    for (lang_inner) |ch| {
+                        if (ch == ',') arg_count += 1;
+                    }
+                    const lang_args = try self.allocator.alloc([]const u8, arg_count);
+                    var arg_idx: usize = 0;
+                    var lang_start: usize = 0;
+                    for (lang_inner, 0..) |ch, li| {
+                        if (ch == ',') {
+                            lang_args[arg_idx] = std.mem.trim(u8, lang_inner[lang_start..li], " \t\"'");
+                            arg_idx += 1;
+                            lang_start = li + 1;
+                        }
+                    }
+                    lang_args[arg_idx] = std.mem.trim(u8, lang_inner[lang_start..], " \t\"'");
+                    try self.components.append(self.allocator, .{ .simple = .{ .pseudo_class = .{
+                        .pc = .lang,
+                        .lang_args = lang_args,
+                    } } });
+                    self.specificity.b += 1;
                 } else {
                     // Unknown pseudo-class: per CSS spec, a selector with an unknown
                     // pseudo-class is invalid and must not match any element.
@@ -1178,9 +1245,70 @@ fn matchPseudoClass(pcs: PseudoClassSel, element: ElementAdapter) bool {
             }
             return true;
         },
+        // :dir(ltr|rtl) — CSS Selectors L4 §14.3
+        .dir => {
+            const wanted = pcs.dir_arg orelse return false;
+            // Resolve directionality: walk up the tree checking dir attribute
+            var cur: ?ElementAdapter = element;
+            while (cur) |c| {
+                const dir_val = c.getAttribute("dir") orelse {
+                    cur = c.parent();
+                    continue;
+                };
+                const is_rtl = eqlIgnoreCase(dir_val, "rtl");
+                const is_ltr = eqlIgnoreCase(dir_val, "ltr");
+                if (is_rtl or is_ltr) {
+                    const resolved: DirKind = if (is_rtl) .rtl else .ltr;
+                    return resolved == wanted;
+                }
+                // "auto" or unknown — keep walking up
+                cur = c.parent();
+            }
+            // No dir attribute found — default to ltr
+            return wanted == .ltr;
+        },
+        // :lang(xx[,yy]*) — CSS Selectors L4 §14.2
+        .lang => {
+            const args = pcs.lang_args orelse return false;
+            // Find the element's language: walk up tree for lang attribute
+            var cur: ?ElementAdapter = element;
+            var elem_lang: ?[]const u8 = null;
+            while (cur) |c| {
+                if (c.getAttribute("lang")) |lv| {
+                    elem_lang = lv;
+                    break;
+                }
+                // Also check xml:lang
+                if (c.getAttribute("xml:lang")) |xlv| {
+                    elem_lang = xlv;
+                    break;
+                }
+                cur = c.parent();
+            }
+            const el = elem_lang orelse return false;
+            // BCP-47 prefix match: :lang(en) matches "en", "en-US", "en-GB", etc.
+            for (args) |range| {
+                if (langMatches(range, el)) return true;
+            }
+            return false;
+        },
         // :has()/:not()/:is()/:where()/:host are handled above via inner fields / early return
         .has, .not, .is, .where, .host => return false,
     }
+}
+
+/// BCP-47 language range prefix match (CSS Selectors L4 §14.2).
+/// Returns true if `tag` equals `range` or starts with `range` followed by '-'.
+/// Case-insensitive per RFC 4647.
+fn langMatches(range: []const u8, tag: []const u8) bool {
+    if (range.len == 0) return false;
+    // Wildcard "*" matches any non-empty language tag
+    if (std.mem.eql(u8, range, "*")) return tag.len > 0;
+    if (tag.len == range.len) return eqlIgnoreCase(tag, range);
+    if (tag.len > range.len and tag[range.len] == '-') {
+        return eqlIgnoreCase(tag[0..range.len], range);
+    }
+    return false;
 }
 
 /// Check if position matches an+b formula
