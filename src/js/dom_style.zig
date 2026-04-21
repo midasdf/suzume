@@ -5262,6 +5262,17 @@ fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
         if (!isValidOklchFunc(val)) return false;
     }
 
+    // CSS Color 5: color-mix() — strict grammar validation.
+    // Only applies when "in <colorspace>" prefix is present (the spec form).
+    // color-mix() forms without "in" fall through to parseColor below.
+    if (val.len >= 14 and eqlIgnoreCase(val[0..10], "color-mix(") and
+        // Check for "in " after the opening paren (with optional whitespace)
+        (eqlIgnoreCase(val[10..13], "in ") or
+         (val.len >= 15 and val[10] == ' ' and eqlIgnoreCase(val[11..14], "in "))))
+    {
+        return isValidColorMixFunc(val);
+    }
+
     // Try parsing as-is first
     if (color_mod.parseColor(val) != null) return true;
     // Try stripping CSS comments: rgb(/* R */0, /* G */51, /* B */255)
@@ -5754,6 +5765,591 @@ fn isValidColorFunc(val: []const u8) bool {
     }
 
     return true;
+}
+
+// ── color-mix() validation (CSS Color 5 §3.2) ─────────────────────
+//
+// Validates:  color-mix(in <colorspace>[<hue-method>]?, <c1>[<p1>]?, <c2>[<p2>]?)
+// Rejects:    percentages < 0 or > 100, both percentages = 0,
+//             hue-interpolation on rectangular colorspace,
+//             missing "in" keyword, missing comma between parts,
+//             unknown colorspace, <3 or >3 top-level comma-separated parts.
+//
+// Does NOT validate the inner <color> values beyond "parseable" — per spec
+// the color-mix function value is always valid when the outer grammar is valid.
+fn isValidColorMixFunc(val: []const u8) bool {
+    const color_mod = @import("../css/properties.zig");
+    // Extract inner args: between "color-mix(" and the last ")"
+    const prefix_len = "color-mix(".len;
+    if (val.len < prefix_len + 1) return false;
+    const end = std.mem.lastIndexOfScalar(u8, val, ')') orelse return false;
+    const args = std.mem.trim(u8, val[prefix_len..end], " \t\r\n");
+
+    // Must start with "in "
+    if (args.len < 3 or !eqlIgnoreCase(args[0..3], "in ")) return false;
+    var rest = args[3..];
+
+    // Find first top-level comma — separates "in <colorspace>[<hue>]" from colors
+    const comma1 = findTopLevelCommaStatic(rest) orelse return false;
+    const method_part = std.mem.trim(u8, rest[0..comma1], " \t");
+    rest = std.mem.trim(u8, rest[comma1 + 1 ..], " \t");
+
+    // Check there's a second top-level comma separating the two color parts
+    const comma2 = findTopLevelCommaStatic(rest) orelse return false;
+    const part1 = std.mem.trim(u8, rest[0..comma2], " \t");
+    const part2_raw = std.mem.trim(u8, rest[comma2 + 1 ..], " \t");
+
+    // Reject 3+ color parts (extra comma after part2 at depth 0)
+    if (findTopLevelCommaStatic(part2_raw) != null) return false;
+    const part2 = part2_raw;
+
+    // Parse colorspace from method_part (may have hue-interpolation for polar)
+    // Tokenize by spaces: first token is colorspace, optional next 2 are hue method
+    var method_toks: [4][]const u8 = undefined;
+    var method_count: usize = 0;
+    var mtok_iter = std.mem.tokenizeAny(u8, method_part, " \t");
+    while (mtok_iter.next()) |tok| {
+        if (method_count < 4) {
+            method_toks[method_count] = tok;
+            method_count += 1;
+        }
+    }
+    if (method_count == 0) return false;
+    const colorspace = method_toks[0];
+
+    // Classify colorspace: rectangular vs polar
+    const is_polar = eqlIgnoreCase(colorspace, "hsl") or
+        eqlIgnoreCase(colorspace, "hwb") or
+        eqlIgnoreCase(colorspace, "lch") or
+        eqlIgnoreCase(colorspace, "oklch");
+    const is_rectangular = eqlIgnoreCase(colorspace, "srgb") or
+        eqlIgnoreCase(colorspace, "srgb-linear") or
+        eqlIgnoreCase(colorspace, "display-p3") or
+        eqlIgnoreCase(colorspace, "display-p3-linear") or
+        eqlIgnoreCase(colorspace, "a98-rgb") or
+        eqlIgnoreCase(colorspace, "prophoto-rgb") or
+        eqlIgnoreCase(colorspace, "rec2020") or
+        eqlIgnoreCase(colorspace, "lab") or
+        eqlIgnoreCase(colorspace, "oklab") or
+        eqlIgnoreCase(colorspace, "xyz") or
+        eqlIgnoreCase(colorspace, "xyz-d50") or
+        eqlIgnoreCase(colorspace, "xyz-d65");
+
+    if (!is_polar and !is_rectangular) return false;
+
+    // Validate hue-interpolation method tokens (if present)
+    if (method_count > 1) {
+        // Rectangular spaces cannot have hue method
+        if (is_rectangular) return false;
+        // Must be exactly "<method> hue" (2 extra tokens)
+        if (method_count != 3) return false;
+        const hue_method = method_toks[1];
+        const hue_kw = method_toks[2];
+        if (!eqlIgnoreCase(hue_kw, "hue")) return false;
+        if (!eqlIgnoreCase(hue_method, "shorter") and
+            !eqlIgnoreCase(hue_method, "longer") and
+            !eqlIgnoreCase(hue_method, "increasing") and
+            !eqlIgnoreCase(hue_method, "decreasing"))
+            return false;
+    }
+
+    // Parse and validate percentages for each part
+    var p1: f32 = -1;
+    var p2: f32 = -1;
+    // We only need to validate percentages, not parse colors (parsing may fail
+    // for things like leading "25% color" which the test uses)
+    _ = parseColorWithPercentValidate(part1, &p1) orelse return false;
+    _ = parseColorWithPercentValidate(part2, &p2) orelse return false;
+
+    // Reject percentages out of range
+    if (p1 > 100) return false;
+    if (p2 > 100) return false;
+
+    // Normalize implicit percentages
+    var np1 = p1;
+    var np2 = p2;
+    if (np1 < 0 and np2 < 0) { np1 = 50; np2 = 50; }
+    else if (np1 < 0) { np1 = 100 - np2; }
+    else if (np2 < 0) { np2 = 100 - np1; }
+
+    // Both 0% is invalid
+    if (np1 == 0 and np2 == 0) return false;
+
+    // Validate inner color values — they must be valid (either parseable or
+    // accepted as keywords / var()-containing values).
+    // Trim percentages before validating color:
+    const c1_str = extractColorPart(part1);
+    const c2_str = extractColorPart(part2);
+    if (c1_str.len == 0 or c2_str.len == 0) return false;
+    // Accept var()-containing colors
+    if (std.mem.indexOf(u8, c1_str, "var(") == null) {
+        if (!eqlIgnoreCase(c1_str, "currentcolor") and
+            !eqlIgnoreCase(c1_str, "transparent") and
+            color_mod.parseColor(c1_str) == null)
+            return false;
+    }
+    if (std.mem.indexOf(u8, c2_str, "var(") == null) {
+        if (!eqlIgnoreCase(c2_str, "currentcolor") and
+            !eqlIgnoreCase(c2_str, "transparent") and
+            color_mod.parseColor(c2_str) == null)
+            return false;
+    }
+
+    return true;
+}
+
+/// Top-level comma finder (static version, does not depend on properties.zig).
+fn findTopLevelCommaStatic(s: []const u8) ?usize {
+    var depth: u32 = 0;
+    for (s, 0..) |ch, i| {
+        if (ch == '(' or ch == '[') depth += 1
+        else if ((ch == ')' or ch == ']') and depth > 0) depth -= 1
+        else if (ch == ',' and depth == 0) return i;
+    }
+    return null;
+}
+
+/// Parse percentage from a color+percent part, returning -1 if no percentage.
+/// Returns null if the percentage is out of [0, 100] range (strict validation).
+fn parseColorWithPercentValidate(part: []const u8, pct: *f32) ?void {
+    const trimmed = std.mem.trim(u8, part, " \t");
+    if (trimmed.len == 0) return null;
+
+    // Leading percent: "25% red"
+    if (trimmed.len > 0 and trimmed[0] >= '0' and trimmed[0] <= '9') {
+        if (std.mem.indexOfScalar(u8, trimmed, '%')) |pct_end| {
+            if (pct_end + 1 < trimmed.len and trimmed[pct_end + 1] == ' ') {
+                const pct_str = trimmed[0..pct_end];
+                if (std.fmt.parseFloat(f32, pct_str)) |v| {
+                    if (v < 0 or v > 100) return null; // out of range
+                    pct.* = v;
+                    return {};
+                } else |_| {}
+            }
+        }
+    }
+
+    // Trailing percent: "red 25%"
+    if (trimmed[trimmed.len - 1] == '%') {
+        var i = trimmed.len - 2;
+        while (i > 0 and (trimmed[i] == '.' or (trimmed[i] >= '0' and trimmed[i] <= '9'))) : (i -= 1) {}
+        if (i > 0 and trimmed[i] == ' ') {
+            const pct_str = trimmed[i + 1 .. trimmed.len - 1];
+            if (std.fmt.parseFloat(f32, pct_str)) |v| {
+                if (v < 0 or v > 100) return null; // out of range
+                pct.* = v;
+                return {};
+            } else |_| {}
+        }
+    }
+
+    // No percent found
+    pct.* = -1;
+    return {};
+}
+
+/// Extract the color portion from a "color [pct%]" or "[pct% ]color" part.
+fn extractColorPart(part: []const u8) []const u8 {
+    const trimmed = std.mem.trim(u8, part, " \t");
+    if (trimmed.len == 0) return "";
+
+    // Leading percent pattern: "25% red" or "25% hsl(...)"
+    if (trimmed.len > 0 and trimmed[0] >= '0' and trimmed[0] <= '9') {
+        if (std.mem.indexOfScalar(u8, trimmed, '%')) |pct_end| {
+            if (pct_end + 1 < trimmed.len and trimmed[pct_end + 1] == ' ') {
+                return std.mem.trim(u8, trimmed[pct_end + 1 ..], " \t");
+            }
+        }
+    }
+
+    // Trailing percent: "red 25%"
+    if (trimmed[trimmed.len - 1] == '%') {
+        var i = trimmed.len - 2;
+        while (i > 0 and (trimmed[i] == '.' or (trimmed[i] >= '0' and trimmed[i] <= '9'))) : (i -= 1) {}
+        if (i > 0 and trimmed[i] == ' ') {
+            return std.mem.trim(u8, trimmed[0..i], " \t");
+        }
+    }
+
+    // calc() percentage as trailing: "red calc(20%)"
+    if (trimmed.len > 5 and eqlIgnoreCase(trimmed[trimmed.len - 1 ..][0..1], ")")) {
+        // Find last space-separated token
+        var last_space: ?usize = null;
+        var depth: u32 = 0;
+        var ii = trimmed.len;
+        while (ii > 0) {
+            ii -= 1;
+            const ch = trimmed[ii];
+            if (ch == ')') depth += 1
+            else if (ch == '(') { if (depth > 0) depth -= 1; }
+            else if (ch == ' ' and depth == 0) {
+                last_space = ii;
+                break;
+            }
+        }
+        if (last_space) |sp| {
+            const last_tok = trimmed[sp + 1 ..];
+            if (last_tok.len > 5 and eqlIgnoreCase(last_tok[0..5], "calc(")) {
+                return std.mem.trim(u8, trimmed[0..sp], " \t");
+            }
+        }
+    }
+
+    return trimmed;
+}
+
+/// Serialize a color-mix() value for inline style (specified value).
+/// Preserves the color-mix() form; resolves inner colors to rgb()/rgba().
+/// Normalizes percentages: omits 50% when both 50%, normalizes "25% color"→"color 25%".
+/// Preserves hue-interpolation method if non-default (shorter).
+/// Returns null if val is not a valid color-mix or cannot be serialized.
+pub fn serializeColorMixSpecified(c: *qjs.JSContext, val: []const u8) ?qjs.JSValue {
+    const color_mod = @import("../css/properties.zig");
+
+    const prefix_len = "color-mix(".len;
+    if (val.len < prefix_len + 1) return null;
+    const end = std.mem.lastIndexOfScalar(u8, val, ')') orelse return null;
+    const args = std.mem.trim(u8, val[prefix_len..end], " \t\r\n");
+
+    if (args.len < 3 or !eqlIgnoreCase(args[0..3], "in ")) return null;
+    const rest0 = args[3..];
+
+    const comma1 = findTopLevelCommaStatic(rest0) orelse return null;
+    const method_part = std.mem.trim(u8, rest0[0..comma1], " \t");
+    const rest1 = std.mem.trim(u8, rest0[comma1 + 1 ..], " \t");
+
+    const comma2 = findTopLevelCommaStatic(rest1) orelse return null;
+    const part1 = std.mem.trim(u8, rest1[0..comma2], " \t");
+    const part2 = std.mem.trim(u8, rest1[comma2 + 1 ..], " \t");
+
+    // Parse colorspace and optional hue method
+    var method_toks: [4][]const u8 = undefined;
+    var method_count: usize = 0;
+    var mtok_iter = std.mem.tokenizeAny(u8, method_part, " \t");
+    while (mtok_iter.next()) |tok| {
+        if (method_count < 4) {
+            method_toks[method_count] = tok;
+            method_count += 1;
+        }
+    }
+    if (method_count == 0) return null;
+    const colorspace = method_toks[0];
+
+    // Determine hue method (if non-default "shorter")
+    var hue_method: ?[]const u8 = null;
+    if (method_count == 3) {
+        const hm = method_toks[1];
+        if (!eqlIgnoreCase(hm, "shorter")) {
+            hue_method = hm; // keep non-default methods
+        }
+    }
+
+    // Parse color and percent for each part
+    var p1: f32 = -1;
+    var p2: f32 = -1;
+    const c1_str = extractColorPart(part1);
+    const c2_str = extractColorPart(part2);
+    if (c1_str.len == 0 or c2_str.len == 0) return null;
+
+    // Extract percentages
+    _ = parseColorWithPercentValidate(part1, &p1) orelse return null;
+    _ = parseColorWithPercentValidate(part2, &p2) orelse return null;
+
+    // Check for calc() percentages — preserve as-is
+    const p1_is_calc = blk: {
+        const trimmed = std.mem.trim(u8, part1, " \t");
+        if (trimmed.len > 5 and trimmed[trimmed.len - 1] == ')') {
+            var last_sp: ?usize = null;
+            var di: usize = trimmed.len;
+            var depth2: u32 = 0;
+            while (di > 0) {
+                di -= 1;
+                const ch = trimmed[di];
+                if (ch == ')') depth2 += 1 else if (ch == '(') { if (depth2 > 0) depth2 -= 1; } else if (ch == ' ' and depth2 == 0) { last_sp = di; break; }
+            }
+            if (last_sp) |sp| {
+                const lt = trimmed[sp + 1 ..];
+                if (lt.len > 5 and eqlIgnoreCase(lt[0..5], "calc(")) break :blk true;
+            }
+        }
+        // Leading calc not supported; just check trailing
+        break :blk false;
+    };
+    const p2_is_calc = blk: {
+        const trimmed = std.mem.trim(u8, part2, " \t");
+        if (trimmed.len > 5 and trimmed[trimmed.len - 1] == ')') {
+            var last_sp: ?usize = null;
+            var di: usize = trimmed.len;
+            var depth2: u32 = 0;
+            while (di > 0) {
+                di -= 1;
+                const ch = trimmed[di];
+                if (ch == ')') depth2 += 1 else if (ch == '(') { if (depth2 > 0) depth2 -= 1; } else if (ch == ' ' and depth2 == 0) { last_sp = di; break; }
+            }
+            if (last_sp) |sp| {
+                const lt = trimmed[sp + 1 ..];
+                if (lt.len > 5 and eqlIgnoreCase(lt[0..5], "calc(")) break :blk true;
+            }
+        }
+        break :blk false;
+    };
+
+    // Serialize the colorspace+hue-method portion
+    var space_buf: [64]u8 = undefined;
+    const space_str: []const u8 = if (hue_method) |hm| blk: {
+        const s = std.fmt.bufPrint(&space_buf, "{s} {s} hue", .{ colorspace, hm }) catch return null;
+        break :blk s;
+    } else colorspace;
+
+    // Serialize an inner color for inclusion in color-mix() specified value.
+    // - Named keywords (red, blue): kept as-is
+    // - currentcolor / transparent / var(): kept as-is
+    // - lab/lch/oklab/oklch: normalized via formatModernColorSpecified (L clamping etc.)
+    // - color(): kept as-is
+    // - rgb/rgba/hsl/hsla/hwb/#hex: resolved to canonical rgb()/rgba()
+    const serializeInnerColor = struct {
+        fn f(ctx2: *qjs.JSContext, color_str: []const u8, buf: []u8, cmod: anytype) []const u8 {
+            if (eqlIgnoreCase(color_str, "currentcolor")) return color_str;
+            if (eqlIgnoreCase(color_str, "transparent")) return color_str;
+            if (std.mem.indexOf(u8, color_str, "var(") != null) return color_str;
+
+            // Named color keywords (no parentheses, no #) — keep as-is
+            if (color_str.len > 0 and color_str[0] != '#' and
+                std.mem.indexOf(u8, color_str, "(") == null)
+            {
+                return color_str;
+            }
+
+            // lab/lch/oklab/oklch: normalize via formatModernColorSpecified
+            if ((color_str.len >= 4 and eqlIgnoreCase(color_str[0..4], "lab(")) or
+                (color_str.len >= 4 and eqlIgnoreCase(color_str[0..4], "lch(")) or
+                (color_str.len >= 6 and eqlIgnoreCase(color_str[0..6], "oklab(")) or
+                (color_str.len >= 6 and eqlIgnoreCase(color_str[0..6], "oklch(")))
+            {
+                const jsv = formatModernColorSpecified(ctx2, color_str);
+                defer qjs.JS_FreeValue(ctx2, jsv);
+                var slen: usize = 0;
+                if (qjs.JS_ToCStringLen(ctx2, &slen, jsv)) |ptr| {
+                    defer qjs.JS_FreeCString(ctx2, ptr);
+                    const n = @min(slen, buf.len);
+                    @memcpy(buf[0..n], ptr[0..n]);
+                    return buf[0..n];
+                }
+                return color_str;
+            }
+
+            // color() function — keep as-is
+            if (color_str.len >= 6 and eqlIgnoreCase(color_str[0..6], "color(")) {
+                return color_str;
+            }
+
+            // rgb/rgba/hsl/hsla/hwb/#hex → canonical rgb()/rgba()
+            if (cmod.parseColor(color_str)) |color| {
+                if (color.a == 255) {
+                    return std.fmt.bufPrint(buf, "rgb({d}, {d}, {d})", .{ color.r, color.g, color.b }) catch color_str;
+                } else {
+                    const orig_a = extractOriginalAlpha(color_str);
+                    if (orig_a) |a| {
+                        return std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d})", .{ color.r, color.g, color.b, a }) catch color_str;
+                    } else {
+                        const af = @as(f32, @floatFromInt(color.a)) / 255.0;
+                        return std.fmt.bufPrint(buf, "rgba({d}, {d}, {d}, {d})", .{ color.r, color.g, color.b, af }) catch color_str;
+                    }
+                }
+            }
+            return color_str;
+        }
+    };
+
+    // Serialize both inner colors into separate buffers.
+    var c1_buf: [192]u8 = undefined;
+    var c2_buf: [192]u8 = undefined;
+    const c1_serialized = serializeInnerColor.f(c, c1_str, &c1_buf, color_mod);
+    const c2_serialized = serializeInnerColor.f(c, c2_str, &c2_buf, color_mod);
+
+    // Get calc() percentage strings if needed
+    var calc1_buf: [32]u8 = undefined;
+    var calc2_buf: [32]u8 = undefined;
+    const calc1_str: ?[]const u8 = if (p1_is_calc) blk: {
+        const trimmed = std.mem.trim(u8, part1, " \t");
+        var last_sp: usize = 0;
+        var di: usize = trimmed.len;
+        var depth2: u32 = 0;
+        while (di > 0) {
+            di -= 1;
+            const ch = trimmed[di];
+            if (ch == ')') depth2 += 1 else if (ch == '(') { if (depth2 > 0) depth2 -= 1; } else if (ch == ' ' and depth2 == 0) { last_sp = di; break; }
+        }
+        const calc_tok = trimmed[last_sp + 1 ..];
+        if (calc_tok.len <= calc1_buf.len) {
+            @memcpy(calc1_buf[0..calc_tok.len], calc_tok);
+            break :blk calc1_buf[0..calc_tok.len];
+        }
+        break :blk calc_tok;
+    } else null;
+    const calc2_str: ?[]const u8 = if (p2_is_calc) blk: {
+        const trimmed = std.mem.trim(u8, part2, " \t");
+        var last_sp: usize = 0;
+        var di: usize = trimmed.len;
+        var depth2: u32 = 0;
+        while (di > 0) {
+            di -= 1;
+            const ch = trimmed[di];
+            if (ch == ')') depth2 += 1 else if (ch == '(') { if (depth2 > 0) depth2 -= 1; } else if (ch == ' ' and depth2 == 0) { last_sp = di; break; }
+        }
+        const calc_tok = trimmed[last_sp + 1 ..];
+        if (calc_tok.len <= calc2_buf.len) {
+            @memcpy(calc2_buf[0..calc_tok.len], calc_tok);
+            break :blk calc2_buf[0..calc_tok.len];
+        }
+        break :blk calc_tok;
+    } else null;
+
+    // Build output string
+    var out_buf: [1024]u8 = undefined;
+    var fbs = std.io.fixedBufferStream(&out_buf);
+    const w = fbs.writer();
+
+    w.print("color-mix(in {s}, ", .{space_str}) catch return null;
+
+    // Normalize implicit percentages to determine effective values.
+    // Rule: omit a percentage if it is effectively 50% AND the other is also
+    // effectively 50% (CSS Color 5 §12.2 serialization of color-mix()).
+    // "Implicit" means unspecified (p < 0), which defaults to 50%.
+    var np1 = p1;
+    var np2 = p2;
+    if (!p1_is_calc and !p2_is_calc) {
+        if (np1 < 0 and np2 < 0) { np1 = 50; np2 = 50; }
+        else if (np1 < 0) { np1 = 100 - np2; }
+        else if (np2 < 0) { np2 = 100 - np1; }
+    }
+    // Omit a percentage when both effective values are 50 (and no calc involved)
+    const both_50 = !p1_is_calc and !p2_is_calc and np1 == 50 and np2 == 50;
+    // When omitting: also omit explicitly-written 50% if the result is both-50
+    const omit_p1 = !p1_is_calc and both_50;
+    const omit_p2 = !p2_is_calc and both_50;
+
+    w.print("{s}", .{c1_serialized}) catch return null;
+    if (p1_is_calc) {
+        if (calc1_str) |cs| w.print(" {s}", .{cs}) catch return null;
+    } else if (!omit_p1) {
+        // Format percentage: avoid ".0" for whole numbers
+        if (p1 == @round(p1)) {
+            w.print(" {d:.0}%", .{p1}) catch return null;
+        } else {
+            w.print(" {d}%", .{p1}) catch return null;
+        }
+    }
+
+    w.print(", {s}", .{c2_serialized}) catch return null;
+    if (p2_is_calc) {
+        if (calc2_str) |cs| w.print(" {s}", .{cs}) catch return null;
+    } else if (!omit_p2) {
+        if (p2 == @round(p2)) {
+            w.print(" {d:.0}%", .{p2}) catch return null;
+        } else {
+            w.print(" {d}%", .{p2}) catch return null;
+        }
+    }
+
+    w.print(")", .{}) catch return null;
+
+    const result = fbs.getWritten();
+    return qjs.JS_NewStringLen(c, result.ptr, result.len);
+}
+
+/// Pure-buffer variant of serializeColorMixSpecified — no JSContext needed.
+/// Normalizes percentages and hue-method only; inner colors are kept as-is
+/// (already in their specified/canonical form from the raw style attribute).
+/// Used by the kotori resolve_fn path (main.zig) where no QJS context exists.
+/// Returns a slice into `buf`, or null on parse failure.
+pub fn serializeColorMixToBuf(val: []const u8, buf: []u8) ?[]const u8 {
+    const prefix_len = "color-mix(".len;
+    if (val.len < prefix_len + 1) return null;
+    const end = std.mem.lastIndexOfScalar(u8, val, ')') orelse return null;
+    const args = std.mem.trim(u8, val[prefix_len..end], " \t\r\n");
+
+    if (args.len < 3 or !eqlIgnoreCase(args[0..3], "in ")) return null;
+    const rest0 = args[3..];
+
+    const comma1 = findTopLevelCommaStatic(rest0) orelse return null;
+    const method_part = std.mem.trim(u8, rest0[0..comma1], " \t");
+    const rest1 = std.mem.trim(u8, rest0[comma1 + 1 ..], " \t");
+
+    const comma2 = findTopLevelCommaStatic(rest1) orelse return null;
+    const part1 = std.mem.trim(u8, rest1[0..comma2], " \t");
+    const part2 = std.mem.trim(u8, rest1[comma2 + 1 ..], " \t");
+
+    // Parse colorspace and optional hue method
+    var method_toks: [4][]const u8 = undefined;
+    var method_count: usize = 0;
+    var mtok_iter = std.mem.tokenizeAny(u8, method_part, " \t");
+    while (mtok_iter.next()) |tok| {
+        if (method_count < 4) {
+            method_toks[method_count] = tok;
+            method_count += 1;
+        }
+    }
+    if (method_count == 0) return null;
+    const colorspace = method_toks[0];
+
+    // Determine hue method: omit if "shorter" (default), keep otherwise
+    var hue_method: ?[]const u8 = null;
+    if (method_count == 3) {
+        const hm = method_toks[1];
+        if (!eqlIgnoreCase(hm, "shorter")) {
+            hue_method = hm;
+        }
+    }
+
+    // Parse percentages
+    var p1: f32 = -1;
+    var p2: f32 = -1;
+    const c1_str = extractColorPart(part1);
+    const c2_str = extractColorPart(part2);
+    if (c1_str.len == 0 or c2_str.len == 0) return null;
+    _ = parseColorWithPercentValidate(part1, &p1) orelse return null;
+    _ = parseColorWithPercentValidate(part2, &p2) orelse return null;
+
+    // Normalize effective percentages
+    var np1 = p1;
+    var np2 = p2;
+    if (np1 < 0 and np2 < 0) { np1 = 50; np2 = 50; }
+    else if (np1 < 0) { np1 = 100 - np2; }
+    else if (np2 < 0) { np2 = 100 - np1; }
+
+    const both_50 = np1 == 50 and np2 == 50;
+
+    // Build colorspace+method string
+    var space_buf: [64]u8 = undefined;
+    const space_str: []const u8 = if (hue_method) |hm| blk: {
+        const s = std.fmt.bufPrint(&space_buf, "{s} {s} hue", .{ colorspace, hm }) catch return null;
+        break :blk s;
+    } else colorspace;
+
+    var fbs = std.io.fixedBufferStream(buf);
+    const w = fbs.writer();
+
+    w.print("color-mix(in {s}, {s}", .{ space_str, c1_str }) catch return null;
+    if (!both_50 and p1 >= 0) {
+        if (p1 == @round(p1)) {
+            w.print(" {d:.0}%", .{p1}) catch return null;
+        } else {
+            w.print(" {d}%", .{p1}) catch return null;
+        }
+    }
+    w.print(", {s}", .{c2_str}) catch return null;
+    if (!both_50 and p2 >= 0) {
+        // p2 was explicitly specified
+        if (p2 == @round(p2)) {
+            w.print(" {d:.0}%", .{p2}) catch return null;
+        } else {
+            w.print(" {d}%", .{p2}) catch return null;
+        }
+    }
+    w.print(")", .{}) catch return null;
+
+    return fbs.getWritten();
 }
 
 fn isColorFuncWithCalc(val: []const u8) bool {
