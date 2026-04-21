@@ -429,6 +429,10 @@ var g_text_proto: ?*JsObject = null;
 var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
+/// Shared isTrusted getter function — same object across all Event instances
+/// so that Object.getOwnPropertyDescriptor(e1,"isTrusted").get ===
+///          Object.getOwnPropertyDescriptor(e2,"isTrusted").get  (DOM §2.6.2)
+var g_is_trusted_getter: ?*JsObject = null;
 var g_xml_doc_proto: ?*JsObject = null;
 var g_domparser_proto: ?*JsObject = null;
 // HTML/SVG/MathML interface prototypes (spec §3.5). Built in initDomBuiltins
@@ -4370,7 +4374,12 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
         if (tgt_sid) |s| ev_obj.setProperty(vm.allocator, s, this) catch {};
         if (ct_sid) |s| ev_obj.setProperty(vm.allocator, s, this) catch {};
         const sentinel_ptr = @intFromPtr(&g_window_sentinel);
+        // DOM §2.9: set/clear dispatch flag around listener invocation
+        if (vm.pool.intern("_dispatching") catch null) |ds|
+            ev_obj.setProperty(vm.allocator, ds, JsValue.initBool(true)) catch {};
         _ = runListenersForTarget(vm, sentinel_ptr, type_str, ev_obj, false, true);
+        if (vm.pool.intern("_dispatching") catch null) |ds|
+            ev_obj.setProperty(vm.allocator, ds, JsValue.initBool(false)) catch {};
         // DOM §2.7: return !canceled (false only if defaultPrevented+cancelable).
         const dp_sid = vm.pool.intern("defaultPrevented") catch null;
         var canceled = false;
@@ -4541,6 +4550,10 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
         }
     }.f;
 
+    // DOM §2.9: set dispatch flag so initEvent short-circuits during dispatch
+    const dispatching_sid = vm.pool.intern("_dispatching") catch return JsValue.initBool(false);
+    ev_obj.setProperty(vm.allocator, dispatching_sid, JsValue.initBool(true)) catch {};
+
     // ── Capture phase: walk path from root (path_buf[N-1]) down to path_buf[1] ──
     // Target itself runs in the target phase (below). eventPhase = CAPTURING_PHASE (1).
     // §2.9 step 9.4: capture-phase listeners only fire for capture=true listeners.
@@ -4588,6 +4601,8 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
     ev_obj.setProperty(vm.allocator, phase_sid, JsValue.initNumber(0)) catch {};
     // Restore target to the original (spec target after dispatch).
     ev_obj.setProperty(vm.allocator, target_sid, target_wrap) catch {};
+    // DOM §2.9: clear dispatch flag so initEvent works again after dispatch
+    ev_obj.setProperty(vm.allocator, dispatching_sid, JsValue.initBool(false)) catch {};
 
     // §2.7: dispatchEvent returns false if the event is canceled
     // (defaultPrevented), true otherwise.
@@ -4921,6 +4936,20 @@ fn resolveEventTarget(vm: *VM, this: JsValue) ?*anyopaque {
     return null;
 }
 
+/// DOM §2.6.2: Event.isTrusted getter — returns the instance's _trusted field.
+/// This function object is shared across all Event instances so that
+/// Object.getOwnPropertyDescriptor(e1,"isTrusted").get ===
+/// Object.getOwnPropertyDescriptor(e2,"isTrusted").get.
+fn nativeIsTrustedGetter(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.initBool(false);
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (vm.pool.intern("_trusted") catch null) |sid| {
+        if (obj.getProperty(sid)) |v| return JsValue.initBool(v.isTruthy());
+    }
+    return JsValue.initBool(false);
+}
+
 /// DOM 2.5: new Event(type, eventInitDict) constructor.
 fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
@@ -4959,7 +4988,8 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("_stopImmediate"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(false)) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("isTrusted"), JsValue.initBool(false)) catch {};
+    // _trusted backing field (false for script-created events per DOM §2.6.2)
+    obj.setProperty(vm.allocator, try vm.pool.intern("_trusted"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("eventPhase"), JsValue.initNumber(0)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("timeStamp"), JsValue.initNumber(0)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
@@ -4967,14 +4997,29 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     obj.setProperty(vm.allocator, try vm.pool.intern("srcElement"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(true)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("_initialized"), JsValue.initBool(true)) catch {};
+    // isTrusted accessor descriptor (DOM §2.6.2): getter is shared across instances
+    // so that Object.getOwnPropertyDescriptor(e1,"isTrusted").get ===
+    //          Object.getOwnPropertyDescriptor(e2,"isTrusted").get
+    if (obj.descriptors == null)
+        obj.descriptors = .{};
+    const it_sid = try vm.pool.intern("isTrusted");
+    const trusted_getter_obj = if (g_is_trusted_getter) |g| g else blk: {
+        const gfn = try vm.createObj(.{ .obj_type = .native_function });
+        gfn.data = .{ .native_fn = &nativeIsTrustedGetter };
+        g_is_trusted_getter = gfn;
+        break :blk gfn;
+    };
+    try obj.descriptors.?.put(vm.allocator, it_sid, .{ .accessor = .{
+        .get = JsValue.initObject(trusted_getter_obj),
+        .set = JsValue.undefined_val,
+        .attrs = .{ .writable = false, .enumerable = true, .configurable = false, .is_accessor = true },
+    } });
     // cancelBubble getter/setter via accessor descriptor
     const cb_get_fn = try vm.createObj(.{ .obj_type = .native_function });
     cb_get_fn.data = .{ .native_fn = &nativeCancelBubbleGet };
     const cb_set_fn = try vm.createObj(.{ .obj_type = .native_function });
     cb_set_fn.data = .{ .native_fn = &nativeCancelBubbleSet };
     const cb_sid = try vm.pool.intern("cancelBubble");
-    if (obj.descriptors == null)
-        obj.descriptors = .{};
     try obj.descriptors.?.put(vm.allocator, cb_sid, .{ .accessor = .{
         .get = JsValue.initObject(cb_get_fn),
         .set = JsValue.initObject(cb_set_fn),
@@ -5053,6 +5098,9 @@ fn nativeInitEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
     const vm = VM.vmFromCtx(ctx);
     const obj = this.asJsObject();
 
+    // DOM §2.8 step 1: first argument is mandatory
+    if (args.len == 0) return error.TypeError;
+
     // Short-circuit if dispatching
     if (vm.pool.intern("_dispatching") catch null) |sid| {
         if (obj.getProperty(sid)) |v| {
@@ -5072,6 +5120,8 @@ fn nativeInitEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
     obj.setProperty(vm.allocator, try vm.pool.intern("_stopped"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("_stopImmediate"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(false)) catch {};
+    // DOM §2.8 step 3: reset isTrusted to false
+    obj.setProperty(vm.allocator, try vm.pool.intern("_trusted"), JsValue.initBool(false)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(true)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("_initialized"), JsValue.initBool(true)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
