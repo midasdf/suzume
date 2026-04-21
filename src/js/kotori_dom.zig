@@ -1757,6 +1757,12 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // to the remaining hard-coded properties on miss.
     // URL-type attributes are handled separately with full WHATWG URL
     // serialization (percent-encode non-ASCII, resolve relative, etc.).
+    // HTML §attr-translate: IDL attribute returns boolean, not raw string.
+    // Must run BEFORE the reflection table (which has translate as .domstring).
+    if (eql(name, "translate") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        return JsValue.initBool(computeTranslate(node));
+    }
+
     if (urlReflectionGet(vm, node, name)) |v| return v;
     if (reflectionGet(vm, node, name)) |v| return v;
 
@@ -1986,6 +1992,22 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     if (eql(name, "head")) return findByTag(vm, node, "head") orelse JsValue.null_val;
     // DOM §4.5: documentElement is null (not undefined) when document has no root element
     if (eql(name, "documentElement")) return findByTag(vm, node, "html") orelse JsValue.null_val;
+
+    // HTML §4.2.2 document.title — text content of first <title> in document tree,
+    // whitespace-normalized (collapse ASCII whitespace runs to single U+0020, trim).
+    if (eql(name, "title") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        return getDocumentTitle(vm, node);
+    }
+
+    // HTML §document-compat document.compatMode — always "CSS1Compat" in standards mode.
+    if (eql(name, "compatMode") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        return JsValue.initString(vm.pool.intern("CSS1Compat") catch return JsValue.null_val);
+    }
+
+    // HTML §document.dir — reflects dir attribute of <html> element, enumerated ltr/rtl/auto/"".
+    if (eql(name, "dir") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        return getDocumentDir(vm, node);
+    }
     if (eql(name, "doctype") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
         // Return first DocumentType child node
         var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
@@ -2079,6 +2101,27 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
     if (eql(name, "className")) {
         setAttrFromVal(vm, node, "class", val);
         setDomDirty();
+        return true;
+    }
+
+    // HTML §attr-translate setter: boolean value → "yes" or "no" content attribute.
+    if (eql(name, "translate") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem_t: *lxb.lxb_dom_element_t = @ptrCast(node);
+        const s: []const u8 = if (val.isTruthy()) "yes" else "no";
+        _ = dom_b.lxb_dom_element_set_attribute(elem_t, "translate".ptr, "translate".len, s.ptr, s.len);
+        setDomDirty();
+        return true;
+    }
+
+    // HTML §4.2.2 document.title setter — set text content of <title> element.
+    if (eql(name, "title") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        setDocumentTitle(vm, node, val);
+        return true;
+    }
+
+    // HTML §document.dir setter — set dir attribute on <html> element.
+    if (eql(name, "dir") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        setDocumentDir(vm, node, val);
         return true;
     }
 
@@ -7004,6 +7047,182 @@ fn findByTag(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8) ?JsValue {
         ch = nodeNext(c);
     }
     return null;
+}
+
+// ── document.title (HTML §4.2.2) ────────────────────────────────────
+
+/// Walk the document tree depth-first and return the first <title> element node,
+/// searching only within the <head> first (spec §4.2.2), then entire tree.
+fn findTitleNode(doc: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    // Depth-first walk from document root.
+    var stack: [64]*lxb.lxb_dom_node_t = undefined;
+    var top: usize = 0;
+    var ch: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
+    while (ch) |c| : (ch = @ptrCast(c.next)) {
+        if (nodeType(c) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        if (top < stack.len) { stack[top] = c; top += 1; }
+    }
+    while (top > 0) {
+        top -= 1;
+        const cur = stack[top];
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(cur);
+        var ln_len: usize = 0;
+        if (dom_b.lxb_dom_element_local_name(elem, &ln_len)) |ln| {
+            if (std.ascii.eqlIgnoreCase(ln[0..ln_len], "title")) return cur;
+        }
+        var c2: ?*lxb.lxb_dom_node_t = @ptrCast(cur.first_child);
+        while (c2) |cc| : (c2 = @ptrCast(cc.next)) {
+            if (nodeType(cc) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+            if (top < stack.len) { stack[top] = cc; top += 1; }
+        }
+    }
+    return null;
+}
+
+/// HTML §4.2.2 document.title getter.
+/// Returns the child text content of the first <title> element, with ASCII
+/// whitespace runs collapsed to a single space and leading/trailing trimmed.
+fn getDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t) JsValue {
+    const title_node = findTitleNode(doc) orelse {
+        return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+    };
+    var raw_len: usize = 0;
+    const raw_ptr = dom_b.lxb_dom_node_text_content(title_node, &raw_len);
+    const raw: []const u8 = if (raw_ptr) |p| p[0..raw_len] else "";
+    // Normalize: collapse ASCII whitespace runs to single U+0020, trim.
+    var buf = vm.allocator.alloc(u8, raw.len) catch {
+        return JsValue.initString(vm.pool.intern(raw) catch return JsValue.null_val);
+    };
+    defer vm.allocator.free(buf);
+    var out_len: usize = 0;
+    var in_ws = true; // start true to trim leading
+    for (raw) |c| {
+        const ws = c == 0x09 or c == 0x0A or c == 0x0C or c == 0x0D or c == 0x20;
+        if (ws) {
+            if (!in_ws) { buf[out_len] = ' '; out_len += 1; }
+            in_ws = true;
+        } else {
+            buf[out_len] = c;
+            out_len += 1;
+            in_ws = false;
+        }
+    }
+    // Trim trailing space added by above
+    if (out_len > 0 and buf[out_len - 1] == ' ') out_len -= 1;
+    return JsValue.initString(vm.pool.intern(buf[0..out_len]) catch return JsValue.null_val);
+}
+
+/// HTML §4.2.2 document.title setter.
+/// Finds or creates the <title> element and sets its text content.
+fn setDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t, val: JsValue) void {
+    var buf: [64]u8 = undefined;
+    const s = VM.formatValue(vm.pool, val, &buf);
+    if (findTitleNode(doc)) |title_node| {
+        // Replace children with a single text node.
+        while (nodeFirstChild(title_node)) |child| dom_b.lxb_dom_node_remove(child);
+        if (s.len > 0) _ = dom_b.lxb_dom_node_text_content_set(title_node, s.ptr, s.len);
+    } else {
+        // Create <title> element, append to <head> or documentElement.
+        const new_title = dom_b.lxb_dom_document_create_element(doc, "title".ptr, 5, null) orelse return;
+        if (s.len > 0) _ = dom_b.lxb_dom_node_text_content_set(@ptrCast(new_title), s.ptr, s.len);
+        // Find <head> to append to, fallback to <html>, fallback to document.
+        const parent: *lxb.lxb_dom_node_t = blk: {
+            var c: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
+            while (c) |n| : (c = @ptrCast(n.next)) {
+                if (nodeType(n) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                const e: *lxb.lxb_dom_element_t = @ptrCast(n);
+                var ln_len: usize = 0;
+                if (dom_b.lxb_dom_element_local_name(e, &ln_len)) |ln| {
+                    if (std.ascii.eqlIgnoreCase(ln[0..ln_len], "html")) {
+                        // Inside <html>, look for <head>
+                        var c2: ?*lxb.lxb_dom_node_t = @ptrCast(n.first_child);
+                        while (c2) |n2| : (c2 = @ptrCast(n2.next)) {
+                            if (nodeType(n2) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                            const e2: *lxb.lxb_dom_element_t = @ptrCast(n2);
+                            var ln2_len: usize = 0;
+                            if (dom_b.lxb_dom_element_local_name(e2, &ln2_len)) |ln2| {
+                                if (std.ascii.eqlIgnoreCase(ln2[0..ln2_len], "head")) break :blk n2;
+                            }
+                        }
+                        break :blk n;
+                    }
+                }
+            }
+            break :blk doc;
+        };
+        dom_b.lxb_dom_node_insert_child(parent, @ptrCast(new_title));
+    }
+    setDomDirty();
+}
+
+// ── document.dir (HTML §document-dom-dir) ────────────────────────────
+
+const dir_keywords = [_][]const u8{ "ltr", "rtl", "auto" };
+
+/// HTML §document.dir getter — reflects dir attribute on <html>, enumerated.
+fn getDocumentDir(vm: *VM, doc: *lxb.lxb_dom_node_t) JsValue {
+    var c: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
+    while (c) |n| : (c = @ptrCast(n.next)) {
+        if (nodeType(n) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const e: *lxb.lxb_dom_element_t = @ptrCast(n);
+        var ln_len: usize = 0;
+        const ln = dom_b.lxb_dom_element_local_name(e, &ln_len) orelse continue;
+        if (!std.ascii.eqlIgnoreCase(ln[0..ln_len], "html")) continue;
+        var val_len: usize = 0;
+        const val_ptr = dom_b.lxb_dom_element_get_attribute(e, "dir".ptr, 3, &val_len);
+        if (val_ptr) |p| {
+            const v = p[0..val_len];
+            for (dir_keywords) |kw| {
+                if (std.ascii.eqlIgnoreCase(v, kw)) {
+                    return JsValue.initString(vm.pool.intern(kw) catch return JsValue.null_val);
+                }
+            }
+        }
+        return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+    }
+    return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+}
+
+/// HTML §document.dir setter — sets dir attribute on <html> element verbatim
+/// (getter canonicalizes; setter accepts any string per spec).
+fn setDocumentDir(vm: *VM, doc: *lxb.lxb_dom_node_t, val: JsValue) void {
+    var c: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
+    while (c) |n| : (c = @ptrCast(n.next)) {
+        if (nodeType(n) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const e: *lxb.lxb_dom_element_t = @ptrCast(n);
+        var ln_len: usize = 0;
+        const ln = dom_b.lxb_dom_element_local_name(e, &ln_len) orelse continue;
+        if (!std.ascii.eqlIgnoreCase(ln[0..ln_len], "html")) continue;
+        var buf: [64]u8 = undefined;
+        const s = valueToString(vm, val, &buf);
+        _ = dom_b.lxb_dom_element_set_attribute(e, "dir".ptr, 3, s.ptr, s.len);
+        setDomDirty();
+        return;
+    }
+}
+
+// ── translate (HTML §attr-translate) ─────────────────────────────────
+
+/// HTML §attr-translate: compute the translation mode of `node`.
+/// Returns true if translate-enabled, false if no-translate.
+/// "yes" → true, "no" → false, absent → walk ancestors; default true at root.
+fn computeTranslate(node: *lxb.lxb_dom_node_t) bool {
+    var cur: ?*lxb.lxb_dom_node_t = node;
+    while (cur) |n| {
+        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(n);
+            var val_len: usize = 0;
+            const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, "translate".ptr, 9, &val_len);
+            if (val_ptr) |p| {
+                const v = p[0..val_len];
+                if (std.ascii.eqlIgnoreCase(v, "yes") or v.len == 0) return true;
+                if (std.ascii.eqlIgnoreCase(v, "no")) return false;
+                // invalid keyword — inherit (continue walking up)
+            }
+        }
+        cur = @ptrCast(n.parent);
+    }
+    return true; // default: translate-enabled
 }
 
 // ══════════════════════════════════════════════════════════════════════
