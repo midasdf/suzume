@@ -242,6 +242,71 @@ fn decodeCssEscapes(input: []const u8, buf: []u8) []const u8 {
     return buf[0..out];
 }
 
+// ── Forgiving selector match (skips invalid args like :has() inside :is()/:where()) ──
+
+/// Selectors 4 §:is()/:where() use forgiving selector lists — invalid individual
+/// arguments are silently dropped rather than making the whole selector invalid.
+/// Specifically, :has() is never valid inside :is()/:where() (§:has() prose), so
+/// any comma-separated part that contains :has( is treated as invalid and skipped.
+fn elementMatchesSelectorForgiving(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
+    if (selector.len == 0) return false;
+    const sel = std.mem.trim(u8, selector, " \t\r\n");
+    if (sel.len == 0) return false;
+
+    // Split on top-level commas, skip any part that contains :has(
+    var start: usize = 0;
+    var depth: usize = 0;
+    var i: usize = 0;
+    while (i < sel.len) {
+        const ch = sel[i];
+        if (ch == '\\' and i + 1 < sel.len) {
+            i += 2;
+            continue;
+        }
+        if (ch == '(' or ch == '[') {
+            depth += 1;
+        } else if ((ch == ')' or ch == ']') and depth > 0) {
+            depth -= 1;
+        } else if (ch == ',' and depth == 0) {
+            const part = std.mem.trim(u8, sel[start..i], " \t\r\n");
+            if (!containsHasPseudo(part)) {
+                if (elementMatchesSelector(node, part)) return true;
+            }
+            start = i + 1;
+        }
+        i += 1;
+    }
+    const last = std.mem.trim(u8, sel[start..], " \t\r\n");
+    if (!containsHasPseudo(last)) {
+        return elementMatchesSelector(node, last);
+    }
+    return false;
+}
+
+/// Returns true if the selector part contains a top-level :has( pseudo-class.
+/// Used to implement forgiving selector lists in :is()/:where().
+fn containsHasPseudo(sel: []const u8) bool {
+    var i: usize = 0;
+    var depth: usize = 0;
+    while (i < sel.len) {
+        const ch = sel[i];
+        if (ch == '\\' and i + 1 < sel.len) {
+            i += 2;
+            continue;
+        }
+        if (ch == '(' or ch == '[') {
+            depth += 1;
+        } else if ((ch == ')' or ch == ']') and depth > 0) {
+            depth -= 1;
+        } else if (ch == ':' and depth == 0) {
+            const rest = sel[i..];
+            if (rest.len >= 5 and std.ascii.eqlIgnoreCase(rest[0..5], ":has(")) return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
 // ── element.matches(selector) ───────────────────────────────────────
 
 pub fn elementMatchesSelector(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
@@ -363,12 +428,12 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":not(") and sel[sel.len - 1] == ')') {
         return !elementMatchesSelector(@ptrCast(elem), sel[5 .. sel.len - 1]);
     }
-    // :is(inner) / :where(inner) — OR of comma-separated
+    // :is(inner) / :where(inner) — OR of comma-separated (forgiving: skip args containing :has())
     if (sel.len > 4 and std.ascii.eqlIgnoreCase(sel[0..4], ":is(") and sel[sel.len - 1] == ')') {
-        return elementMatchesSelector(@ptrCast(elem), sel[4 .. sel.len - 1]);
+        return elementMatchesSelectorForgiving(@ptrCast(elem), sel[4 .. sel.len - 1]);
     }
     if (sel.len > 7 and std.ascii.eqlIgnoreCase(sel[0..7], ":where(") and sel[sel.len - 1] == ')') {
-        return elementMatchesSelector(@ptrCast(elem), sel[7 .. sel.len - 1]);
+        return elementMatchesSelectorForgiving(@ptrCast(elem), sel[7 .. sel.len - 1]);
     }
     // :has(inner) — matches if descendant/child/sibling matches inner relative selector
     if (sel.len > 5 and std.ascii.eqlIgnoreCase(sel[0..5], ":has(") and sel[sel.len - 1] == ')') {
@@ -480,9 +545,13 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             if (!std.ascii.eqlIgnoreCase(tag2, "input") and !std.ascii.eqlIgnoreCase(tag2, "textarea")) return !lxb_dom_element_has_attribute(elem, "contenteditable", 15);
             return false;
         }
-        // :placeholder-shown
+        // :placeholder-shown — element has non-empty placeholder AND no current value
         if (std.ascii.eqlIgnoreCase(sel, ":placeholder-shown")) {
-            if (!lxb_dom_element_has_attribute(elem, "placeholder", 11)) return false;
+            // placeholder attribute must exist and be non-empty
+            var ph_len: usize = 0;
+            const ph_val = lxb_dom_element_get_attribute(elem, "placeholder", 11, &ph_len);
+            if (ph_val == null or ph_len == 0) return false;
+            // element must have no current value (check value attribute)
             var val_len2: usize = 0;
             const val2 = lxb_dom_element_get_attribute(elem, "value", 5, &val_len2);
             return val2 == null or val_len2 == 0;
@@ -630,9 +699,8 @@ pub fn matchSingleSimple(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
             if (name_ptr_o == null) return false;
             const tag_o = name_ptr_o.?[0..name_len_o];
             if (std.ascii.eqlIgnoreCase(tag_o, "details") or std.ascii.eqlIgnoreCase(tag_o, "dialog")) {
-                var attr_len_o: usize = 0;
-                const attr_val_o = lxb_dom_element_get_attribute(elem, "open", 4, &attr_len_o);
-                return attr_val_o != null;
+                // Use has_attribute for boolean attributes (open has no value)
+                return lxb_dom_element_has_attribute(elem, "open", 4);
             }
             return false;
         }
@@ -1011,7 +1079,7 @@ pub fn findPseudoStart(sel: []const u8) ?usize {
 }
 
 pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially first (no siblings)
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // no parent → trivially first (no siblings)
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -1029,7 +1097,7 @@ pub fn isFirstChild(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn isLastChild(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially last (no siblings)
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // no parent → trivially last (no siblings)
     var child = lxb_dom_node_last_child_noi(parent);
     while (child) |ch| {
         if (ch.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
@@ -1269,7 +1337,7 @@ fn isFormInvalid(elem: *lxb.lxb_dom_element_t) bool {
 }
 
 pub fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially first
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // no parent → trivially first
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return false;
@@ -1287,7 +1355,7 @@ pub fn isFirstOfType(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // detached = trivially last
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return true; // no parent → trivially last
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return false;
@@ -1305,7 +1373,7 @@ pub fn isLastOfType(node: *lxb.lxb_dom_node_t) bool {
 }
 
 pub fn getNthIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // detached = trivially 1st
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // no parent → trivially 1st
     var idx: u32 = 0;
     var child: ?*lxb.lxb_dom_node_t = parent.first_child;
     while (child) |ch| {
@@ -1319,7 +1387,7 @@ pub fn getNthIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 pub fn getNthLastIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent = node.parent orelse return 1; // detached = trivially 1st
+    const parent = node.parent orelse return 1; // no parent → trivially 1st
     var idx: u32 = 0;
     var child = lxb_dom_node_last_child_noi(parent);
     while (child) |ch| {
@@ -1333,7 +1401,7 @@ pub fn getNthLastIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 pub fn getNthOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // detached = trivially 1st
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // no parent → trivially 1st
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return 0;
@@ -1354,7 +1422,7 @@ pub fn getNthOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
 }
 
 pub fn getNthLastOfTypeIndex(node: *lxb.lxb_dom_node_t) u32 {
-    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // detached = trivially 1st
+    const parent: *lxb.lxb_dom_node_t = node.parent orelse return 1; // no parent → trivially 1st
     var name_len: usize = 0;
     const name = lxb_dom_element_local_name(@ptrCast(node), &name_len);
     if (name == null) return 0;
@@ -1893,12 +1961,12 @@ pub fn nodeMatchesSimple(node: *lxb.lxb_dom_node_t, selector: []const u8) bool {
         const inner = std.mem.trim(u8, selector[5 .. selector.len - 1], " \t");
         return hasRelativeMatch(node, inner);
     }
-    // :is(inner) / :where(inner) — OR match
+    // :is(inner) / :where(inner) — OR match (forgiving: skip :has() args)
     if (selector.len > 4 and std.ascii.eqlIgnoreCase(selector[0..4], ":is(") and selector[selector.len - 1] == ')') {
-        return elementMatchesSelector(node, selector[4 .. selector.len - 1]);
+        return elementMatchesSelectorForgiving(node, selector[4 .. selector.len - 1]);
     }
     if (selector.len > 7 and std.ascii.eqlIgnoreCase(selector[0..7], ":where(") and selector[selector.len - 1] == ')') {
-        return elementMatchesSelector(node, selector[7 .. selector.len - 1]);
+        return elementMatchesSelectorForgiving(node, selector[7 .. selector.len - 1]);
     }
 
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
