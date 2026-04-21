@@ -6863,12 +6863,20 @@ pub const VM = struct {
         var global = false;
         var ignore_case = false;
         var multiline = false;
+        var dot_all = false;
+        var sticky = false;
+        var unicode = false;
+        var has_indices = false;
         if (self.pool.get(flags_id)) |flags| {
             for (flags) |ch| {
                 switch (ch) {
                     'g' => global = true,
                     'i' => ignore_case = true,
                     'm' => multiline = true,
+                    's' => dot_all = true,
+                    'y' => sticky = true,
+                    'u' => unicode = true,
+                    'd' => has_indices = true,
                     else => {},
                 }
             }
@@ -6881,16 +6889,45 @@ pub const VM = struct {
                 .global = global,
                 .ignore_case = ignore_case,
                 .multiline = multiline,
+                .dot_all = dot_all,
+                .sticky = sticky,
+                .unicode = unicode,
+                .has_indices = has_indices,
             } },
         };
         try self.objects.append(self.allocator, obj);
-        // Set properties
+        // Set properties — ECMA-262 §22.2.6
         const source_id = try self.pool.intern("source");
         try obj.setProperty(self.allocator, source_id, JsValue.initString(pattern_id));
         const global_id = try self.pool.intern("global");
         try obj.setProperty(self.allocator, global_id, JsValue.initBool(global));
         const ic_id = try self.pool.intern("ignoreCase");
         try obj.setProperty(self.allocator, ic_id, JsValue.initBool(ignore_case));
+        const ml_id = try self.pool.intern("multiline");
+        try obj.setProperty(self.allocator, ml_id, JsValue.initBool(multiline));
+        const da_id = try self.pool.intern("dotAll");
+        try obj.setProperty(self.allocator, da_id, JsValue.initBool(dot_all));
+        const sy_id = try self.pool.intern("sticky");
+        try obj.setProperty(self.allocator, sy_id, JsValue.initBool(sticky));
+        const un_id = try self.pool.intern("unicode");
+        try obj.setProperty(self.allocator, un_id, JsValue.initBool(unicode));
+        const hi_id = try self.pool.intern("hasIndices");
+        try obj.setProperty(self.allocator, hi_id, JsValue.initBool(has_indices));
+        const li_id = try self.pool.intern("lastIndex");
+        try obj.setProperty(self.allocator, li_id, JsValue.initNumber(0));
+        const fl_id = try self.pool.intern("flags");
+        // Canonical order per §22.2.6.3: d g i m s u y
+        var flag_buf: [8]u8 = undefined;
+        var fl_len: usize = 0;
+        if (has_indices) { flag_buf[fl_len] = 'd'; fl_len += 1; }
+        if (global)      { flag_buf[fl_len] = 'g'; fl_len += 1; }
+        if (ignore_case) { flag_buf[fl_len] = 'i'; fl_len += 1; }
+        if (multiline)   { flag_buf[fl_len] = 'm'; fl_len += 1; }
+        if (dot_all)     { flag_buf[fl_len] = 's'; fl_len += 1; }
+        if (unicode)     { flag_buf[fl_len] = 'u'; fl_len += 1; }
+        if (sticky)      { flag_buf[fl_len] = 'y'; fl_len += 1; }
+        const flags_interned = try self.pool.intern(flag_buf[0..fl_len]);
+        try obj.setProperty(self.allocator, fl_id, JsValue.initString(flags_interned));
         // Methods
         try self.registerNativeMethod(obj, "test", &nativeRegExpTest);
         try self.registerNativeMethod(obj, "exec", &nativeRegExpExec);
@@ -6905,7 +6942,24 @@ pub const VM = struct {
         const re = obj.data.regexp_data;
         const pattern = vm.pool.get(re.source) orelse return JsValue.initBool(false);
         const str = vm.pool.get(args[0].asStringId()) orelse return JsValue.initBool(false);
-        return JsValue.initBool(regexSearch(pattern, str, re.ignore_case) != null);
+        const flags = flagsFromRe(re);
+        return JsValue.initBool(
+            kotori_regex.searchLegacy(pattern, str, flags) != null,
+        );
+    }
+
+    /// Build a `kotori_regex.Flags` bitfield from the stored RegExpData.
+    /// Centralized so all exec paths see every flag (spec §22.2.2.1).
+    fn flagsFromRe(re: anytype) kotori_regex.Flags {
+        return .{
+            .global = re.global,
+            .ignore_case = re.ignore_case,
+            .multiline = re.multiline,
+            .dot_all = re.dot_all,
+            .sticky = re.sticky,
+            .unicode = re.unicode,
+            .has_indices = re.has_indices,
+        };
     }
 
     fn nativeRegExpExec(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
@@ -6916,21 +6970,56 @@ pub const VM = struct {
         const re = obj.data.regexp_data;
         const pattern = vm.pool.get(re.source) orelse return JsValue.null_val;
         const str = vm.pool.get(args[0].asStringId()) orelse return JsValue.null_val;
-        const result = regexSearch(pattern, str, re.ignore_case) orelse return JsValue.null_val;
-        // Return [full_match, group1, group2, ...] with index property
+        const flags = flagsFromRe(re);
+        const legacy = kotori_regex.searchLegacyAlloc(
+            vm.allocator,
+            pattern,
+            str,
+            flags,
+        ) orelse return JsValue.null_val;
+        defer kotori_regex.freeLegacyNamed(vm.allocator, legacy.named_groups);
+        // Return [full_match, group1, group2, ...] with index/input/groups
         const arr = try vm.createArray();
-        const matched = str[result.start..result.end];
-        try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(matched)));
+        const matched = str[legacy.start..legacy.end];
+        try arr.data.array.append(
+            vm.allocator,
+            JsValue.initString(try vm.pool.intern(matched)),
+        );
         // Add capturing groups
-        for (result.captures) |cap| {
+        for (legacy.captures) |cap| {
             if (cap) |c| {
-                try arr.data.array.append(vm.allocator, JsValue.initString(try vm.pool.intern(str[c.start..c.end])));
+                try arr.data.array.append(
+                    vm.allocator,
+                    JsValue.initString(try vm.pool.intern(str[c.start..c.end])),
+                );
             } else break;
         }
         const index_id = try vm.pool.intern("index");
-        try arr.setProperty(vm.allocator, index_id, JsValue.initNumber(@floatFromInt(result.start)));
+        try arr.setProperty(
+            vm.allocator,
+            index_id,
+            JsValue.initNumber(@floatFromInt(legacy.start)),
+        );
         const input_id = try vm.pool.intern("input");
         try arr.setProperty(vm.allocator, input_id, args[0]);
+        // §22.2.7.1 step 38: populate `groups` object when the pattern has
+        // named captures. Empty patterns get no `groups` key per spec.
+        if (legacy.named_groups.len != 0) {
+            const groups_obj = try vm.createObj(.{});
+            for (legacy.named_groups) |ng| {
+                const ng_name_id = try vm.pool.intern(ng.name);
+                const idx: usize = ng.index;
+                // legacy.captures is 0-indexed over groups 1..N
+                const val: JsValue = if (idx >= 1 and idx <= legacy.captures.len) blk: {
+                    if (legacy.captures[idx - 1]) |c|
+                        break :blk JsValue.initString(try vm.pool.intern(str[c.start..c.end]));
+                    break :blk JsValue.undefined_val;
+                } else JsValue.undefined_val;
+                try groups_obj.setProperty(vm.allocator, ng_name_id, val);
+            }
+            const groups_id = try vm.pool.intern("groups");
+            try arr.setProperty(vm.allocator, groups_id, JsValue.initObject(groups_obj));
+        }
         return JsValue.initObject(arr);
     }
 

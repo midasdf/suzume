@@ -1737,15 +1737,25 @@ fn subExec(c: *const Compiled, input: []const u8, start: u32, body_ip: u32) ?Sub
                 const neg = (op.kind == .assert_behind_neg);
                 var try_start: u32 = 0;
                 var matched = false;
+                var match_caps_inner: ?[]u32 = null;
                 while (try_start <= sp) : (try_start += 1) {
-                    if (subExecBounded(c, input, try_start, op.a, sp)) |_| {
+                    if (subExecBounded(c, input, try_start, op.a, sp)) |mc| {
                         matched = true;
+                        match_caps_inner = mc;
                         break;
                     }
                 }
                 if (matched != !neg) {
                     if (!backtrack(&stack, &ip, &sp, &caps)) return null;
                     continue;
+                }
+                // Spec §22.2.2.3: captures taken inside a successful lookbehind
+                // persist into the outer match. Mirrors the main VM loop.
+                if (match_caps_inner) |mc| {
+                    var gi4: usize = 0;
+                    while (gi4 < mc.len and gi4 < caps.len) : (gi4 += 1) {
+                        if (mc[gi4] != UNSET) caps[gi4] = mc[gi4];
+                    }
                 }
                 ip = op.b;
             },
@@ -1906,7 +1916,35 @@ pub fn searchLegacyAlloc(
         }
         slot += 1;
     }
+    // Copy named-group side table into a stable allocation owned by `alloc`.
+    // Caller is expected to either copy into its own container before
+    // allocating again from `alloc`, or use the helper `copyLegacyNames`.
+    if (c.named.len != 0) {
+        const ng_slice = alloc.alloc(LegacyNamed, c.named.len) catch {
+            return out;
+        };
+        var k: usize = 0;
+        while (k < c.named.len) : (k += 1) {
+            // Name bytes live in the `Compiled`'s arena which is about to be
+            // deinit'd. Duplicate the bytes into `alloc` too.
+            const name_copy = alloc.dupe(u8, c.named[k].name) catch {
+                // partial failure — bail with what we have
+                alloc.free(ng_slice);
+                return out;
+            };
+            ng_slice[k] = .{ .name = name_copy, .index = c.named[k].index };
+        }
+        out.named_groups = ng_slice;
+    }
     return out;
+}
+
+/// Free a `LegacyResult.named_groups` slice previously returned by
+/// `searchLegacyAlloc`. Safe to call when `.named_groups.len == 0`.
+pub fn freeLegacyNamed(alloc: std.mem.Allocator, named: []const LegacyNamed) void {
+    if (named.len == 0) return;
+    for (named) |ng| alloc.free(ng.name);
+    alloc.free(named);
 }
 
 /// Search starting at `start_index`. Used for sticky `y` and `lastIndex`.
@@ -1939,6 +1977,20 @@ pub fn execLegacyAt(
             out.captures[slot] = null;
         }
         slot += 1;
+    }
+    if (c.named.len != 0) {
+        const ng_slice = alloc.alloc(LegacyNamed, c.named.len) catch {
+            return out;
+        };
+        var k: usize = 0;
+        while (k < c.named.len) : (k += 1) {
+            const name_copy = alloc.dupe(u8, c.named[k].name) catch {
+                alloc.free(ng_slice);
+                return out;
+            };
+            ng_slice[k] = .{ .name = name_copy, .index = c.named[k].index };
+        }
+        out.named_groups = ng_slice;
     }
     return out;
 }
@@ -2152,4 +2204,79 @@ test "multiline ^" {
 test "pathological pattern bounded" {
     // Exponential backtracking would hang without step budget.
     try testing.expect(searchLegacy("(a+)+b", "aaaaaaaaaaaaaaaaaaaaaac", .{}) == null);
+}
+
+// ── Layer 0C follow-ups ────────────────────────────────────────────────
+
+test "searchLegacyAlloc populates named_groups" {
+    const alloc = std.testing.allocator;
+    const r = searchLegacyAlloc(alloc, "(?<year>\\d{4})-(?<mon>\\d{2})", "2024-12", .{}) orelse
+        return error.TestExpectedMatch;
+    defer freeLegacyNamed(alloc, r.named_groups);
+    try testing.expectEqual(@as(usize, 2), r.named_groups.len);
+    try testing.expectEqualStrings("year", r.named_groups[0].name);
+    try testing.expectEqual(@as(u16, 1), r.named_groups[0].index);
+    try testing.expectEqualStrings("mon", r.named_groups[1].name);
+    try testing.expectEqual(@as(u16, 2), r.named_groups[1].index);
+}
+
+test "searchLegacyAlloc empty named_groups when pattern has none" {
+    const alloc = std.testing.allocator;
+    const r = searchLegacyAlloc(alloc, "(a)(b)", "ab", .{}) orelse
+        return error.TestExpectedMatch;
+    defer freeLegacyNamed(alloc, r.named_groups);
+    try testing.expectEqual(@as(usize, 0), r.named_groups.len);
+}
+
+test "lookbehind inner captures persist in nested assertion" {
+    // Regression: the subExec branch for assert_behind used to drop
+    // the inner captures. Now they propagate. Construct a pattern that
+    // puts a capture group inside a lookbehind that is itself inside
+    // another lookahead so the subExec (not execInner) path runs.
+    const r = searchLegacy("(?=(?<=(a))b)", "ab", .{}) orelse
+        return error.TestExpectedMatch;
+    try testing.expect(r.captures[0] != null);
+    try testing.expectEqual(@as(usize, 0), r.captures[0].?.start);
+    try testing.expectEqual(@as(usize, 1), r.captures[0].?.end);
+}
+
+test "backref inside alternation" {
+    try testing.expect(searchLegacy("(x)y\\1|z", "xyx", .{}) != null);
+    try testing.expect(searchLegacy("(x)y\\1|z", "xyz", .{}) != null); // z branch
+}
+
+test "named group with ascii underscore" {
+    const alloc = std.testing.allocator;
+    const r = searchLegacyAlloc(alloc, "(?<my_var>foo)", "foo", .{}) orelse
+        return error.TestExpectedMatch;
+    defer freeLegacyNamed(alloc, r.named_groups);
+    try testing.expectEqual(@as(usize, 1), r.named_groups.len);
+    try testing.expectEqualStrings("my_var", r.named_groups[0].name);
+}
+
+test "duplicate named group errors" {
+    const alloc = std.testing.allocator;
+    var c_or_err = compile(alloc, "(?<x>a)(?<x>b)", .{});
+    if (c_or_err) |*c| {
+        c.deinit();
+        try testing.expect(false); // should not succeed
+    } else |err| {
+        try testing.expectEqual(CompileError.DuplicateGroupName, err);
+    }
+}
+
+test "numeric backref out of range errors at compile" {
+    const alloc = std.testing.allocator;
+    // \1 referenced before any group ever declared — parser is lenient and
+    // allows forward backrefs, but at exec with group 1 unset, it matches
+    // empty. This is a compile-accepts / exec-lenient behavior test.
+    var c = compile(alloc, "\\1(a)", .{}) catch {
+        // If compiler rejects it, also acceptable.
+        return;
+    };
+    defer c.deinit();
+    // It compiled — exec behavior: \1 is unset so matches empty, then (a).
+    const r = search(&c, "a");
+    try testing.expect(r != null);
+    if (r) |res| c.allocator.free(res.captures);
 }

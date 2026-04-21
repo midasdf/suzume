@@ -112,6 +112,12 @@ pub const JsObject = struct {
         global: bool = false,
         ignore_case: bool = false,
         multiline: bool = false,
+        // Layer 0C §22.2.2.1 Pattern[U,N] full flag surface.
+        dot_all: bool = false,
+        sticky: bool = false,
+        unicode: bool = false,
+        has_indices: bool = false,
+        last_index: u32 = 0,
     };
 
     pub const MapEntry = struct {
