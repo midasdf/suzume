@@ -5242,13 +5242,21 @@ fn isValidColorValue(val: []const u8, auto_allowed: bool) bool {
         }
     }
 
-    // Reject comma syntax for hwb (modern syntax only)
+    // CSS Color 4 §7 — hwb() strict grammar:
+    //   hwb( [<hue> | none] <percentage|none> <percentage|none> [/ <alpha>]? )
+    // Modern space syntax only (no commas). Whiteness/blackness MUST be
+    // percentages (or none/calc()). Hue is <number> or <angle> or none.
     if (val.len >= 4 and eqlIgnoreCase(val[0..4], "hwb(")) {
-        if (color_mod.extractFuncArgs(val)) |inner| {
-            for (inner) |ch| {
-                if (ch == ',') return false;
-            }
-        }
+        if (!isValidHwbFunc(val)) return false;
+    }
+
+    // CSS Color 4 §9/§10 — oklab/oklch/lab/lch stricter component validation
+    // beyond the shared isValidModernColorFunc (unit rules per-function).
+    if (val.len >= 6 and eqlIgnoreCase(val[0..6], "oklab(")) {
+        if (!isValidOklabFunc(val)) return false;
+    }
+    if (val.len >= 6 and eqlIgnoreCase(val[0..6], "oklch(")) {
+        if (!isValidOklchFunc(val)) return false;
     }
 
     // Try parsing as-is first
@@ -5301,6 +5309,264 @@ pub fn isValidColorKeyword(val: []const u8) bool {
         if (eqlIgnoreCase(val, sc)) return true;
     }
     return false;
+}
+
+/// CSS Color 4 §7 — Validate a single hwb() component or alpha token.
+/// Returns true if `tok` is acceptable as one of hwb()'s positional args.
+/// `kind`: 0=hue, 1=whiteness, 2=blackness, 3=alpha.
+fn isValidHwbComponent(tok: []const u8, kind: u2) bool {
+    if (tok.len == 0) return false;
+    if (eqlIgnoreCase(tok, "none")) return true;
+    if (isCssMathFunc(tok)) return true;
+    switch (kind) {
+        // Hue: <number> or <angle> (deg/rad/grad/turn)
+        0 => {
+            if (std.mem.endsWith(u8, tok, "deg")) {
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 3]) catch return false;
+                return true;
+            }
+            if (std.mem.endsWith(u8, tok, "rad")) {
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 3]) catch return false;
+                return true;
+            }
+            if (std.mem.endsWith(u8, tok, "grad")) {
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 4]) catch return false;
+                return true;
+            }
+            if (std.mem.endsWith(u8, tok, "turn")) {
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 4]) catch return false;
+                return true;
+            }
+            // Bare number (degrees implied)
+            if (tok.len > 0 and tok[tok.len - 1] == '%') return false;
+            _ = std.fmt.parseFloat(f32, tok) catch return false;
+            return true;
+        },
+        // Whiteness / Blackness: MUST be <percentage> per CSS Color 4 §7
+        1, 2 => {
+            if (tok[tok.len - 1] != '%') return false;
+            _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return false;
+            return true;
+        },
+        // Alpha: <number> or <percentage>
+        3 => {
+            if (tok[tok.len - 1] == '%') {
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return false;
+                return true;
+            }
+            _ = std.fmt.parseFloat(f32, tok) catch return false;
+            return true;
+        },
+    }
+}
+
+/// CSS Color 4 §7 — hwb() grammar (modern/space syntax only):
+///   hwb( [<hue>|none] <percentage|none> <percentage|none> [/ <alpha|none>]? )
+fn isValidHwbFunc(val: []const u8) bool {
+    const color_mod = @import("../css/properties.zig");
+    const inner = color_mod.extractFuncArgs(val) orelse return false;
+
+    // Reject commas (legacy syntax not supported for hwb).
+    for (inner) |ch| if (ch == ',') return false;
+
+    // Locate '/' at depth 0
+    var has_slash = false;
+    var slash_pos: usize = 0;
+    {
+        var depth: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == '/' and depth == 0) {
+                has_slash = true;
+                slash_pos = i;
+                break;
+            }
+        }
+    }
+
+    const color_part = if (has_slash) inner[0..slash_pos] else inner;
+
+    // Tokenize color_part on whitespace at depth 0
+    var tokens: [8][]const u8 = undefined;
+    var count: usize = 0;
+    {
+        var depth: usize = 0;
+        var start: usize = 0;
+        var in_tok = false;
+        for (color_part, 0..) |ch, i| {
+            if (ch == '(') {
+                if (!in_tok) {
+                    start = i;
+                    in_tok = true;
+                }
+                depth += 1;
+            } else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if ((ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') and depth == 0) {
+                if (in_tok and count < 8) {
+                    tokens[count] = color_part[start..i];
+                    count += 1;
+                }
+                in_tok = false;
+            } else {
+                if (!in_tok) {
+                    start = i;
+                    in_tok = true;
+                }
+            }
+        }
+        if (in_tok and count < 8) {
+            tokens[count] = color_part[start..color_part.len];
+            count += 1;
+        }
+    }
+    if (count != 3) return false;
+
+    // Validate hue (0), whiteness (1), blackness (2)
+    if (!isValidHwbComponent(tokens[0], 0)) return false;
+    if (!isValidHwbComponent(tokens[1], 1)) return false;
+    if (!isValidHwbComponent(tokens[2], 2)) return false;
+
+    // Alpha: single token after '/'
+    if (has_slash) {
+        const alpha = std.mem.trim(u8, inner[slash_pos + 1 ..], " \t\r\n");
+        if (alpha.len == 0) return false;
+        // Alpha must be a single token (no spaces unless inside calc())
+        if (!isCssMathFunc(alpha)) {
+            if (std.mem.indexOfAny(u8, alpha, " \t\r\n") != null) return false;
+        }
+        if (!isValidHwbComponent(alpha, 3)) return false;
+    }
+    return true;
+}
+
+/// CSS Color 4 §9.2 — oklab() grammar:
+///   oklab( [<percentage>|<number>|none] [<percentage>|<number>|none]{2} [/ <alpha>]? )
+/// L: 0-1 or 0%-100% (no angle units).
+/// a, b: number or percentage (-0.4..0.4 unclamped parse) — no angle units.
+fn isValidOklabFunc(val: []const u8) bool {
+    return isValidOklabOklchImpl(val, false);
+}
+
+/// CSS Color 4 §9.3 — oklch() grammar:
+///   oklch( [<percentage>|<number>|none] [<percentage>|<number>|none]
+///          [<hue>|none] [/ <alpha>]? )
+/// L: 0-1 or 0%-100% (no angle units).
+/// C: number or percentage (no angle units).
+/// H: <number> | <angle> | none.
+fn isValidOklchFunc(val: []const u8) bool {
+    return isValidOklabOklchImpl(val, true);
+}
+
+fn isValidOklabOklchImpl(val: []const u8, is_hue: bool) bool {
+    const color_mod = @import("../css/properties.zig");
+    const inner = color_mod.extractFuncArgs(val) orelse return false;
+
+    // Modern syntax only — no commas.
+    for (inner) |ch| if (ch == ',') return false;
+
+    // Locate '/' at depth 0
+    var has_slash = false;
+    var slash_pos: usize = 0;
+    {
+        var depth: usize = 0;
+        for (inner, 0..) |ch, i| {
+            if (ch == '(') depth += 1 else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if (ch == '/' and depth == 0) {
+                has_slash = true;
+                slash_pos = i;
+                break;
+            }
+        }
+    }
+
+    const color_part = if (has_slash) inner[0..slash_pos] else inner;
+
+    var tokens: [8][]const u8 = undefined;
+    var count: usize = 0;
+    {
+        var depth: usize = 0;
+        var start: usize = 0;
+        var in_tok = false;
+        for (color_part, 0..) |ch, i| {
+            if (ch == '(') {
+                if (!in_tok) {
+                    start = i;
+                    in_tok = true;
+                }
+                depth += 1;
+            } else if (ch == ')') {
+                if (depth > 0) depth -= 1;
+            } else if ((ch == ' ' or ch == '\t' or ch == '\n' or ch == '\r') and depth == 0) {
+                if (in_tok and count < 8) {
+                    tokens[count] = color_part[start..i];
+                    count += 1;
+                }
+                in_tok = false;
+            } else {
+                if (!in_tok) {
+                    start = i;
+                    in_tok = true;
+                }
+            }
+        }
+        if (in_tok and count < 8) {
+            tokens[count] = color_part[start..color_part.len];
+            count += 1;
+        }
+    }
+    if (count != 3) return false;
+
+    // Component validator: disallows angle units except on hue when is_hue.
+    const checkComp = struct {
+        fn check(tok: []const u8, allow_angle: bool) bool {
+            if (tok.len == 0) return false;
+            if (eqlIgnoreCase(tok, "none")) return true;
+            if (isCssMathFunc(tok)) return true;
+            const has_deg = std.mem.endsWith(u8, tok, "deg");
+            const has_rad = std.mem.endsWith(u8, tok, "rad");
+            const has_grad = std.mem.endsWith(u8, tok, "grad");
+            const has_turn = std.mem.endsWith(u8, tok, "turn");
+            if (has_deg or has_rad or has_grad or has_turn) {
+                if (!allow_angle) return false;
+                const unit_len: usize = if (has_grad or has_turn) 4 else 3;
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - unit_len]) catch return false;
+                return true;
+            }
+            if (tok[tok.len - 1] == '%') {
+                _ = std.fmt.parseFloat(f32, tok[0 .. tok.len - 1]) catch return false;
+                return true;
+            }
+            _ = std.fmt.parseFloat(f32, tok) catch return false;
+            return true;
+        }
+    }.check;
+
+    // L: no angle units
+    if (!checkComp(tokens[0], false)) return false;
+    // 2nd component: a (oklab) or C (oklch) — no angle units either
+    if (!checkComp(tokens[1], false)) return false;
+    // 3rd: b (oklab, no angle) or H (oklch, angle allowed)
+    if (!checkComp(tokens[2], is_hue)) return false;
+
+    // Alpha validation
+    if (has_slash) {
+        const alpha = std.mem.trim(u8, inner[slash_pos + 1 ..], " \t\r\n");
+        if (alpha.len == 0) return false;
+        if (!isCssMathFunc(alpha)) {
+            if (std.mem.indexOfAny(u8, alpha, " \t\r\n") != null) return false;
+        }
+        if (eqlIgnoreCase(alpha, "none")) return true;
+        if (isCssMathFunc(alpha)) return true;
+        if (alpha[alpha.len - 1] == '%') {
+            _ = std.fmt.parseFloat(f32, alpha[0 .. alpha.len - 1]) catch return false;
+            return true;
+        }
+        _ = std.fmt.parseFloat(f32, alpha) catch return false;
+    }
+    return true;
 }
 
 /// Check if value is a color function containing calc() that parseColor can't handle yet
