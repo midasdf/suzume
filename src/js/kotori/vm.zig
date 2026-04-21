@@ -1434,6 +1434,87 @@ pub const VM = struct {
                                 }
                             }
                         }
+                    } else if (obj_val.isString()) {
+                        // ECMAScript §10.4.3 String exotic objects: numeric index
+                        // property returns the character at that index. This covers
+                        // `str[0]`, `str[1]`, etc. per ECMA-262 §6.1.4.
+                        // `"length"` via dot-access is handled in `.get_prop`.
+                        // String prototype method fallback: non-integer keys.
+                        const str_idx: ?usize = if (key.isInt())
+                            blk: {
+                                const i = key.asInt();
+                                break :blk if (i >= 0) @as(usize, @intCast(i)) else null;
+                            }
+                        else if (key.isNumber())
+                            blk: {
+                                const n = key.asNumber();
+                                const i: i64 = @intFromFloat(n);
+                                break :blk if (@as(f64, @floatFromInt(i)) == n and i >= 0) @as(usize, @intCast(i)) else null;
+                            }
+                        else if (key.isString())
+                            blk: {
+                                // String key — might be a numeric index like "0", "1"
+                                const k_str = self.pool.get(key.asStringId()) orelse break :blk null;
+                                var parsed: usize = 0;
+                                var all_digits = k_str.len > 0;
+                                for (k_str) |c| {
+                                    if (c < '0' or c > '9') { all_digits = false; break; }
+                                    parsed = parsed * 10 + (c - '0');
+                                }
+                                break :blk if (all_digits) parsed else null;
+                            }
+                        else
+                            null;
+
+                        if (str_idx) |idx| {
+                            if (self.pool.get(obj_val.asStringId())) |s| {
+                                const u16len = utf16Len(s);
+                                if (idx < u16len) {
+                                    const cu = utf16CodeUnitAt(s, idx) orelse {
+                                        self.push(JsValue.initString(try self.pool.intern("")));
+                                        continue;
+                                    };
+                                    var buf: [4]u8 = undefined;
+                                    const ch_str: []const u8 = if (cu < 0x80) blk: {
+                                        buf[0] = @intCast(cu);
+                                        break :blk buf[0..1];
+                                    } else if (cu < 0x800) blk: {
+                                        buf[0] = @intCast(0xC0 | (cu >> 6));
+                                        buf[1] = @intCast(0x80 | (cu & 0x3F));
+                                        break :blk buf[0..2];
+                                    } else blk: {
+                                        buf[0] = @intCast(0xE0 | (cu >> 12));
+                                        buf[1] = @intCast(0x80 | ((cu >> 6) & 0x3F));
+                                        buf[2] = @intCast(0x80 | (cu & 0x3F));
+                                        break :blk buf[0..3];
+                                    };
+                                    self.push(JsValue.initString(try self.pool.intern(ch_str)));
+                                    continue;
+                                }
+                            }
+                            self.push(JsValue.undefined_val);
+                            continue;
+                        }
+                        // Non-integer key: check "length" and string_proto.
+                        if (key.isString()) {
+                            const k_sid = key.asStringId();
+                            if (self.pool.get(k_sid)) |k_str| {
+                                if (std.mem.eql(u8, k_str, "length")) {
+                                    if (self.pool.get(obj_val.asStringId())) |s| {
+                                        self.push(JsValue.initNumber(@floatFromInt(utf16Len(s))));
+                                    } else {
+                                        self.push(JsValue.initNumber(0));
+                                    }
+                                    continue;
+                                }
+                            }
+                            if (self.string_proto) |sp| {
+                                if (sp.getProperty(k_sid)) |val| {
+                                    self.push(val);
+                                    continue;
+                                }
+                            }
+                        }
                     }
                     self.push(JsValue.undefined_val);
                 },
