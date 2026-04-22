@@ -1,4 +1,5 @@
 const std = @import("std");
+const dom_element = @import("../js/dom_element.zig");
 const Box = @import("../layout/box.zig").Box;
 const BoxType = @import("../layout/box.zig").BoxType;
 const Surface = @import("surface.zig").Surface;
@@ -687,6 +688,25 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 };
                 child_clip = clip.intersect(box_clip);
             }
+            // ── Element-level scroll (overflow:scroll|auto) ─────────────────
+            // If this box is a scrollable container and has a stored JS-set
+            // scroll position, shift children by that offset. Non-scrollable
+            // boxes and boxes without an entry in g_elem_scroll pass through
+            // the identity transform (no change), keeping existing layout/paint
+            // behavior for all other elements.
+            var child_scroll_y = scroll_y;
+            var child_scroll_x = scroll_x_eff;
+            const box_is_element_scrollable = (box.style.overflow_x == .scroll or box.style.overflow_x == .auto_ or
+                                               box.style.overflow_y == .scroll or box.style.overflow_y == .auto_);
+            if (box_is_element_scrollable) {
+                if (box.dom_node) |dn| {
+                    if (dom_element.getScrollOffsetForNode(@intFromPtr(dn.lxb_node))) |so| {
+                        child_scroll_y += so.top;
+                        child_scroll_x += so.left;
+                    }
+                }
+            }
+
             // Paint children sorted by z-index (ascending order, tree order as tiebreaker).
             // Each parent box acts as a stacking context — children's z-index values
             // are compared only within the same parent, matching CSS stacking behavior.
@@ -700,7 +720,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
             if (min_z == max_z) {
                 // All children share same z-index — paint in tree order
                 for (box.children.items) |child| {
-                    paintBox(child, surface, fonts, scroll_y, scroll_x_eff, child_clip, image_cache, effective_opacity);
+                    paintBox(child, surface, fonts, child_scroll_y, child_scroll_x, child_clip, image_cache, effective_opacity);
                 }
             } else {
                 // Paint from lowest z-index to highest
@@ -708,7 +728,7 @@ fn paintBox(box: *const Box, surface: *Surface, fonts: *FontCache, scroll_y_in: 
                 while (true) {
                     for (box.children.items) |child| {
                         if (child.style.z_index == current_z) {
-                            paintBox(child, surface, fonts, scroll_y, scroll_x_eff, child_clip, image_cache, effective_opacity);
+                            paintBox(child, surface, fonts, child_scroll_y, child_scroll_x, child_clip, image_cache, effective_opacity);
                         }
                     }
                     if (current_z == max_z) break;
