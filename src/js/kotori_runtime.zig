@@ -169,6 +169,9 @@ pub const KotoriRuntime = struct {
         // submit/reset delegation).
         _ = self.eval(click_polyfill_js);
 
+        // HTML §4.10.5.1.18 input.files + FileList stub.
+        _ = self.eval(file_input_polyfill_js);
+
         // HTML §3.1.5 / §3.1.6: Document HTMLCollection getters
         // (document.forms/links/images/scripts/embeds/plugins). The QuickJS
         // path installs these in dom_api.zig:5224 but kotori globals need
@@ -4094,6 +4097,60 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\  };
+        \\})();
+    ;
+
+    /// HTML §4.10.5.1.18 — HTMLInputElement.files (FileList).
+    ///
+    /// Provides a minimal FileList constructor (length + indexed access +
+    /// item(i)) plus the input.files accessor:
+    ///   - Non-file inputs: getter returns null; setter is a no-op (not
+    ///     null-throwing) per spec "files cannot be set when it does not
+    ///     apply".
+    ///   - type=file inputs: getter returns a persistent FileList for the
+    ///     element (lazy-init); setter requires a FileList instance,
+    ///     throws TypeError otherwise; setting null is a no-op.
+    const file_input_polyfill_js =
+        \\(function(){
+        \\  if(typeof globalThis==='undefined')return;
+        \\  var FileList_ = function FileList(){this._items=[];};
+        \\  Object.defineProperty(FileList_.prototype,'length',{
+        \\    get:function(){return this._items.length;},
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  FileList_.prototype.item=function(i){
+        \\    i=Number(i)|0;if(i<0)i=0;
+        \\    return i<this._items.length?this._items[i]:null;
+        \\  };
+        \\  try{globalThis.FileList=FileList_;}catch(e){}
+        \\  var File_ = function File(bits,name,opts){
+        \\    this.name=name==null?'':String(name);
+        \\    this.lastModified=(opts&&opts.lastModified)||Date.now();
+        \\    this.type=(opts&&opts.type)||'';
+        \\    this.size=0;
+        \\  };
+        \\  try{globalThis.File=File_;}catch(e){}
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function isFileInput(el){
+        \\    return tag(el)==='input'&&(el.type||'').toLowerCase()==='file';
+        \\  }
+        \\  try{Object.defineProperty(EP,'files',{
+        \\    get:function(){
+        \\      if(!isFileInput(this))return null;
+        \\      if(!this._files)this._files=new FileList_();
+        \\      return this._files;
+        \\    },
+        \\    set:function(v){
+        \\      if(!isFileInput(this))return;
+        \\      if(v===null)return;
+        \\      if(!(v instanceof FileList_))
+        \\        throw new TypeError("files must be a FileList");
+        \\      this._files=v;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
         \\})();
     ;
 
