@@ -58,19 +58,21 @@ const Rect = struct {
     }
 };
 
-// ── §3.3 rootMargin parsed form (px only; CSS %-based margin NYI) ────
+// ── §3.3 rootMargin parsed form (px + %) ──────────────────────────────
+
+const MarginValue = struct { num: f32 = 0, pct: bool = false };
 
 const RootMargin = struct {
-    top: f32 = 0,
-    right: f32 = 0,
-    bottom: f32 = 0,
-    left: f32 = 0,
+    top: MarginValue = .{},
+    right: MarginValue = .{},
+    bottom: MarginValue = .{},
+    left: MarginValue = .{},
 };
 
-/// Parse rootMargin string: "10px 5px 0px 20px" (1–4 values, px only).
+/// Parse rootMargin string: "10px 5px 0px 20px" or "10% 5%" (1–4 values, px or %).
 /// Returns zero margin on any parse failure.
 fn parseRootMargin(s: []const u8) RootMargin {
-    var values: [4]f32 = .{ 0, 0, 0, 0 };
+    var values: [4]MarginValue = .{ .{}, .{}, .{}, .{} };
     var count: usize = 0;
     var i: usize = 0;
     while (i < s.len and count < 4) {
@@ -92,9 +94,15 @@ fn parseRootMargin(s: []const u8) RootMargin {
         }
         if (i == start) break; // no digits
         const num = std.fmt.parseFloat(f32, s[start..i]) catch 0;
-        // consume "px" or "%" (we treat % as px for now; proper % requires viewport)
-        while (i < s.len and s[i] != ' ') i += 1;
-        values[count] = if (neg) -num else num;
+        // check unit: '%' → percentage, otherwise consume any non-space chars (px/em/etc.)
+        var is_pct: bool = false;
+        if (i < s.len and s[i] == '%') {
+            is_pct = true;
+            i += 1;
+        } else {
+            while (i < s.len and s[i] != ' ') i += 1;
+        }
+        values[count] = MarginValue{ .num = if (neg) -num else num, .pct = is_pct };
         count += 1;
     }
     return switch (count) {
@@ -143,11 +151,15 @@ fn getBoundingRect(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) Rect {
 /// §4.3 — compute root bounds (viewport expanded by rootMargin).
 fn getRootBounds(ctx: *qjs.JSContext, rm: RootMargin) Rect {
     const vp = dom_api.getViewportForCtx(ctx);
+    const top    = if (rm.top.pct)    vp.h * rm.top.num    / 100.0 else rm.top.num;
+    const right  = if (rm.right.pct)  vp.w * rm.right.num  / 100.0 else rm.right.num;
+    const bottom = if (rm.bottom.pct) vp.h * rm.bottom.num / 100.0 else rm.bottom.num;
+    const left   = if (rm.left.pct)   vp.w * rm.left.num   / 100.0 else rm.left.num;
     return .{
-        .x = -rm.left,
-        .y = -rm.top,
-        .w = vp.w + rm.left + rm.right,
-        .h = vp.h + rm.top + rm.bottom,
+        .x = -left,
+        .y = -top,
+        .w = vp.w + left + right,
+        .h = vp.h + top + bottom,
     };
 }
 
