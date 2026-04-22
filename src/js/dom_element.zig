@@ -2544,15 +2544,11 @@ pub fn formReset(
     _: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
     const c = ctx orelse return quickjs.JS_UNDEFINED();
-    // Step 1: if not connected, return.
-    const conn = qjs.JS_GetPropertyStr(c, this_val, "isConnected");
-    const is_connected = qjs.JS_ToBool(c, conn) > 0;
-    qjs.JS_FreeValue(c, conn);
-    if (!is_connected) return quickjs.JS_UNDEFINED();
-
-    // Steps 2-4: dispatch cancelable "reset" event; if not canceled, run
-    // the form-reset algorithm clearing dirty flags and restoring defaults
-    // on each resettable element.
+    // HTML §4.10.21.4 form.reset(): always fire a cancelable "reset" event;
+    // if not canceled, run the form-reset algorithm clearing dirty flags and
+    // restoring defaults on each resettable element. The event must fire
+    // even on a disconnected form (WPT resetting-a-form/reset-event.html
+    // creates the form via createElement and never attaches it).
     const js_code =
         \\(function(form){
         \\  var ev;
