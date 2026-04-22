@@ -8987,7 +8987,10 @@ fn findFirstMatch(root: *lxb.lxb_dom_node_t, selector: []const u8) ?*lxb.lxb_dom
     var cur: ?*lxb.lxb_dom_node_t = nodeFirstChild(root);
     while (cur) |node| {
         if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            if (matchSimpleSelector(@ptrCast(node), sel)) return node;
+            // Delegate to the full dom_selector engine for consistency with
+            // findAllMatches (supports attribute selectors, pseudo-classes,
+            // and combinators).
+            if (suzume_element_matches(node, sel.ptr, sel.len)) return node;
         }
         if (nodeFirstChild(node)) |child| {
             cur = child;
@@ -9016,7 +9019,11 @@ fn findAllMatches(root: *lxb.lxb_dom_node_t, selector: []const u8, alloc: std.me
     var cur: ?*lxb.lxb_dom_node_t = nodeFirstChild(root);
     while (cur) |node| {
         if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-            if (matchSimpleSelector(@ptrCast(node), sel)) {
+            // Delegate to the full selector engine (dom_selector.zig) via
+            // the C-ABI bridge so that `[attr]`, `[attr=val]`, `:pseudo`,
+            // and combinator selectors all match. Without this we had a
+            // local simple matcher that only understood tag/#id/.class.
+            if (suzume_element_matches(node, sel.ptr, sel.len)) {
                 results.append(alloc, node) catch {};
             }
         }
@@ -9038,6 +9045,8 @@ fn findAllMatches(root: *lxb.lxb_dom_node_t, selector: []const u8, alloc: std.me
 }
 
 /// Match a simple CSS selector: tag, #id, .class, tag.class, tag#id, .a.b
+/// (Retained for findFirstMatch legacy path; findAllMatches now delegates
+/// to suzume_element_matches for full selector support including [attr=val].)
 fn matchSimpleSelector(elem: *lxb.lxb_dom_element_t, sel: []const u8) bool {
     if (sel.len == 0) return false;
 
