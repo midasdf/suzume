@@ -3381,3 +3381,14 @@ pub fn elementGetBoundingClientRect(
     }
     return obj;
 }
+
+/// Returns the JS-set scroll offset for the element whose lxb_dom_node_t
+/// pointer is `node_ptr`, or `null` if no offset has ever been stored.
+/// Called by the paint pipeline to apply element-level scrolling without
+/// re-running layout.
+pub fn getScrollOffsetForNode(node_ptr: usize) ?struct { top: f32, left: f32 } {
+    if (g_elem_scroll) |*m| {
+        if (m.get(node_ptr)) |p| return .{ .top = p.top, .left = p.left };
+    }
+    return null;
+}
