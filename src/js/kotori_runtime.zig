@@ -3095,10 +3095,27 @@ pub const KotoriRuntime = struct {
         \\  function tag(el){return (el.tagName||'').toLowerCase();}
         \\  function getStr(el,k){return Object.prototype.hasOwnProperty.call(el,k)?el[k]:undefined;}
         \\  // ── input/textarea: value with dirty value flag (§4.10.5.1) ──
+        \\  // §4.10.5.1.20 Color state value sanitization: if the value is not
+        \\  // a valid simple color, return "#000000". Normalize to ASCII
+        \\  // lowercase.
+        \\  function sanitizeColor(v){
+        \\    if(typeof v!=='string'||v.length!==7||v.charCodeAt(0)!==35)return '#000000';
+        \\    for(var i=1;i<7;i++){
+        \\      var c=v.charCodeAt(i);
+        \\      if(!((c>=48&&c<=57)||(c>=65&&c<=70)||(c>=97&&c<=102)))return '#000000';
+        \\    }
+        \\    return v.toLowerCase();
+        \\  }
         \\  Object.defineProperty(EP,'value',{
         \\    get:function(){
         \\      var t=tag(this);
         \\      if(t==='input'){
+        \\        var it=(this.type||'').toLowerCase();
+        \\        if(it==='color'){
+        \\          if(this._dirtyValue===true&&typeof this._value==='string')return sanitizeColor(this._value);
+        \\          var ca=this.getAttribute('value');
+        \\          return sanitizeColor(ca==null?'':ca);
+        \\        }
         \\        if(this._dirtyValue===true&&typeof this._value==='string')return this._value;
         \\        var a=this.getAttribute('value');
         \\        return a==null?'':a;
