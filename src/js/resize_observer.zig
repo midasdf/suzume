@@ -16,6 +16,7 @@ const qjs = quickjs.c;
 const lxb = @import("../bindings/lexbor.zig").c;
 const dom_api = @import("dom_api.zig");
 const dom_element = @import("dom_element.zig");
+const env = @import("../env.zig");
 
 const allocator = std.heap.c_allocator;
 
@@ -157,8 +158,9 @@ fn buildEntry(
     // borderBoxSize §3.3
     _ = qjs.JS_SetPropertyStr(ctx, entry, "borderBoxSize", makeSizeArray(ctx, border_w, border_h));
 
-    // devicePixelContentBoxSize §3.3 — DPR assumed 1 (no DPI info available)
-    _ = qjs.JS_SetPropertyStr(ctx, entry, "devicePixelContentBoxSize", makeSizeArray(ctx, content_w, content_h));
+    // devicePixelContentBoxSize §3.3 — scale content box by DPR.
+    const dpr = env.getDevicePixelRatio();
+    _ = qjs.JS_SetPropertyStr(ctx, entry, "devicePixelContentBoxSize", makeSizeArray(ctx, content_w * dpr, content_h * dpr));
 
     return entry;
 }
