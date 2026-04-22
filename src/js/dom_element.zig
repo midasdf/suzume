@@ -1920,6 +1920,32 @@ pub fn camelToDataAttr(key: []const u8, buf: []u8) ?[]const u8 {
 }
 
 // ── Value getter/setter (input, textarea, select) ───────────────────
+//
+// HTML Living Standard §4.10.5.1 "Common form control APIs":
+//   The `value` IDL attribute on input/textarea/select tracks a *current
+//   value* that is independent of the content attribute once set. The
+//   "dirty value flag" separates the in-memory value (`_value`) from the
+//   default value (content attribute / textContent).
+//
+// We store the dirty flag and current value as JS object slots:
+//   _dirtyValue   : boolean (true once value setter has run on this wrapper)
+//   _value        : string (current value, only consulted when _dirtyValue)
+//
+// When `_dirtyValue` is false, the value falls back to:
+//   - <input>: the "value" content attribute (or "")
+//   - <textarea>: textContent
+//   - <select>: derived from option selection (existing behavior)
+
+fn getDirtyFlag(c: *qjs.JSContext, this_val: qjs.JSValue, name: [*:0]const u8) bool {
+    const v = qjs.JS_GetPropertyStr(c, this_val, name);
+    defer qjs.JS_FreeValue(c, v);
+    if (quickjs.JS_IsUndefined(v) or quickjs.JS_IsNull(v)) return false;
+    return qjs.JS_ToBool(c, v) > 0;
+}
+
+fn setDirtyFlag(c: *qjs.JSContext, this_val: qjs.JSValue, name: [*:0]const u8, v: bool) void {
+    _ = qjs.JS_SetPropertyStr(c, this_val, name, quickjs.JS_NewBool(v));
+}
 
 pub fn elementGetValue(
     ctx: ?*qjs.JSContext,
@@ -1936,23 +1962,34 @@ pub fn elementGetValue(
     if (name_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
     const tag = name_ptr.?[0..name_len];
 
+    if (std.mem.eql(u8, tag, "select")) {
+        // select: find selected option's value (per §4.10.7)
+        return getSelectedOptionValue(c, @ptrCast(elem));
+    }
+
+    // input/textarea: dirty value flag separation (§4.10.5.1)
+    if (getDirtyFlag(c, this_val, "_dirtyValue")) {
+        const stored = qjs.JS_GetPropertyStr(c, this_val, "_value");
+        if (!quickjs.JS_IsUndefined(stored) and !quickjs.JS_IsNull(stored)) {
+            return stored;
+        }
+        qjs.JS_FreeValue(c, stored);
+    }
+
     if (std.mem.eql(u8, tag, "textarea")) {
-        // textarea: value = textContent
+        // textarea default value = textContent
         const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
         var len: usize = 0;
         const ptr = lxb_dom_node_text_content(node, &len);
         if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
         return qjs.JS_NewStringLen(c, ptr.?, len);
-    } else if (std.mem.eql(u8, tag, "select")) {
-        // select: find selected option's value
-        return getSelectedOptionValue(c, @ptrCast(elem));
-    } else {
-        // input and other elements: use "value" attribute
-        var attr_len: usize = 0;
-        const attr_ptr = lxb_dom_element_get_attribute(elem, "value", 5, &attr_len);
-        if (attr_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
-        return qjs.JS_NewStringLen(c, attr_ptr.?, attr_len);
     }
+
+    // input and others: "value" attribute (default value)
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "value", 5, &attr_len);
+    if (attr_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, attr_ptr.?, attr_len);
 }
 
 pub fn elementSetValue(
@@ -1966,22 +2003,166 @@ pub fn elementSetValue(
     const args = argv orelse return quickjs.JS_UNDEFINED();
     const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
 
-    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
-    defer qjs.JS_FreeCString(c, s.ptr);
-
     // Check tag name
     var name_len: usize = 0;
     const name_ptr = lxb_dom_element_local_name(elem, &name_len);
     if (name_ptr == null) return quickjs.JS_UNDEFINED();
     const tag = name_ptr.?[0..name_len];
 
+    // For <select>, value setter selects the option whose value matches.
+    if (std.mem.eql(u8, tag, "select")) {
+        const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+        defer qjs.JS_FreeCString(c, s.ptr);
+        selectByValue(c, @ptrCast(elem), s.ptr[0..s.len]);
+        setDomDirty();
+        return quickjs.JS_UNDEFINED();
+    }
+
+    // input/textarea: store value on wrapper, set dirty flag (§4.10.5.1).
+    // Coerce to string via JS_ToString for non-string inputs (number, bool, …).
+    const str_val = qjs.JS_ToString(c, args[0]);
+    if (quickjs.JS_IsException(str_val)) return str_val;
+    setDirtyFlag(c, this_val, "_dirtyValue", true);
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_value", qjs.JS_DupValue(c, str_val));
+    qjs.JS_FreeValue(c, str_val);
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── input.defaultValue / textarea.defaultValue ──────────────────────
+//
+// HTML §4.10.5.1.6 (input) / §4.10.11 (textarea):
+//   defaultValue reflects the "value" content attribute on <input>, and
+//   the textContent on <textarea>.  Setting it does NOT touch the dirty
+//   value flag — only the default changes.
+
+pub fn elementGetDefaultValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewStringLen(c, "", 0);
+
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
+    const tag = name_ptr.?[0..name_len];
+
     if (std.mem.eql(u8, tag, "textarea")) {
-        // textarea: set textContent
+        const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        var len: usize = 0;
+        const ptr = lxb_dom_node_text_content(node, &len);
+        if (ptr == null or len == 0) return qjs.JS_NewStringLen(c, "", 0);
+        return qjs.JS_NewStringLen(c, ptr.?, len);
+    }
+
+    var attr_len: usize = 0;
+    const attr_ptr = lxb_dom_element_get_attribute(elem, "value", 5, &attr_len);
+    if (attr_ptr == null) return qjs.JS_NewStringLen(c, "", 0);
+    return qjs.JS_NewStringLen(c, attr_ptr.?, attr_len);
+}
+
+pub fn elementSetDefaultValue(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const s = jsStringToSlice(c, args[0]) orelse return quickjs.JS_UNDEFINED();
+    defer qjs.JS_FreeCString(c, s.ptr);
+
+    var name_len: usize = 0;
+    const name_ptr = lxb_dom_element_local_name(elem, &name_len);
+    if (name_ptr == null) return quickjs.JS_UNDEFINED();
+    const tag = name_ptr.?[0..name_len];
+
+    if (std.mem.eql(u8, tag, "textarea")) {
         const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
         _ = lxb_dom_node_text_content_set(node, s.ptr, s.len);
     } else {
-        // input, select, etc.: set "value" attribute
         _ = lxb_dom_element_set_attribute(elem, "value", 5, s.ptr, s.len);
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── input.checked / input.defaultChecked ────────────────────────────
+//
+// HTML §4.10.5.1.16 "checkedness":
+//   checked IDL attribute reflects the *current* checkedness; affected
+//   by user interaction or programmatic set, separated from the
+//   "checked" content attribute by the "dirty checkedness flag".
+
+pub fn elementGetChecked(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+
+    if (getDirtyFlag(c, this_val, "_dirtyChecked")) {
+        const stored = qjs.JS_GetPropertyStr(c, this_val, "_checked");
+        defer qjs.JS_FreeValue(c, stored);
+        return quickjs.JS_NewBool(qjs.JS_ToBool(c, stored) > 0);
+    }
+
+    return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, "checked", 7));
+}
+
+pub fn elementSetChecked(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    _ = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const v = qjs.JS_ToBool(c, args[0]) > 0;
+    setDirtyFlag(c, this_val, "_dirtyChecked", true);
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_checked", quickjs.JS_NewBool(v));
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+pub fn elementGetDefaultChecked(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+    return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, "checked", 7));
+}
+
+pub fn elementSetDefaultChecked(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const v = qjs.JS_ToBool(c, args[0]) > 0;
+    if (v) {
+        _ = lxb_dom_element_set_attribute(elem, "checked", 7, "", 0);
+    } else {
+        _ = lxb_dom_element_remove_attribute(elem, "checked", 7);
     }
     setDomDirty();
     return quickjs.JS_UNDEFINED();
@@ -2034,6 +2215,392 @@ fn getSelectedOptionValue(ctx: *qjs.JSContext, node: *lxb.lxb_dom_node_t) qjs.JS
         return qjs.JS_NewStringLen(ctx, v.ptr, v.len);
     }
     return qjs.JS_NewStringLen(ctx, "", 0);
+}
+
+/// HTML §4.10.7 select.value setter:
+///   On set, run the option-selectedness algorithm: for each <option>,
+///   set selectedness to true iff its value matches the new value.
+///   Only the first matching option is selected; remainder are deselected
+///   (whether select is single or multiple — this matches Chromium).
+fn selectByValue(_: *qjs.JSContext, node: *lxb.lxb_dom_node_t, new_value: []const u8) void {
+    var matched = false;
+    var child = lxb.lxb_dom_node_first_child(node);
+    while (child) |ch| : (child = lxb.lxb_dom_node_next(ch)) {
+        if (ch.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+        var ch_name_len: usize = 0;
+        const ch_name = lxb_dom_element_local_name(ch_elem, &ch_name_len);
+        if (ch_name == null) continue;
+        const tag = ch_name.?[0..ch_name_len];
+
+        if (std.mem.eql(u8, tag, "optgroup")) {
+            // Recurse into <optgroup>
+            var sub = lxb.lxb_dom_node_first_child(ch);
+            while (sub) |sn| : (sub = lxb.lxb_dom_node_next(sn)) {
+                if (sn.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                const sub_elem: *lxb.lxb_dom_element_t = @ptrCast(sn);
+                var sn_name_len: usize = 0;
+                const sn_name = lxb_dom_element_local_name(sub_elem, &sn_name_len);
+                if (sn_name == null) continue;
+                if (!std.mem.eql(u8, sn_name.?[0..sn_name_len], "option")) continue;
+                applyOptionSelection(sub_elem, new_value, &matched);
+            }
+        } else if (std.mem.eql(u8, tag, "option")) {
+            applyOptionSelection(ch_elem, new_value, &matched);
+        }
+    }
+}
+
+fn optionValueMatches(elem: *lxb.lxb_dom_element_t, new_value: []const u8) bool {
+    var val_len: usize = 0;
+    const val_ptr = lxb_dom_element_get_attribute(elem, "value", 5, &val_len);
+    if (val_ptr) |vp| {
+        return std.mem.eql(u8, vp[0..val_len], new_value);
+    }
+    // No value attribute — fall back to whitespace-stripped textContent
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    var tc_len: usize = 0;
+    const tc = lxb_dom_node_text_content(node, &tc_len);
+    if (tc) |t| {
+        const trimmed = std.mem.trim(u8, t[0..tc_len], " \t\n\r\x0c");
+        return std.mem.eql(u8, trimmed, new_value);
+    }
+    return new_value.len == 0;
+}
+
+fn applyOptionSelection(elem: *lxb.lxb_dom_element_t, new_value: []const u8, matched: *bool) void {
+    if (!matched.* and optionValueMatches(elem, new_value)) {
+        _ = lxb_dom_element_set_attribute(elem, "selected", 8, "", 0);
+        matched.* = true;
+    } else {
+        _ = lxb_dom_element_remove_attribute(elem, "selected", 8);
+    }
+}
+
+// ── HTMLSelectElement.selectedIndex ─────────────────────────────────
+// HTML §4.10.7: index of first selected option, or -1.
+pub fn selectGetSelectedIndex(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewInt32(c, -1);
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+
+    var index: i32 = 0;
+    var child = lxb.lxb_dom_node_first_child(node);
+    while (child) |ch| : (child = lxb.lxb_dom_node_next(ch)) {
+        if (ch.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+        var name_len: usize = 0;
+        const name = lxb_dom_element_local_name(ch_elem, &name_len);
+        if (name == null) continue;
+        const tag = name.?[0..name_len];
+
+        if (std.mem.eql(u8, tag, "optgroup")) {
+            var sub = lxb.lxb_dom_node_first_child(ch);
+            while (sub) |sn| : (sub = lxb.lxb_dom_node_next(sn)) {
+                if (sn.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                const sub_elem: *lxb.lxb_dom_element_t = @ptrCast(sn);
+                var sn_name_len: usize = 0;
+                const sn_name = lxb_dom_element_local_name(sub_elem, &sn_name_len);
+                if (sn_name == null) continue;
+                if (!std.mem.eql(u8, sn_name.?[0..sn_name_len], "option")) continue;
+                if (lxb_dom_element_has_attribute(sub_elem, "selected", 8)) {
+                    return qjs.JS_NewInt32(c, index);
+                }
+                index += 1;
+            }
+        } else if (std.mem.eql(u8, tag, "option")) {
+            if (lxb_dom_element_has_attribute(ch_elem, "selected", 8)) {
+                return qjs.JS_NewInt32(c, index);
+            }
+            index += 1;
+        }
+    }
+    return qjs.JS_NewInt32(c, -1);
+}
+
+pub fn selectSetSelectedIndex(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+
+    var target: i32 = 0;
+    if (qjs.JS_ToInt32(c, &target, args[0]) != 0) return quickjs.JS_UNDEFINED();
+
+    var index: i32 = 0;
+    var child = lxb.lxb_dom_node_first_child(node);
+    while (child) |ch| : (child = lxb.lxb_dom_node_next(ch)) {
+        if (ch.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+        var name_len: usize = 0;
+        const name = lxb_dom_element_local_name(ch_elem, &name_len);
+        if (name == null) continue;
+        const tag = name.?[0..name_len];
+
+        if (std.mem.eql(u8, tag, "optgroup")) {
+            var sub = lxb.lxb_dom_node_first_child(ch);
+            while (sub) |sn| : (sub = lxb.lxb_dom_node_next(sn)) {
+                if (sn.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                const sub_elem: *lxb.lxb_dom_element_t = @ptrCast(sn);
+                var sn_name_len: usize = 0;
+                const sn_name = lxb_dom_element_local_name(sub_elem, &sn_name_len);
+                if (sn_name == null) continue;
+                if (!std.mem.eql(u8, sn_name.?[0..sn_name_len], "option")) continue;
+                if (index == target) {
+                    _ = lxb_dom_element_set_attribute(sub_elem, "selected", 8, "", 0);
+                } else {
+                    _ = lxb_dom_element_remove_attribute(sub_elem, "selected", 8);
+                }
+                index += 1;
+            }
+        } else if (std.mem.eql(u8, tag, "option")) {
+            if (index == target) {
+                _ = lxb_dom_element_set_attribute(ch_elem, "selected", 8, "", 0);
+            } else {
+                _ = lxb_dom_element_remove_attribute(ch_elem, "selected", 8);
+            }
+            index += 1;
+        }
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+// ── HTMLOptionElement.selected / .defaultSelected / .index ──────────
+//
+// HTML §4.10.10 The option element:
+//   selected — current selectedness (separated from "selected" attr by
+//              a "dirty selectedness" flag once explicitly set).
+//   defaultSelected — reflects the "selected" content attribute.
+//   index — option's position within the parent select's list of options.
+
+pub fn optionGetSelected(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_NewBool(false);
+    const elem = getElement(c, this_val) orelse return quickjs.JS_NewBool(false);
+
+    if (getDirtyFlag(c, this_val, "_dirtySelected")) {
+        const stored = qjs.JS_GetPropertyStr(c, this_val, "_selected");
+        defer qjs.JS_FreeValue(c, stored);
+        return quickjs.JS_NewBool(qjs.JS_ToBool(c, stored) > 0);
+    }
+    return quickjs.JS_NewBool(lxb_dom_element_has_attribute(elem, "selected", 8));
+}
+
+/// Find this option's parent <select> (walking up through optional <optgroup>).
+/// Returns null if not in a select tree.
+fn findParentSelect(elem: *lxb.lxb_dom_element_t) ?*lxb.lxb_dom_element_t {
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    var parent = node.*.parent;
+    while (parent) |p| {
+        if (p.*.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const pe: *lxb.lxb_dom_element_t = @ptrCast(p);
+            var pn_len: usize = 0;
+            const pn = lxb_dom_element_local_name(pe, &pn_len);
+            if (pn) |n| {
+                const tag = n[0..pn_len];
+                if (std.mem.eql(u8, tag, "select")) return pe;
+                if (!std.mem.eql(u8, tag, "optgroup")) return null;
+            }
+        }
+        parent = p.*.parent;
+    }
+    return null;
+}
+
+pub fn optionSetSelected(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    if (argc < 1) return quickjs.JS_UNDEFINED();
+    const args = argv orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    const v = qjs.JS_ToBool(c, args[0]) > 0;
+    setDirtyFlag(c, this_val, "_dirtySelected", true);
+    _ = qjs.JS_SetPropertyStr(c, this_val, "_selected", quickjs.JS_NewBool(v));
+
+    // Reflect to attribute so getSelectedOptionValue and selectedIndex see it.
+    if (v) {
+        _ = lxb_dom_element_set_attribute(elem, "selected", 8, "", 0);
+    } else {
+        _ = lxb_dom_element_remove_attribute(elem, "selected", 8);
+    }
+
+    // For a select-one (no `multiple`) parent, deselect siblings on `true`.
+    if (v) {
+        if (findParentSelect(elem)) |sel| {
+            const is_multiple = lxb_dom_element_has_attribute(sel, "multiple", 8);
+            if (!is_multiple) deselectSiblingOptions(sel, elem);
+        }
+    }
+    setDomDirty();
+    return quickjs.JS_UNDEFINED();
+}
+
+fn deselectSiblingOptions(select_elem: *lxb.lxb_dom_element_t, keep: *lxb.lxb_dom_element_t) void {
+    const node: *lxb.lxb_dom_node_t = @ptrCast(select_elem);
+    var child = lxb.lxb_dom_node_first_child(node);
+    while (child) |ch| : (child = lxb.lxb_dom_node_next(ch)) {
+        if (ch.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const ch_elem: *lxb.lxb_dom_element_t = @ptrCast(ch);
+        var name_len: usize = 0;
+        const name = lxb_dom_element_local_name(ch_elem, &name_len);
+        if (name == null) continue;
+        const tag = name.?[0..name_len];
+        if (std.mem.eql(u8, tag, "optgroup")) {
+            var sub = lxb.lxb_dom_node_first_child(ch);
+            while (sub) |sn| : (sub = lxb.lxb_dom_node_next(sn)) {
+                if (sn.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                const se: *lxb.lxb_dom_element_t = @ptrCast(sn);
+                if (se == keep) continue;
+                var sn_name_len: usize = 0;
+                const sn_name = lxb_dom_element_local_name(se, &sn_name_len);
+                if (sn_name == null) continue;
+                if (!std.mem.eql(u8, sn_name.?[0..sn_name_len], "option")) continue;
+                _ = lxb_dom_element_remove_attribute(se, "selected", 8);
+            }
+        } else if (std.mem.eql(u8, tag, "option")) {
+            if (ch_elem == keep) continue;
+            _ = lxb_dom_element_remove_attribute(ch_elem, "selected", 8);
+        }
+    }
+}
+
+pub fn optionGetIndex(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return qjs.JS_NewInt32(c, 0);
+    const sel = findParentSelect(elem) orelse return qjs.JS_NewInt32(c, 0);
+
+    const sel_node: *lxb.lxb_dom_node_t = @ptrCast(sel);
+    var index: i32 = 0;
+    var child = lxb.lxb_dom_node_first_child(sel_node);
+    while (child) |ch| : (child = lxb.lxb_dom_node_next(ch)) {
+        if (ch.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const ce: *lxb.lxb_dom_element_t = @ptrCast(ch);
+        var nl: usize = 0;
+        const n = lxb_dom_element_local_name(ce, &nl);
+        if (n == null) continue;
+        const tag = n.?[0..nl];
+        if (std.mem.eql(u8, tag, "optgroup")) {
+            var sub = lxb.lxb_dom_node_first_child(ch);
+            while (sub) |sn| : (sub = lxb.lxb_dom_node_next(sn)) {
+                if (sn.*.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+                const se: *lxb.lxb_dom_element_t = @ptrCast(sn);
+                if (se == elem) return qjs.JS_NewInt32(c, index);
+                var snl: usize = 0;
+                const sn_name = lxb_dom_element_local_name(se, &snl);
+                if (sn_name == null) continue;
+                if (!std.mem.eql(u8, sn_name.?[0..snl], "option")) continue;
+                index += 1;
+            }
+        } else if (std.mem.eql(u8, tag, "option")) {
+            if (ce == elem) return qjs.JS_NewInt32(c, index);
+            index += 1;
+        }
+    }
+    return qjs.JS_NewInt32(c, 0);
+}
+
+// ── HTMLFormElement.reset() ─────────────────────────────────────────
+//
+// HTML §4.10.21.4 reset() steps:
+//   1. If form is not connected, return.
+//   2. Fire an event named "reset" at form, with bubbles=true,
+//      cancelable=true.
+//   3. If the event was canceled, return.
+//   4. Invoke "reset algorithm" (§4.10.5.2) on each resettable element:
+//      - input: clear dirty value flag, restore value from default
+//      - textarea: same
+//      - select: clear dirty option-selectedness on every option,
+//                restore each option.selected = defaultSelected
+pub fn formReset(
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    _: c_int,
+    _: ?[*]qjs.JSValue,
+) callconv(.c) qjs.JSValue {
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    // Step 1: if not connected, return.
+    const conn = qjs.JS_GetPropertyStr(c, this_val, "isConnected");
+    const is_connected = qjs.JS_ToBool(c, conn) > 0;
+    qjs.JS_FreeValue(c, conn);
+    if (!is_connected) return quickjs.JS_UNDEFINED();
+
+    // Steps 2-4: dispatch cancelable "reset" event; if not canceled, run
+    // the form-reset algorithm clearing dirty flags and restoring defaults
+    // on each resettable element.
+    const js_code =
+        \\(function(form){
+        \\  var ev;
+        \\  try { ev = new Event('reset', {bubbles:true, cancelable:true}); }
+        \\  catch(e) { return; }
+        \\  var notCanceled = form.dispatchEvent(ev);
+        \\  if (!notCanceled) return;
+        \\  // Form reset algorithm (HTML §4.10.5.2)
+        \\  var els = form.querySelectorAll('input,textarea,select,output');
+        \\  for (var i=0;i<els.length;i++) {
+        \\    var el=els[i];
+        \\    var tag=(el.tagName||'').toLowerCase();
+        \\    if (tag==='input' || tag==='textarea') {
+        \\      el._dirtyValue = false;
+        \\      delete el._value;
+        \\      el._dirtyChecked = false;
+        \\      delete el._checked;
+        \\    } else if (tag==='select') {
+        \\      var opts = el.querySelectorAll('option');
+        \\      for (var j=0;j<opts.length;j++) {
+        \\        var op=opts[j];
+        \\        op._dirtySelected = false;
+        \\        delete op._selected;
+        \\        if (op.hasAttribute('selected')) {
+        \\          // already correct (default = true)
+        \\        } else {
+        \\          op.removeAttribute('selected');
+        \\        }
+        \\        // Restore: option.selected = defaultSelected (=hasAttr 'selected')
+        \\        // Already reflected via attribute, so getter returns correct value.
+        \\      }
+        \\    } else if (tag==='output') {
+        \\      // <output>.defaultValue is descendant text; we restore textContent
+        \\      if (typeof el._defaultValue === 'string') {
+        \\        el.textContent = el._defaultValue;
+        \\      }
+        \\    }
+        \\  }
+        \\})
+    ;
+    const fn_val = qjs.JS_Eval(c, js_code, js_code.len, "<form-reset>", qjs.JS_EVAL_TYPE_GLOBAL);
+    if (!quickjs.JS_IsException(fn_val)) {
+        var args = [_]qjs.JSValue{this_val};
+        const r = qjs.JS_Call(c, fn_val, quickjs.JS_UNDEFINED(), 1, &args);
+        qjs.JS_FreeValue(c, r);
+    }
+    qjs.JS_FreeValue(c, fn_val);
+    return quickjs.JS_UNDEFINED();
 }
 
 // ── Hidden getter/setter ────────────────────────────────────────────

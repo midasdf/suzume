@@ -134,6 +134,15 @@ pub const KotoriRuntime = struct {
         // tests that reference static HTML elements by id.
         _ = self.eval(named_access_polyfill_js);
 
+        // HTML §4.10.5.1 / §4.10.7 / §4.10.10 / §4.10.21: form-control state.
+        // Adds dirty value/checked/selected flag separation, select.options,
+        // form.elements/length/reset(), and option.text/index/selected. The
+        // kotori native bindings only expose default* (reflected attribute);
+        // this polyfill layers per-instance current-state slots above them.
+        // Defines on Element.prototype because per-tag prototypes are frozen
+        // against defineProperty in this engine; getters branch on tag name.
+        _ = self.eval(form_state_polyfill_js);
+
         return self;
     }
 
@@ -3000,6 +3009,390 @@ pub const KotoriRuntime = struct {
         \\      globalThis[id]=el;
         \\    }
         \\  } catch(e) {}
+        \\})();
+    ;
+
+    /// HTML §4.10.5.1 / §4.10.7 / §4.10.10 / §4.10.21 — form-control state.
+    ///
+    /// Adds the *current* state slots (value, checked, selectedness) on form
+    /// controls, separated from their *default* counterparts via the spec's
+    /// dirty value/checkedness flags (HTML §4.10.5.1 step 2).
+    ///
+    /// Architecture:
+    ///   - kotori freezes per-tag prototypes (HTMLInputElement.prototype etc.)
+    ///     against `Object.defineProperty`. Element.prototype is writable.
+    ///   - The accessors live on Element.prototype and branch on `tagName`
+    ///     so they only act on form controls; non-form elements get
+    ///     undefined which matches Web spec.
+    ///   - Per-instance `_dirtyValue`, `_value`, `_dirtyChecked`, `_checked`,
+    ///     `_dirtySelected`, `_selected` slots (assignable JS object props
+    ///     on the wrapper) hold the current-state values.
+    ///   - Default* (defaultValue, defaultChecked, defaultSelected) flow
+    ///     through the existing `html_reflection.zig` IDL registry which
+    ///     reflects the content attribute.
+    ///
+    /// Spec anchors:
+    ///   §4.10.5.1.6 input.defaultValue (reflects "value")
+    ///   §4.10.5.1.16 input.checkedness / dirty checkedness flag
+    ///   §4.10.5.1 input value sanitization (delegated; we store raw string)
+    ///   §4.10.7 select.value / .selectedIndex / .options / .add / .remove
+    ///   §4.10.10 option.selected / .defaultSelected / .index / .text
+    ///   §4.10.11.5 textarea defaultValue (textContent at parse time)
+    ///   §4.10.21.1 form.elements / .length
+    ///   §4.10.21.4 form.reset() — fires "reset" event, restores defaults
+    const form_state_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function getStr(el,k){return Object.prototype.hasOwnProperty.call(el,k)?el[k]:undefined;}
+        \\  // ── input/textarea: value with dirty value flag (§4.10.5.1) ──
+        \\  Object.defineProperty(EP,'value',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      if(t==='input'){
+        \\        if(this._dirtyValue===true&&typeof this._value==='string')return this._value;
+        \\        var a=this.getAttribute('value');
+        \\        return a==null?'':a;
+        \\      }
+        \\      if(t==='textarea'){
+        \\        if(this._dirtyValue===true&&typeof this._value==='string')return this._value;
+        \\        var tc=this.textContent;
+        \\        return tc==null?'':tc;
+        \\      }
+        \\      if(t==='select'){
+        \\        var opts=this.querySelectorAll('option');
+        \\        for(var i=0;i<opts.length;i++){if(opts[i].selected){
+        \\          var v=opts[i].getAttribute('value');
+        \\          return v==null?(opts[i].textContent||''):v;
+        \\        }}
+        \\        // No selected: in select-one mode, first option is the selectedness default.
+        \\        if(opts.length&&!this.hasAttribute('multiple')){
+        \\          var v=opts[0].getAttribute('value');
+        \\          return v==null?(opts[0].textContent||''):v;
+        \\        }
+        \\        return '';
+        \\      }
+        \\      if(t==='option'){
+        \\        var v=this.getAttribute('value');
+        \\        if(v!=null)return v;
+        \\        var tc=this.textContent||'';
+        \\        return tc.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');
+        \\      }
+        \\      if(t==='button'||t==='li'||t==='data'||t==='meter'||t==='progress'||t==='param'){
+        \\        return this.getAttribute('value')||'';
+        \\      }
+        \\      return undefined;
+        \\    },
+        \\    set:function(v){
+        \\      var t=tag(this);
+        \\      if(t==='input'||t==='textarea'){
+        \\        this._dirtyValue=true;
+        \\        this._value=String(v);
+        \\        return;
+        \\      }
+        \\      if(t==='select'){
+        \\        var nv=String(v);
+        \\        var opts=this.querySelectorAll('option');
+        \\        var matched=false;
+        \\        for(var i=0;i<opts.length;i++){
+        \\          var o=opts[i];
+        \\          var ov=o.getAttribute('value');
+        \\          var cmp=ov!=null?ov:(o.textContent||'').replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');
+        \\          if(!matched&&cmp===nv){
+        \\            o._dirtySelected=true;o._selected=true;
+        \\            matched=true;
+        \\          } else {
+        \\            o._dirtySelected=true;o._selected=false;
+        \\          }
+        \\        }
+        \\        return;
+        \\      }
+        \\      if(t==='option'||t==='button'||t==='li'||t==='data'||t==='meter'||t==='progress'||t==='param'){
+        \\        this.setAttribute('value',String(v));
+        \\        return;
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  // ── input.defaultValue / textarea.defaultValue (§4.10.5.1.6 / §4.10.11.5) ──
+        \\  Object.defineProperty(EP,'defaultValue',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      if(t==='input')return this.getAttribute('value')||'';
+        \\      if(t==='textarea')return this.textContent||'';
+        \\      if(t==='output'){
+        \\        if(typeof this._defaultValue==='string')return this._defaultValue;
+        \\        return this.textContent||'';
+        \\      }
+        \\      return undefined;
+        \\    },
+        \\    set:function(v){
+        \\      var t=tag(this);
+        \\      var s=String(v);
+        \\      if(t==='input'){this.setAttribute('value',s);return;}
+        \\      if(t==='textarea'){this.textContent=s;return;}
+        \\      if(t==='output'){this._defaultValue=s;if(this._dirtyValue!==true)this.textContent=s;return;}
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  // ── input.checked / .defaultChecked (§4.10.5.1.16) ──
+        \\  Object.defineProperty(EP,'checked',{
+        \\    get:function(){
+        \\      if(tag(this)!=='input')return undefined;
+        \\      if(this._dirtyChecked===true)return this._checked===true;
+        \\      return this.hasAttribute('checked');
+        \\    },
+        \\    set:function(v){
+        \\      if(tag(this)!=='input')return;
+        \\      this._dirtyChecked=true;
+        \\      this._checked=!!v;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'defaultChecked',{
+        \\    get:function(){
+        \\      if(tag(this)!=='input')return undefined;
+        \\      return this.hasAttribute('checked');
+        \\    },
+        \\    set:function(v){
+        \\      if(tag(this)!=='input')return;
+        \\      if(v)this.setAttribute('checked','');else this.removeAttribute('checked');
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  // ── option.selected / .defaultSelected / .index / .text (§4.10.10) ──
+        \\  Object.defineProperty(EP,'selected',{
+        \\    get:function(){
+        \\      if(tag(this)!=='option')return undefined;
+        \\      if(this._dirtySelected===true)return this._selected===true;
+        \\      return this.hasAttribute('selected');
+        \\    },
+        \\    set:function(v){
+        \\      if(tag(this)!=='option')return;
+        \\      var b=!!v;
+        \\      // Per HTML §4.10.10: setting `selected` IDL attribute sets the
+        \\      // dirty selectedness flag and the *current* selectedness ONLY.
+        \\      // Do NOT touch the content attribute (that drives defaultSelected).
+        \\      this._dirtySelected=true;
+        \\      this._selected=b;
+        \\      // select-one: deselect siblings on true (§4.10.7 selectedness algorithm)
+        \\      if(b){
+        \\        var p=this.parentNode;
+        \\        while(p&&(p.tagName||'').toLowerCase()==='optgroup')p=p.parentNode;
+        \\        if(p&&(p.tagName||'').toLowerCase()==='select'&&!p.hasAttribute('multiple')){
+        \\          var sibs=p.querySelectorAll('option');
+        \\          for(var i=0;i<sibs.length;i++){
+        \\            if(sibs[i]===this)continue;
+        \\            sibs[i]._dirtySelected=true;sibs[i]._selected=false;
+        \\          }
+        \\        }
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'defaultSelected',{
+        \\    get:function(){
+        \\      if(tag(this)!=='option')return undefined;
+        \\      return this.hasAttribute('selected');
+        \\    },
+        \\    set:function(v){
+        \\      if(tag(this)!=='option')return;
+        \\      if(v)this.setAttribute('selected','');else this.removeAttribute('selected');
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'index',{
+        \\    get:function(){
+        \\      if(tag(this)!=='option')return undefined;
+        \\      var p=this.parentNode;
+        \\      while(p&&(p.tagName||'').toLowerCase()==='optgroup')p=p.parentNode;
+        \\      if(!p||(p.tagName||'').toLowerCase()!=='select')return 0;
+        \\      var opts=p.querySelectorAll('option');
+        \\      for(var i=0;i<opts.length;i++)if(opts[i]===this)return i;
+        \\      return 0;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'text',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      if(t==='option'){
+        \\        var lab=this.getAttribute('label');
+        \\        if(lab!=null)return lab;
+        \\        var tc=this.textContent||'';
+        \\        return tc.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');
+        \\      }
+        \\      if(t==='script'||t==='style'||t==='title')return this.textContent||'';
+        \\      return undefined;
+        \\    },
+        \\    set:function(v){
+        \\      var t=tag(this);
+        \\      if(t==='option'||t==='script'||t==='style'||t==='title'){
+        \\        this.textContent=String(v);
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  // ── select.selectedIndex / .options / .selectedOptions / .type / .add / .remove / .item / .namedItem (§4.10.7) ──
+        \\  Object.defineProperty(EP,'selectedIndex',{
+        \\    get:function(){
+        \\      if(tag(this)!=='select')return undefined;
+        \\      var opts=this.querySelectorAll('option');
+        \\      for(var i=0;i<opts.length;i++)if(opts[i].selected)return i;
+        \\      return -1;
+        \\    },
+        \\    set:function(n){
+        \\      if(tag(this)!=='select')return;
+        \\      n=n|0;
+        \\      var opts=this.querySelectorAll('option');
+        \\      for(var i=0;i<opts.length;i++){
+        \\        if(i===n){opts[i]._dirtySelected=true;opts[i]._selected=true;}
+        \\        else{opts[i]._dirtySelected=true;opts[i]._selected=false;}
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'options',{
+        \\    get:function(){
+        \\      if(tag(this)!=='select')return undefined;
+        \\      return this.querySelectorAll('option');
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'selectedOptions',{
+        \\    get:function(){
+        \\      if(tag(this)!=='select')return undefined;
+        \\      var opts=this.querySelectorAll('option'),r=[];
+        \\      for(var i=0;i<opts.length;i++)if(opts[i].selected)r.push(opts[i]);
+        \\      return r;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'type',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      if(t==='select')return this.hasAttribute('multiple')?'select-multiple':'select-one';
+        \\      // Other element 'type' (input, button etc.) handled by IDL reflection.
+        \\      return undefined;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  // Methods on Element.prototype too — branch by tag.
+        \\  EP.add=function(elem,before){
+        \\    if(tag(this)!=='select'){throw new TypeError('add: not a select');}
+        \\    if(elem==null)return;
+        \\    var ref=null;
+        \\    if(before==null){ref=null;}
+        \\    else if(typeof before==='number'){
+        \\      var opts=this.querySelectorAll('option');
+        \\      ref=before<opts.length?opts[before]:null;
+        \\    } else { ref=before; }
+        \\    if(ref==null)this.appendChild(elem); else this.insertBefore(elem,ref);
+        \\  };
+        \\  EP.remove=function(i){
+        \\    if(arguments.length===0){
+        \\      // ChildNode.remove() — remove self from parent
+        \\      if(this.parentNode)this.parentNode.removeChild(this);
+        \\      return;
+        \\    }
+        \\    if(tag(this)!=='select')return;
+        \\    var opts=this.querySelectorAll('option');
+        \\    i=i|0;
+        \\    if(i>=0&&i<opts.length)opts[i].parentNode.removeChild(opts[i]);
+        \\  };
+        \\  EP.item=function(i){
+        \\    if(tag(this)!=='select')return null;
+        \\    var opts=this.querySelectorAll('option');i=i>>>0;
+        \\    return i<opts.length?opts[i]:null;
+        \\  };
+        \\  EP.namedItem=function(n){
+        \\    if(tag(this)!=='select')return null;
+        \\    var opts=this.querySelectorAll('option');
+        \\    for(var i=0;i<opts.length;i++)if(opts[i].id===n||opts[i].getAttribute('name')===n)return opts[i];
+        \\    return null;
+        \\  };
+        \\  // ── form.elements / .length / .reset() (§4.10.21) ──
+        \\  // kotori's querySelectorAll has limited comma-list support, so collect
+        \\  // each tag separately and merge in tree order.
+        \\  function _collectListed(root){
+        \\    var tags=['input','select','textarea','button','output','fieldset'];
+        \\    var seen=Object.create(null),out=[];
+        \\    // Walk tree in document order, push matching elements once.
+        \\    var stack=[root],node;
+        \\    // Iterative DFS: pop, push children reversed
+        \\    while(stack.length){
+        \\      node=stack.pop();
+        \\      var children=node.children;
+        \\      if(children){
+        \\        for(var i=children.length-1;i>=0;i--)stack.push(children[i]);
+        \\      }
+        \\      var t=(node.tagName||'').toLowerCase();
+        \\      if(t==='input'||t==='select'||t==='textarea'||t==='button'||t==='output'||t==='fieldset'){
+        \\        out.push(node);
+        \\      }
+        \\    }
+        \\    return out;
+        \\  }
+        \\  Object.defineProperty(EP,'elements',{
+        \\    get:function(){
+        \\      if(tag(this)!=='form')return undefined;
+        \\      return _collectListed(this);
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  Object.defineProperty(EP,'length',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      if(t==='form'){var els=this.elements;return els?els.length:0;}
+        \\      if(t==='select'){return this.querySelectorAll('option').length;}
+        \\      return undefined;
+        \\    },
+        \\    set:function(n){
+        \\      if(tag(this)!=='select')return;
+        \\      n=n>>>0;
+        \\      var opts=this.querySelectorAll('option');
+        \\      if(n<opts.length){
+        \\        for(var i=opts.length-1;i>=n;i--)if(opts[i].parentNode)opts[i].parentNode.removeChild(opts[i]);
+        \\      } else {
+        \\        for(var i=opts.length;i<n;i++){var o=document.createElement('option');this.appendChild(o);}
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  EP.reset=function(){
+        \\    if(tag(this)!=='form')return;
+        \\    // §4.10.21.4 reset(): if not connected, return.
+        \\    if(!this.isConnected)return;
+        \\    var ev;
+        \\    try { ev=new Event('reset',{bubbles:true,cancelable:true}); }
+        \\    catch(e){return;}
+        \\    var notCanceled=this.dispatchEvent(ev);
+        \\    if(!notCanceled)return;
+        \\    // §4.10.5.2 form-reset algorithm: clear dirty flags on each control.
+        \\    var els=_collectListed(this);
+        \\    for(var i=0;i<els.length;i++){
+        \\      var el=els[i];
+        \\      var t=tag(el);
+        \\      if(t==='input'||t==='textarea'){
+        \\        el._dirtyValue=false;
+        \\        el._value=undefined;
+        \\        el._dirtyChecked=false;
+        \\        el._checked=undefined;
+        \\      } else if(t==='select'){
+        \\        var opts=el.querySelectorAll('option');
+        \\        for(var j=0;j<opts.length;j++){
+        \\          opts[j]._dirtySelected=false;
+        \\          opts[j]._selected=undefined;
+        \\          // After clearing dirty flag, selected getter falls back to hasAttribute('selected'),
+        \\          // which reflects defaultSelected per spec. No attribute change needed.
+        \\        }
+        \\      } else if(t==='output') {
+        \\        if(typeof el._defaultValue==='string')el.textContent=el._defaultValue;
+        \\        el._dirtyValue=false;
+        \\      }
+        \\    }
+        \\  };
         \\})();
     ;
 

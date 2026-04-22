@@ -3794,11 +3794,31 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         qjs.JS_FreeAtom(ctx, hrefAtom);
     }
 
-    // input.value / textarea.value / select.value
+    // input.value / textarea.value / select.value (HTML §4.10.5.1)
     {
         const valueAtom = qjs.JS_NewAtom(ctx, "value");
         _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, valueAtom, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetValue, "get value", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetValue, "set value", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
         qjs.JS_FreeAtom(ctx, valueAtom);
+    }
+    // input.defaultValue / textarea.defaultValue / input.checked /
+    // input.defaultChecked (HTML §4.10.5.1.6, §4.10.5.1.16, §4.10.11.5).
+    // We register these on HTMLElement.prototype because the per-tag protos
+    // (HTMLInputElement etc.) inherit from it. The accessors branch on tag
+    // name internally so they are no-ops for non-form elements.
+    {
+        const a = qjs.JS_NewAtom(ctx, "defaultValue");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, a, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetDefaultValue, "get defaultValue", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetDefaultValue, "set defaultValue", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, a);
+    }
+    {
+        const a = qjs.JS_NewAtom(ctx, "checked");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, a, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetChecked, "get checked", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetChecked, "set checked", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, a);
+    }
+    {
+        const a = qjs.JS_NewAtom(ctx, "defaultChecked");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, html_element_proto, a, qjs.JS_NewCFunction(ctx, &dom_elem.elementGetDefaultChecked, "get defaultChecked", 0), qjs.JS_NewCFunction(ctx, &dom_elem.elementSetDefaultChecked, "set defaultChecked", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, a);
     }
 
     // Set HTMLElement.prototype as the class prototype (elements get this as their __proto__)
@@ -3881,18 +3901,45 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
         _ = qjs.JS_SetPropertyStr(ctx, global, name.ptr, ctor);
     }
 
-    // ── HTMLFormElement.prototype: submit() / requestSubmit() ──────────
-    // HTML Living Standard §4.10.21.3 "Form submission"
+    // ── HTMLFormElement.prototype: submit() / requestSubmit() / reset() ──────
+    // HTML Living Standard §4.10.21.3 "Form submission", §4.10.21.4 reset()
     {
         const fm_ctor = qjs.JS_GetPropertyStr(ctx, global, "HTMLFormElement");
         const fm_proto = qjs.JS_GetPropertyStr(ctx, fm_ctor, "prototype");
         _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "submit", qjs.JS_NewCFunction(ctx, &dom_elem.formSubmit, "submit", 0));
         _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "requestSubmit", qjs.JS_NewCFunction(ctx, &dom_elem.formRequestSubmit, "requestSubmit", 1));
+        // HTML Living Standard §4.10.21.4 "reset()"
+        _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "reset", qjs.JS_NewCFunction(ctx, &dom_elem.formReset, "reset", 0));
         // HTML Living Standard §4.10.21.2 "statically validate the constraints"
         _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "checkValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formCheckValidity, "checkValidity", 0));
         _ = qjs.JS_SetPropertyStr(ctx, fm_proto, "reportValidity", qjs.JS_NewCFunction(ctx, &dom_elem.formReportValidity, "reportValidity", 0));
         qjs.JS_FreeValue(ctx, fm_proto);
         qjs.JS_FreeValue(ctx, fm_ctor);
+    }
+
+    // ── HTMLSelectElement.prototype: selectedIndex (HTML §4.10.7) ───────────
+    {
+        const sel_ctor = qjs.JS_GetPropertyStr(ctx, global, "HTMLSelectElement");
+        const sel_proto = qjs.JS_GetPropertyStr(ctx, sel_ctor, "prototype");
+        const a = qjs.JS_NewAtom(ctx, "selectedIndex");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, sel_proto, a, qjs.JS_NewCFunction(ctx, &dom_elem.selectGetSelectedIndex, "get selectedIndex", 0), qjs.JS_NewCFunction(ctx, &dom_elem.selectSetSelectedIndex, "set selectedIndex", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, a);
+        qjs.JS_FreeValue(ctx, sel_proto);
+        qjs.JS_FreeValue(ctx, sel_ctor);
+    }
+
+    // ── HTMLOptionElement.prototype: selected / index (HTML §4.10.10) ───────
+    {
+        const op_ctor = qjs.JS_GetPropertyStr(ctx, global, "HTMLOptionElement");
+        const op_proto = qjs.JS_GetPropertyStr(ctx, op_ctor, "prototype");
+        const sa = qjs.JS_NewAtom(ctx, "selected");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, op_proto, sa, qjs.JS_NewCFunction(ctx, &dom_elem.optionGetSelected, "get selected", 0), qjs.JS_NewCFunction(ctx, &dom_elem.optionSetSelected, "set selected", 1), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, sa);
+        const ia = qjs.JS_NewAtom(ctx, "index");
+        _ = qjs.JS_DefinePropertyGetSet(ctx, op_proto, ia, qjs.JS_NewCFunction(ctx, &dom_elem.optionGetIndex, "get index", 0), quickjs.JS_UNDEFINED(), qjs.JS_PROP_CONFIGURABLE | qjs.JS_PROP_ENUMERABLE);
+        qjs.JS_FreeAtom(ctx, ia);
+        qjs.JS_FreeValue(ctx, op_proto);
+        qjs.JS_FreeValue(ctx, op_ctor);
     }
 
     // ── Constraint validation API — HTML Living Standard §4.10.18 ───────────
@@ -4022,6 +4069,81 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    });
             \\    Object.defineProperty(HTMLFormElement.prototype,'length',{
             \\      get:function(){ return this.elements.length; },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\  }
+            \\  // HTML §4.10.7 HTMLSelectElement collection / length / add / remove
+            \\  if(typeof HTMLSelectElement!=='undefined'){
+            \\    var SP=HTMLSelectElement.prototype;
+            \\    Object.defineProperty(SP,'options',{
+            \\      get:function(){ return this.querySelectorAll('option'); },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\    Object.defineProperty(SP,'length',{
+            \\      get:function(){ return this.options.length; },
+            \\      set:function(n){
+            \\        n=n>>>0;
+            \\        var opts=this.options;
+            \\        if(n<opts.length){
+            \\          for(var i=opts.length-1;i>=n;i--) opts[i].parentNode && opts[i].parentNode.removeChild(opts[i]);
+            \\        } else {
+            \\          for(var i=opts.length;i<n;i++){
+            \\            var o=document.createElement('option');
+            \\            this.appendChild(o);
+            \\          }
+            \\        }
+            \\      },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\    Object.defineProperty(SP,'selectedOptions',{
+            \\      get:function(){
+            \\        var opts=this.options,r=[];
+            \\        for(var i=0;i<opts.length;i++) if(opts[i].selected) r.push(opts[i]);
+            \\        return r;
+            \\      },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\    Object.defineProperty(SP,'type',{
+            \\      get:function(){ return this.hasAttribute('multiple') ? 'select-multiple' : 'select-one'; },
+            \\      configurable:true,enumerable:true
+            \\    });
+            \\    SP.item=function(i){ var o=this.options; i=i>>>0; return i<o.length ? o[i] : null; };
+            \\    SP.namedItem=function(n){
+            \\      var o=this.options;
+            \\      for(var i=0;i<o.length;i++) if(o[i].id===n||o[i].name===n) return o[i];
+            \\      return null;
+            \\    };
+            \\    SP.add=function(elem,before){
+            \\      if(elem==null) return;
+            \\      var ref=null;
+            \\      if(before==null){ ref=null; }
+            \\      else if(typeof before==='number'){
+            \\        var opts=this.options;
+            \\        ref = before<opts.length ? opts[before] : null;
+            \\      } else { ref=before; }
+            \\      if(ref==null) this.appendChild(elem);
+            \\      else this.insertBefore(elem, ref);
+            \\    };
+            \\    SP.remove=function(i){
+            \\      if(arguments.length===0){
+            \\        // ChildNode.remove() inherited fallback
+            \\        if(this.parentNode) this.parentNode.removeChild(this);
+            \\        return;
+            \\      }
+            \\      var opts=this.options;
+            \\      i=i|0;
+            \\      if(i>=0 && i<opts.length) opts[i].parentNode.removeChild(opts[i]);
+            \\    };
+            \\  }
+            \\  // HTML §4.10.10 HTMLOptionElement.text / .label fallbacks
+            \\  if(typeof HTMLOptionElement!=='undefined'){
+            \\    var OP=HTMLOptionElement.prototype;
+            \\    Object.defineProperty(OP,'text',{
+            \\      get:function(){
+            \\        var t=this.textContent||'';
+            \\        return t.replace(/[\t\n\f\r ]+/g,' ').replace(/^ | $/g,'');
+            \\      },
+            \\      set:function(v){ this.textContent = String(v); },
             \\      configurable:true,enumerable:true
             \\    });
             \\  }
@@ -4505,11 +4627,15 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\  if(typeof HTMLFormElement!=='undefined'){var FM=HTMLFormElement;rs(FM,'name');re(FM,'method',null,['get','post','dialog'],'get','get');rs(FM,'target');rs(FM,'acceptCharset','accept-charset');rua(FM,'action');re(FM,'enctype',null,['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'application/x-www-form-urlencoded','application/x-www-form-urlencoded');re(FM,'encoding','enctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'application/x-www-form-urlencoded','application/x-www-form-urlencoded');rs(FM,'autocomplete');rs(FM,'rel');rb(FM,'noValidate','novalidate');}
             \\  if(typeof HTMLFieldSetElement!=='undefined'){var FS=HTMLFieldSetElement;rs(FS,'name');rb(FS,'disabled');}
             \\  if(typeof HTMLLabelElement!=='undefined'){rs(HTMLLabelElement,'htmlFor','for');}
-            \\  if(typeof HTMLInputElement!=='undefined'){var IN=HTMLInputElement;rs(IN,'name');re(IN,'type',null,['hidden','text','search','tel','url','email','password','date','month','week','time','datetime-local','number','range','color','checkbox','radio','file','submit','image','reset','button'],'text','text');rs(IN,'value');rs(IN,'defaultValue','value');rs(IN,'accept');rs(IN,'alt');rs(IN,'autocomplete');rs(IN,'dirName','dirname');rua(IN,'formAction','formaction');re(IN,'formEnctype','formenctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'','application/x-www-form-urlencoded');re(IN,'formMethod','formmethod',['get','post','dialog'],'','get');rs(IN,'formTarget','formtarget');rs(IN,'max');rs(IN,'min');rs(IN,'pattern');rs(IN,'placeholder');ru(IN,'src');rs(IN,'step');rs(IN,'align');rs(IN,'useMap','usemap');rs(IN,'capture');rs(IN,'popoverTargetAction','popovertargetaction');riu(IN,'width',null,0);riu(IN,'height',null,0);ris(IN,'maxLength','maxlength',-1,0);ris(IN,'minLength','minlength',-1,0);riu(IN,'size',null,20,1);rb(IN,'disabled');rb(IN,'checked');rb(IN,'defaultChecked','checked');rb(IN,'multiple');rb(IN,'readOnly','readonly');rb(IN,'required');rb(IN,'formNoValidate','formnovalidate');rb(IN,'autofocus');rb(IN,'indeterminate');}
+            \\  // HTMLInputElement: 'value'/'defaultValue'/'checked'/'defaultChecked' wired
+            \\  // by Zig accessors above (HTML §4.10.5.1 dirty value/checkedness flags).
+            \\  if(typeof HTMLInputElement!=='undefined'){var IN=HTMLInputElement;rs(IN,'name');re(IN,'type',null,['hidden','text','search','tel','url','email','password','date','month','week','time','datetime-local','number','range','color','checkbox','radio','file','submit','image','reset','button'],'text','text');rs(IN,'accept');rs(IN,'alt');rs(IN,'autocomplete');rs(IN,'dirName','dirname');rua(IN,'formAction','formaction');re(IN,'formEnctype','formenctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'','application/x-www-form-urlencoded');re(IN,'formMethod','formmethod',['get','post','dialog'],'','get');rs(IN,'formTarget','formtarget');rs(IN,'max');rs(IN,'min');rs(IN,'pattern');rs(IN,'placeholder');ru(IN,'src');rs(IN,'step');rs(IN,'align');rs(IN,'useMap','usemap');rs(IN,'capture');rs(IN,'popoverTargetAction','popovertargetaction');riu(IN,'width',null,0);riu(IN,'height',null,0);ris(IN,'maxLength','maxlength',-1,0);ris(IN,'minLength','minlength',-1,0);riu(IN,'size',null,20,1);rb(IN,'disabled');rb(IN,'multiple');rb(IN,'readOnly','readonly');rb(IN,'required');rb(IN,'formNoValidate','formnovalidate');rb(IN,'autofocus');rb(IN,'indeterminate');}
             \\  if(typeof HTMLButtonElement!=='undefined'){var BT=HTMLButtonElement;rs(BT,'name');re(BT,'type',null,['submit','reset','button'],'submit','submit');rs(BT,'value');rua(BT,'formAction','formaction');re(BT,'formEnctype','formenctype',['application/x-www-form-urlencoded','multipart/form-data','text/plain'],'','application/x-www-form-urlencoded');re(BT,'formMethod','formmethod',['get','post','dialog'],'','get');rs(BT,'formTarget','formtarget');rs(BT,'popoverTargetAction','popovertargetaction');rb(BT,'disabled');rb(BT,'autofocus');rb(BT,'formNoValidate','formnovalidate');}
             \\  if(typeof HTMLSelectElement!=='undefined'){var SL=HTMLSelectElement;rs(SL,'name');rs(SL,'autocomplete');ri(SL,'size',null,0);rb(SL,'disabled');rb(SL,'multiple');rb(SL,'required');rb(SL,'autofocus');}
             \\  if(typeof HTMLOptGroupElement!=='undefined'){rs(HTMLOptGroupElement,'label');rb(HTMLOptGroupElement,'disabled');}
-            \\  if(typeof HTMLOptionElement!=='undefined'){var OP=HTMLOptionElement;rs(OP,'label');rs(OP,'value');rb(OP,'disabled');rb(OP,'defaultSelected','selected');rb(OP,'selected');}
+            \\  // HTMLOptionElement: 'selected' wired by Zig accessor above with dirty
+            \\  // selectedness (HTML §4.10.10). 'value' kept attribute-only here.
+            \\  if(typeof HTMLOptionElement!=='undefined'){var OP=HTMLOptionElement;rs(OP,'label');rs(OP,'value');rb(OP,'disabled');rb(OP,'defaultSelected','selected');}
             \\  if(typeof HTMLTextAreaElement!=='undefined'){var TA=HTMLTextAreaElement;rs(TA,'name');rs(TA,'placeholder');rs(TA,'wrap');rs(TA,'autocomplete');rs(TA,'dirName','dirname');riu(TA,'cols',null,20,1);riu(TA,'rows',null,2,1);ris(TA,'maxLength','maxlength',-1,0);ris(TA,'minLength','minlength',-1,0);rb(TA,'disabled');rb(TA,'readOnly','readonly');rb(TA,'required');rb(TA,'autofocus');}
             \\  if(typeof HTMLOutputElement!=='undefined'){var OU=HTMLOutputElement;rs(OU,'name');rs(OU,'defaultValue');}
             \\  if(typeof HTMLProgressElement!=='undefined'){var PR=HTMLProgressElement;ri(PR,'max',null,1);}
