@@ -143,6 +143,27 @@ pub const KotoriRuntime = struct {
         // against defineProperty in this engine; getters branch on tag name.
         _ = self.eval(form_state_polyfill_js);
 
+        // HTML §4.10.18 Constraint Validation API: willValidate / validity
+        // (ValidityState) / validationMessage getters + checkValidity() /
+        // reportValidity() / setCustomValidity() methods. Mirrors the QJS
+        // polyfill at dom_api.zig:3978 which runs only in the QuickJS
+        // context; without this kotori-side polyfill, `input.validity` is
+        // undefined on kotori and every constraint-validation WPT test
+        // fails at the first `.validity.*` access.
+        _ = self.eval(validity_polyfill_js);
+
+        // HTML §4.10.5.1.8 / §4.10.11.3: text-field selection API.
+        // selectionStart/End/Direction + select()/setSelectionRange()/
+        // setRangeText(). Only applicable to textarea and input types
+        // text/search/url/tel/password.
+        _ = self.eval(selection_polyfill_js);
+
+        // HTML §4.10.5.1.12 / §4.10.5.1.13: valueAsNumber / valueAsDate /
+        // stepUp / stepDown for number/range/date/time/datetime-local/
+        // month/week inputs. Shares unit-scale parsers with the validity
+        // polyfill's stepMismatch.
+        _ = self.eval(input_numeric_polyfill_js);
+
         // HTML §3.1.5 / §3.1.6: Document HTMLCollection getters
         // (document.forms/links/images/scripts/embeds/plugins). The QuickJS
         // path installs these in dom_api.zig:5224 but kotori globals need
@@ -3462,6 +3483,496 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\  };
+        \\})();
+    ;
+
+    /// HTML §4.10.18 Constraint Validation API for kotori.
+    ///
+    /// Defines willValidate / validity (ValidityState) / validationMessage
+    /// getters, plus checkValidity() / reportValidity() / setCustomValidity()
+    /// methods. Mirrors the QuickJS-side polyfill at dom_api.zig:3978
+    /// (constraint_js) but installed on Element.prototype with tag-based
+    /// branching, matching form_state_polyfill_js's "per-tag prototypes are
+    /// frozen" workaround for kotori.
+    const validity_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  // ValidityState stamp so Object.prototype.toString.call(v) returns
+        \\  // "[object ValidityState]" per WebIDL §3.7 (assert_class_string).
+        \\  var ValidityState=function ValidityState(){};
+        \\  var VS_PROTO=ValidityState.prototype;
+        \\  try{if(typeof Symbol!=='undefined'&&Symbol.toStringTag)
+        \\    VS_PROTO[Symbol.toStringTag]='ValidityState';}catch(e){}
+        \\  try{if(typeof globalThis!=='undefined'&&typeof globalThis.ValidityState==='undefined')
+        \\    globalThis.ValidityState=ValidityState;}catch(e){}
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function isSubmittable(el){
+        \\    var t=tag(el);
+        \\    return t==='input'||t==='textarea'||t==='select'||t==='button';
+        \\  }
+        \\  function willVal(el){
+        \\    if(!isSubmittable(el))return false;
+        \\    if(el.disabled)return false;
+        \\    var t=tag(el);
+        \\    var it=(el.type||'').toLowerCase();
+        \\    if(t==='input'&&(it==='hidden'||it==='reset'||it==='button'))return false;
+        \\    if(t==='button'&&(it==='reset'||it==='button'))return false;
+        \\    if(el.closest&&el.closest('datalist'))return false;
+        \\    return true;
+        \\  }
+        \\  function parseDTV(s,t){
+        \\    if(!s)return null;
+        \\    var m;
+        \\    if(t==='date'){m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s);if(!m)return null;var d=Date.UTC(+m[1],+m[2]-1,+m[3]);return isNaN(d)?null:d;}
+        \\    if(t==='datetime-local'){m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(s);if(!m)return null;var sec=m[6]?parseFloat(m[6]):0;var ms=Math.round((sec-Math.floor(sec))*1000);var d2=Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],Math.floor(sec),ms);return isNaN(d2)?null:d2;}
+        \\    if(t==='time'){m=/^(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(s);if(!m)return null;var sec2=m[3]?parseFloat(m[3]):0;return (+m[1])*3600000+(+m[2])*60000+Math.round(sec2*1000);}
+        \\    if(t==='month'){m=/^(\d{4})-(\d{2})$/.exec(s);if(!m)return null;return (+m[1])*12+(+m[2])-1;}
+        \\    if(t==='week'){m=/^(\d{4})-W(\d{2})$/.exec(s);if(!m)return null;var y=+m[1],w=+m[2];if(w<1||w>53)return null;var jan4=new Date(Date.UTC(y,0,4));var dow=jan4.getUTCDay()||7;var mon1=Date.UTC(y,0,4-dow+1);return mon1+(w-1)*604800000;}
+        \\    return null;
+        \\  }
+        \\  function makeValidity(el){
+        \\    var msg=el._customValidationMessage||'';
+        \\    var customError=msg!=='';
+        \\    var val=el.value;if(val==null)val='';else val=String(val);
+        \\    var type=(el.type||'text').toLowerCase();
+        \\    var req=el.required||false;
+        \\    var valueMissing=false;
+        \\    if(req){
+        \\      if(type==='checkbox'){
+        \\        valueMissing=!el.checked;
+        \\      } else if(type==='radio'){
+        \\        // §4.10.18.3 radio group: missing iff no radio in the same
+        \\        // form+name group is checked.
+        \\        var gname=el.name||'';
+        \\        var group;
+        \\        if(gname===''){group=[el];}
+        \\        else {
+        \\          var scope=el.form||(typeof document!=='undefined'?document:null);
+        \\          if(scope&&scope.querySelectorAll){
+        \\            try{group=scope.querySelectorAll('input[type="radio"][name="'+gname.replace(/"/g,'\\"')+'"]');}
+        \\            catch(e){group=[el];}
+        \\          } else group=[el];
+        \\        }
+        \\        var anyChecked=false;
+        \\        for(var gi=0;gi<group.length;gi++){if(group[gi].checked){anyChecked=true;break;}}
+        \\        valueMissing=!anyChecked;
+        \\      } else if(type==='file'){
+        \\        var files=el.files;
+        \\        valueMissing=!files||files.length===0;
+        \\      } else if(tag(el)==='select'){
+        \\        valueMissing=val===''||val==null;
+        \\      } else {
+        \\        valueMissing=val==='';
+        \\      }
+        \\    }
+        \\    var minLen=(el.minLength!=null&&el.minLength>=0)?el.minLength:0;
+        \\    var maxLen=(el.maxLength!=null&&el.maxLength>=0)?el.maxLength:Infinity;
+        \\    var tooShort=minLen>0&&val.length>0&&val.length<minLen;
+        \\    var tooLong=val.length>maxLen;
+        \\    var numVal=parseFloat(val);
+        \\    var minV=parseFloat(el.min);
+        \\    var maxV=parseFloat(el.max);
+        \\    var rangeUnderflow=!isNaN(numVal)&&!isNaN(minV)&&numVal<minV;
+        \\    var rangeOverflow=!isNaN(numVal)&&!isNaN(maxV)&&numVal>maxV;
+        \\    var typeMismatch=false;
+        \\    if(val!==''){
+        \\      if(type==='email')typeMismatch=!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val);
+        \\      if(type==='url'){try{new URL(val);}catch(e){typeMismatch=true;}}
+        \\    }
+        \\    var patternMismatch=false;
+        \\    if(val!==''&&el.pattern){
+        \\      try{patternMismatch=!(new RegExp('^(?:'+el.pattern+')$')).test(val);}catch(e){}
+        \\    }
+        \\    var stepMismatch=false;
+        \\    if((type==='number'||type==='range')&&val!==''&&!isNaN(numVal)){
+        \\      var stepAttr=el.getAttribute('step');
+        \\      if(stepAttr!=='any'){
+        \\        var step=parseFloat(stepAttr);
+        \\        if(!isFinite(step)||step<=0)step=1;
+        \\        var base=0;
+        \\        var minAttr=el.getAttribute('min');
+        \\        if(minAttr!==null){var mb=parseFloat(minAttr);if(isFinite(mb))base=mb;}
+        \\        else if(el.defaultValue){var db=parseFloat(el.defaultValue);if(isFinite(db))base=db;}
+        \\        var r=(numVal-base)/step;
+        \\        var rounded=Math.round(r);
+        \\        var tol=1e-9*Math.max(Math.abs(step),1);
+        \\        if(Math.abs((r-rounded)*step)>tol)stepMismatch=true;
+        \\      }
+        \\    }
+        \\    if(!stepMismatch&&val!==''&&(type==='date'||type==='time'||type==='datetime-local'||type==='month'||type==='week')){
+        \\      var nv=parseDTV(val,type);
+        \\      if(nv!==null){
+        \\        var scale=1,defStep=1;
+        \\        if(type==='date'){scale=86400000;defStep=1;}
+        \\        else if(type==='week'){scale=604800000;defStep=1;}
+        \\        else if(type==='month'){scale=1;defStep=1;}
+        \\        else if(type==='time'||type==='datetime-local'){scale=1000;defStep=60;}
+        \\        var stepAttrD=el.getAttribute('step');
+        \\        if(stepAttrD!=='any'){
+        \\          var stepD=(stepAttrD===null||stepAttrD==='')?defStep:parseFloat(stepAttrD);
+        \\          if(!isFinite(stepD)||stepD<=0)stepD=defStep;
+        \\          var baseD=null;
+        \\          var minAttrD=el.getAttribute('min');
+        \\          if(minAttrD!==null&&minAttrD!=='')baseD=parseDTV(minAttrD,type);
+        \\          if(baseD===null){
+        \\            if(type==='date'||type==='datetime-local'||type==='time')baseD=0;
+        \\            else if(type==='week')baseD=Date.UTC(1969,11,29);
+        \\            else if(type==='month')baseD=1970*12;
+        \\          }
+        \\          var unit=stepD*scale;
+        \\          var ratio=(nv-baseD)/unit;
+        \\          var roundedD=Math.round(ratio);
+        \\          var tolD=1e-9*Math.max(Math.abs(unit),1);
+        \\          if(Math.abs((ratio-roundedD)*unit)>tolD)stepMismatch=true;
+        \\        }
+        \\      }
+        \\    }
+        \\    var valid=!valueMissing&&!tooShort&&!tooLong&&!rangeUnderflow&&!rangeOverflow&&!typeMismatch&&!patternMismatch&&!stepMismatch&&!customError;
+        \\    var vs=Object.create(VS_PROTO);
+        \\    vs.valueMissing=valueMissing;vs.tooShort=tooShort;vs.tooLong=tooLong;
+        \\    vs.rangeUnderflow=rangeUnderflow;vs.rangeOverflow=rangeOverflow;
+        \\    vs.typeMismatch=typeMismatch;vs.patternMismatch=patternMismatch;
+        \\    vs.stepMismatch=stepMismatch;vs.customError=customError;
+        \\    vs.badInput=false;vs.valid=valid;
+        \\    return vs;
+        \\  }
+        \\  try{Object.defineProperty(EP,'willValidate',{
+        \\    get:function(){return willVal(this);},
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{Object.defineProperty(EP,'validity',{
+        \\    get:function(){
+        \\      if(!isSubmittable(this))return undefined;
+        \\      return makeValidity(this);
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{Object.defineProperty(EP,'validationMessage',{
+        \\    get:function(){
+        \\      if(!willVal(this))return '';
+        \\      var vs=makeValidity(this);
+        \\      if(vs.valid)return '';
+        \\      var m=this._customValidationMessage||'';
+        \\      return m!==''?m:'Please fill out this field.';
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  EP.checkValidity=function(){
+        \\    if(!willVal(this))return true;
+        \\    var v=makeValidity(this);
+        \\    if(v.valid)return true;
+        \\    var ev=new Event('invalid',{bubbles:false,cancelable:true});
+        \\    this.dispatchEvent(ev);
+        \\    return false;
+        \\  };
+        \\  EP.reportValidity=function(){return this.checkValidity();};
+        \\  EP.setCustomValidity=function(msg){
+        \\    this._customValidationMessage=msg==null?'':String(msg);
+        \\  };
+        \\})();
+    ;
+
+    /// HTML §4.10.5.1.8 / §4.10.11.3 — Text field selection API for kotori.
+    ///
+    /// Installs selectionStart / selectionEnd / selectionDirection
+    /// IDL attributes and select() / setSelectionRange() / setRangeText()
+    /// methods on Element.prototype with tag-and-type branching, matching
+    /// form_state_polyfill_js's convention. Per-element selection state
+    /// lives in `_selStart`, `_selEnd`, `_selDir` slots.
+    ///
+    /// Restricted to <textarea> and <input type=text|search|url|tel|password>
+    /// per spec ("applicable element"). Accessing these on other types
+    /// throws InvalidStateError.
+    const selection_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function isTextType(el){
+        \\    var t=tag(el);
+        \\    if(t==='textarea')return true;
+        \\    if(t!=='input')return false;
+        \\    var it=(el.type||'text').toLowerCase();
+        \\    return it==='text'||it==='search'||it==='url'||it==='tel'||it==='password';
+        \\  }
+        \\  function valLen(el){var v=el.value;return v==null?0:String(v).length;}
+        \\  function clamp(n,max){if(typeof n!=='number'||n<0||!isFinite(n))n=0;else n=Math.floor(n);return n>max?max:n;}
+        \\  function throwInv(){throw new DOMException('The element does not support selection.','InvalidStateError');}
+        \\  function fireSelect(el){
+        \\    try{var ev=new Event('select',{bubbles:true,cancelable:false});el.dispatchEvent(ev);}catch(e){}
+        \\  }
+        \\  try{Object.defineProperty(EP,'selectionStart',{
+        \\    get:function(){
+        \\      if(!isTextType(this))return null;
+        \\      var s=this._selStart;
+        \\      return s==null?valLen(this):clamp(s,valLen(this));
+        \\    },
+        \\    set:function(v){
+        \\      if(!isTextType(this))throwInv();
+        \\      v=clamp(v,valLen(this));
+        \\      this._selStart=v;
+        \\      var e=this._selEnd;
+        \\      if(e==null||v>e)this._selEnd=v;
+        \\      if(this._selDir==null)this._selDir='none';
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{Object.defineProperty(EP,'selectionEnd',{
+        \\    get:function(){
+        \\      if(!isTextType(this))return null;
+        \\      var e=this._selEnd;
+        \\      return e==null?valLen(this):clamp(e,valLen(this));
+        \\    },
+        \\    set:function(v){
+        \\      if(!isTextType(this))throwInv();
+        \\      v=clamp(v,valLen(this));
+        \\      this._selEnd=v;
+        \\      if(this._selDir==null)this._selDir='none';
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{Object.defineProperty(EP,'selectionDirection',{
+        \\    get:function(){
+        \\      if(!isTextType(this))return null;
+        \\      return this._selDir||'none';
+        \\    },
+        \\    set:function(v){
+        \\      if(!isTextType(this))throwInv();
+        \\      v=String(v);
+        \\      if(v!=='forward'&&v!=='backward'&&v!=='none')v='none';
+        \\      this._selDir=v;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  EP.select=function(){
+        \\    if(!isTextType(this))return;
+        \\    this._selStart=0;
+        \\    this._selEnd=valLen(this);
+        \\    this._selDir='none';
+        \\    fireSelect(this);
+        \\  };
+        \\  EP.setSelectionRange=function(start,end,dir){
+        \\    if(!isTextType(this))throwInv();
+        \\    var len=valLen(this);
+        \\    start=clamp(start,len);
+        \\    end=clamp(end,len);
+        \\    if(end<start)end=start;
+        \\    this._selStart=start;
+        \\    this._selEnd=end;
+        \\    if(dir==='forward'||dir==='backward')this._selDir=dir;
+        \\    else this._selDir='none';
+        \\    fireSelect(this);
+        \\  };
+        \\  EP.setRangeText=function(replacement,start,end,selectionMode){
+        \\    if(!isTextType(this))throwInv();
+        \\    replacement=replacement==null?'':String(replacement);
+        \\    var cur=this.value==null?'':String(this.value);
+        \\    var len=cur.length;
+        \\    var selStart=this._selStart==null?len:clamp(this._selStart,len);
+        \\    var selEnd=this._selEnd==null?len:clamp(this._selEnd,len);
+        \\    if(arguments.length<2){start=selStart;end=selEnd;}
+        \\    start=start>>>0;end=end>>>0;
+        \\    if(end<start)throw new DOMException('The end index is before the start index.','IndexSizeError');
+        \\    if(start>len)start=len;
+        \\    if(end>len)end=len;
+        \\    var newVal=cur.slice(0,start)+replacement+cur.slice(end);
+        \\    this.value=newVal;
+        \\    var newEnd=start+replacement.length;
+        \\    var mode=selectionMode||'preserve';
+        \\    if(mode==='select'){this._selStart=start;this._selEnd=newEnd;}
+        \\    else if(mode==='start'){this._selStart=start;this._selEnd=start;}
+        \\    else if(mode==='end'){this._selStart=newEnd;this._selEnd=newEnd;}
+        \\    else {
+        \\      // preserve: adjust old selection relative to insertion
+        \\      var delta=replacement.length-(end-start);
+        \\      var os=selStart,oe=selEnd;
+        \\      if(os>end)os+=delta;
+        \\      else if(os>start)os=start+replacement.length;
+        \\      if(oe>end)oe+=delta;
+        \\      else if(oe>start)oe=start+replacement.length;
+        \\      var nlen=newVal.length;
+        \\      if(os<0)os=0;if(os>nlen)os=nlen;
+        \\      if(oe<0)oe=0;if(oe>nlen)oe=nlen;
+        \\      this._selStart=os;this._selEnd=oe;
+        \\    }
+        \\    this._selDir='none';
+        \\    fireSelect(this);
+        \\  };
+        \\})();
+    ;
+
+    /// HTML §4.10.5.1.12 / §4.10.5.1.13 — Numeric input API.
+    ///
+    /// Installs valueAsNumber (getter/setter) and stepUp(n) / stepDown(n)
+    /// methods. For type=number, parses/formats floats. For type=range,
+    /// same treatment. Date / time / datetime-local / month / week inputs
+    /// use the unit-scale parsers shared with the stepMismatch algorithm.
+    ///
+    /// Spec rules:
+    ///   valueAsNumber getter: NaN if parse fails
+    ///   valueAsNumber setter: TypeError if input type is not "applicable",
+    ///     otherwise set value to canonical string form
+    ///   stepUp/stepDown: multiply allowed steps, clamp to min/max,
+    ///     InvalidStateError if input has no step
+    const input_numeric_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function itype(el){return (el.type||'').toLowerCase();}
+        \\  function isNumericApplicable(el){
+        \\    if(tag(el)!=='input')return false;
+        \\    var t=itype(el);
+        \\    return t==='number'||t==='range'||t==='date'||t==='time'||t==='datetime-local'||t==='month'||t==='week';
+        \\  }
+        \\  // Parse current value into numeric representation per type.
+        \\  // Returns NaN if invalid. Unit: number/range → raw float;
+        \\  // date/week/datetime-local/time → ms; month → months-since-yr0.
+        \\  function parseVal(el){
+        \\    var t=itype(el);
+        \\    var v=el.value;if(v==null||v==='')return NaN;
+        \\    v=String(v);
+        \\    var m;
+        \\    if(t==='number'||t==='range'){var n=parseFloat(v);return isNaN(n)?NaN:n;}
+        \\    if(t==='date'){m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(v);if(!m)return NaN;return Date.UTC(+m[1],+m[2]-1,+m[3]);}
+        \\    if(t==='datetime-local'){m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(v);if(!m)return NaN;var sec=m[6]?parseFloat(m[6]):0;return Date.UTC(+m[1],+m[2]-1,+m[3],+m[4],+m[5],Math.floor(sec),Math.round((sec-Math.floor(sec))*1000));}
+        \\    if(t==='time'){m=/^(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(v);if(!m)return NaN;var s2=m[3]?parseFloat(m[3]):0;return (+m[1])*3600000+(+m[2])*60000+Math.round(s2*1000);}
+        \\    if(t==='month'){m=/^(\d{4})-(\d{2})$/.exec(v);if(!m)return NaN;return (+m[1])*12+(+m[2])-1;}
+        \\    if(t==='week'){m=/^(\d{4})-W(\d{2})$/.exec(v);if(!m)return NaN;var y=+m[1],w=+m[2];var jan4=new Date(Date.UTC(y,0,4));var dow=jan4.getUTCDay()||7;var mon1=Date.UTC(y,0,4-dow+1);return mon1+(w-1)*604800000;}
+        \\    return NaN;
+        \\  }
+        \\  function pad(n,w){n=String(n);while(n.length<w)n='0'+n;return n;}
+        \\  // Format numeric representation back to string per type.
+        \\  function formatVal(el,num){
+        \\    var t=itype(el);
+        \\    if(t==='number'||t==='range'){
+        \\      if(!isFinite(num))return '';
+        \\      // Canonical float: no trailing zeros. toString is close enough.
+        \\      return String(num);
+        \\    }
+        \\    if(t==='date'){var d=new Date(num);if(isNaN(d.getTime()))return '';return pad(d.getUTCFullYear(),4)+'-'+pad(d.getUTCMonth()+1,2)+'-'+pad(d.getUTCDate(),2);}
+        \\    if(t==='datetime-local'){var d=new Date(num);if(isNaN(d.getTime()))return '';var base=pad(d.getUTCFullYear(),4)+'-'+pad(d.getUTCMonth()+1,2)+'-'+pad(d.getUTCDate(),2)+'T'+pad(d.getUTCHours(),2)+':'+pad(d.getUTCMinutes(),2);var s=d.getUTCSeconds(),ms=d.getUTCMilliseconds();if(s>0||ms>0){base+=':'+pad(s,2);if(ms>0)base+='.'+pad(ms,3);}return base;}
+        \\    if(t==='time'){num=num%86400000;if(num<0)num+=86400000;var h=Math.floor(num/3600000);var mm=Math.floor((num%3600000)/60000);var s=Math.floor((num%60000)/1000);var ms=Math.floor(num%1000);var base=pad(h,2)+':'+pad(mm,2);if(s>0||ms>0){base+=':'+pad(s,2);if(ms>0)base+='.'+pad(ms,3);}return base;}
+        \\    if(t==='month'){var y=Math.floor(num/12);var mo=(num%12)+1;return pad(y,4)+'-'+pad(mo,2);}
+        \\    if(t==='week'){var d=new Date(num);if(isNaN(d.getTime()))return '';var y=d.getUTCFullYear();var jan4=new Date(Date.UTC(y,0,4));var dow=jan4.getUTCDay()||7;var mon1=Date.UTC(y,0,4-dow+1);var w=Math.floor((num-mon1)/604800000)+1;if(w<1){y-=1;jan4=new Date(Date.UTC(y,0,4));dow=jan4.getUTCDay()||7;mon1=Date.UTC(y,0,4-dow+1);w=Math.floor((num-mon1)/604800000)+1;}return pad(y,4)+'-W'+pad(w,2);}
+        \\    return '';
+        \\  }
+        \\  function scale(el){
+        \\    var t=itype(el);
+        \\    if(t==='date')return 86400000;
+        \\    if(t==='week')return 604800000;
+        \\    if(t==='month')return 1;
+        \\    if(t==='time'||t==='datetime-local')return 1000;
+        \\    return 1;
+        \\  }
+        \\  function defStep(el){
+        \\    var t=itype(el);
+        \\    if(t==='time'||t==='datetime-local')return 60;
+        \\    return 1;
+        \\  }
+        \\  function readStep(el){
+        \\    var a=el.getAttribute('step');
+        \\    if(a==='any')return null;
+        \\    var ds=defStep(el);
+        \\    if(a===null||a==='')return ds;
+        \\    var s=parseFloat(a);
+        \\    if(!isFinite(s)||s<=0)return ds;
+        \\    return s;
+        \\  }
+        \\  function readBase(el){
+        \\    var t=itype(el);
+        \\    var mn=el.getAttribute('min');
+        \\    if(mn!==null&&mn!==''){
+        \\      if(t==='number'||t==='range'){var n=parseFloat(mn);if(isFinite(n))return n;}
+        \\      else {
+        \\        // shim parse via parseVal by briefly writing
+        \\        var oldv=el.value;
+        \\        try{el.value=mn;var pv=parseVal(el);el.value=oldv;if(!isNaN(pv))return pv;}catch(e){el.value=oldv;}
+        \\      }
+        \\    }
+        \\    if(t==='number'||t==='range'){
+        \\      var dv=el.defaultValue;
+        \\      if(dv){var n2=parseFloat(dv);if(isFinite(n2))return n2;}
+        \\      return 0;
+        \\    }
+        \\    if(t==='week')return Date.UTC(1969,11,29);
+        \\    if(t==='month')return 1970*12;
+        \\    return 0;
+        \\  }
+        \\  try{Object.defineProperty(EP,'valueAsNumber',{
+        \\    get:function(){
+        \\      if(!isNumericApplicable(this))return NaN;
+        \\      var t=itype(this);
+        \\      var raw=parseVal(this);
+        \\      if(isNaN(raw))return NaN;
+        \\      // For number/range, the value is raw. For date types,
+        \\      // spec says valueAsNumber returns milliseconds since epoch
+        \\      // except for month which returns months-since-1970-01.
+        \\      if(t==='month')return raw-1970*12;
+        \\      return raw;
+        \\    },
+        \\    set:function(v){
+        \\      if(!isNumericApplicable(this))throw new TypeError('valueAsNumber not applicable');
+        \\      var n=Number(v);
+        \\      if(!isFinite(n)){this.value='';return;}
+        \\      var t=itype(this);
+        \\      if(t==='month')n=n+1970*12;
+        \\      this.value=formatVal(this,n);
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{Object.defineProperty(EP,'valueAsDate',{
+        \\    get:function(){
+        \\      if(!isNumericApplicable(this))return null;
+        \\      var t=itype(this);
+        \\      if(t==='number'||t==='range'||t==='time')return null;
+        \\      var raw=parseVal(this);
+        \\      if(isNaN(raw))return null;
+        \\      var ms=raw;if(t==='month')ms=Date.UTC(Math.floor(raw/12),raw%12,1);
+        \\      return new Date(ms);
+        \\    },
+        \\    set:function(v){
+        \\      if(!isNumericApplicable(this))throw new TypeError('valueAsDate not applicable');
+        \\      if(v===null){this.value='';return;}
+        \\      if(!(v instanceof Date))throw new TypeError('not a Date');
+        \\      var ms=v.getTime();if(isNaN(ms)){this.value='';return;}
+        \\      var t=itype(this);
+        \\      if(t==='month'){var nm=v.getUTCFullYear()*12+v.getUTCMonth();this.value=formatVal(this,nm);}
+        \\      else this.value=formatVal(this,ms);
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  function stepBy(el,n){
+        \\    if(!isNumericApplicable(el))throw new DOMException('stepUp/stepDown not applicable','InvalidStateError');
+        \\    var step=readStep(el);
+        \\    if(step===null)throw new DOMException('step=any forbids stepUp/stepDown','InvalidStateError');
+        \\    var cur=parseVal(el);
+        \\    if(isNaN(cur))cur=readBase(el);
+        \\    var base=readBase(el);
+        \\    var sc=scale(el);
+        \\    var delta=n*step*sc;
+        \\    var next=cur+delta;
+        \\    // Snap to step grid based on base
+        \\    var units=Math.round((next-base)/(step*sc));
+        \\    next=base+units*step*sc;
+        \\    // Clamp to min/max if present
+        \\    var mn=el.getAttribute('min');
+        \\    if(mn!==null&&mn!==''){
+        \\      var old=el.value;
+        \\      try{el.value=mn;var pmn=parseVal(el);el.value=old;if(!isNaN(pmn)&&next<pmn)next=pmn;}catch(e){el.value=old;}
+        \\    }
+        \\    var mx=el.getAttribute('max');
+        \\    if(mx!==null&&mx!==''){
+        \\      var old2=el.value;
+        \\      try{el.value=mx;var pmx=parseVal(el);el.value=old2;if(!isNaN(pmx)&&next>pmx)next=pmx;}catch(e){el.value=old2;}
+        \\    }
+        \\    var t=itype(el);
+        \\    var out=(t==='month')?next:next;
+        \\    el.value=formatVal(el,out);
+        \\  }
+        \\  EP.stepUp=function(n){if(n==null)n=1;var k=Math.trunc(Number(n));if(!isFinite(k)||k===0)k=1;stepBy(this,k);};
+        \\  EP.stepDown=function(n){if(n==null)n=1;var k=Math.trunc(Number(n));if(!isFinite(k)||k===0)k=1;stepBy(this,-k);};
         \\})();
     ;
 

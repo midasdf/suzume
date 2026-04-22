@@ -4044,7 +4044,70 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\        if (Math.abs((r - rounded) * step) > tol) stepMismatch = true;
             \\      }
             \\    }
-            \\    // TODO(wave27): stepMismatch for date|time|datetime-local|month|week
+            \\    // §4.10.18.4 stepMismatch for date|time|datetime-local|month|week (Wave 27).
+            \\    if (!stepMismatch && val !== '' &&
+            \\        (type==='date'||type==='time'||type==='datetime-local'||type==='month'||type==='week')) {
+            \\      var _parseDTV = function(s,t){
+            \\        if(!s) return null;
+            \\        var m;
+            \\        if(t==='date'){
+            \\          m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(s); if(!m) return null;
+            \\          var d=Date.UTC(+m[1], +m[2]-1, +m[3]); return isNaN(d)?null:d;
+            \\        }
+            \\        if(t==='datetime-local'){
+            \\          m=/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(s); if(!m) return null;
+            \\          var sec=m[6]?parseFloat(m[6]):0;
+            \\          var ms=Math.round((sec-Math.floor(sec))*1000);
+            \\          var d2=Date.UTC(+m[1], +m[2]-1, +m[3], +m[4], +m[5], Math.floor(sec), ms);
+            \\          return isNaN(d2)?null:d2;
+            \\        }
+            \\        if(t==='time'){
+            \\          m=/^(\d{2}):(\d{2})(?::(\d{2}(?:\.\d+)?))?$/.exec(s); if(!m) return null;
+            \\          var sec2=m[3]?parseFloat(m[3]):0;
+            \\          return (+m[1])*3600000 + (+m[2])*60000 + Math.round(sec2*1000);
+            \\        }
+            \\        if(t==='month'){
+            \\          m=/^(\d{4})-(\d{2})$/.exec(s); if(!m) return null;
+            \\          return (+m[1])*12 + (+m[2]) - 1;
+            \\        }
+            \\        if(t==='week'){
+            \\          m=/^(\d{4})-W(\d{2})$/.exec(s); if(!m) return null;
+            \\          var y=+m[1], w=+m[2];
+            \\          if(w<1||w>53) return null;
+            \\          var jan4=new Date(Date.UTC(y,0,4));
+            \\          var dow=jan4.getUTCDay()||7;
+            \\          var mon1=Date.UTC(y,0,4-dow+1);
+            \\          return mon1+(w-1)*604800000;
+            \\        }
+            \\        return null;
+            \\      };
+            \\      var _nv=_parseDTV(val, type);
+            \\      if(_nv!==null){
+            \\        var _scale=1, _defStep=1;
+            \\        if(type==='date'){ _scale=86400000; _defStep=1; }
+            \\        else if(type==='week'){ _scale=604800000; _defStep=1; }
+            \\        else if(type==='month'){ _scale=1; _defStep=1; }
+            \\        else if(type==='time'||type==='datetime-local'){ _scale=1000; _defStep=60; }
+            \\        var _stepAttrD=el.getAttribute('step');
+            \\        if(_stepAttrD!=='any'){
+            \\          var _stepD=(_stepAttrD===null||_stepAttrD==='')?_defStep:parseFloat(_stepAttrD);
+            \\          if(!isFinite(_stepD)||_stepD<=0) _stepD=_defStep;
+            \\          var _base=null;
+            \\          var _minAttrD=el.getAttribute('min');
+            \\          if(_minAttrD!==null&&_minAttrD!=='') _base=_parseDTV(_minAttrD, type);
+            \\          if(_base===null){
+            \\            if(type==='date'||type==='datetime-local'||type==='time') _base=0;
+            \\            else if(type==='week') _base=Date.UTC(1969,11,29);
+            \\            else if(type==='month') _base=1970*12;
+            \\          }
+            \\          var _unit=_stepD*_scale;
+            \\          var _ratio=(_nv-_base)/_unit;
+            \\          var _rounded=Math.round(_ratio);
+            \\          var _tolD=1e-9*Math.max(Math.abs(_unit),1);
+            \\          if(Math.abs((_ratio-_rounded)*_unit)>_tolD) stepMismatch=true;
+            \\        }
+            \\      }
+            \\    }
             \\    var valid = !valueMissing&&!tooShort&&!tooLong&&!rangeUnderflow&&!rangeOverflow&&!typeMismatch&&!patternMismatch&&!stepMismatch&&!customError;
             \\    return {
             \\      valueMissing:valueMissing, tooShort:tooShort, tooLong:tooLong,
