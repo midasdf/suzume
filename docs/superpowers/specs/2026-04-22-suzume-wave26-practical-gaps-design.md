@@ -227,18 +227,39 @@ After this spec is approved, the writing-plans skill will produce an implementat
 - `intersection-observer`: 60/118 test files errored. Suggests harness timeout, not subtest failures — raising `TIMEOUT` above 30 for this area is a separate knob.
 - `cssom-view`: single-file error — the area's default entry file isn't producing subtests with our runner. Needs a broader glob or different test-file discovery.
 
-### 9.2 Per-track deltas (filled as tracks land)
+### 9.2 Final WPT (2026-04-22, post Track A+B+C+D1+E, branch `wave26-practical-gaps` @ HEAD)
 
-- **Post Track E** (DPR accessor + resize_observer scaling): no expected change since DPR=1 on this platform; ran to verify no regression.
-- **Post Track C** (rootMargin %): _TBD post-measurement_
-- **Post Track D1** (stepMismatch number/range): _TBD post-measurement_
-- **Post Track A** (scroll paint-time): _TBD — DEFERRED from this session_
-- **Post Track B** (scrollIntoView): _TBD — DEFERRED from this session_
+| Area | Baseline | Final | Δ subtests |
+|------|----------|-------|-----------|
+| resize-observer | 0/14 | 0/14 | 0 |
+| intersection-observer | 1/18 | 1/18 | 0 |
+| cssom-view | 0/0 (err) | 0/0 (err) | 0 |
+| html/semantics/forms/the-input-element | 153/984 | 153/984 | 0 |
+| html/semantics/forms/constraints | 0/33 | 0/33 | 0 |
+| **dom/nodes (canary)** | not measured in-session | 5321/5763 (92.3%) | no regression |
+| **dom/events (canary)** | not measured in-session | 61/178 (34.3%) | no regression |
 
-### 9.3 Real-site smoke results
+### 9.3 Per-track landed work
 
-_TBD — deferred to the session that lands Tracks A+B (scroll paint integration)._
+- **Track E (`feat(env): add getDevicePixelRatio accessor`, `feat(resize-observer): honor env.getDevicePixelRatio`, `test(resize-observer): cover DPR scaling arithmetic`)** — DPR=1 on this platform so WPT is unchanged; the hook is in place for Wave 27 when a real DPI source is plumbed.
+- **Track C (`feat(intersection-observer): resolve rootMargin percentages`, `test(intersection-observer): cover rootMargin percentage parsing`)** — rootMargin `%` is now resolved against the viewport bounds; 4 new unit tests pass. No WPT delta because IO tests here largely error out at harness init (60/118 test-file errors), not at the %-parsing level.
+- **Track D1 (`feat(forms): implement stepMismatch for number/range`)** — full HTML §4.10.18.4 arithmetic (step="any" short-circuit, min attr / defaultValue base, 1e-9 tolerance) shipped. No WPT delta because `forms/constraints` baseline is blocked by the pre-existing "validity undefined" harness bug (see §9.1) which prevents any subtest from executing.
+- **Track A (`feat(dom): expose g_elem_scroll lookup`, `feat(paint): apply element scroll offset when recursing into overflow:scroll|auto children`)** — paint pipeline now reads `g_elem_scroll` via `dom_element.getScrollOffsetForNode` and shifts child scroll values. Identity transform for non-scrolled elements preserves all existing geometry; `dom/nodes` canary reports 5321/5763 (92.3%), no regression.
+- **Track B (`feat(dom): add computeScrollExtent + maxScrollFor helpers`, `feat(dom): implement scrollIntoView alignment`)** — `elementScrollIntoView` replaced from a stub-returning-undefined to a full implementation: walks target ancestors, for each scrollable one computes start/center/end/nearest position and updates `g_elem_scroll` so the next paint reflects the alignment. Legacy boolean arg honored. `behavior:smooth` deferred to Wave 27.
 
-### 9.4 Final tag
+### 9.4 Deferred (explicitly)
 
-`wave26-final` — pending Track A+B completion.
+- **Track D2** (live `:valid`/`:invalid` style invalidation on `input`/`change`) — not landed. Investigation revealed no existing per-element style-invalidation hook; the cascade layer needs a new primitive that's larger than this wave's scope. Filed as Wave 27 candidate.
+- **`scrollIntoView({behavior:"smooth"})`** — Track B secondary goal, not landed. Requires an rAF-driven easing loop; deferred to Wave 27.
+- **IntersectionObserver non-viewport `root`** — Track C secondary goal, not landed.
+- **`scrollHeight`/`scrollWidth` true overflow extent** (plan Task A1) — helpers (`computeScrollExtent`, `maxScrollFor`) shipped in Track B Commit 1, but the getters were **not** rewired to use them (kept current `clientHeight` mirror). Follow-up to surface the real extent to JS.
+- **Scroll-event dispatch after mutation** (plan Task A4) — not landed.
+- **Root cause of "validity undefined" on textarea/radio** — pre-existing platform issue surfaced by baseline, out of scope.
+
+### 9.5 Real-site smoke results
+
+Smoke fixture shipped at `tests/manual/wave26_scroll_smoke.html`. Visual verification on a physical display not performed this session; the fixture exercises `element.scrollTop=`, `scrollIntoView({block:"center"})`, `scrollIntoView({block:"end"})`. Deferred to the next interactive session on a HyperPixel target.
+
+### 9.6 Final tag
+
+`wave26-final` on HEAD (see git log for exact SHA).
