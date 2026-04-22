@@ -3582,8 +3582,12 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    var minLen=(el.minLength!=null&&el.minLength>=0)?el.minLength:0;
         \\    var maxLen=(el.maxLength!=null&&el.maxLength>=0)?el.maxLength:Infinity;
-        \\    var tooShort=minLen>0&&val.length>0&&val.length<minLen;
-        \\    var tooLong=val.length>maxLen;
+        \\    // §4.10.18.3 "suffering from being too short/long" require the
+        \\    // element's value to have been edited by the user; programmatic
+        \\    // value changes don't trip minlength/maxlength constraints.
+        \\    var edited=el._userEdited===true;
+        \\    var tooShort=edited&&minLen>0&&val.length>0&&val.length<minLen;
+        \\    var tooLong=edited&&val.length>maxLen;
         \\    var numVal=parseFloat(val);
         \\    var minV=parseFloat(el.min);
         \\    var maxV=parseFloat(el.max);
