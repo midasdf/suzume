@@ -584,6 +584,12 @@ pub fn initPageJsKotori(doc: *Document, page_kotori_rt: *?KotoriRuntime, allocat
         return;
     };
 
+    // HTML §4.1.4: propagate the page URL to document.URL / documentURI /
+    // window.location.href. Without this the bootstrap default (about:blank)
+    // makes IDL attributes that depend on the document's address (e.g.
+    // formAction when missing/empty per §4.10.21.2) return the wrong value.
+    if (base_url) |u| krt.setDocumentUrl(u);
+
     // Wire up fetch() API if loader is available
     if (loader) |l| {
         krt.setHttpFetcher(@ptrCast(l.client), &kotoriFetchBridge);

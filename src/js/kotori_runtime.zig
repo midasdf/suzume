@@ -3376,6 +3376,47 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
+        \\  // HTML §4.10.22.3 form.requestSubmit(submitter).
+        \\  // Validates the submitter (must be a submit button owned by this form)
+        \\  // and then fires a cancelable `submit` event with `event.submitter`
+        \\  // set to the submitter (or null if the form is its own submitter).
+        \\  // We do NOT perform the actual navigation/form-submission step — most
+        \\  // callers either preventDefault() in the submit handler or rely on
+        \\  // the handler for testing, per WPT form-requestsubmit coverage.
+        \\  EP.requestSubmit=function(submitter){
+        \\    if(tag(this)!=='form')throw new TypeError('requestSubmit: not a form');
+        \\    if(submitter!==undefined&&submitter!==null){
+        \\      var st=tag(submitter);
+        \\      var isSubmitButton=false;
+        \\      if(st==='button'){
+        \\        // HTML §4.10.8: button default type is 'submit'.
+        \\        var bt=submitter.getAttribute('type');
+        \\        bt=bt==null?'submit':bt.toLowerCase();
+        \\        if(bt==='submit')isSubmitButton=true;
+        \\      } else if(st==='input'){
+        \\        var it=submitter.getAttribute('type');
+        \\        it=it==null?'text':it.toLowerCase();
+        \\        if(it==='submit'||it==='image')isSubmitButton=true;
+        \\      }
+        \\      if(!isSubmitButton){
+        \\        throw new TypeError('requestSubmit: submitter must be a submit button');
+        \\      }
+        \\      if(submitter.form!==this){
+        \\        throw new DOMException('requestSubmit: submitter is not owned by this form','NotFoundError');
+        \\      }
+        \\    } else {
+        \\      submitter=null;
+        \\    }
+        \\    // HTML §4.10.22.3 step 3: "Submit this form element from submitter."
+        \\    // Dispatch a SubmitEvent (cancelable, bubbles) with event.submitter set.
+        \\    var ev;
+        \\    try { ev=new Event('submit',{bubbles:true,cancelable:true}); }
+        \\    catch(e) { return; }
+        \\    try { Object.defineProperty(ev,'submitter',{value:submitter,writable:false,enumerable:true,configurable:true}); } catch(e) {}
+        \\    this.dispatchEvent(ev);
+        \\    // We don't perform actual form navigation — handlers are expected
+        \\    // to preventDefault() or observe dispatch side effects.
+        \\  };
         \\  EP.reset=function(){
         \\    if(tag(this)!=='form')return;
         \\    // §4.10.21.4 reset(): if not connected, return.
@@ -3402,6 +3443,18 @@ pub const KotoriRuntime = struct {
         \\          opts[j]._selected=undefined;
         \\          // After clearing dirty flag, selected getter falls back to hasAttribute('selected'),
         \\          // which reflects defaultSelected per spec. No attribute change needed.
+        \\        }
+        \\        // HTML §4.10.7 selectedness rule: if display size is 1 (no `multiple`)
+        \\        // and no option has defaultSelected, the first option's selectedness
+        \\        // must be set to true. After a reset this applies to the fresh
+        \\        // defaultSelected state.
+        \\        if(!el.hasAttribute('multiple')){
+        \\          var anySel=false;
+        \\          for(var j=0;j<opts.length;j++){if(opts[j].selected){anySel=true;break;}}
+        \\          if(!anySel&&opts.length>0){
+        \\            opts[0]._dirtySelected=true;
+        \\            opts[0]._selected=true;
+        \\          }
         \\        }
         \\      } else if(t==='output') {
         \\        if(typeof el._defaultValue==='string')el.textContent=el._defaultValue;
@@ -3714,6 +3767,38 @@ pub const KotoriRuntime = struct {
         \\  });
         \\})();
     ;
+
+    /// HTML §4.1.4: propagate the page's URL into document.URL /
+    /// document.documentURI / window.location.href. Called from the main
+    /// page-load flow after init() when the base_url is known. Without this
+    /// the document's address stays at the bootstrap default (about:blank)
+    /// and IDL attributes that spec "returns document's URL" (e.g.
+    /// formAction when missing/empty, baseURI) return the wrong value.
+    pub fn setDocumentUrl(self: *KotoriRuntime, url: []const u8) void {
+        const url_sid = self.pool.intern(url) catch return;
+        const doc_sid = self.pool.intern("document") catch return;
+        const doc_val = self.vm.globals.get(doc_sid) orelse return;
+        if (!doc_val.isObject()) return;
+        const doc_obj = doc_val.asJsObject();
+        if (self.pool.intern("URL")) |k| {
+            doc_obj.setProperty(self.allocator, k, JsValue.initString(url_sid)) catch {};
+        } else |_| {}
+        if (self.pool.intern("documentURI")) |k| {
+            doc_obj.setProperty(self.allocator, k, JsValue.initString(url_sid)) catch {};
+        } else |_| {}
+        // window.location.href
+        const window_sid = self.pool.intern("window") catch return;
+        const window_val = self.vm.globals.get(window_sid) orelse return;
+        if (!window_val.isObject()) return;
+        const window_obj = window_val.asJsObject();
+        const loc_sid = self.pool.intern("location") catch return;
+        const loc_val = window_obj.getProperty(loc_sid) orelse return;
+        if (!loc_val.isObject()) return;
+        const loc_obj = loc_val.asJsObject();
+        if (self.pool.intern("href")) |k| {
+            loc_obj.setProperty(self.allocator, k, JsValue.initString(url_sid)) catch {};
+        } else |_| {}
+    }
 
     /// Evaluate a JS source string. Returns the result or error message.
     pub fn eval(self: *KotoriRuntime, source: []const u8) EvalResult {

@@ -1381,10 +1381,8 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     const iface = resolveHtmlIfaceForNode(node) orelse return null;
     const attr_name = refl.lookupUrlAttr(iface, name) orelse return null;
-    // Attribute absent → return empty string (HTML §2.6.5).
     var val_len: usize = 0;
     const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
-    const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
     // HTML §2.6.5: resolve the attribute value against the document base URL.
     // Get base URL from document.URL (stored as a string property on the doc object).
     const base_url: ?[]const u8 = blk: {
@@ -1397,6 +1395,21 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
         if (!url_val.isString()) break :blk null;
         break :blk vm.pool.get(url_val.asStringId());
     };
+    // HTML §4.10.21.2 formAction special case: when the formaction content
+    // attribute is missing OR its value is the empty string, the IDL attribute
+    // must return the document's URL (not the empty string). Same rule applies
+    // to any "form-action" style URL reflection; we scope it to formAction
+    // here since it's the only spec'd override in our reflection table.
+    const is_form_action = std.mem.eql(u8, name, "formAction");
+    const attr_empty_or_absent = val_ptr == null or val_len == 0;
+    if (is_form_action and attr_empty_or_absent) {
+        if (base_url) |url| {
+            return JsValue.initString(vm.pool.intern(url) catch return null);
+        }
+        return JsValue.initString(vm.pool.intern("") catch return null);
+    }
+    // Attribute absent → return empty string (HTML §2.6.5).
+    const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
     // Canonicalize: resolve relative → absolute using document base URL.
     const resolved = refl.canonicalizeUrl(vm.allocator, raw, base_url) catch {
         return JsValue.initString(vm.pool.intern(raw) catch return null);
