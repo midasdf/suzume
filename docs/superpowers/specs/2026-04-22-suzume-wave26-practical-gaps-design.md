@@ -16,7 +16,7 @@ The user requested practical-use improvements focused on Phase C roadmap blocker
 | `ResizeObserver` | `src/js/resize_observer.zig` (338 lines) | constructor, observe, unobserve, disconnect, flush; 3 box modes (content/border/device-pixel-content) recognized |
 | `IntersectionObserver` | `src/js/intersection_observer.zig` (473 lines) | constructor, observe, unobserve, disconnect, takeRecords; rootMargin + thresholds + crossesThreshold |
 | `element.scroll/scrollTo/scrollBy` | `src/js/dom_element.zig:2848` | Implemented; stores position in `g_elem_scroll` map |
-| `scrollIntoView` | `src/js/dom_element.zig:2907`, registered at `src/js/dom_api.zig:3622` | Present, details not yet audited |
+| `scrollIntoView` | `src/js/dom_element.zig:2907`, registered at `src/js/dom_api.zig:3622` | **Stub** (function returns `undefined` with no work; comment: "actual scroll-to-element requires layout position lookup") |
 | `form.submit/requestSubmit` | `src/js/dom_element.zig:3130-3167` | Shipped in Wave 25 |
 | `checkValidity/reportValidity/setCustomValidity` | `src/js/dom_element.zig:3226-3330` + JS polyfill in `src/js/dom_api.zig:3946-4035` | Present |
 | `:valid / :invalid / :required / :optional / :placeholder-shown` | `src/js/dom_selector.zig:517-549, 1211-1335` | Implemented |
@@ -210,13 +210,35 @@ After this spec is approved, the writing-plans skill will produce an implementat
 
 ---
 
-## 9. Results (to be filled during execution)
+## 9. Results
 
-- **Baseline WPT** (pre-Track A): _TBD_
-- **Post Track A**: _TBD_
-- **Post Track B**: _TBD_
-- **Post Track C**: _TBD_
-- **Post Track D**: _TBD_
-- **Post Track E**: _TBD_
-- **Final tag**: `wave26-final` on commit `TBD`
-- **Real-site smoke results**: _TBD_
+### 9.1 Baseline WPT (2026-04-22, pre-Track work, branch `wave26-practical-gaps` @ `77937ed`)
+
+| Area | Pass | Total | % |
+|------|------|-------|---|
+| resize-observer | 0 | 14 | 0.0% |
+| intersection-observer | 1 | 18 | 5.6% |
+| cssom-view | 0 | 0 | — (1 file errored) |
+| html/semantics/forms/the-input-element | 153 | 984 | 15.5% |
+| html/semantics/forms/constraints | 0 | 33 | 0.0% |
+
+**Notable baseline observations (surprising):**
+- `forms/constraints`: 0 subtests pass — traced to WPT harness errors "Cannot read properties of undefined (reading 'valid')" / "willValidate expected true got undefined". Indicates the existing `ValidityState` polyfill isn't reaching `textarea` / `select` elements at runtime despite the polyfill loop targeting `HTMLTextAreaElement`/`HTMLSelectElement`. This is a **pre-existing bug, out of Wave 26 scope**; documented as a follow-up candidate.
+- `intersection-observer`: 60/118 test files errored. Suggests harness timeout, not subtest failures — raising `TIMEOUT` above 30 for this area is a separate knob.
+- `cssom-view`: single-file error — the area's default entry file isn't producing subtests with our runner. Needs a broader glob or different test-file discovery.
+
+### 9.2 Per-track deltas (filled as tracks land)
+
+- **Post Track E** (DPR accessor + resize_observer scaling): no expected change since DPR=1 on this platform; ran to verify no regression.
+- **Post Track C** (rootMargin %): _TBD post-measurement_
+- **Post Track D1** (stepMismatch number/range): _TBD post-measurement_
+- **Post Track A** (scroll paint-time): _TBD — DEFERRED from this session_
+- **Post Track B** (scrollIntoView): _TBD — DEFERRED from this session_
+
+### 9.3 Real-site smoke results
+
+_TBD — deferred to the session that lands Tracks A+B (scroll paint integration)._
+
+### 9.4 Final tag
+
+`wave26-final` — pending Track A+B completion.
