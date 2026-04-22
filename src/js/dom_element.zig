@@ -2726,6 +2726,46 @@ fn ensureScrollMap() *std.AutoHashMap(usize, ElemScrollPos) {
     return &g_elem_scroll.?;
 }
 
+/// CSSOM View §6.5: the scroll area is the union of the element's padding-box
+/// and each descendant's border-box that overflows. Returns (right, bottom)
+/// in the element's **local coordinate space** (relative to the padding-box
+/// top-left).
+fn computeScrollExtent(box: *const @import("../layout/box.zig").Box) struct { right: f32, bottom: f32 } {
+    const pb = box.paddingBox();
+    var right: f32 = pb.width;
+    var bottom: f32 = pb.height;
+    for (box.children.items) |child| {
+        const bb = child.borderBox();
+        const child_right = (bb.x - pb.x) + bb.width;
+        const child_bottom = (bb.y - pb.y) + bb.height;
+        if (child_right > right) right = child_right;
+        if (child_bottom > bottom) bottom = child_bottom;
+        // Recurse — nested descendants may overflow further.
+        const nested = computeScrollExtent(child);
+        // `nested` is in child's local space; add child's offset within us.
+        const nested_right = (bb.x - pb.x) + nested.right;
+        const nested_bottom = (bb.y - pb.y) + nested.bottom;
+        if (nested_right > right) right = nested_right;
+        if (nested_bottom > bottom) bottom = nested_bottom;
+    }
+    return .{ .right = right, .bottom = bottom };
+}
+
+/// Max scrollTop / scrollLeft for an element (scroll extent − padding-box
+/// dimensions, clamped non-negative). Returns {0,0} if the element has no
+/// box (hidden / detached).
+fn maxScrollFor(c: *qjs.JSContext, elem: *lxb.lxb_dom_element_t) struct { top: f32, left: f32 } {
+    const root_box = api.getRootBox(c) orelse return .{ .top = 0, .left = 0 };
+    const node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const box = api.findBoxForNode(root_box, node) orelse return .{ .top = 0, .left = 0 };
+    const ext = computeScrollExtent(box);
+    const pb = box.paddingBox();
+    return .{
+        .top = @max(0.0, ext.bottom - pb.height),
+        .left = @max(0.0, ext.right - pb.width),
+    };
+}
+
 /// Returns true if the element has a scrollable overflow on either axis.
 /// Per CSSOM View §6.5: scroll(), scrollTo(), scrollBy() are no-ops on
 /// non-scrollable elements (overflow != scroll|auto on x or y).
