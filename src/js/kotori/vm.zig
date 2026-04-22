@@ -6698,7 +6698,25 @@ pub const VM = struct {
     fn nativeObjectIs(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         const a = if (args.len > 0) args[0] else JsValue.undefined_val;
         const b = if (args.len > 1) args[1] else JsValue.undefined_val;
-        // SameValue: NaN===NaN (same bits in NaN-boxing), +0!==-0 (different bits)
+        // ECMA-262 §7.2.11 SameValue:
+        //   Both Number: NaN===NaN, +0!==-0, otherwise f64 equality.
+        //   Otherwise: same bits.
+        const a_num = a.isNumber() or a.isInt();
+        const b_num = b.isNumber() or b.isInt();
+        if (a_num and b_num) {
+            const an = a.toNumber();
+            const bn = b.toNumber();
+            // NaN-NaN case: both NaN → true.
+            if (an != an and bn != bn) return JsValue.initBool(true);
+            // +0/-0: distinguished via 1/x sign. For 0, x==0 regardless of
+            // sign, so inspect the bitwise sign.
+            if (an == 0.0 and bn == 0.0) {
+                const ai: u64 = @bitCast(an);
+                const bi: u64 = @bitCast(bn);
+                return JsValue.initBool(ai == bi);
+            }
+            return JsValue.initBool(an == bn);
+        }
         return JsValue.initBool(a.bits == b.bits);
     }
 

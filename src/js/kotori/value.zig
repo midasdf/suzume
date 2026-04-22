@@ -210,9 +210,14 @@ pub const JsValue = packed struct {
     pub fn jsStrictEq(a: JsValue, b: JsValue) JsValue {
         // Same bits → always equal (handles null==null, undefined==undefined, bool, int, string by id)
         if (a.bits == b.bits) return initBool(true);
-        // Both numbers: compare as f64 (NaN != NaN)
-        if (a.isNumber() and b.isNumber()) {
-            return initBool(a.asNumber() == b.asNumber());
+        // ECMA-262 §7.2.15: Number and BigInt are separate types, but Int
+        // and Number here are both representations of the same "Number" type
+        // (NaN-boxed int32 vs f64). Compare numerically.
+        const a_numish = a.isNumber() or a.isInt();
+        const b_numish = b.isNumber() or b.isInt();
+        if (a_numish and b_numish) {
+            // NaN !== NaN handled naturally by == on f64 (NaN != NaN).
+            return initBool(a.toNumber() == b.toNumber());
         }
         // Strings: same StringId means same content (interned)
         if (a.isString() and b.isString()) {
@@ -344,12 +349,18 @@ pub const JsValue = packed struct {
 
     /// ECMA-262 §13.5.5.1 UnsignedRightShift ( >>> ).
     /// Left operand coerced via ToUint32 (spec-faithful), shift count via
-    /// ToUint32 & 0x1f. Result is u32 reinterpreted as i32 so the NaN-box
-    /// can store it as a 32-bit signed int (callers that view it as unsigned
-    /// use `@bitCast` back to u32).
+    /// ToUint32 & 0x1f. Result is a Number holding the u32 value verbatim;
+    /// if the u32 exceeds i32 positive range we must return it as f64 (since
+    /// JsValue.initInt stores i32 bits and would otherwise flip to negative
+    /// when read back via toNumber). Values that fit in i32 positive range
+    /// stay in the int box for faster arithmetic downstream.
     pub fn jsUshr(a: JsValue, b: JsValue) JsValue {
         const ua: u32 = toUint32(a);
         const shift: u5 = @truncate(toUint32(b));
-        return initInt(@bitCast(ua >> shift));
+        const result: u32 = ua >> shift;
+        if (result <= 0x7FFFFFFF) {
+            return initInt(@intCast(result));
+        }
+        return initNumber(@as(f64, @floatFromInt(result)));
     }
 };
