@@ -2276,13 +2276,16 @@ pub const KotoriRuntime = struct {
         \\  var origGetAttribute = Element.prototype.getAttribute;
         \\  Element.prototype.getAttribute = function(name){
         \\    var want = normalizeQName(this, String(name));
+        \\    /* Native first (covers parsed HTML attrs AND IDL-reflection
+        \\     * setters that bypass the sidecar wrapper). */
+        \\    var nv = origGetAttribute.call(this, want);
+        \\    if (nv !== null) return nv;
+        \\    /* Sidecar fallback for attrs only our wrapper tracks (e.g.
+        \\     * attr-node setters that may not hit lexbor in all cases). */
         \\    var list = sidecar(this);
         \\    for (var i=0; i<list.length; i++) {
         \\      if (list[i].name === want) return list[i].value;
         \\    }
-        \\    /* Only fall back for elements whose sidecar is empty (parsed
-        \\     * HTML attrs that never went through our wrapper). */
-        \\    if (list.length === 0) return origGetAttribute.call(this, want);
         \\    return null;
         \\  };
         \\
@@ -2290,11 +2293,11 @@ pub const KotoriRuntime = struct {
         \\  var origHasAttribute = Element.prototype.hasAttribute;
         \\  Element.prototype.hasAttribute = function(name){
         \\    var want = normalizeQName(this, String(name));
+        \\    if (origHasAttribute.call(this, want)) return true;
         \\    var list = sidecar(this);
         \\    for (var i=0; i<list.length; i++) {
         \\      if (list[i].name === want) return true;
         \\    }
-        \\    if (list.length === 0) return origHasAttribute.call(this, want);
         \\    return false;
         \\  };
         \\
