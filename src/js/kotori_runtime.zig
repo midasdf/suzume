@@ -3318,6 +3318,16 @@ pub const KotoriRuntime = struct {
         \\      // Other element 'type' (input, button etc.) handled by IDL reflection.
         \\      return undefined;
         \\    },
+        \\    set:function(v){
+        \\      // HTML §2.6.2 DOMString reflection setter: set the content
+        \\      // attribute. Canonicalization / enumerated-keyword matching
+        \\      // happens in the native reflectionSet for input type etc.,
+        \\      // but here we just forward to setAttribute so IDL assignment
+        \\      // like `input.type = 'number'` updates the attribute (which
+        \\      // the getter then re-canonicalizes on read).
+        \\      if(v==null)this.removeAttribute('type');
+        \\      else this.setAttribute('type',String(v));
+        \\    },
         \\    configurable:true,enumerable:true
         \\  });
         \\  // Methods on Element.prototype too — branch by tag.
@@ -3982,25 +3992,35 @@ pub const KotoriRuntime = struct {
         \\    if(isNaN(cur))cur=readBase(el);
         \\    var base=readBase(el);
         \\    var sc=scale(el);
+        \\    // Read min/max bounds once.
+        \\    var mn_val=null, mx_val=null;
+        \\    var mnAttr=el.getAttribute('min');
+        \\    if(mnAttr!==null&&mnAttr!==''){
+        \\      var old=el.value;try{el.value=mnAttr;var pmn=parseVal(el);el.value=old;if(!isNaN(pmn))mn_val=pmn;}catch(e){el.value=old;}
+        \\    }
+        \\    var mxAttr=el.getAttribute('max');
+        \\    if(mxAttr!==null&&mxAttr!==''){
+        \\      var old2=el.value;try{el.value=mxAttr;var pmx=parseVal(el);el.value=old2;if(!isNaN(pmx))mx_val=pmx;}catch(e){el.value=old2;}
+        \\    }
+        \\    // §4.10.5.1.13 step 3: "If applying the algorithm to convert a
+        \\    // string to a number to the max attribute's value results in
+        \\    // less than the min, return." No-op when the range is inverted.
+        \\    if(mn_val!==null&&mx_val!==null&&mn_val>mx_val)return;
         \\    var delta=n*step*sc;
         \\    var next=cur+delta;
-        \\    // Snap to step grid based on base
+        \\    // Snap to step grid based on base.
         \\    var units=Math.round((next-base)/(step*sc));
         \\    next=base+units*step*sc;
-        \\    // Clamp to min/max if present
-        \\    var mn=el.getAttribute('min');
-        \\    if(mn!==null&&mn!==''){
-        \\      var old=el.value;
-        \\      try{el.value=mn;var pmn=parseVal(el);el.value=old;if(!isNaN(pmn)&&next<pmn)next=pmn;}catch(e){el.value=old;}
+        \\    // Clamp to min.
+        \\    if(mn_val!==null&&next<mn_val)next=mn_val;
+        \\    // Clamp to max: step-aligned floor, not a hard max.
+        \\    if(mx_val!==null&&next>mx_val){
+        \\      var maxUnits=Math.floor((mx_val-base)/(step*sc));
+        \\      var aligned=base+maxUnits*step*sc;
+        \\      if(aligned<base&&mn_val!==null)aligned=mn_val;
+        \\      next=aligned;
         \\    }
-        \\    var mx=el.getAttribute('max');
-        \\    if(mx!==null&&mx!==''){
-        \\      var old2=el.value;
-        \\      try{el.value=mx;var pmx=parseVal(el);el.value=old2;if(!isNaN(pmx)&&next>pmx)next=pmx;}catch(e){el.value=old2;}
-        \\    }
-        \\    var t=itype(el);
-        \\    var out=(t==='month')?next:next;
-        \\    el.value=formatVal(el,out);
+        \\    el.value=formatVal(el,next);
         \\  }
         \\  EP.stepUp=function(n){if(n==null)n=1;var k=Math.trunc(Number(n));if(!isFinite(k)||k===0)k=1;stepBy(this,k);};
         \\  EP.stepDown=function(n){if(n==null)n=1;var k=Math.trunc(Number(n));if(!isFinite(k)||k===0)k=1;stepBy(this,-k);};

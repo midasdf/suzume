@@ -1357,12 +1357,13 @@ fn resolveHtmlIfaceForNode(node: *lxb.lxb_dom_node_t) ?[]const u8 {
     if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
     const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
     // Only HTML-namespace elements have HTML IDL reflections. Reject
-    // null-namespace, SVG, MathML, XLink, etc.
-    if (nsIdToUri(elem.node.ns)) |uri| {
-        if (!std.mem.eql(u8, uri, "http://www.w3.org/1999/xhtml")) return null;
-    } else {
-        return null;
-    }
+    // explicit SVG / MathML / XLink / XML / XMLNS namespaces (0x03..0x07).
+    // Otherwise (LXB_NS_HTML=0x02, LXB_NS_UNDEF=0x01, or the 0x00 "no ns"
+    // that lexbor sometimes leaves on disconnected elements created via
+    // createElement+setAttribute), default to HTML — the surrounding
+    // document is HTML and IDL reflections apply.
+    const ns_id = elem.node.ns;
+    if (ns_id >= 0x03 and ns_id <= 0x07) return null;
     var ln_len: usize = 0;
     const ln_ptr = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return null;
     const local_name = ln_ptr[0..ln_len];
