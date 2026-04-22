@@ -483,3 +483,45 @@ fn jsTakeRecords(
     const c = ctx orelse return quickjs.JS_UNDEFINED();
     return qjs.JS_NewArray(c);
 }
+
+test "parseRootMargin — single % value expands to all sides" {
+    const rm = parseRootMargin("10%");
+    try std.testing.expect(rm.top.pct);
+    try std.testing.expectEqual(@as(f32, 10), rm.top.num);
+    try std.testing.expect(rm.right.pct);
+    try std.testing.expectEqual(@as(f32, 10), rm.right.num);
+    try std.testing.expect(rm.bottom.pct);
+    try std.testing.expectEqual(@as(f32, 10), rm.bottom.num);
+    try std.testing.expect(rm.left.pct);
+    try std.testing.expectEqual(@as(f32, 10), rm.left.num);
+}
+
+test "parseRootMargin — four distinct values with %" {
+    const rm = parseRootMargin("10% 20% 30% 40%");
+    try std.testing.expectEqual(@as(f32, 10), rm.top.num);
+    try std.testing.expectEqual(@as(f32, 20), rm.right.num);
+    try std.testing.expectEqual(@as(f32, 30), rm.bottom.num);
+    try std.testing.expectEqual(@as(f32, 40), rm.left.num);
+    try std.testing.expect(rm.top.pct and rm.right.pct and rm.bottom.pct and rm.left.pct);
+}
+
+test "parseRootMargin — mixed px and %" {
+    const rm = parseRootMargin("-5% 10px");
+    try std.testing.expect(rm.top.pct);
+    try std.testing.expectEqual(@as(f32, -5), rm.top.num);
+    try std.testing.expect(!rm.right.pct);
+    try std.testing.expectEqual(@as(f32, 10), rm.right.num);
+}
+
+test "parseRootMargin — three values, left mirrors right" {
+    const rm = parseRootMargin("1px 2% 3px");
+    try std.testing.expectEqual(@as(f32, 1), rm.top.num);
+    try std.testing.expect(!rm.top.pct);
+    try std.testing.expectEqual(@as(f32, 2), rm.right.num);
+    try std.testing.expect(rm.right.pct);
+    try std.testing.expectEqual(@as(f32, 3), rm.bottom.num);
+    try std.testing.expect(!rm.bottom.pct);
+    // Left mirrors right per CSS shorthand rule:
+    try std.testing.expectEqual(@as(f32, 2), rm.left.num);
+    try std.testing.expect(rm.left.pct);
+}
