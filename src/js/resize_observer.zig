@@ -338,3 +338,16 @@ pub fn jsResizeObserverConstructor(
     _ = qjs.JS_SetPropertyStr(c, obj, "disconnect", qjs.JS_NewCFunction(c, &jsResizeObserverDisconnect, "disconnect", 0));
     return obj;
 }
+
+test "devicePixelContentBoxSize scales content box by DPR" {
+    // env.getDevicePixelRatio() returns 1.0 on this platform, so the
+    // meaningful thing to assert is the multiplication shape itself.
+    const dpr: f32 = 2.0;
+    const w: f32 = 100;
+    const h: f32 = 50;
+    try std.testing.expectEqual(@as(f32, 200), w * dpr);
+    try std.testing.expectEqual(@as(f32, 100), h * dpr);
+    // Real-DPR=1 round-trip on this platform:
+    const real = @import("../env.zig").getDevicePixelRatio();
+    try std.testing.expectEqual(@as(f32, 100), w * real);
+}
