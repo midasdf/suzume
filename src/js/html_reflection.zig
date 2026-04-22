@@ -523,7 +523,12 @@ pub const table = &[_]ReflectedAttr{
     // ── HTMLOutputElement (HTML §4.10.12) ────────────────────────────
     .{ .iface = "HTMLOutputElement", .idl = "htmlFor",     .content = "for",  .type = .domstring },
     .{ .iface = "HTMLOutputElement", .idl = "name",        .content = "name", .type = .domstring },
-    .{ .iface = "HTMLOutputElement", .idl = "defaultValue",.content = "value",.type = .domstring },
+    // NB: `defaultValue` is NOT a content-attribute reflection for output.
+    // HTML §4.10.12 specifies defaultValue as a stored string slot that
+    // tracks descendant text content until explicitly set (see
+    // form_state_polyfill_js in kotori_runtime.zig). Reflecting it from
+    // the `value` content attribute was a spec violation that shadowed
+    // the polyfill and broke resetting-a-form output subtests.
 
     // ── HTMLParagraphElement (HTML §4.4.1) ───────────────────────────
     .{ .iface = "HTMLParagraphElement", .idl = "align", .content = "align", .type = .domstring },
