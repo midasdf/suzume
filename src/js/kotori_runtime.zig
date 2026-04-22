@@ -164,6 +164,11 @@ pub const KotoriRuntime = struct {
         // polyfill's stepMismatch.
         _ = self.eval(input_numeric_polyfill_js);
 
+        // HTML §6.3 activation behavior: HTMLElement.click() with form-
+        // control default actions (checkbox toggle, radio group check,
+        // submit/reset delegation).
+        _ = self.eval(click_polyfill_js);
+
         // HTML §3.1.5 / §3.1.6: Document HTMLCollection getters
         // (document.forms/links/images/scripts/embeds/plugins). The QuickJS
         // path installs these in dom_api.zig:5224 but kotori globals need
@@ -3538,25 +3543,34 @@ pub const KotoriRuntime = struct {
         \\    var type=(el.type||'text').toLowerCase();
         \\    var req=el.required||false;
         \\    var valueMissing=false;
-        \\    if(req){
+        \\    // Radios get special group-inheritance treatment per §4.10.18.3:
+        \\    // a radio is missing if ANY radio in its group is required and
+        \\    // NO radio in the group is checked (the `required` attribute
+        \\    // propagates through name+form group membership).
+        \\    if(type==='radio'){
+        \\      // §4.10.18.3 radio group: manual iteration because kotori's
+        \\      // selector engine does not yet handle attribute selectors
+        \\      // like [type="radio"][name="..."] reliably.
+        \\      var gname=el.name||'';
+        \\      var anyRequired=req,anyChecked=(el.checked===true);
+        \\      if(gname!==''){
+        \\        var scope=el.form||(typeof document!=='undefined'?document:null);
+        \\        if(scope&&scope.getElementsByTagName){
+        \\          var all=scope.getElementsByTagName('input');
+        \\          for(var gi=0;gi<all.length;gi++){
+        \\            var cand=all[gi];
+        \\            if(cand===el)continue;
+        \\            if((cand.type||'').toLowerCase()!=='radio')continue;
+        \\            if((cand.name||'')!==gname)continue;
+        \\            if(cand.required)anyRequired=true;
+        \\            if(cand.checked===true)anyChecked=true;
+        \\          }
+        \\        }
+        \\      }
+        \\      valueMissing=anyRequired&&!anyChecked;
+        \\    } else if(req){
         \\      if(type==='checkbox'){
         \\        valueMissing=!el.checked;
-        \\      } else if(type==='radio'){
-        \\        // §4.10.18.3 radio group: missing iff no radio in the same
-        \\        // form+name group is checked.
-        \\        var gname=el.name||'';
-        \\        var group;
-        \\        if(gname===''){group=[el];}
-        \\        else {
-        \\          var scope=el.form||(typeof document!=='undefined'?document:null);
-        \\          if(scope&&scope.querySelectorAll){
-        \\            try{group=scope.querySelectorAll('input[type="radio"][name="'+gname.replace(/"/g,'\\"')+'"]');}
-        \\            catch(e){group=[el];}
-        \\          } else group=[el];
-        \\        }
-        \\        var anyChecked=false;
-        \\        for(var gi=0;gi<group.length;gi++){if(group[gi].checked){anyChecked=true;break;}}
-        \\        valueMissing=!anyChecked;
         \\      } else if(type==='file'){
         \\        var files=el.files;
         \\        valueMissing=!files||files.length===0;
@@ -3986,6 +4000,73 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  EP.stepUp=function(n){if(n==null)n=1;var k=Math.trunc(Number(n));if(!isFinite(k)||k===0)k=1;stepBy(this,k);};
         \\  EP.stepDown=function(n){if(n==null)n=1;var k=Math.trunc(Number(n));if(!isFinite(k)||k===0)k=1;stepBy(this,-k);};
+        \\})();
+    ;
+
+    /// HTML §4.10.5.1.20 / §6.3 "activation behavior" — HTMLElement.click()
+    ///
+    /// kotori has no native click() method on Element.prototype. This
+    /// polyfill implements the spec's activation behavior:
+    ///   1. Dispatch a synthetic 'click' MouseEvent (bubbles, cancelable).
+    ///   2. If the event was canceled (preventDefault), stop.
+    ///   3. Perform activation behavior for the element type:
+    ///      - input type=checkbox: toggle checkedness
+    ///      - input type=radio: uncheck all radios in the same form+name
+    ///        group, check the clicked one
+    ///      - input type=submit / button type=submit: form.requestSubmit()
+    ///      - input type=reset / button type=reset: form.reset()
+    ///
+    /// Tests that click on radios to trigger group-wide state changes
+    /// (valueMissing re-evaluation, change-event firing) fail without this.
+    const click_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function itype(el){return (el.type||'').toLowerCase();}
+        \\  EP.click=function(){
+        \\    if(this.disabled)return;
+        \\    var ev;
+        \\    try{ev=new MouseEvent('click',{bubbles:true,cancelable:true,view:typeof window!=='undefined'?window:null});}
+        \\    catch(e){ev=new Event('click',{bubbles:true,cancelable:true});}
+        \\    var notCanceled=this.dispatchEvent(ev);
+        \\    if(!notCanceled)return;
+        \\    var t=tag(this);
+        \\    var it=itype(this);
+        \\    if(t==='input'&&it==='checkbox'){
+        \\      this.checked=!this.checked;
+        \\      try{this.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
+        \\      try{this.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}
+        \\    } else if(t==='input'&&it==='radio'){
+        \\      var gname=this.name||'';
+        \\      if(gname!==''){
+        \\        var scope=this.form||(typeof document!=='undefined'?document:null);
+        \\        if(scope&&scope.getElementsByTagName){
+        \\          var all=scope.getElementsByTagName('input');
+        \\          for(var i=0;i<all.length;i++){
+        \\            var r=all[i];
+        \\            if((r.type||'').toLowerCase()==='radio'&&(r.name||'')===gname){
+        \\              r.checked=(r===this);
+        \\            }
+        \\          }
+        \\        }
+        \\      } else {
+        \\        this.checked=true;
+        \\      }
+        \\      try{this.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
+        \\      try{this.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}
+        \\    } else if((t==='input'&&(it==='submit'||it==='image'))||(t==='button'&&(it==='submit'||it===''||it==='submit'))){
+        \\      var form=this.form;
+        \\      if(form&&typeof form.requestSubmit==='function'){
+        \\        try{form.requestSubmit(this);}catch(e){}
+        \\      }
+        \\    } else if((t==='input'&&it==='reset')||(t==='button'&&it==='reset')){
+        \\      var form2=this.form;
+        \\      if(form2&&typeof form2.reset==='function'){
+        \\        try{form2.reset();}catch(e){}
+        \\      }
+        \\    }
+        \\  };
         \\})();
     ;
 
