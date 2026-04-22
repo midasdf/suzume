@@ -1,0 +1,8 @@
+<!doctype html><body>
+<input id=i type=number step=5 value=3>
+<script>
+var el = document.getElementById('i');
+// Expected: value=3 with step=5 from base=0 → stepMismatch=true
+document.title = 'stepMismatch=' + el.validity.stepMismatch;
+</script>
+</body>

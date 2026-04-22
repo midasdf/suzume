@@ -4022,8 +4022,29 @@ pub fn registerDomApis(rt: *qjs.JSRuntime, ctx: *qjs.JSContext, document_ptr: *a
             \\    if(val!==''&&el.pattern){
             \\      try{patternMismatch=!(new RegExp('^(?:'+el.pattern+')$')).test(val);}catch(e){}
             \\    }
-            \\    // stepMismatch (simplified)
+            \\    // §4.10.18.4 suffering from a step mismatch — Wave 26: number/range only.
             \\    var stepMismatch = false;
+            \\    if ((type==='number' || type==='range') && val !== '' && !isNaN(numVal)) {
+            \\      var stepAttr = el.getAttribute('step');
+            \\      if (stepAttr !== 'any') {
+            \\        var step = parseFloat(stepAttr);
+            \\        if (!isFinite(step) || step <= 0) step = 1;
+            \\        var base = 0;
+            \\        var minAttr = el.getAttribute('min');
+            \\        if (minAttr !== null) {
+            \\          var mb = parseFloat(minAttr);
+            \\          if (isFinite(mb)) base = mb;
+            \\        } else if (el.defaultValue) {
+            \\          var db = parseFloat(el.defaultValue);
+            \\          if (isFinite(db)) base = db;
+            \\        }
+            \\        var r = (numVal - base) / step;
+            \\        var rounded = Math.round(r);
+            \\        var tol = 1e-9 * Math.max(Math.abs(step), 1);
+            \\        if (Math.abs((r - rounded) * step) > tol) stepMismatch = true;
+            \\      }
+            \\    }
+            \\    // TODO(wave27): stepMismatch for date|time|datetime-local|month|week
             \\    var valid = !valueMissing&&!tooShort&&!tooLong&&!rangeUnderflow&&!rangeOverflow&&!typeMismatch&&!patternMismatch&&!stepMismatch&&!customError;
             \\    return {
             \\      valueMissing:valueMissing, tooShort:tooShort, tooLong:tooLong,
