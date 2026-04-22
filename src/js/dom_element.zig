@@ -2945,12 +2945,112 @@ pub fn elementScrollBy(
 }
 
 pub fn elementScrollIntoView(
-    _: ?*qjs.JSContext,
-    _: qjs.JSValue,
-    _: c_int,
-    _: ?[*]qjs.JSValue,
+    ctx: ?*qjs.JSContext,
+    this_val: qjs.JSValue,
+    argc: c_int,
+    argv: ?[*]qjs.JSValue,
 ) callconv(.c) qjs.JSValue {
-    // Stub — actual scroll-to-element requires layout position lookup
+    const c = ctx orelse return quickjs.JS_UNDEFINED();
+    const elem = getElement(c, this_val) orelse return quickjs.JS_UNDEFINED();
+
+    // Parse options: scrollIntoView(), scrollIntoView(bool), or
+    // scrollIntoView({block?, inline?, behavior?}).
+    // Legacy boolean: true → block:'start', false → block:'end'.
+    const Align = enum { start, center, end, nearest };
+    var block: Align = .start;
+    var inline_: Align = .nearest;
+    if (argc >= 1) {
+        const args = argv orelse return quickjs.JS_UNDEFINED();
+        const a = args[0];
+        if (a.tag == qjs.JS_TAG_BOOL) {
+            block = if (qjs.JS_ToBool(c, a) != 0) .start else .end;
+        } else if (a.tag == qjs.JS_TAG_OBJECT) {
+            const readAlign = struct {
+                fn call(cc: *qjs.JSContext, obj: qjs.JSValue, key: [*:0]const u8, default: Align) Align {
+                    const v = qjs.JS_GetPropertyStr(cc, obj, key);
+                    defer qjs.JS_FreeValue(cc, v);
+                    if (quickjs.JS_IsUndefined(v)) return default;
+                    const slice = jsStringToSlice(cc, v) orelse return default;
+                    defer qjs.JS_FreeCString(cc, slice.ptr);
+                    const s = slice.ptr[0..slice.len];
+                    if (std.mem.eql(u8, s, "start")) return .start;
+                    if (std.mem.eql(u8, s, "center")) return .center;
+                    if (std.mem.eql(u8, s, "end")) return .end;
+                    if (std.mem.eql(u8, s, "nearest")) return .nearest;
+                    return default;
+                }
+            }.call;
+            block = readAlign(c, a, "block", .start);
+            inline_ = readAlign(c, a, "inline", .nearest);
+            // Ignore behavior for now (instant only).
+        }
+    }
+
+    const root_box = api.getRootBox(c) orelse return quickjs.JS_UNDEFINED();
+    const target_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+    const target_box = api.findBoxForNode(root_box, target_node) orelse return quickjs.JS_UNDEFINED();
+    const tbb = target_box.borderBox();
+
+    // Walk ancestor chain; for each scrollable ancestor, update its scroll
+    // offset in g_elem_scroll so the target sits at the requested alignment.
+    var cursor: ?*const @import("../layout/box.zig").Box = target_box.parent;
+    while (cursor) |anc| : (cursor = anc.parent) {
+        // Only boxes with a dom_node are candidates — anonymous/line boxes skip.
+        const anc_dn = anc.dom_node orelse continue;
+        const anc_node = anc_dn.lxb_node;
+        if (anc_node.type != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
+        const anc_elem: *lxb.lxb_dom_element_t = @ptrCast(anc_node);
+
+        const styles = api.getStylesForCtx(c) orelse break;
+        const cs = styles.get(@intFromPtr(anc_elem)) orelse continue;
+        const scrollable_x = cs.overflow_x == .scroll or cs.overflow_x == .auto_;
+        const scrollable_y = cs.overflow_y == .scroll or cs.overflow_y == .auto_;
+        if (!scrollable_x and !scrollable_y) continue;
+
+        const apb = anc.paddingBox();
+        const tx_rel = tbb.x - apb.x; // target top-left relative to ancestor content
+        const ty_rel = tbb.y - apb.y;
+
+        const max = maxScrollFor(c, anc_elem);
+        const cur = blk: {
+            if (g_elem_scroll) |*m| {
+                if (m.get(@intFromPtr(anc_elem))) |p| break :blk p;
+            }
+            break :blk ElemScrollPos{ .top = 0, .left = 0 };
+        };
+
+        var new_top: f32 = cur.top;
+        var new_left: f32 = cur.left;
+
+        if (scrollable_y) {
+            new_top = switch (block) {
+                .start => ty_rel,
+                .center => ty_rel - (apb.height - tbb.height) / 2.0,
+                .end => ty_rel - (apb.height - tbb.height),
+                .nearest => blk: {
+                    if (ty_rel < cur.top) break :blk ty_rel;
+                    if (ty_rel + tbb.height > cur.top + apb.height) break :blk ty_rel + tbb.height - apb.height;
+                    break :blk cur.top;
+                },
+            };
+            new_top = @max(0.0, @min(new_top, max.top));
+        }
+        if (scrollable_x) {
+            new_left = switch (inline_) {
+                .start => tx_rel,
+                .center => tx_rel - (apb.width - tbb.width) / 2.0,
+                .end => tx_rel - (apb.width - tbb.width),
+                .nearest => blk: {
+                    if (tx_rel < cur.left) break :blk tx_rel;
+                    if (tx_rel + tbb.width > cur.left + apb.width) break :blk tx_rel + tbb.width - apb.width;
+                    break :blk cur.left;
+                },
+            };
+            new_left = @max(0.0, @min(new_left, max.left));
+        }
+
+        ensureScrollMap().put(@intFromPtr(anc_elem), .{ .top = new_top, .left = new_left }) catch {};
+    }
     return quickjs.JS_UNDEFINED();
 }
 
