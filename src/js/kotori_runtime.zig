@@ -3659,6 +3659,19 @@ pub const KotoriRuntime = struct {
         \\    configurable:true,enumerable:true
         \\  });}catch(e){}
         \\  EP.checkValidity=function(){
+        \\    // HTML §4.10.22.2: forms aggregate their submittable controls.
+        \\    if(tag(this)==='form'){
+        \\      var ctrls=this.elements||this.querySelectorAll('input,textarea,select,button');
+        \\      var allValid=true;
+        \\      for(var i=0;i<ctrls.length;i++){
+        \\        var c=ctrls[i];
+        \\        if(c.checkValidity&&!c.checkValidity())allValid=false;
+        \\      }
+        \\      if(!allValid){
+        \\        try{var fe=new Event('invalid',{bubbles:false,cancelable:true});this.dispatchEvent(fe);}catch(e){}
+        \\      }
+        \\      return allValid;
+        \\    }
         \\    if(!willVal(this))return true;
         \\    var v=makeValidity(this);
         \\    if(v.valid)return true;
