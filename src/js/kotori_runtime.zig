@@ -143,6 +143,22 @@ pub const KotoriRuntime = struct {
         // against defineProperty in this engine; getters branch on tag name.
         _ = self.eval(form_state_polyfill_js);
 
+        // HTML §3.1.5 / §3.1.6: Document HTMLCollection getters
+        // (document.forms/links/images/scripts/embeds/plugins). The QuickJS
+        // path installs these in dom_api.zig:5224 but kotori globals need
+        // their own polyfill. Each returns a live Proxy-wrapped HTMLCollection
+        // with indexed access, .length, .item(), .namedItem(), and named
+        // property access (by id then by name — HTMLCollection §4.2.9).
+        _ = self.eval(document_collections_polyfill_js);
+
+        // HTML §4.10.18.3: form owner accessor for form-associated elements.
+        // input/select/textarea/button/fieldset/output/object.form returns
+        // the owning <form>: either the element referenced by a form="id"
+        // attribute (if valid) or the nearest <form> ancestor. Without this
+        // getter every form-control-infrastructure test fails since
+        // `input.form` is undefined.
+        _ = self.eval(form_owner_polyfill_js);
+
         return self;
     }
 
@@ -3393,6 +3409,195 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\  };
+        \\})();
+    ;
+
+    /// HTML §3.1.5 Document / §4.2.9 HTMLCollection: live collection getters
+    /// for document.forms / links / images / scripts / embeds / plugins.
+    ///
+    /// Each getter returns a Proxy-wrapped live HTMLCollection. On every
+    /// access the underlying node list is re-walked, so the collection
+    /// tracks DOM mutations (live semantics per §3.1.5). The Proxy adds:
+    ///   - indexed access:    coll[0], coll[1], ...
+    ///   - named access:      coll.fm1 (by id, then by name)
+    ///   - .length
+    ///   - .item(i) / .namedItem(n)
+    ///   - instanceof HTMLCollection (via getPrototypeOf trap)
+    ///   - Symbol.iterator
+    ///
+    /// Reference (QuickJS path): src/js/dom_api.zig:5224 "coll_js" block.
+    /// That installation only runs in the QuickJS engine; kotori globals
+    /// never see it, so `document.forms` was undefined on kotori and every
+    /// form-navigation / reset-form test that starts with
+    /// `document.forms.fm1.reset()` failed immediately.
+    const document_collections_polyfill_js =
+        \\(function(){
+        \\  if(typeof document==='undefined')return;
+        \\  if(typeof HTMLCollection==='undefined')return;
+        \\  // Collect descendants of document in tree order filtered by fn.
+        \\  function collect(fn){
+        \\    var out=[];
+        \\    function walk(n){
+        \\      var kids=n.childNodes;
+        \\      if(!kids)return;
+        \\      for(var i=0;i<kids.length;i++){
+        \\        var k=kids[i];
+        \\        if(k&&k.nodeType===1){
+        \\          if(fn(k))out.push(k);
+        \\          walk(k);
+        \\        }
+        \\      }
+        \\    }
+        \\    walk(document);
+        \\    return out;
+        \\  }
+        \\  // DOM §4.2.9 namedItem algorithm: match first by id, then by name.
+        \\  // Name matching restricted to HTML-namespace elements (§4.2.9 step 3).
+        \\  function buildNameMap(arr){
+        \\    var n=Object.create(null);
+        \\    for(var i=0;i<arr.length;i++){
+        \\      var el=arr[i];
+        \\      if(!el||!el.getAttribute)continue;
+        \\      var id=el.getAttribute('id');
+        \\      if(id&&!(id in n))n[id]=el;
+        \\    }
+        \\    for(var i=0;i<arr.length;i++){
+        \\      var el=arr[i];
+        \\      if(!el||!el.getAttribute)continue;
+        \\      var ns=el.namespaceURI;
+        \\      if(ns!=null&&ns!=='http://www.w3.org/1999/xhtml')continue;
+        \\      var nm=el.getAttribute('name');
+        \\      if(nm&&!(nm in n))n[nm]=el;
+        \\    }
+        \\    return n;
+        \\  }
+        \\  function isIndex(p){
+        \\    if(typeof p!=='string')return false;
+        \\    if(p.length===0||p.length>10)return false;
+        \\    for(var i=0;i<p.length;i++){var c=p.charCodeAt(i);if(c<48||c>57)return false;}
+        \\    // Reject leading-zero numeric strings except "0" itself
+        \\    if(p.length>1&&p.charCodeAt(0)===48)return false;
+        \\    return true;
+        \\  }
+        \\  function makeLive(filterFn){
+        \\    var _cache=null;
+        \\    function query(){return collect(filterFn);}
+        \\    return function(){
+        \\      if(_cache)return _cache;
+        \\      _cache=new Proxy({},{
+        \\        get:function(t,p){
+        \\          var arr=query();
+        \\          if(p==='length')return arr.length;
+        \\          if(p==='item')return function(i){i=i>>>0;return i<arr.length?arr[i]:null;};
+        \\          if(p==='namedItem')return function(n){var m=buildNameMap(arr);n=String(n);if(n==='')return null;return m[n]||null;};
+        \\          if(p===Symbol.iterator){var a=arr.slice();return function(){var i=0;return{next:function(){return i<a.length?{value:a[i++],done:false}:{value:undefined,done:true};}};};}
+        \\          if(p===Symbol.toStringTag)return 'HTMLCollection';
+        \\          if(isIndex(p)){var i=p>>>0;return i<arr.length?arr[i]:undefined;}
+        \\          if(typeof p==='string'){var m=buildNameMap(arr);if(p in m)return m[p];}
+        \\          return t[p];
+        \\        },
+        \\        has:function(t,p){
+        \\          var arr=query();
+        \\          if(p==='length'||p==='item'||p==='namedItem')return true;
+        \\          if(isIndex(p))return (p>>>0)<arr.length;
+        \\          if(typeof p==='string'){var m=buildNameMap(arr);if(p in m)return true;}
+        \\          return false;
+        \\        },
+        \\        ownKeys:function(){
+        \\          var arr=query(),m=buildNameMap(arr),keys=[];
+        \\          for(var i=0;i<arr.length;i++)keys.push(String(i));
+        \\          var nk=Object.keys(m);
+        \\          for(var j=0;j<nk.length;j++)if(keys.indexOf(nk[j])<0)keys.push(nk[j]);
+        \\          return keys;
+        \\        },
+        \\        getOwnPropertyDescriptor:function(t,p){
+        \\          var arr=query();
+        \\          if(isIndex(p)){var i=p>>>0;if(i<arr.length)return{value:arr[i],writable:false,enumerable:true,configurable:true};}
+        \\          if(p==='length')return{value:arr.length,writable:false,enumerable:false,configurable:true};
+        \\          if(typeof p==='string'){var m=buildNameMap(arr);if(p in m)return{value:m[p],writable:false,enumerable:false,configurable:true};}
+        \\          return undefined;
+        \\        },
+        \\        getPrototypeOf:function(){return HTMLCollection.prototype;}
+        \\      });
+        \\      return _cache;
+        \\    };
+        \\  }
+        \\  function isTag(name){return function(el){return (el.tagName||'').toLowerCase()===name;};}
+        \\  function isLink(el){
+        \\    var t=(el.tagName||'').toLowerCase();
+        \\    return (t==='a'||t==='area')&&el.hasAttribute&&el.hasAttribute('href');
+        \\  }
+        \\  try{Object.defineProperty(document,'forms',{get:makeLive(isTag('form')),configurable:true,enumerable:true});}catch(e){}
+        \\  try{Object.defineProperty(document,'images',{get:makeLive(isTag('img')),configurable:true,enumerable:true});}catch(e){}
+        \\  try{Object.defineProperty(document,'links',{get:makeLive(isLink),configurable:true,enumerable:true});}catch(e){}
+        \\  try{Object.defineProperty(document,'scripts',{get:makeLive(isTag('script')),configurable:true,enumerable:true});}catch(e){}
+        \\  var embedsGetter=makeLive(isTag('embed'));
+        \\  try{Object.defineProperty(document,'embeds',{get:embedsGetter,configurable:true,enumerable:true});}catch(e){}
+        \\  try{Object.defineProperty(document,'plugins',{get:embedsGetter,configurable:true,enumerable:true});}catch(e){}
+        \\  // HTMLDocument.all — a legacy all-elements collection (may be needed
+        \\  // by older scripts). Kept as a plain Proxy without legacy "falsy"
+        \\  // [[IsHTMLDDA]] behaviour (the spec quirk is not observable here).
+        \\  try{Object.defineProperty(document,'all',{get:makeLive(function(){return true;}),configurable:true,enumerable:false});}catch(e){}
+        \\})();
+    ;
+
+    /// HTML §4.10.18.3 "Form owner" accessor for form-associated elements.
+    ///
+    /// Installs Element.prototype.form as an instance getter that returns
+    /// the element's owning <form> for listed form-associated tags:
+    /// input, select, textarea, button, fieldset, output, object, img (for
+    /// object-associated-with-form-owner cases). The algorithm follows the
+    /// static form-owner determination:
+    ///
+    ///   1. If the element has a `form` content attribute, look up the
+    ///      element with that id. If it exists AND is a <form>, return it.
+    ///      If the attribute is present but no matching form exists, the
+    ///      form owner is null (even if there is an ancestor form).
+    ///   2. Otherwise, walk ancestors looking for the nearest <form>.
+    ///   3. Otherwise, return null.
+    ///
+    /// This does not implement the "parser-inserted flag" nuance
+    /// (reassociation after DOM mutations); the dynamic cases are rare and
+    /// require mutation hooks in native code. The static algorithm covers
+    /// almost every real-world form and most WPT form-control-infrastructure
+    /// subtests.
+    const form_owner_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  function tag(el){return (el.tagName||'').toLowerCase();}
+        \\  function isAssociable(t){
+        \\    return t==='input'||t==='select'||t==='textarea'||t==='button'||
+        \\           t==='fieldset'||t==='output'||t==='object'||t==='label'||
+        \\           t==='img';
+        \\  }
+        \\  function computeFormOwner(el){
+        \\    var fa=el.getAttribute('form');
+        \\    if(fa!=null&&fa!==''){
+        \\      var f=document.getElementById(fa);
+        \\      if(f&&tag(f)==='form')return f;
+        \\      return null;
+        \\    }
+        \\    // Ascend to nearest form ancestor.
+        \\    var p=el.parentNode;
+        \\    while(p){
+        \\      if(p.nodeType===1&&tag(p)==='form')return p;
+        \\      p=p.parentNode;
+        \\    }
+        \\    return null;
+        \\  }
+        \\  Object.defineProperty(EP,'form',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      // <label>.control and <label>.htmlFor would use a different
+        \\      // algorithm, but <label>.form returns label.control.form in
+        \\      // browsers. For simplicity, return the same static owner.
+        \\      if(!isAssociable(t))return undefined;
+        \\      return computeFormOwner(this);
+        \\    },
+        \\    configurable:true,
+        \\    enumerable:true
+        \\  });
         \\})();
     ;
 
