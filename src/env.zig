@@ -103,6 +103,16 @@ pub fn netWrite(stream: std.Io.net.Stream, bytes: []const u8) !void {
     try w.interface.flush();
 }
 
+// ─── Display metrics ─────────────────────────────────────────────────
+
+/// Returns the device pixel ratio (CSS pixels → physical pixels scale).
+/// Defaults to 1.0 on platforms without a display metric.
+/// TODO(wave27): query platform/nsfb for surface DPI. 1.0 is correct for the
+/// current RPi Zero 2W / HyperPixel4 target.
+pub fn getDevicePixelRatio() f32 {
+    return 1.0;
+}
+
 /// Read `file` to EOF, allocating up to `max_size` bytes with `allocator`.
 /// Equivalent to the 0.15 `file.readToEndAlloc(allocator, max_size)`.
 pub fn readToEndAlloc(file: std.Io.File, allocator: std.mem.Allocator, max_size: usize) ![]u8 {
