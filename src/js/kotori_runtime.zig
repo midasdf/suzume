@@ -3101,16 +3101,171 @@ pub const KotoriRuntime = struct {
         \\  function tag(el){return (el.tagName||'').toLowerCase();}
         \\  function getStr(el,k){return Object.prototype.hasOwnProperty.call(el,k)?el[k]:undefined;}
         \\  // ── input/textarea: value with dirty value flag (§4.10.5.1) ──
-        \\  // §4.10.5.1.20 Color state value sanitization: if the value is not
-        \\  // a valid simple color, return "#000000". Normalize to ASCII
-        \\  // lowercase.
-        \\  function sanitizeColor(v){
-        \\    if(typeof v!=='string'||v.length!==7||v.charCodeAt(0)!==35)return '#000000';
-        \\    for(var i=1;i<7;i++){
-        \\      var c=v.charCodeAt(i);
-        \\      if(!((c>=48&&c<=57)||(c>=65&&c<=70)||(c>=97&&c<=102)))return '#000000';
+        \\  // §4.10.5.1.20 Color state value sanitization (per the
+        \\  // optional "liberal acceptance" path, see HTML spec note):
+        \\  // major browsers run input through the CSS <color> parser
+        \\  // (rejecting `transparent` and `currentcolor`) and convert
+        \\  // the result to a 7-char #rrggbb. If the input cannot be
+        \\  // parsed, return "#000000". The strict "valid simple color"
+        \\  // path is a subset of this and still returns the same hex.
+        \\  function _hex2(n){
+        \\    n=Math.round(n);if(n<0)n=0;if(n>255)n=255;
+        \\    var h=n.toString(16);return h.length===1?'0'+h:h;
+        \\  }
+        \\  function _rgbHex(r,g,b){return '#'+_hex2(r)+_hex2(g)+_hex2(b);}
+        \\  function _isHex(c){return (c>=48&&c<=57)||(c>=65&&c<=70)||(c>=97&&c<=102);}
+        \\  function _clamp(x,mn,mx){return x<mn?mn:(x>mx?mx:x);}
+        \\  function _parseRgbPart(s){
+        \\    s=s.replace(/^\s+|\s+$/g,'');
+        \\    if(s===''||s==='none')return null;
+        \\    if(s.charAt(s.length-1)==='%'){
+        \\      var p=parseFloat(s.slice(0,-1));
+        \\      if(isNaN(p))return null;
+        \\      return _clamp(p*2.55,0,255);
         \\    }
-        \\    return v.toLowerCase();
+        \\    var n=parseFloat(s);
+        \\    if(isNaN(n))return null;
+        \\    return _clamp(n,0,255);
+        \\  }
+        \\  function _parsePctOrNum(s){
+        \\    s=s.replace(/^\s+|\s+$/g,'');
+        \\    if(s===''||s==='none')return null;
+        \\    if(s.charAt(s.length-1)==='%'){
+        \\      var p=parseFloat(s.slice(0,-1));
+        \\      if(isNaN(p))return null;
+        \\      return p;
+        \\    }
+        \\    var n=parseFloat(s);
+        \\    if(isNaN(n))return null;
+        \\    return n;
+        \\  }
+        \\  function _parseHueDeg(s){
+        \\    s=s.replace(/^\s+|\s+$/g,'');
+        \\    var m=s.match(/^[-+]?[0-9]*\.?[0-9]+(?:[eE][-+]?[0-9]+)?/);
+        \\    if(!m)return null;
+        \\    var num=parseFloat(m[0]);
+        \\    if(isNaN(num))return null;
+        \\    var unit=s.slice(m[0].length).toLowerCase();
+        \\    if(unit==='rad')num=num*180/Math.PI;
+        \\    else if(unit==='grad')num=num*0.9;
+        \\    else if(unit==='turn')num=num*360;
+        \\    // 'deg' or '' both treat as degrees
+        \\    return ((num%360)+360)%360;
+        \\  }
+        \\  function _srgbDecode(c){
+        \\    // sRGB / displayP3 transfer function (gamma → linear)
+        \\    if(c<=0.04045)return c/12.92;
+        \\    return Math.pow((c+0.055)/1.055,2.4);
+        \\  }
+        \\  function _srgbEncode(c){
+        \\    // sRGB transfer function (linear → gamma)
+        \\    if(c<=0)return 0;
+        \\    if(c<=0.0031308)return c*12.92;
+        \\    return 1.055*Math.pow(c,1/2.4)-0.055;
+        \\  }
+        \\  function _hslHex(h,s,l){
+        \\    var c=(1-Math.abs(2*l-1))*s;
+        \\    var hp=h/60;
+        \\    var x=c*(1-Math.abs((hp%2)-1));
+        \\    var r1=0,g1=0,b1=0;
+        \\    if(hp<1){r1=c;g1=x;}
+        \\    else if(hp<2){r1=x;g1=c;}
+        \\    else if(hp<3){g1=c;b1=x;}
+        \\    else if(hp<4){g1=x;b1=c;}
+        \\    else if(hp<5){r1=x;b1=c;}
+        \\    else{r1=c;b1=x;}
+        \\    var m=l-c/2;
+        \\    return _rgbHex((r1+m)*255,(g1+m)*255,(b1+m)*255);
+        \\  }
+        \\  var _COLOR_TABLE=null;
+        \\  function _colorTable(){
+        \\    if(_COLOR_TABLE!==null)return _COLOR_TABLE;
+        \\    _COLOR_TABLE={};
+        \\    var data="aliceblue=f0f8ff,antiquewhite=faebd7,aqua=00ffff,aquamarine=7fffd4,azure=f0ffff,beige=f5f5dc,bisque=ffe4c4,black=000000,blanchedalmond=ffebcd,blue=0000ff,blueviolet=8a2be2,brown=a52a2a,burlywood=deb887,cadetblue=5f9ea0,chartreuse=7fff00,chocolate=d2691e,coral=ff7f50,cornflowerblue=6495ed,cornsilk=fff8dc,crimson=dc143c,cyan=00ffff,darkblue=00008b,darkcyan=008b8b,darkgoldenrod=b8860b,darkgray=a9a9a9,darkgreen=006400,darkgrey=a9a9a9,darkkhaki=bdb76b,darkmagenta=8b008b,darkolivegreen=556b2f,darkorange=ff8c00,darkorchid=9932cc,darkred=8b0000,darksalmon=e9967a,darkseagreen=8fbc8f,darkslateblue=483d8b,darkslategray=2f4f4f,darkslategrey=2f4f4f,darkturquoise=00ced1,darkviolet=9400d3,deeppink=ff1493,deepskyblue=00bfff,dimgray=696969,dimgrey=696969,dodgerblue=1e90ff,firebrick=b22222,floralwhite=fffaf0,forestgreen=228b22,fuchsia=ff00ff,gainsboro=dcdcdc,ghostwhite=f8f8ff,gold=ffd700,goldenrod=daa520,gray=808080,green=008000,greenyellow=adff2f,grey=808080,honeydew=f0fff0,hotpink=ff69b4,indianred=cd5c5c,indigo=4b0082,ivory=fffff0,khaki=f0e68c,lavender=e6e6fa,lavenderblush=fff0f5,lawngreen=7cfc00,lemonchiffon=fffacd,lightblue=add8e6,lightcoral=f08080,lightcyan=e0ffff,lightgoldenrodyellow=fafad2,lightgray=d3d3d3,lightgreen=90ee90,lightgrey=d3d3d3,lightpink=ffb6c1,lightsalmon=ffa07a,lightseagreen=20b2aa,lightskyblue=87cefa,lightslategray=778899,lightslategrey=778899,lightsteelblue=b0c4de,lightyellow=ffffe0,lime=00ff00,limegreen=32cd32,linen=faf0e6,magenta=ff00ff,maroon=800000,mediumaquamarine=66cdaa,mediumblue=0000cd,mediumorchid=ba55d3,mediumpurple=9370db,mediumseagreen=3cb371,mediumslateblue=7b68ee,mediumspringgreen=00fa9a,mediumturquoise=48d1cc,mediumvioletred=c71585,midnightblue=191970,mintcream=f5fffa,mistyrose=ffe4e1,moccasin=ffe4b5,navajowhite=ffdead,navy=000080,oldlace=fdf5e6,olive=808000,olivedrab=6b8e23,orange=ffa500,orangered=ff4500,orchid=da70d6,palegoldenrod=eee8aa,palegreen=98fb98,paleturquoise=afeeee,palevioletred=db7093,papayawhip=ffefd5,peachpuff=ffdab9,peru=cd853f,pink=ffc0cb,plum=dda0dd,powderblue=b0e0e6,purple=800080,rebeccapurple=663399,red=ff0000,rosybrown=bc8f8f,royalblue=4169e1,saddlebrown=8b4513,salmon=fa8072,sandybrown=f4a460,seagreen=2e8b57,seashell=fff5ee,sienna=a0522d,silver=c0c0c0,skyblue=87ceeb,slateblue=6a5acd,slategray=708090,slategrey=708090,snow=fffafa,springgreen=00ff7f,steelblue=4682b4,tan=d2b48c,teal=008080,thistle=d8bfd8,tomato=ff6347,turquoise=40e0d0,violet=ee82ee,wheat=f5deb3,white=ffffff,whitesmoke=f5f5f5,yellow=ffff00,yellowgreen=9acd32,canvas=ffffff,canvastext=000000,linktext=0000ee,visitedtext=551a8b,activetext=ff0000,buttonface=f0f0f0,buttontext=000000,buttonborder=767676,field=ffffff,fieldtext=000000,highlight=0078d7,highlighttext=ffffff,selecteditem=0078d7,selecteditemtext=ffffff,mark=ffff00,marktext=000000,graytext=6d6d6d,accentcolor=0078d7,accentcolortext=ffffff,activeborder=767676,activecaption=ffffff,appworkspace=ffffff,background=ffffff,buttonhighlight=f0f0f0,buttonshadow=767676,captiontext=000000,inactiveborder=767676,inactivecaption=ffffff,inactivecaptiontext=6d6d6d,infobackground=ffffff,infotext=000000,menu=ffffff,menutext=000000,scrollbar=ffffff,threeddarkshadow=767676,threedface=f0f0f0,threedhighlight=f0f0f0,threedlightshadow=f0f0f0,threedshadow=767676,window=ffffff,windowframe=767676,windowtext=000000";
+        \\    var pairs=data.split(',');
+        \\    for(var i=0;i<pairs.length;i++){
+        \\      var p=pairs[i],eq=p.indexOf('=');
+        \\      if(eq>0)_COLOR_TABLE[p.slice(0,eq)]='#'+p.slice(eq+1);
+        \\    }
+        \\    return _COLOR_TABLE;
+        \\  }
+        \\  function sanitizeColor(v){
+        \\    if(typeof v!=='string')return '#000000';
+        \\    if(v.indexOf('\u0000')>=0)return '#000000';
+        \\    var s=v.replace(/^[\u0009\u000A\u000C\u000D\u0020]+|[\u0009\u000A\u000C\u000D\u0020]+$/g,'');
+        \\    if(s==='')return '#000000';
+        \\    var lower=s.toLowerCase();
+        \\    // Per HTML spec: transparent + currentcolor are explicitly
+        \\    // excluded from input type=color value sanitization.
+        \\    if(lower==='transparent'||lower==='currentcolor'||lower==='inherit')return '#000000';
+        \\    // 3-/6-digit hex
+        \\    if(s.charCodeAt(0)===35){
+        \\      var hex=s.slice(1),hl=hex.length;
+        \\      if(hl===3){
+        \\        for(var i=0;i<3;i++)if(!_isHex(hex.charCodeAt(i)))return '#000000';
+        \\        return ('#'+hex.charAt(0)+hex.charAt(0)+hex.charAt(1)+hex.charAt(1)+hex.charAt(2)+hex.charAt(2)).toLowerCase();
+        \\      }
+        \\      if(hl===6){
+        \\        for(var i=0;i<6;i++)if(!_isHex(hex.charCodeAt(i)))return '#000000';
+        \\        return ('#'+hex).toLowerCase();
+        \\      }
+        \\      return '#000000';
+        \\    }
+        \\    // Named/system color
+        \\    var t=_colorTable();
+        \\    var named=t[lower];
+        \\    if(named)return named;
+        \\    // Functional notation: rgb()/rgba()/hsl()/hsla()/color()
+        \\    var openIdx=lower.indexOf('(');
+        \\    if(openIdx>0&&lower.charAt(lower.length-1)===')'){
+        \\      var fn=lower.slice(0,openIdx);
+        \\      var inner=lower.slice(openIdx+1,lower.length-1);
+        \\      var raw=inner.split(/[\s,\/]+/);
+        \\      var parts=[];
+        \\      for(var i=0;i<raw.length;i++)if(raw[i]!=='')parts.push(raw[i]);
+        \\      if(fn==='rgb'||fn==='rgba'){
+        \\        if(parts.length<3)return '#000000';
+        \\        var r=_parseRgbPart(parts[0]),g=_parseRgbPart(parts[1]),b=_parseRgbPart(parts[2]);
+        \\        if(r==null||g==null||b==null)return '#000000';
+        \\        return _rgbHex(r,g,b);
+        \\      }
+        \\      if(fn==='hsl'||fn==='hsla'){
+        \\        if(parts.length<3)return '#000000';
+        \\        var h=_parseHueDeg(parts[0]),sat=_parsePctOrNum(parts[1]),light=_parsePctOrNum(parts[2]);
+        \\        if(h==null||sat==null||light==null)return '#000000';
+        \\        return _hslHex(h,sat/100,light/100);
+        \\      }
+        \\      if(fn==='color'){
+        \\        if(parts.length<4)return '#000000';
+        \\        var space=parts[0];
+        \\        var R=parseFloat(parts[1]),G=parseFloat(parts[2]),B=parseFloat(parts[3]);
+        \\        if(isNaN(R)||isNaN(G)||isNaN(B))return '#000000';
+        \\        if(space==='srgb'){
+        \\          R=_clamp(R,0,1);G=_clamp(G,0,1);B=_clamp(B,0,1);
+        \\          return _rgbHex(R*255,G*255,B*255);
+        \\        }
+        \\        if(space==='srgb-linear'){
+        \\          R=_srgbEncode(_clamp(R,0,1));
+        \\          G=_srgbEncode(_clamp(G,0,1));
+        \\          B=_srgbEncode(_clamp(B,0,1));
+        \\          return _rgbHex(R*255,G*255,B*255);
+        \\        }
+        \\        if(space==='display-p3'){
+        \\          // sRGB transfer-function decode → linear D65 displayP3
+        \\          var lr=_srgbDecode(R),lg=_srgbDecode(G),lb=_srgbDecode(B);
+        \\          // Linear-displayP3 → linear-sRGB matrix (D65, no chromatic adaptation needed)
+        \\          var R2= 1.2249401*lr+-0.2249404*lg+ 0.0000004*lb;
+        \\          var G2=-0.0420569*lr+ 1.0420571*lg+-0.0000002*lb;
+        \\          var B2=-0.0196376*lr+-0.0786361*lg+ 1.0982737*lb;
+        \\          R=_srgbEncode(_clamp(R2,0,1));
+        \\          G=_srgbEncode(_clamp(G2,0,1));
+        \\          B=_srgbEncode(_clamp(B2,0,1));
+        \\          return _rgbHex(R*255,G*255,B*255);
+        \\        }
+        \\        return '#000000';
+        \\      }
+        \\    }
+        \\    return '#000000';
         \\  }
         \\  Object.defineProperty(EP,'value',{
         \\    get:function(){
