@@ -4179,6 +4179,31 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });}catch(e){}
+        \\  // HTML §4.10.5.1.10 — HTMLInputElement.list
+        \\  // The list attribute applies to text/search/url/tel/email/date/
+        \\  // month/week/time/datetime-local/number/range/color (NOT hidden,
+        \\  // password, file, checkbox, radio, submit, image, reset, button).
+        \\  // Returns the first element with the matching id, only if it is
+        \\  // a <datalist>. Otherwise null.
+        \\  var listApplies_={text:1,search:1,url:1,tel:1,email:1,
+        \\    date:1,month:1,week:1,time:1,"datetime-local":1,
+        \\    number:1,range:1,color:1};
+        \\  try{Object.defineProperty(EP,'list',{
+        \\    get:function(){
+        \\      if(tag(this)!=='input')return undefined;
+        \\      var t=(this.type||'text').toLowerCase();
+        \\      if(!listApplies_[t])return null;
+        \\      var id=this.getAttribute&&this.getAttribute('list');
+        \\      if(id==null||id==='')return null;
+        \\      if(typeof document==='undefined'||!document.getElementById)
+        \\        return null;
+        \\      var el=document.getElementById(id);
+        \\      if(!el)return null;
+        \\      if((el.tagName||'').toLowerCase()!=='datalist')return null;
+        \\      return el;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
         \\})();
     ;
 
