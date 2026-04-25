@@ -172,6 +172,12 @@ pub const KotoriRuntime = struct {
         // HTML §4.10.5.1.18 input.files + FileList stub.
         _ = self.eval(file_input_polyfill_js);
 
+        // HTML §3.2.2 cloneNode form-control state propagation.
+        // Patches Element.prototype.cloneNode to copy `_value` /
+        // `_dirtyValue` / `_checked` / `_dirtyChecked` per spec for
+        // input + textarea descendants of the cloned subtree.
+        _ = self.eval(clone_form_state_polyfill_js);
+
         // HTML §3.1.5 / §3.1.6: Document HTMLCollection getters
         // (document.forms/links/images/scripts/embeds/plugins). The QuickJS
         // path installs these in dom_api.zig:5224 but kotori globals need
@@ -3211,7 +3217,56 @@ pub const KotoriRuntime = struct {
         \\    set:function(v){
         \\      if(tag(this)!=='input')return;
         \\      this._dirtyChecked=true;
-        \\      this._checked=!!v;
+        \\      var b=!!v;
+        \\      this._checked=b;
+        \\      // HTML §4.10.5 radio button group exclusivity:
+        \\      // when a radio's checkedness becomes true, all other
+        \\      // radios in the same group (same form owner, same
+        \\      // non-empty name, case-sensitive) must be unchecked.
+        \\      if(b&&(this.type||'').toLowerCase()==='radio'){
+        \\        var name=(this.getAttribute&&this.getAttribute('name'))||'';
+        \\        if(name===''){return;}
+        \\        // Determine form owner: form= attribute id reference,
+        \\        // else nearest <form> ancestor.
+        \\        var owner=null;
+        \\        var fid=this.getAttribute&&this.getAttribute('form');
+        \\        var doc=this.ownerDocument||(typeof document!=='undefined'?document:null);
+        \\        if(fid&&doc&&doc.getElementById){
+        \\          var f=doc.getElementById(fid);
+        \\          if(f&&(f.tagName||'').toLowerCase()==='form')owner=f;
+        \\        }
+        \\        if(owner===null){
+        \\          var p=this.parentNode;
+        \\          while(p){
+        \\            if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form'){owner=p;break;}
+        \\            p=p.parentNode;
+        \\          }
+        \\        }
+        \\        // Search radios under the form owner if any, else under
+        \\        // the document root, then filter to siblings sharing
+        \\        // the same form owner (form-less radios uncheck only
+        \\        // other form-less radios).
+        \\        var root=owner||doc;
+        \\        if(!root||!root.querySelectorAll)return;
+        \\        var sibs=root.querySelectorAll('input[type=radio]');
+        \\        for(var i=0;i<sibs.length;i++){
+        \\          var s=sibs[i];
+        \\          if(s===this)continue;
+        \\          var sn=(s.getAttribute&&s.getAttribute('name'))||'';
+        \\          if(sn!==name)continue;
+        \\          // Same-owner check (only when no explicit form ancestor
+        \\          // search root): if owner is null, both must be form-less.
+        \\          if(owner===null){
+        \\            var sp=s.parentNode,sOwner=null;
+        \\            while(sp){
+        \\              if(sp.nodeType===1&&(sp.tagName||'').toLowerCase()==='form'){sOwner=sp;break;}
+        \\              sp=sp.parentNode;
+        \\            }
+        \\            if(sOwner!==null)continue;
+        \\          }
+        \\          s._dirtyChecked=true;s._checked=false;
+        \\        }
+        \\      }
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
@@ -4204,6 +4259,64 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });}catch(e){}
+        \\})();
+    ;
+
+    /// HTML §3.2.2 "Cloning steps" for form-control elements.
+    ///
+    /// Native cloneNode duplicates attributes (the *default* value /
+    /// checkedness reflection) but does not propagate the per-element
+    /// dirty value flag, dirty checkedness flag, raw value, or
+    /// checkedness — those live on JS-side state slots
+    /// (`_value`, `_dirtyValue`, `_checked`, `_dirtyChecked`) populated
+    /// by `form_state_polyfill_js`. The HTML spec explicitly requires
+    /// this propagation:
+    ///
+    ///   "The cloning steps for input elements must propagate the
+    ///   value, dirty value flag, checkedness, and dirty checkedness
+    ///   flag from node being cloned to copy."
+    ///
+    /// (Likewise textarea propagates value + dirty value flag.)
+    ///
+    /// We patch Element.prototype.cloneNode to (a) call through to the
+    /// original native implementation, then (b) walk the source +
+    /// clone subtrees in lockstep, copying the form-control state
+    /// slots for each input/textarea encountered. Selection state
+    /// (`_selStart`/`_selEnd`/`_selDir`) is intentionally NOT
+    /// propagated — per spec it is per-element runtime state and the
+    /// clone should start fresh.
+    const clone_form_state_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var orig=Element.prototype.cloneNode;
+        \\  if(typeof orig!=='function')return;
+        \\  function tag(el){return (el&&el.tagName)?el.tagName.toLowerCase():'';}
+        \\  function copyState(src,dst){
+        \\    if(!src||!dst)return;
+        \\    var t=tag(src);
+        \\    if(t==='input'||t==='textarea'){
+        \\      if('_value' in src) dst._value=src._value;
+        \\      if('_dirtyValue' in src) dst._dirtyValue=src._dirtyValue;
+        \\    }
+        \\    if(t==='input'){
+        \\      if('_checked' in src) dst._checked=src._checked;
+        \\      if('_dirtyChecked' in src) dst._dirtyChecked=src._dirtyChecked;
+        \\    }
+        \\  }
+        \\  function walk(src,dst){
+        \\    if(!src||!dst)return;
+        \\    copyState(src,dst);
+        \\    var sk=src.childNodes,dk=dst.childNodes;
+        \\    if(!sk||!dk)return;
+        \\    var n=sk.length<dk.length?sk.length:dk.length;
+        \\    for(var i=0;i<n;i++) walk(sk[i],dk[i]);
+        \\  }
+        \\  try{Element.prototype.cloneNode=function(deep){
+        \\    var copy=orig.call(this,deep);
+        \\    if(deep)walk(this,copy);
+        \\    else copyState(this,copy);
+        \\    return copy;
+        \\  };}catch(e){}
         \\})();
     ;
 
