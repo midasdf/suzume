@@ -3267,6 +3267,108 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    return '#000000';
         \\  }
+        \\  // ── §4.10.5.1.5/6/7/8/9/13 date/time/number value sanitization ──
+        \\  function _sanPad(n,l){var s=String(n);while(s.length<l)s='0'+s;return s;}
+        \\  function _sanIsLeap(y){return (y%4===0&&y%100!==0)||y%400===0;}
+        \\  function _sanDaysInMonth(y,m){
+        \\    if(m===2)return _sanIsLeap(y)?29:28;
+        \\    if(m===4||m===6||m===9||m===11)return 30;
+        \\    return 31;
+        \\  }
+        \\  function _sanWeeksInYear(y){
+        \\    var jan1=new Date(Date.UTC(y,0,1)).getUTCDay();
+        \\    if(jan1===4)return 53;
+        \\    if(_sanIsLeap(y)&&jan1===3)return 53;
+        \\    return 52;
+        \\  }
+        \\  // Reject "00014" (5+ digits with leading zero); accept "10000".
+        \\  function _sanYearStr(s){
+        \\    if(s.length<4)return false;
+        \\    if(s.length>4&&s.charAt(0)==='0')return false;
+        \\    return true;
+        \\  }
+        \\  function _sanDate(v){
+        \\    if(typeof v!=='string')return '';
+        \\    var m=/^(\d{4,})-(\d{2})-(\d{2})$/.exec(v);
+        \\    if(!m)return '';
+        \\    if(!_sanYearStr(m[1]))return '';
+        \\    var Y=+m[1],M=+m[2],D=+m[3];
+        \\    if(Y<1)return '';
+        \\    if(M<1||M>12)return '';
+        \\    if(D<1||D>_sanDaysInMonth(Y,M))return '';
+        \\    return m[1]+'-'+_sanPad(M,2)+'-'+_sanPad(D,2);
+        \\  }
+        \\  // Time spec (§4.10.5.1.10) does NOT mandate normalization, only validation.
+        \\  // Datetime-local (§4.10.5.1.6) uses the *normalized* form, so callers
+        \\  // pass normalize=true for that path only.
+        \\  function _sanTime(v,normalize){
+        \\    if(typeof v!=='string')return '';
+        \\    var m=/^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(v);
+        \\    if(!m)return '';
+        \\    var H=+m[1],Mn=+m[2],S=m[3]?+m[3]:0;
+        \\    var ms=m[4]||'';
+        \\    if(H>23||Mn>59||S>59)return '';
+        \\    var t=_sanPad(H,2)+':'+_sanPad(Mn,2);
+        \\    if(normalize){
+        \\      var msIsZero=ms===''||/^0+$/.test(ms);
+        \\      if(S!==0||!msIsZero){
+        \\        t+=':'+_sanPad(S,2);
+        \\        if(!msIsZero)t+='.'+ms;
+        \\      }
+        \\      return t;
+        \\    }
+        \\    if(m[3]!==undefined){
+        \\      t+=':'+_sanPad(S,2);
+        \\      if(m[4]!==undefined)t+='.'+ms;
+        \\    }
+        \\    return t;
+        \\  }
+        \\  function _sanDtLocal(v){
+        \\    if(typeof v!=='string')return '';
+        \\    var m=/^(\d{4,}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)$/.exec(v);
+        \\    if(!m)return '';
+        \\    var d=_sanDate(m[1]);
+        \\    if(d==='')return '';
+        \\    var t=_sanTime(m[2],true);
+        \\    if(t==='')return '';
+        \\    return d+'T'+t;
+        \\  }
+        \\  function _sanMonth(v){
+        \\    if(typeof v!=='string')return '';
+        \\    var m=/^(\d{4,})-(\d{2})$/.exec(v);
+        \\    if(!m)return '';
+        \\    if(!_sanYearStr(m[1]))return '';
+        \\    var Y=+m[1],M=+m[2];
+        \\    if(Y<1)return '';
+        \\    if(M<1||M>12)return '';
+        \\    return m[1]+'-'+_sanPad(M,2);
+        \\  }
+        \\  function _sanWeek(v){
+        \\    if(typeof v!=='string')return '';
+        \\    var m=/^(\d{4,})-W(\d{2})$/.exec(v);
+        \\    if(!m)return '';
+        \\    if(!_sanYearStr(m[1]))return '';
+        \\    var Y=+m[1],W=+m[2];
+        \\    if(Y<1)return '';
+        \\    if(W<1||W>_sanWeeksInYear(Y))return '';
+        \\    return m[1]+'-W'+_sanPad(W,2);
+        \\  }
+        \\  function _sanNumber(v){
+        \\    if(typeof v!=='string')return '';
+        \\    if(!/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v))return '';
+        \\    var n=parseFloat(v);
+        \\    if(!isFinite(n))return '';
+        \\    return v;
+        \\  }
+        \\  function _sanByType(it,raw){
+        \\    if(it==='date')return _sanDate(raw);
+        \\    if(it==='time')return _sanTime(raw);
+        \\    if(it==='datetime-local')return _sanDtLocal(raw);
+        \\    if(it==='month')return _sanMonth(raw);
+        \\    if(it==='week')return _sanWeek(raw);
+        \\    if(it==='number')return _sanNumber(raw);
+        \\    return null;
+        \\  }
         \\  Object.defineProperty(EP,'value',{
         \\    get:function(){
         \\      var t=tag(this);
@@ -3277,9 +3379,11 @@ pub const KotoriRuntime = struct {
         \\          var ca=this.getAttribute('value');
         \\          return sanitizeColor(ca==null?'':ca);
         \\        }
-        \\        if(this._dirtyValue===true&&typeof this._value==='string')return this._value;
-        \\        var a=this.getAttribute('value');
-        \\        return a==null?'':a;
+        \\        var raw;
+        \\        if(this._dirtyValue===true&&typeof this._value==='string')raw=this._value;
+        \\        else{var a=this.getAttribute('value');raw=a==null?'':a;}
+        \\        var s=_sanByType(it,raw);
+        \\        return s===null?raw:s;
         \\      }
         \\      if(t==='textarea'){
         \\        if(this._dirtyValue===true&&typeof this._value==='string')return this._value;
