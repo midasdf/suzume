@@ -4147,6 +4147,17 @@ pub const KotoriRuntime = struct {
         \\    this.size=0;
         \\  };
         \\  try{globalThis.File=File_;}catch(e){}
+        \\  // HTML §8.7.1 DataTransfer — minimal stub backing input.files
+        \\  // assignment: every DataTransfer owns one persistent FileList,
+        \\  // and `dt.files` returns the same instance on every access.
+        \\  var DataTransfer_ = function DataTransfer(){
+        \\    this._files = new FileList_();
+        \\  };
+        \\  try{Object.defineProperty(DataTransfer_.prototype,'files',{
+        \\    get:function(){return this._files;},
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{globalThis.DataTransfer=DataTransfer_;}catch(e){}
         \\  if(typeof Element==='undefined'||!Element.prototype)return;
         \\  var EP=Element.prototype;
         \\  function tag(el){return (el.tagName||'').toLowerCase();}
