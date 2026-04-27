@@ -3313,7 +3313,10 @@ pub const KotoriRuntime = struct {
         \\      var msIsZero=ms===''||/^0+$/.test(ms);
         \\      if(S!==0||!msIsZero){
         \\        t+=':'+_sanPad(S,2);
-        \\        if(!msIsZero)t+='.'+ms;
+        \\        if(!msIsZero){
+        \\          var msTrim=ms.replace(/0+$/,'');
+        \\          t+='.'+msTrim;
+        \\        }
         \\      }
         \\      return t;
         \\    }
@@ -3360,13 +3363,39 @@ pub const KotoriRuntime = struct {
         \\    if(!isFinite(n))return '';
         \\    return v;
         \\  }
-        \\  function _sanByType(it,raw){
+        \\  // Per HTML §4.10.5.1.5 (URL): strip newlines, then trim ASCII ws.
+        \\  function _sanUrl(v){
+        \\    if(typeof v!=='string')return v;
+        \\    var s=v.replace(/[\u000A\u000D]/g,'');
+        \\    return s.replace(/^[\u0009\u000A\u000C\u000D\u0020]+|[\u0009\u000A\u000C\u000D\u0020]+$/g,'');
+        \\  }
+        \\  // Per HTML §4.10.5.1.6 (Email):
+        \\  // single: strip newlines + trim ASCII whitespace.
+        \\  // multiple: split on ',', trim newlines+ws per segment, rejoin.
+        \\  function _sanEmail(v,multiple){
+        \\    if(typeof v!=='string')return v;
+        \\    if(multiple){
+        \\      var parts=v.split(',');
+        \\      var out=[];
+        \\      for(var i=0;i<parts.length;i++){
+        \\        var s=parts[i].replace(/[\u000A\u000D]/g,'');
+        \\        s=s.replace(/^[\u0009\u000A\u000C\u000D\u0020]+|[\u0009\u000A\u000C\u000D\u0020]+$/g,'');
+        \\        out.push(s);
+        \\      }
+        \\      return out.join(',');
+        \\    }
+        \\    var s2=v.replace(/[\u000A\u000D]/g,'');
+        \\    return s2.replace(/^[\u0009\u000A\u000C\u000D\u0020]+|[\u0009\u000A\u000C\u000D\u0020]+$/g,'');
+        \\  }
+        \\  function _sanByType(it,raw,el){
         \\    if(it==='date')return _sanDate(raw);
         \\    if(it==='time')return _sanTime(raw);
         \\    if(it==='datetime-local')return _sanDtLocal(raw);
         \\    if(it==='month')return _sanMonth(raw);
         \\    if(it==='week')return _sanWeek(raw);
         \\    if(it==='number')return _sanNumber(raw);
+        \\    if(it==='url')return _sanUrl(raw);
+        \\    if(it==='email')return _sanEmail(raw,!!(el&&el.hasAttribute&&el.hasAttribute('multiple')));
         \\    return null;
         \\  }
         \\  Object.defineProperty(EP,'value',{
@@ -3382,7 +3411,7 @@ pub const KotoriRuntime = struct {
         \\        var raw;
         \\        if(this._dirtyValue===true&&typeof this._value==='string')raw=this._value;
         \\        else{var a=this.getAttribute('value');raw=a==null?'':a;}
-        \\        var s=_sanByType(it,raw);
+        \\        var s=_sanByType(it,raw,this);
         \\        return s===null?raw:s;
         \\      }
         \\      if(t==='textarea'){
@@ -3418,7 +3447,14 @@ pub const KotoriRuntime = struct {
         \\      var t=tag(this);
         \\      if(t==='input'||t==='textarea'){
         \\        this._dirtyValue=true;
-        \\        this._value=String(v);
+        \\        var raw=String(v);
+        \\        if(t==='input'){
+        \\          var it=(this.type||'').toLowerCase();
+        \\          var s=_sanByType(it,raw,this);
+        \\          this._value=s===null?raw:s;
+        \\        }else{
+        \\          this._value=raw;
+        \\        }
         \\        return;
         \\      }
         \\      if(t==='select'){
@@ -3942,7 +3978,17 @@ pub const KotoriRuntime = struct {
         \\    var rangeOverflow=!isNaN(numVal)&&!isNaN(maxV)&&numVal>maxV;
         \\    var typeMismatch=false;
         \\    if(val!==''){
-        \\      if(type==='email')typeMismatch=!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val);
+        \\      if(type==='email'){
+        \\        var _emRe=/^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        \\        if(el.hasAttribute&&el.hasAttribute('multiple')){
+        \\          var _ems=val.split(',');
+        \\          for(var _ei=0;_ei<_ems.length;_ei++){
+        \\            if(!_emRe.test(_ems[_ei])){typeMismatch=true;break;}
+        \\          }
+        \\        }else{
+        \\          typeMismatch=!_emRe.test(val);
+        \\        }
+        \\      }
         \\      if(type==='url'){try{new URL(val);}catch(e){typeMismatch=true;}}
         \\    }
         \\    var patternMismatch=false;
