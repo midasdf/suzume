@@ -3363,6 +3363,53 @@ pub const KotoriRuntime = struct {
         \\    if(!isFinite(n))return '';
         \\    return v;
         \\  }
+        \\  // Per HTML §4.10.5.1.13 (Range): clamp to [min,max], snap to
+        \\  // step base. Default min=0 max=100 step=1. Invalid input ->
+        \\  // best representation of the default value (midpoint).
+        \\  function _sanRange(v,el){
+        \\    if(typeof v!=='string')return '';
+        \\    function _f(name,dflt){
+        \\      var a=el&&el.getAttribute&&el.getAttribute(name);
+        \\      if(a==null)return dflt;
+        \\      if(!/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(a))return dflt;
+        \\      var n=parseFloat(a);
+        \\      return isFinite(n)?n:dflt;
+        \\    }
+        \\    var min=_f('min',0), max=_f('max',100), step=_f('step',1);
+        \\    if(step<=0)step=1;
+        \\    function _default(){return (max>=min)?(min+(max-min)/2):min;}
+        \\    var n;
+        \\    if(!/^-?(?:\d+(?:\.\d+)?|\.\d+)(?:[eE][+-]?\d+)?$/.test(v)){
+        \\      n=_default();
+        \\    } else {
+        \\      n=parseFloat(v);
+        \\      if(!isFinite(n))n=_default();
+        \\    }
+        \\    if(max>=min){
+        \\      if(n<min)n=min;
+        \\      if(n>max)n=max;
+        \\    } else {
+        \\      n=min;
+        \\    }
+        \\    var diff=n-min;
+        \\    var k=Math.round(diff/step);
+        \\    var snapped=min+k*step;
+        \\    if(max>=min&&snapped>max){
+        \\      var k2=Math.floor((max-min)/step);
+        \\      snapped=min+k2*step;
+        \\    }
+        \\    n=snapped;
+        \\    function _decimals(x){
+        \\      var s=String(x);
+        \\      var i=s.indexOf('.');
+        \\      return i<0?0:(s.length-i-1);
+        \\    }
+        \\    var prec=Math.max(_decimals(step),_decimals(min),_decimals(max));
+        \\    if(prec>0){
+        \\      n=parseFloat(n.toFixed(Math.min(prec+2,12)));
+        \\    }
+        \\    return String(n);
+        \\  }
         \\  // Per HTML §4.10.5.1.5 (URL): strip newlines, then trim ASCII ws.
         \\  function _sanUrl(v){
         \\    if(typeof v!=='string')return v;
@@ -3395,6 +3442,7 @@ pub const KotoriRuntime = struct {
         \\    if(it==='month')return _sanMonth(raw);
         \\    if(it==='week')return _sanWeek(raw);
         \\    if(it==='number')return _sanNumber(raw);
+        \\    if(it==='range')return _sanRange(raw,el);
         \\    if(it==='url')return _sanUrl(raw);
         \\    if(it==='email')return _sanEmail(raw,!!(el&&el.hasAttribute&&el.hasAttribute('multiple')));
         \\    if(it==='text'||it==='search'||it==='tel'||it==='password'||it==='')return _sanText(raw);
