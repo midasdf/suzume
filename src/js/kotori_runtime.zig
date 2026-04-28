@@ -3387,6 +3387,7 @@ pub const KotoriRuntime = struct {
         \\    var s2=v.replace(/[\u000A\u000D]/g,'');
         \\    return s2.replace(/^[\u0009\u000A\u000C\u000D\u0020]+|[\u0009\u000A\u000C\u000D\u0020]+$/g,'');
         \\  }
+        \\  function _sanText(v){return String(v).replace(/[\u000A\u000D]/g,'');}
         \\  function _sanByType(it,raw,el){
         \\    if(it==='date')return _sanDate(raw);
         \\    if(it==='time')return _sanTime(raw);
@@ -3396,6 +3397,7 @@ pub const KotoriRuntime = struct {
         \\    if(it==='number')return _sanNumber(raw);
         \\    if(it==='url')return _sanUrl(raw);
         \\    if(it==='email')return _sanEmail(raw,!!(el&&el.hasAttribute&&el.hasAttribute('multiple')));
+        \\    if(it==='text'||it==='search'||it==='tel'||it==='password'||it==='')return _sanText(raw);
         \\    return null;
         \\  }
         \\  Object.defineProperty(EP,'value',{
