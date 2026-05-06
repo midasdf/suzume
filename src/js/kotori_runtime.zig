@@ -173,6 +173,12 @@ pub const KotoriRuntime = struct {
         // document.activeElement getter (returns body when nothing focused).
         _ = self.eval(focus_polyfill_js);
 
+        // WHATWG URL Standard — globalThis.URL constructor + Location
+        // augmentation (pathname, protocol, host, etc. derived from href).
+        // Tests like show-picker-cross-origin-iframe use
+        // `new URL("...", self.location).pathname`.
+        _ = self.eval(url_polyfill_js);
+
         // HTML §4.10.5.1.16 radio insert-time exclusivity. Hooks
         // appendChild/insertBefore so a checked radio inserted into a
         // form-rooted tree triggers group exclusivity (uncheck other
@@ -4847,6 +4853,107 @@ pub const KotoriRuntime = struct {
         \\  // Convenience: document.hasFocus() returns true (we always claim
         \\  // focus in WPT mode; no window blur tracking).
         \\  try{document.hasFocus=function(){return true;};}catch(e){}
+        \\})();
+    ;
+
+    /// WHATWG URL Standard — minimal `globalThis.URL` constructor +
+    /// Location interface enrichment.
+    ///
+    /// Why a polyfill instead of native: kotori's QuickJS path has a
+    /// full URL implementation (web_api.zig:1529 + dom_api.zig URL
+    /// bindings), but kotori VM doesn't share those bindings. Tests
+    /// like show-picker-cross-origin-iframe call
+    /// `new URL("...", self.location).pathname` — without URL global
+    /// they crash with `Cannot read properties of undefined`.
+    ///
+    /// Scope: parse `protocol://host:port/path?query#hash`, expose
+    /// href/protocol/host/hostname/port/pathname/search/hash/origin
+    /// plus `toString()`. URLSearchParams is a minimal stub. Not full
+    /// spec (no IDN, no percent-decoding); covers the WPT cases that
+    /// only inspect pathname / origin / toString output.
+    ///
+    /// Location augmentation: window.location.href is set in
+    /// kotori_runtime.setDocumentUrl; this polyfill parses it and
+    /// stamps protocol/host/hostname/port/pathname/search/hash/origin
+    /// onto the same object so `self.location.pathname` returns the
+    /// path portion.
+    const url_polyfill_js =
+        \\(function(){
+        \\  if(typeof globalThis==='undefined')return;
+        \\  function parseURL(url){
+        \\    var out={href:url,protocol:'',host:'',hostname:'',port:'',pathname:'/',search:'',hash:'',origin:''};
+        \\    var protoEnd=url.indexOf('://');
+        \\    if(protoEnd===-1){
+        \\      out.pathname=url;return out;
+        \\    }
+        \\    out.protocol=url.substring(0,protoEnd+1);
+        \\    var rest=url.substring(protoEnd+3);
+        \\    var hashIdx=rest.indexOf('#');
+        \\    if(hashIdx!==-1){out.hash=rest.substring(hashIdx);rest=rest.substring(0,hashIdx);}
+        \\    var searchIdx=rest.indexOf('?');
+        \\    if(searchIdx!==-1){out.search=rest.substring(searchIdx);rest=rest.substring(0,searchIdx);}
+        \\    var pathIdx=rest.indexOf('/');
+        \\    if(pathIdx!==-1){out.host=rest.substring(0,pathIdx);out.pathname=rest.substring(pathIdx);}
+        \\    else{out.host=rest;out.pathname='/';}
+        \\    var colonIdx=out.host.indexOf(':');
+        \\    if(colonIdx!==-1){out.hostname=out.host.substring(0,colonIdx);out.port=out.host.substring(colonIdx+1);}
+        \\    else{out.hostname=out.host;out.port='';}
+        \\    out.origin=out.protocol+'//'+out.host;
+        \\    return out;
+        \\  }
+        \\  function resolveURL(input,base){
+        \\    if(input.indexOf('://')!==-1)return input;
+        \\    if(typeof base!=='string'||base.indexOf('://')===-1)return input;
+        \\    var b=parseURL(base);
+        \\    if(input.charAt(0)==='/'){
+        \\      return b.origin+input;
+        \\    }
+        \\    var lastSlash=b.pathname.lastIndexOf('/');
+        \\    var dir=lastSlash!==-1?b.pathname.substring(0,lastSlash+1):'/';
+        \\    return b.origin+dir+input;
+        \\  }
+        \\  function URL(url,base){
+        \\    if(!(this instanceof URL))throw new TypeError("Constructor URL requires 'new'");
+        \\    if(typeof url!=='string')url=String(url);
+        \\    if(base!==undefined&&base!==null){
+        \\      if(typeof base!=='string')base=String(base);
+        \\      url=resolveURL(url,base);
+        \\    }
+        \\    var p=parseURL(url);
+        \\    this.href=p.href;
+        \\    this.protocol=p.protocol;
+        \\    this.host=p.host;
+        \\    this.hostname=p.hostname;
+        \\    this.port=p.port;
+        \\    this.pathname=p.pathname;
+        \\    this.search=p.search;
+        \\    this.hash=p.hash;
+        \\    this.origin=p.origin;
+        \\    this.searchParams={
+        \\      _data:{},
+        \\      get:function(n){return Object.prototype.hasOwnProperty.call(this._data,n)?this._data[n]:null;},
+        \\      has:function(n){return Object.prototype.hasOwnProperty.call(this._data,n);},
+        \\      toString:function(){return '';}
+        \\    };
+        \\  }
+        \\  URL.prototype.toString=function(){return this.href;};
+        \\  if(typeof globalThis.URL==='undefined')globalThis.URL=URL;
+        \\  // Augment self.location with getter-derived fields. setDocumentUrl
+        \\  // overwrites location.href post-init, so static fields get stale.
+        \\  // Getters parse on each access — always reflect the current href.
+        \\  if(typeof self!=='undefined'&&self.location){
+        \\    var loc=self.location;
+        \\    var fields=['protocol','host','hostname','port','pathname','search','hash','origin'];
+        \\    for(var fi=0;fi<fields.length;fi++){
+        \\      (function(name){
+        \\        try{Object.defineProperty(loc,name,{
+        \\          get:function(){return parseURL(this.href||'')[name]||'';},
+        \\          configurable:true,enumerable:true
+        \\        });}catch(e){}
+        \\      })(fields[fi]);
+        \\    }
+        \\    try{loc.toString=function(){return this.href;};}catch(e){}
+        \\  }
         \\})();
     ;
 
