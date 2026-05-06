@@ -428,6 +428,7 @@ var g_chardata_proto: ?*JsObject = null;
 var g_text_proto: ?*JsObject = null;
 var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
+var g_fragment_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 /// Shared isTrusted getter function — same object across all Event instances
 /// so that Object.getOwnPropertyDescriptor(e1,"isTrusted").get ===
@@ -826,6 +827,24 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // ── DocumentType.prototype → Node.prototype ──
     g_doctype_proto = try vm.createObj(.{});
     g_doctype_proto.?.prototype = g_node_proto;
+
+    // ── DocumentFragment.prototype → Node.prototype ──
+    // DOM §4.7 — DocumentFragment is a Node that mixes in ParentNode
+    // (children, querySelector{,All}, getElementById, etc.). Without
+    // these methods on the fragment-specific prototype, fragment-rooted
+    // queries silently return undefined and orphan-tree radio groups,
+    // shadow root containment, and similar tests fail.
+    g_fragment_proto = try vm.createObj(.{});
+    {
+        const fp = g_fragment_proto.?;
+        fp.prototype = g_node_proto;
+        try vm.registerNativeMethod(fp, "querySelector", &nativeQuerySelector);
+        try vm.registerNativeMethod(fp, "querySelectorAll", &nativeQuerySelectorAll);
+        try vm.registerNativeMethod(fp, "getElementById", &nativeGetElementById);
+        try vm.registerNativeMethod(fp, "getElementsByTagName", &nativeGetElementsByTagName);
+        try vm.registerNativeMethod(fp, "getElementsByTagNameNS", &nativeGetElementsByTagNameNS);
+        try vm.registerNativeMethod(fp, "getElementsByClassName", &nativeGetElementsByClassName);
+    }
 
     // ── Element.prototype → Node.prototype ──
     vm.element_proto = try vm.createObj(.{});
@@ -5005,9 +5024,16 @@ fn nativeScrollBy(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerro
 
 /// Wrap a ShadowRoot as a kotori JsObject (dom_node backed by the fragment).
 /// Sets __isShadowRoot = true on the object so JS can detect it.
+/// Caches the wrapper in nodeCache keyed on the fragment so subsequent
+/// `getRootNode()` / wrapNode hits return the same JS object — required
+/// for `host.attachShadow(...) === radio.getRootNode()` identity (DOM §4.8).
 fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
+    const frag_node: *lxb.lxb_dom_node_t = @ptrCast(root_sr.fragment);
+    if (nodeCacheGet(frag_node)) |cached| {
+        return JsValue.initObject(cached);
+    }
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
-    obj.data = .{ .dom_node = @ptrCast(root_sr.fragment) };
+    obj.data = .{ .dom_node = frag_node };
     // Mark as shadow root for JS detection.
     const is_sr_sid = vm.pool.intern("__isShadowRoot") catch return JsValue.initObject(obj);
     obj.setProperty(vm.allocator, is_sr_sid, JsValue.initBool(true)) catch {};
@@ -5035,6 +5061,7 @@ fn wrapShadowRoot(vm: *VM, root_sr: *sr.ShadowRoot) ?JsValue {
     // `vm.element_proto` (the previous behaviour) plus a single-call
     // _ownerDoc slot write.
     applyInterfaceProto(vm, obj, null, "", host_owner);
+    nodeCachePut(vm.allocator, frag_node, obj);
     return JsValue.initObject(obj);
 }
 
@@ -5582,6 +5609,16 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
     if (nodeCacheGet(node)) |cached| {
         return JsValue.initObject(cached);
     }
+    // DOM §4.8 — a DocumentFragment that backs a ShadowRoot must wrap as
+    // a ShadowRoot (with __isShadowRoot, mode) rather than a generic
+    // fragment. Without this branch, `node.getRootNode()` would return
+    // a different wrapper than the one produced by `host.attachShadow`,
+    // breaking identity comparisons.
+    if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT) {
+        if (sr.shadowRootForFragment(node)) |root_sr| {
+            return wrapShadowRoot(vm, root_sr);
+        }
+    }
     const obj = vm.createObj(.{ .obj_type = .dom_node }) catch return null;
     obj.data = .{ .dom_node = @ptrCast(node) };
     const nt = nodeType(node);
@@ -5631,7 +5668,7 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
             lxb.LXB_DOM_NODE_TYPE_TEXT => g_text_proto,
             lxb.LXB_DOM_NODE_TYPE_COMMENT => g_comment_proto,
             lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE => g_doctype_proto,
-            lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_node_proto,
+            lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_fragment_proto,
             else => g_node_proto,
         };
         setNodeOwnerDoc(vm, obj, owner_doc_val);

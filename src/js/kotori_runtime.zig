@@ -173,6 +173,12 @@ pub const KotoriRuntime = struct {
         // document.activeElement getter (returns body when nothing focused).
         _ = self.eval(focus_polyfill_js);
 
+        // HTML §4.10.5.1.16 radio insert-time exclusivity. Hooks
+        // appendChild/insertBefore so a checked radio inserted into a
+        // form-rooted tree triggers group exclusivity (uncheck other
+        // radios in the same form/name group).
+        _ = self.eval(radio_insert_polyfill_js);
+
         // HTML §4.10.5.1.18 input.files + FileList stub.
         _ = self.eval(file_input_polyfill_js);
 
@@ -4695,6 +4701,73 @@ pub const KotoriRuntime = struct {
         \\  // Convenience: document.hasFocus() returns true (we always claim
         \\  // focus in WPT mode; no window blur tracking).
         \\  try{document.hasFocus=function(){return true;};}catch(e){}
+        \\})();
+    ;
+
+    /// HTML §4.10.5.1.16 — radio insert-time group exclusivity.
+    ///
+    /// Per spec, when an `input type=radio` whose checkedness is true is
+    /// preinserted into a parent and ends up sharing a radio button group
+    /// with another already-checked radio, the OTHERS in the group must
+    /// have their checkedness set to false. The IDL `.checked` setter
+    /// already performs this walk; this polyfill hooks
+    /// `Element.prototype.appendChild` / `insertBefore` so that the post-
+    /// insert state triggers the same walk by calling `radio.checked = true`
+    /// (which is idempotent for the already-true case but propagates to
+    /// the new group context).
+    ///
+    /// Test "Appending input radio input into a disconnect tree do NOT
+    /// update" governs the form-less case: when the post-insert radio has
+    /// no form ancestor, exclusivity must NOT fire. We gate by
+    /// `formOwner(node) != null`, matching observed browser behavior and
+    /// the WPT cases in radio-disconnected-group-owner.html.
+    const radio_insert_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  var EP=Element.prototype;
+        \\  var origAppend=EP.appendChild;
+        \\  var origInsertBefore=EP.insertBefore;
+        \\  if(typeof origAppend!=='function'||typeof origInsertBefore!=='function')return;
+        \\  function formOwnerOf(el){
+        \\    var fid=el.getAttribute&&el.getAttribute('form');
+        \\    if(fid){
+        \\      var d=el.ownerDocument||(typeof document!=='undefined'?document:null);
+        \\      if(d&&d.getElementById){
+        \\        var ff=d.getElementById(fid);
+        \\        if(ff&&(ff.tagName||'').toLowerCase()==='form')return ff;
+        \\      }
+        \\      return null;
+        \\    }
+        \\    var p=el.parentNode;
+        \\    while(p){
+        \\      if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form')return p;
+        \\      p=p.parentNode;
+        \\    }
+        \\    return null;
+        \\  }
+        \\  function checkRadioOnInsert(node){
+        \\    if(!node||node.nodeType!==1)return;
+        \\    if((node.tagName||'').toLowerCase()!=='input')return;
+        \\    if((node.type||'').toLowerCase()!=='radio')return;
+        \\    if(node.checked!==true)return;
+        \\    // Per HTML §4.10.5.1.16: only fire when the radio now has a
+        \\    // non-null form owner (form-rooted tree). Orphan trees do
+        \\    // not trigger exclusivity on insert per WPT
+        \\    // radio-disconnected-group-owner "Appending into disconnect
+        \\    // tree don't update".
+        \\    if(!formOwnerOf(node))return;
+        \\    try{node.checked=true;}catch(e){}
+        \\  }
+        \\  EP.appendChild=function(child){
+        \\    var r=origAppend.call(this,child);
+        \\    checkRadioOnInsert(child);
+        \\    return r;
+        \\  };
+        \\  EP.insertBefore=function(child,ref){
+        \\    var r=origInsertBefore.call(this,child,ref);
+        \\    checkRadioOnInsert(child);
+        \\    return r;
+        \\  };
         \\})();
     ;
 
