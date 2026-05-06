@@ -3680,6 +3680,41 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
+        \\  // ── HTMLElement.labels (HTML §4.10.4) ──
+        \\  // labelable elements: button, input (except hidden), keygen,
+        \\  // meter, output, progress, select, textarea. Returns an array
+        \\  // (acts as NodeList for length + indexed access) of all <label>
+        \\  // elements that label this element — direct ancestors AND
+        \\  // for=id references.
+        \\  Object.defineProperty(EP,'labels',{
+        \\    get:function(){
+        \\      var t=tag(this);
+        \\      if(t!=='input'&&t!=='textarea'&&t!=='select'&&t!=='button'&&t!=='meter'&&t!=='output'&&t!=='progress')return null;
+        \\      if(t==='input'&&(this.type||'').toLowerCase()==='hidden')return null;
+        \\      var result=[];
+        \\      var p=this.parentNode;
+        \\      while(p){
+        \\        if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='label'){
+        \\          result.push(p);
+        \\        }
+        \\        p=p.parentNode;
+        \\      }
+        \\      var id=this.getAttribute&&this.getAttribute('id');
+        \\      if(id){
+        \\        var doc=this.ownerDocument||(typeof document!=='undefined'?document:null);
+        \\        if(doc&&doc.getElementsByTagName){
+        \\          var allLabels=doc.getElementsByTagName('label');
+        \\          for(var i=0;i<allLabels.length;i++){
+        \\            var lbl=allLabels[i];
+        \\            var forAttr=lbl.getAttribute&&lbl.getAttribute('for');
+        \\            if(forAttr===id&&result.indexOf(lbl)===-1)result.push(lbl);
+        \\          }
+        \\        }
+        \\      }
+        \\      return result;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
         \\  // ── option.selected / .defaultSelected / .index / .text (§4.10.10) ──
         \\  Object.defineProperty(EP,'selected',{
         \\    get:function(){
@@ -3829,6 +3864,12 @@ pub const KotoriRuntime = struct {
         \\      el._selStart=null;
         \\      el._selEnd=null;
         \\      el._selDir=null;
+        \\    }
+        \\    // §4.10.5.1.16 morph INTO radio with `checked` attribute set:
+        \\    // run group exclusivity so other radios in the same group
+        \\    // become unchecked. The IDL setter has the canonical walk.
+        \\    if(newT==='radio'&&el.checked===true){
+        \\      try{el.checked=true;}catch(e){}
         \\    }
         \\  }
         \\  Object.defineProperty(EP,'type',{
@@ -4661,20 +4702,45 @@ pub const KotoriRuntime = struct {
         \\    // §4.10.5.1 pre-activation: toggle checkedness BEFORE click
         \\    // dispatch so onclick handlers see the new state.
         \\    var preChecked=this.checked, preIndet=this.indeterminate;
+        \\    // For radio: snapshot the entire group (so we can revert ALL
+        \\    // siblings if the click is canceled — the IDL setter unchecks
+        \\    // the prior winner, and preventDefault must restore it).
+        \\    var radioSnapshot=null;
         \\    if(t==='input'&&it==='checkbox'){
         \\      this.checked=!preChecked;
         \\      if(this.indeterminate!==undefined)this.indeterminate=false;
         \\    } else if(t==='input'&&it==='radio'){
-        \\      // §4.10.5.1.16 group via setting checked=true triggers
-        \\      // exclusivity through the IDL setter (which honors tree
-        \\      // root + form owner).
+        \\      var rname=(this.getAttribute&&this.getAttribute('name'))||'';
+        \\      if(rname!==''){
+        \\        radioSnapshot=[];
+        \\        var rt=(typeof this.getRootNode==='function')?this.getRootNode():(this.ownerDocument||this);
+        \\        if(rt&&rt.querySelectorAll){
+        \\          var rsibs=rt.querySelectorAll('input[type=radio]');
+        \\          for(var rsi=0;rsi<rsibs.length;rsi++){
+        \\            var rs=rsibs[rsi];
+        \\            if(((rs.getAttribute&&rs.getAttribute('name'))||'')===rname){
+        \\              radioSnapshot.push({el:rs,checked:rs.checked===true,dirty:rs._dirtyChecked===true});
+        \\            }
+        \\          }
+        \\        }
+        \\      }
+        \\      // §4.10.5.1.16 group exclusivity via IDL setter.
         \\      this.checked=true;
         \\    }
         \\    var notCanceled=this.dispatchEvent(ev);
         \\    if(t==='input'&&(it==='checkbox'||it==='radio')){
         \\      if(!notCanceled){
-        \\        // Canceled activation: revert to pre-activation state.
-        \\        this.checked=preChecked;
+        \\        if(radioSnapshot){
+        \\          // Revert all group siblings (the prior checked one was
+        \\          // unset by the IDL setter; restore it).
+        \\          for(var rk=0;rk<radioSnapshot.length;rk++){
+        \\            var sn=radioSnapshot[rk];
+        \\            sn.el._dirtyChecked=sn.dirty;
+        \\            sn.el._checked=sn.checked;
+        \\          }
+        \\        } else {
+        \\          this.checked=preChecked;
+        \\        }
         \\        if(this.indeterminate!==undefined)this.indeterminate=preIndet;
         \\        return;
         \\      }

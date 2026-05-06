@@ -3473,6 +3473,12 @@ pub const VM = struct {
     pub fn createObj(self: *VM, opts: struct { obj_type: object_mod.ObjType = .ordinary }) !*JsObject {
         const obj = try self.allocator.create(JsObject);
         obj.* = .{ .obj_type = opts.obj_type };
+        // Default-prototype native arrays inherit Array.prototype so
+        // forEach/map/filter/etc. work on them. NodeList-like collections
+        // returned by qSA, getElementsByTagName, etc. also benefit.
+        // Native callers that want a different prototype overwrite
+        // obj.prototype after construction.
+        if (opts.obj_type == .array) obj.prototype = self.array_proto;
         try self.objects.append(self.allocator, obj);
         return obj;
     }
