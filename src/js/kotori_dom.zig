@@ -9018,6 +9018,129 @@ fn setInnerHTML(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
         dom_b.lxb_dom_node_insert_child(node, c);
         ch = next;
     }
+
+    // HTML §4.10.5.1.16 — radio button group exclusivity for parser-
+    // inserted radios. The HTML parser does not run the IDL "set
+    // checkedness" steps, so multiple `<input type=radio name=g checked>`
+    // can appear in one parse; per the WPT
+    // radio-disconnected-group-owner.html cases, only the LAST one in
+    // each (name, form-owner) group should retain the `checked`
+    // attribute when a form owner exists. Orphan-tree groups are
+    // exempt — see `radioFormOwner` returning null.
+    applyRadioGroupExclusivityAfterParse(node);
+}
+
+/// HTML §4.10.5.1.16 post-parse helper for setInnerHTML. Walks the
+/// inserted subtree, collects `<input type=radio>` elements that have
+/// the `checked` attribute and a non-null form owner, then removes
+/// `checked` from any earlier-in-document-order radio that shares a
+/// group with a later one (same name + same form owner).
+const RadioGroupEntry = struct {
+    elem: *lxb.lxb_dom_element_t,
+    name: []const u8,
+    form_owner: *lxb.lxb_dom_node_t,
+};
+
+fn applyRadioGroupExclusivityAfterParse(root: *lxb.lxb_dom_node_t) void {
+    var buf: [128]RadioGroupEntry = undefined;
+    var n: usize = 0;
+    collectCheckedRadiosWithOwner(root, &buf, &n);
+
+    var i: usize = 0;
+    while (i < n) : (i += 1) {
+        const r = buf[i];
+        var has_later = false;
+        var j: usize = i + 1;
+        while (j < n) : (j += 1) {
+            const later = buf[j];
+            if (later.form_owner == r.form_owner and std.mem.eql(u8, later.name, r.name)) {
+                has_later = true;
+                break;
+            }
+        }
+        if (has_later) {
+            _ = dom_b.lxb_dom_element_remove_attribute(r.elem, "checked", 7);
+        }
+    }
+}
+
+fn collectCheckedRadiosWithOwner(
+    node: *lxb.lxb_dom_node_t,
+    buf: *[128]RadioGroupEntry,
+    n: *usize,
+) void {
+    var cur: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+    while (cur) |c| {
+        if (nodeType(c) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const e: *lxb.lxb_dom_element_t = @ptrCast(c);
+            var lname_len: usize = 0;
+            const lname_p = dom_b.lxb_dom_element_local_name(e, &lname_len);
+            if (lname_p) |lname_ptr| {
+                if (std.ascii.eqlIgnoreCase(lname_ptr[0..lname_len], "input")) {
+                    var tlen: usize = 0;
+                    const tval_p = dom_b.lxb_dom_element_get_attribute(e, "type", 4, &tlen);
+                    const is_radio = if (tval_p) |tval| std.ascii.eqlIgnoreCase(tval[0..tlen], "radio") else false;
+                    if (is_radio) {
+                        const has_checked = dom_b.lxb_dom_element_has_attribute(e, "checked", 7);
+                        if (has_checked) {
+                            var nm_len: usize = 0;
+                            const nm_p = dom_b.lxb_dom_element_get_attribute(e, "name", 4, &nm_len);
+                            if (nm_p != null and nm_len > 0) {
+                                if (radioFormOwner(c)) |fo| {
+                                    if (n.* < buf.len) {
+                                        buf[n.*] = .{
+                                            .elem = e,
+                                            .name = nm_p.?[0..nm_len],
+                                            .form_owner = fo,
+                                        };
+                                        n.* += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        collectCheckedRadiosWithOwner(c, buf, n);
+        cur = nodeNext(c);
+    }
+}
+
+fn radioFormOwner(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return null;
+    const e: *lxb.lxb_dom_element_t = @ptrCast(node);
+    var flen: usize = 0;
+    if (dom_b.lxb_dom_element_get_attribute(e, "form", 4, &flen)) |fval| {
+        if (flen > 0) {
+            const doc = g_document orelse return null;
+            const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(doc));
+            if (findElementById(doc_node, fval[0..flen])) |t| {
+                var tlen: usize = 0;
+                const tname = dom_b.lxb_dom_element_local_name(t, &tlen);
+                if (tname) |tn_ptr| {
+                    if (std.ascii.eqlIgnoreCase(tn_ptr[0..tlen], "form")) {
+                        return @ptrCast(t);
+                    }
+                }
+            }
+            return null;
+        }
+    }
+    var p: ?*lxb.lxb_dom_node_t = nodeParent(node);
+    while (p) |pp| : (p = nodeParent(pp)) {
+        if (nodeType(pp) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const pe: *lxb.lxb_dom_element_t = @ptrCast(pp);
+            var pn_len: usize = 0;
+            const pn = dom_b.lxb_dom_element_local_name(pe, &pn_len);
+            if (pn) |pp_ptr| {
+                if (std.ascii.eqlIgnoreCase(pp_ptr[0..pn_len], "form")) {
+                    return pp;
+                }
+            }
+        }
+    }
+    return null;
 }
 
 // ══════════════════════════════════════════════════════════════════════
