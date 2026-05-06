@@ -4403,6 +4403,33 @@ fn nativeAttachShadow(ctx: *anyopaque, this: JsValue, args: []const JsValue) any
 ///
 /// Returns `true` if `_stopImmediate` was hit inside the loop (so the caller
 /// can abort subsequent phases).
+/// HTML §8.1.5.1 — invoke the on{type} event handler IDL attribute on a JS
+/// node-wrapper, if present and callable. Acts as a non-capturing listener
+/// per spec (fires at target phase + bubble phase, not capture).
+fn callPropertyHandler(
+    vm: *VM,
+    node: *lxb.lxb_dom_node_t,
+    type_str: []const u8,
+    ev_obj: *JsObject,
+) void {
+    var name_buf: [80]u8 = undefined;
+    if (type_str.len + 2 > name_buf.len) return;
+    name_buf[0] = 'o';
+    name_buf[1] = 'n';
+    @memcpy(name_buf[2 .. 2 + type_str.len], type_str);
+    const name = name_buf[0 .. 2 + type_str.len];
+    const sid = vm.pool.intern(name) catch return;
+    const node_val = wrapNode(vm, node) orelse return;
+    if (!node_val.isObject()) return;
+    const node_obj = node_val.asJsObject();
+    const handler = node_obj.getProperty(sid) orelse return;
+    if (!handler.isObject()) return;
+    const ot = handler.asJsObject().obj_type;
+    if (ot != .function and ot != .native_function) return;
+    // DOM §2.9 inner invoke: `this` = currentTarget = node.
+    _ = vm.callJsFunction(handler, node_val, &.{JsValue.initObject(ev_obj)}) catch {};
+}
+
 fn runListenersForTarget(
     vm: *VM,
     target_addr: usize,
@@ -4770,9 +4797,14 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
         ev_obj.setProperty(vm.allocator, ct_sid, target_wrap) catch {};
         // Pass 1: capture=true listeners (registration order)
         _ = runListenersForTarget(vm, @intFromPtr(target_node), type_str, ev_obj, true, false);
-        // Pass 2: capture=false listeners (registration order), unless stopped
+        // Pass 2: capture=false listeners (registration order), unless stopped.
+        // HTML §8.1.5.1: on{type} event-handler IDL attributes fire here too
+        // as a non-capturing listener at the target.
         if (!isStopped(ev_obj, stopped_sid)) {
             _ = runListenersForTarget(vm, @intFromPtr(target_node), type_str, ev_obj, false, false);
+            if (!isStopped(ev_obj, stopped_sid)) {
+                callPropertyHandler(vm, target_node, type_str, ev_obj);
+            }
         }
     }
 
@@ -4789,6 +4821,9 @@ fn nativeDispatchEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) an
             ev_obj.setProperty(vm.allocator, target_sid, wrapNode(vm, retargeted) orelse JsValue.null_val) catch {};
             ev_obj.setProperty(vm.allocator, ct_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
             _ = runListenersForTarget(vm, @intFromPtr(node), type_str, ev_obj, false, false);
+            if (!isStopped(ev_obj, stopped_sid)) {
+                callPropertyHandler(vm, node, type_str, ev_obj);
+            }
         }
     }
 

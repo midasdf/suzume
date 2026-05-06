@@ -3656,6 +3656,20 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
+        \\  // ── input.indeterminate (§4.10.5.1.16) ──
+        \\  // No content attribute reflection; IDL-only state on the element.
+        \\  // Spec: pre-activation steps reset indeterminate to false on click.
+        \\  Object.defineProperty(EP,'indeterminate',{
+        \\    get:function(){
+        \\      if(tag(this)!=='input')return undefined;
+        \\      return this._indeterminate===true;
+        \\    },
+        \\    set:function(v){
+        \\      if(tag(this)!=='input')return;
+        \\      this._indeterminate=!!v;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
         \\  // ── option.selected / .defaultSelected / .index / .text (§4.10.10) ──
         \\  Object.defineProperty(EP,'selected',{
         \\    get:function(){
@@ -4566,17 +4580,21 @@ pub const KotoriRuntime = struct {
         \\  function itype(el){return (el.type||'').toLowerCase();}
         \\  EP.click=function(){
         \\    if(this.disabled)return;
+        \\    // HTML §4.10.5 + DOM §3.7 synthetic-click activation steps.
+        \\    // kotori's native dispatchEvent does NOT run the events.zig
+        \\    // pre/post-activation block, so the polyfill is the only path
+        \\    // that toggles checked + fires the input/change pair.
+        \\    var t=tag(this);
+        \\    var it=itype(this);
         \\    var ev;
         \\    try{ev=new MouseEvent('click',{bubbles:true,cancelable:true,view:typeof window!=='undefined'?window:null});}
         \\    catch(e){ev=new Event('click',{bubbles:true,cancelable:true});}
-        \\    var notCanceled=this.dispatchEvent(ev);
-        \\    if(!notCanceled)return;
-        \\    var t=tag(this);
-        \\    var it=itype(this);
+        \\    // §4.10.5.1 pre-activation: toggle checkedness BEFORE click
+        \\    // dispatch so onclick handlers see the new state.
+        \\    var preChecked=this.checked, preIndet=this.indeterminate;
         \\    if(t==='input'&&it==='checkbox'){
-        \\      this.checked=!this.checked;
-        \\      try{this.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
-        \\      try{this.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}
+        \\      this.checked=!preChecked;
+        \\      if(this.indeterminate!==undefined)this.indeterminate=false;
         \\    } else if(t==='input'&&it==='radio'){
         \\      var gname=this.name||'';
         \\      if(gname!==''){
@@ -4593,9 +4611,23 @@ pub const KotoriRuntime = struct {
         \\      } else {
         \\        this.checked=true;
         \\      }
-        \\      try{this.dispatchEvent(new Event('input',{bubbles:true}));}catch(e){}
-        \\      try{this.dispatchEvent(new Event('change',{bubbles:true}));}catch(e){}
-        \\    } else if((t==='input'&&(it==='submit'||it==='image'))||(t==='button'&&(it==='submit'||it===''||it==='submit'))){
+        \\    }
+        \\    var notCanceled=this.dispatchEvent(ev);
+        \\    if(t==='input'&&(it==='checkbox'||it==='radio')){
+        \\      if(!notCanceled){
+        \\        // Canceled activation: revert to pre-activation state.
+        \\        this.checked=preChecked;
+        \\        if(this.indeterminate!==undefined)this.indeterminate=preIndet;
+        \\        return;
+        \\      }
+        \\      // §4.10.5.1: input + change events from a synthetic activation
+        \\      // are TRUSTED (the click event itself is untrusted per spec).
+        \\      try{var inp=new Event('input',{bubbles:true,cancelable:false});inp._trusted=true;this.dispatchEvent(inp);}catch(e){}
+        \\      try{var chg=new Event('change',{bubbles:true,cancelable:false});chg._trusted=true;this.dispatchEvent(chg);}catch(e){}
+        \\      return;
+        \\    }
+        \\    if(!notCanceled)return;
+        \\    if((t==='input'&&(it==='submit'||it==='image'))||(t==='button'&&(it==='submit'||it===''))){
         \\      var form=this.form;
         \\      if(form&&typeof form.requestSubmit==='function'){
         \\        try{form.requestSubmit(this);}catch(e){}

@@ -553,7 +553,22 @@ fn createEventObject(ctx: *qjs.JSContext, event_type: []const u8, target: ?*lxb.
 
     _ = qjs.JS_SetPropertyStr(ctx, event, "type", qjs.JS_NewStringLen(ctx, event_type.ptr, event_type.len));
     _ = qjs.JS_SetPropertyStr(ctx, event, "bubbles", quickjs.JS_NewBool(true));
-    _ = qjs.JS_SetPropertyStr(ctx, event, "cancelable", quickjs.JS_NewBool(true));
+    // Per HTML/UI Events: input, change, focus/blur, scroll, resize, error,
+    // and select are NOT cancelable. Synthesized via createEventObject when
+    // dispatched from native code (e.g. post-activation input/change).
+    const non_cancelable = std.mem.eql(u8, event_type, "input") or
+        std.mem.eql(u8, event_type, "change") or
+        std.mem.eql(u8, event_type, "focus") or
+        std.mem.eql(u8, event_type, "blur") or
+        std.mem.eql(u8, event_type, "focusin") or
+        std.mem.eql(u8, event_type, "focusout") or
+        std.mem.eql(u8, event_type, "scroll") or
+        std.mem.eql(u8, event_type, "resize") or
+        std.mem.eql(u8, event_type, "error") or
+        std.mem.eql(u8, event_type, "select") or
+        std.mem.eql(u8, event_type, "load") or
+        std.mem.eql(u8, event_type, "DOMContentLoaded");
+    _ = qjs.JS_SetPropertyStr(ctx, event, "cancelable", quickjs.JS_NewBool(!non_cancelable));
     _ = qjs.JS_SetPropertyStr(ctx, event, "defaultPrevented", quickjs.JS_NewBool(false));
     _ = qjs.JS_SetPropertyStr(ctx, event, "eventPhase", qjs.JS_NewInt32(ctx, 0));
 
