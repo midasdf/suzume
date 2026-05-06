@@ -5290,7 +5290,8 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     obj.setProperty(vm.allocator, try vm.pool.intern("timeStamp"), JsValue.initNumber(ts_ms)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("currentTarget"), JsValue.null_val) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("srcElement"), JsValue.null_val) catch {};
+    // DOM §2.6.2 srcElement: legacy alias for target — derived via accessor
+    // on Event.prototype (kotori_runtime.zig event_returnvalue_polyfill_js).
     // DOM §2.7 returnValue: NO own data property — Event.prototype defines
     // an accessor that derives from defaultPrevented (kotori_runtime.zig
     // event_returnvalue_polyfill_js).

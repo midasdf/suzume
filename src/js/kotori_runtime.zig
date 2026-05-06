@@ -5032,16 +5032,20 @@ pub const KotoriRuntime = struct {
         \\})();
     ;
 
-    /// DOM §2.7 Event.prototype.returnValue accessor.
+    /// DOM §2.7 Event.prototype.returnValue accessor + legacy
+    /// srcElement alias for target (DOM §2.6.2).
     ///
-    /// Per spec: `returnValue` getter returns `!defaultPrevented`,
-    /// setter calls `preventDefault()` when assigned `false` AND
-    /// `cancelable === true`. Setting to `true` is a no-op.
-    /// kotori previously set `returnValue` as an own data property on
-    /// each event instance (createEventObject + preventDefault +
-    /// initEvent in kotori_dom.zig), which shadowed any prototype
-    /// accessor. Those native setProperty calls were removed; this
-    /// polyfill installs the accessor on Event.prototype.
+    /// returnValue: getter returns `!defaultPrevented`; setter calls
+    /// `preventDefault()` when assigned `false` AND `cancelable === true`.
+    /// Setting to `true` is a no-op. kotori previously set `returnValue`
+    /// as an own data property on each event instance, which shadowed
+    /// any prototype accessor — those native setProperty calls were
+    /// removed.
+    ///
+    /// srcElement: legacy alias that returns the same value as
+    /// `target`. The native event creation initialized srcElement=null
+    /// and never updated it during dispatch; the accessor delegates
+    /// to `this.target` so it always matches.
     const event_returnvalue_polyfill_js =
         \\(function(){
         \\  if(typeof Event==='undefined'||!Event.prototype)return;
@@ -5052,6 +5056,10 @@ pub const KotoriRuntime = struct {
         \\        if(typeof this.preventDefault==='function')this.preventDefault();
         \\      }
         \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  try{Object.defineProperty(Event.prototype,'srcElement',{
+        \\    get:function(){return this.target;},
         \\    configurable:true,enumerable:true
         \\  });}catch(e){}
         \\})();
