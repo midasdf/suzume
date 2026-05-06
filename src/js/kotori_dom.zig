@@ -5291,7 +5291,9 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("currentTarget"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("srcElement"), JsValue.null_val) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(true)) catch {};
+    // DOM §2.7 returnValue: NO own data property — Event.prototype defines
+    // an accessor that derives from defaultPrevented (kotori_runtime.zig
+    // event_returnvalue_polyfill_js).
     obj.setProperty(vm.allocator, try vm.pool.intern("_initialized"), JsValue.initBool(true)) catch {};
     // isTrusted accessor descriptor (DOM §2.6.2): getter is shared across instances
     // so that Object.getOwnPropertyDescriptor(e1,"isTrusted").get ===
@@ -5383,7 +5385,7 @@ fn nativePreventDefault(ctx: *anyopaque, this: JsValue, _: []const JsValue) anye
             }
         }
         obj.setProperty(vm.allocator, try vm.pool.intern("defaultPrevented"), JsValue.initBool(true)) catch {};
-        obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(false)) catch {};
+        // returnValue derives from defaultPrevented via Event.prototype accessor.
     }
     return JsValue.undefined_val;
 }
@@ -5418,7 +5420,7 @@ fn nativeInitEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
     obj.setProperty(vm.allocator, try vm.pool.intern("_cancelBubble"), JsValue.initBool(false)) catch {};
     // DOM §2.8 step 3: reset isTrusted to false
     obj.setProperty(vm.allocator, try vm.pool.intern("_trusted"), JsValue.initBool(false)) catch {};
-    obj.setProperty(vm.allocator, try vm.pool.intern("returnValue"), JsValue.initBool(true)) catch {};
+    // returnValue derives from defaultPrevented via Event.prototype accessor.
     obj.setProperty(vm.allocator, try vm.pool.intern("_initialized"), JsValue.initBool(true)) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.null_val) catch {};
     obj.setProperty(vm.allocator, try vm.pool.intern("currentTarget"), JsValue.null_val) catch {};

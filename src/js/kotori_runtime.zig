@@ -179,6 +179,11 @@ pub const KotoriRuntime = struct {
         // `new URL("...", self.location).pathname`.
         _ = self.eval(url_polyfill_js);
 
+        // DOM §2.7 — Event.prototype.returnValue accessor that derives
+        // from defaultPrevented. The setter calls preventDefault when
+        // assigned `false`; the getter returns !defaultPrevented.
+        _ = self.eval(event_returnvalue_polyfill_js);
+
         // HTML §4.10.5.1.16 radio insert-time exclusivity. Hooks
         // appendChild/insertBefore so a checked radio inserted into a
         // form-rooted tree triggers group exclusivity (uncheck other
@@ -5020,6 +5025,31 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    try{loc.toString=function(){return this.href;};}catch(e){}
         \\  }
+        \\})();
+    ;
+
+    /// DOM §2.7 Event.prototype.returnValue accessor.
+    ///
+    /// Per spec: `returnValue` getter returns `!defaultPrevented`,
+    /// setter calls `preventDefault()` when assigned `false` AND
+    /// `cancelable === true`. Setting to `true` is a no-op.
+    /// kotori previously set `returnValue` as an own data property on
+    /// each event instance (createEventObject + preventDefault +
+    /// initEvent in kotori_dom.zig), which shadowed any prototype
+    /// accessor. Those native setProperty calls were removed; this
+    /// polyfill installs the accessor on Event.prototype.
+    const event_returnvalue_polyfill_js =
+        \\(function(){
+        \\  if(typeof Event==='undefined'||!Event.prototype)return;
+        \\  try{Object.defineProperty(Event.prototype,'returnValue',{
+        \\    get:function(){return !this.defaultPrevented;},
+        \\    set:function(v){
+        \\      if(v===false&&this.cancelable===true){
+        \\        if(typeof this.preventDefault==='function')this.preventDefault();
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
         \\})();
     ;
 
