@@ -4901,6 +4901,8 @@ pub const KotoriRuntime = struct {
         \\  if(typeof document==='undefined')return;
         \\  var EP=Element.prototype;
         \\  EP.focus=function(){
+        \\    // HTML §6.6.3: disabled form controls cannot be focused.
+        \\    if(this.disabled===true)return;
         \\    try{document._activeElement=this;}catch(e){}
         \\  };
         \\  EP.blur=function(){
