@@ -3290,6 +3290,42 @@ pub const VM = struct {
             try dom_exc_ctor.setProperty(self.allocator, try self.pool.intern("prototype"), JsValue.initObject(dom_exc_proto));
             try dom_exc_proto.setProperty(self.allocator, try self.pool.intern("constructor"), JsValue.initObject(dom_exc_ctor));
             if (self.function_proto) |fn_p| dom_exc_ctor.prototype = fn_p;
+            // WebIDL §3.14.5 — legacy code constants on both the interface
+            // object (constructor) and the prototype, so that
+            // `instance.INVALID_STATE_ERR === DOMException.INVALID_STATE_ERR === 11`.
+            const LegacyCode = struct { name: []const u8, code: f64 };
+            const legacy_codes = [_]LegacyCode{
+                .{ .name = "INDEX_SIZE_ERR", .code = 1 },
+                .{ .name = "DOMSTRING_SIZE_ERR", .code = 2 },
+                .{ .name = "HIERARCHY_REQUEST_ERR", .code = 3 },
+                .{ .name = "WRONG_DOCUMENT_ERR", .code = 4 },
+                .{ .name = "INVALID_CHARACTER_ERR", .code = 5 },
+                .{ .name = "NO_DATA_ALLOWED_ERR", .code = 6 },
+                .{ .name = "NO_MODIFICATION_ALLOWED_ERR", .code = 7 },
+                .{ .name = "NOT_FOUND_ERR", .code = 8 },
+                .{ .name = "NOT_SUPPORTED_ERR", .code = 9 },
+                .{ .name = "INUSE_ATTRIBUTE_ERR", .code = 10 },
+                .{ .name = "INVALID_STATE_ERR", .code = 11 },
+                .{ .name = "SYNTAX_ERR", .code = 12 },
+                .{ .name = "INVALID_MODIFICATION_ERR", .code = 13 },
+                .{ .name = "NAMESPACE_ERR", .code = 14 },
+                .{ .name = "INVALID_ACCESS_ERR", .code = 15 },
+                .{ .name = "VALIDATION_ERR", .code = 16 },
+                .{ .name = "TYPE_MISMATCH_ERR", .code = 17 },
+                .{ .name = "SECURITY_ERR", .code = 18 },
+                .{ .name = "NETWORK_ERR", .code = 19 },
+                .{ .name = "ABORT_ERR", .code = 20 },
+                .{ .name = "URL_MISMATCH_ERR", .code = 21 },
+                .{ .name = "QUOTA_EXCEEDED_ERR", .code = 22 },
+                .{ .name = "TIMEOUT_ERR", .code = 23 },
+                .{ .name = "INVALID_NODE_TYPE_ERR", .code = 24 },
+                .{ .name = "DATA_CLONE_ERR", .code = 25 },
+            };
+            for (legacy_codes) |lc| {
+                const sid = try self.pool.intern(lc.name);
+                try dom_exc_ctor.setProperty(self.allocator, sid, JsValue.initNumber(lc.code));
+                try dom_exc_proto.setProperty(self.allocator, sid, JsValue.initNumber(lc.code));
+            }
             try self.globals.put(self.allocator, try self.pool.intern("DOMException"), JsValue.initObject(dom_exc_ctor));
         }
 

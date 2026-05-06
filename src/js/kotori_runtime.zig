@@ -4521,7 +4521,10 @@ pub const KotoriRuntime = struct {
         \\    set:function(v){
         \\      if(!isNumericApplicable(this))throw new TypeError('valueAsNumber not applicable');
         \\      var n=Number(v);
-        \\      if(!isFinite(n)){this.value='';return;}
+        \\      // HTML §4.10.5.7: NaN → set value to empty string. Infinity /
+        \\      // -Infinity → throw TypeError. Finite number → format & set.
+        \\      if(n!==n){this.value='';return;}
+        \\      if(n===Infinity||n===-Infinity)throw new TypeError('valueAsNumber: not a finite number');
         \\      var t=itype(this);
         \\      if(t==='month')n=n+1970*12;
         \\      this.value=formatVal(this,n);
@@ -4532,18 +4535,31 @@ pub const KotoriRuntime = struct {
         \\    get:function(){
         \\      if(!isNumericApplicable(this))return null;
         \\      var t=itype(this);
-        \\      if(t==='number'||t==='range'||t==='time')return null;
+        \\      // HTML §4.10.5.7: valueAsDate applies to date, month, week, time.
+        \\      // number, range, datetime-local return null (the latter has a
+        \\      // separate spec carve-out — it returns null since it has no
+        \\      // single zone-anchored Date representation).
+        \\      if(t==='number'||t==='range'||t==='datetime-local')return null;
         \\      var raw=parseVal(this);
         \\      if(isNaN(raw))return null;
-        \\      var ms=raw;if(t==='month')ms=Date.UTC(Math.floor(raw/12),raw%12,1);
+        \\      var ms=raw;
+        \\      if(t==='month')ms=Date.UTC(Math.floor(raw/12),raw%12,1);
+        \\      // time: parseVal returns ms-since-midnight; the Date is anchored
+        \\      // at 1970-01-01 00:00:00 UTC, so passing ms directly yields the
+        \\      // right time-of-day on the epoch day.
         \\      return new Date(ms);
         \\    },
         \\    set:function(v){
-        \\      if(!isNumericApplicable(this))throw new TypeError('valueAsDate not applicable');
+        \\      var t=itype(this);
+        \\      // HTML §4.10.5.7: valueAsDate setter throws
+        \\      // InvalidStateError for non-applicable types. number, range,
+        \\      // and datetime-local don't support valueAsDate (Mozilla bug
+        \\      // 1933351 removed datetime-local from the spec list).
+        \\      if(!isNumericApplicable(this)||t==='number'||t==='range'||t==='datetime-local')
+        \\        throw new DOMException('valueAsDate setter not applicable for type='+t,'InvalidStateError');
         \\      if(v===null){this.value='';return;}
         \\      if(!(v instanceof Date))throw new TypeError('not a Date');
         \\      var ms=v.getTime();if(isNaN(ms)){this.value='';return;}
-        \\      var t=itype(this);
         \\      if(t==='month'){var nm=v.getUTCFullYear()*12+v.getUTCMonth();this.value=formatVal(this,nm);}
         \\      else this.value=formatVal(this,ms);
         \\    },
@@ -4554,7 +4570,13 @@ pub const KotoriRuntime = struct {
         \\    var step=readStep(el);
         \\    if(step===null)throw new DOMException('step=any forbids stepUp/stepDown','InvalidStateError');
         \\    var cur=parseVal(el);
-        \\    if(isNaN(cur))cur=readBase(el);
+        \\    // HTML §4.10.5.1.13 step 6: if value is empty or NaN, both value
+        \\    // and valueBeforeStepping default to 0. The empty case is also
+        \\    // exempt from the §10 direction-abort: stepDown on an empty
+        \\    // input with min="7" produces "7" (snap into range), not no-op.
+        \\    var wasEmpty=isNaN(cur);
+        \\    if(wasEmpty)cur=0;
+        \\    var valueBeforeStepping=cur;
         \\    var base=readBase(el);
         \\    var sc=scale(el);
         \\    // Read min/max bounds once.
@@ -4567,23 +4589,35 @@ pub const KotoriRuntime = struct {
         \\    if(mxAttr!==null&&mxAttr!==''){
         \\      var old2=el.value;try{el.value=mxAttr;var pmx=parseVal(el);el.value=old2;if(!isNaN(pmx))mx_val=pmx;}catch(e){el.value=old2;}
         \\    }
-        \\    // §4.10.5.1.13 step 3: "If applying the algorithm to convert a
-        \\    // string to a number to the max attribute's value results in
-        \\    // less than the min, return." No-op when the range is inverted.
+        \\    // §4.10.5.1.13 step 3: if min > max, return.
         \\    if(mn_val!==null&&mx_val!==null&&mn_val>mx_val)return;
         \\    var delta=n*step*sc;
         \\    var next=cur+delta;
-        \\    // Snap to step grid based on base.
+        \\    // Snap to step grid based on base (§7 alignment).
         \\    var units=Math.round((next-base)/(step*sc));
         \\    next=base+units*step*sc;
-        \\    // Clamp to min.
-        \\    if(mn_val!==null&&next<mn_val)next=mn_val;
-        \\    // Clamp to max: step-aligned floor, not a hard max.
+        \\    // §8 clamp to min: smallest value >= min that's an integral
+        \\    // multiple of step from base.
+        \\    if(mn_val!==null&&next<mn_val){
+        \\      var minUnits=Math.ceil((mn_val-base)/(step*sc));
+        \\      next=base+minUnits*step*sc;
+        \\      if(next<mn_val)next+=step*sc;
+        \\    }
+        \\    // §9 clamp to max: largest value <= max that's an integral
+        \\    // multiple of step from base.
         \\    if(mx_val!==null&&next>mx_val){
         \\      var maxUnits=Math.floor((mx_val-base)/(step*sc));
-        \\      var aligned=base+maxUnits*step*sc;
-        \\      if(aligned<base&&mn_val!==null)aligned=mn_val;
-        \\      next=aligned;
+        \\      next=base+maxUnits*step*sc;
+        \\      if(next>mx_val)next-=step*sc;
+        \\    }
+        \\    // §10: if the chosen direction would cross valueBeforeStepping
+        \\    // (i.e., stepDown ended up >, or stepUp ended up <), return
+        \\    // without modifying. Skipped when value was originally empty —
+        \\    // empty inputs snap into [min,max] regardless of direction
+        \\    // (input-stepdown-02 "no initial value and positive min").
+        \\    if(!wasEmpty){
+        \\      if(n<0&&next>valueBeforeStepping)return;
+        \\      if(n>0&&next<valueBeforeStepping)return;
         \\    }
         \\    el.value=formatVal(el,next);
         \\  }
