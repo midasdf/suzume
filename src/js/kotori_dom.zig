@@ -4086,9 +4086,14 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
     var signal_val: JsValue = JsValue.undefined_val;
     var has_signal = false;
     if (args.len > 2) {
-        if (args[2].isBool()) {
-            capture = args[2].asBool();
-        } else if (args[2].isObject()) {
+        if (!args[2].isObject() and !args[2].isUndefined()) {
+            // DOM §2.7.1: non-object, non-undefined values coerce to a
+            // boolean capture flag. 2.3 → truthy → capture=true; "" →
+            // falsy. WPT EventListenerOptions-capture
+            // "Capture boolean should be honored correctly".
+            capture = args[2].isTruthy();
+        }
+        if (args[2].isObject()) {
             const opts = args[2].asJsObject();
             if (vm.pool.intern("capture") catch null) |sid| {
                 if (opts.getProperty(sid)) |v| capture = v.isTruthy();
@@ -5487,12 +5492,16 @@ fn nativeRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsVal
     if (args.len < 2) return JsValue.undefined_val;
     const event_type = argToString(vm, args[0]);
     const callback = args[1];
-    // Parse capture: boolean or object {capture}
+    // Parse capture: boolean (or any coercible-to-bool non-object)
+    // or object {capture}. Mirrors nativeAddEventListener's parsing
+    // so that addEventListener+removeEventListener with the same
+    // truthy non-object value (e.g., 2.3) match.
     var capture = false;
     if (args.len > 2) {
-        if (args[2].isBool()) {
-            capture = args[2].asBool();
-        } else if (args[2].isObject()) {
+        if (!args[2].isObject() and !args[2].isUndefined()) {
+            capture = args[2].isTruthy();
+        }
+        if (args[2].isObject()) {
             const opts = args[2].asJsObject();
             if (vm.pool.intern("capture") catch null) |sid| {
                 if (opts.getProperty(sid)) |v| capture = v.isTruthy();
