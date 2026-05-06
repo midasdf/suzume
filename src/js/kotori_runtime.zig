@@ -4751,6 +4751,10 @@ pub const KotoriRuntime = struct {
         \\    var ev;
         \\    try{ev=new MouseEvent('click',{bubbles:true,cancelable:true,view:typeof window!=='undefined'?window:null});}
         \\    catch(e){ev=new Event('click',{bubbles:true,cancelable:true});}
+        \\    // Mark so the dispatchEvent activation hook below doesn't
+        \\    // double-process this click — .click() pre-toggles + posts
+        \\    // input/change itself.
+        \\    try{ev._fromClick=true;}catch(e){}
         \\    // §4.10.5.1 pre-activation: toggle checkedness BEFORE click
         \\    // dispatch so onclick handlers see the new state.
         \\    var preChecked=this.checked, preIndet=this.indeterminate;
@@ -4815,6 +4819,66 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\  };
+        \\  // ── dispatchEvent activation hook (DOM §3 "synthetic click activation
+        \\  // steps") — when JS calls
+        \\  // `el.dispatchEvent(new MouseEvent('click', {cancelable:true}))`
+        \\  // directly on a checkbox/radio, the kotori native dispatch path
+        \\  // skips activation behavior. Hook EP.dispatchEvent so the same
+        \\  // pre-toggle + revert/post-fire flow used by .click() runs for
+        \\  // direct cancelable click events too. The `_fromClick` flag
+        \\  // (set by the .click() polyfill above) prevents double-handling
+        \\  // when click() itself dispatches.
+        \\  var _origDispatch=EP.dispatchEvent;
+        \\  if(typeof _origDispatch==='function'){
+        \\    EP.dispatchEvent=function(ev){
+        \\      var t=tag(this),it=itype(this);
+        \\      var isCheckable=t==='input'&&(it==='checkbox'||it==='radio');
+        \\      if(!isCheckable||!ev||ev.type!=='click'||!ev.cancelable||ev._fromClick){
+        \\        return _origDispatch.call(this,ev);
+        \\      }
+        \\      // Synthetic click activation: pre-toggle, dispatch, revert
+        \\      // or post-fire input+change.
+        \\      var preChecked=this.checked, preIndet=this.indeterminate;
+        \\      var radioSnapshot=null;
+        \\      if(it==='checkbox'){
+        \\        this.checked=!preChecked;
+        \\        if(this.indeterminate!==undefined)this.indeterminate=false;
+        \\      } else {
+        \\        var rname=(this.getAttribute&&this.getAttribute('name'))||'';
+        \\        if(rname!==''){
+        \\          radioSnapshot=[];
+        \\          var rt=(typeof this.getRootNode==='function')?this.getRootNode():(this.ownerDocument||this);
+        \\          if(rt&&rt.querySelectorAll){
+        \\            var rsibs=rt.querySelectorAll('input[type=radio]');
+        \\            for(var rsi=0;rsi<rsibs.length;rsi++){
+        \\              var rs=rsibs[rsi];
+        \\              if(((rs.getAttribute&&rs.getAttribute('name'))||'')===rname){
+        \\                radioSnapshot.push({el:rs,checked:rs.checked===true,dirty:rs._dirtyChecked===true});
+        \\              }
+        \\            }
+        \\          }
+        \\        }
+        \\        this.checked=true;
+        \\      }
+        \\      var notCanceled=_origDispatch.call(this,ev);
+        \\      if(!notCanceled){
+        \\        if(radioSnapshot){
+        \\          for(var rk=0;rk<radioSnapshot.length;rk++){
+        \\            var sn=radioSnapshot[rk];
+        \\            sn.el._dirtyChecked=sn.dirty;
+        \\            sn.el._checked=sn.checked;
+        \\          }
+        \\        } else {
+        \\          this.checked=preChecked;
+        \\        }
+        \\        if(this.indeterminate!==undefined)this.indeterminate=preIndet;
+        \\        return notCanceled;
+        \\      }
+        \\      try{var inp=new Event('input',{bubbles:true,cancelable:false});inp._trusted=true;_origDispatch.call(this,inp);}catch(e){}
+        \\      try{var chg=new Event('change',{bubbles:true,cancelable:false});chg._trusted=true;_origDispatch.call(this,chg);}catch(e){}
+        \\      return notCanceled;
+        \\    };
+        \\  }
         \\})();
     ;
 
