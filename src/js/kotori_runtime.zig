@@ -169,6 +169,10 @@ pub const KotoriRuntime = struct {
         // submit/reset delegation).
         _ = self.eval(click_polyfill_js);
 
+        // HTML §6.6.3 focus management: HTMLElement.focus() / .blur() and
+        // document.activeElement getter (returns body when nothing focused).
+        _ = self.eval(focus_polyfill_js);
+
         // HTML §4.10.5.1.18 input.files + FileList stub.
         _ = self.eval(file_input_polyfill_js);
 
@@ -3600,45 +3604,45 @@ pub const KotoriRuntime = struct {
         \\      // non-empty name, case-sensitive) must be unchecked.
         \\      if(b&&(this.type||'').toLowerCase()==='radio'){
         \\        var name=(this.getAttribute&&this.getAttribute('name'))||'';
-        \\        if(name===''){return;}
-        \\        // Determine form owner: form= attribute id reference,
-        \\        // else nearest <form> ancestor.
-        \\        var owner=null;
-        \\        var fid=this.getAttribute&&this.getAttribute('form');
-        \\        var doc=this.ownerDocument||(typeof document!=='undefined'?document:null);
-        \\        if(fid&&doc&&doc.getElementById){
-        \\          var f=doc.getElementById(fid);
-        \\          if(f&&(f.tagName||'').toLowerCase()==='form')owner=f;
-        \\        }
-        \\        if(owner===null){
-        \\          var p=this.parentNode;
+        \\        if(name==='')return;
+        \\        // §4.10.5.1.16 radio button group: the same name, same form
+        \\        // owner (or both no form owner), and the same tree root.
+        \\        // Tree root via getRootNode handles disconnected trees,
+        \\        // shadow roots, and document fragments uniformly.
+        \\        var fo=function(el){
+        \\          var fid=el.getAttribute&&el.getAttribute('form');
+        \\          if(fid){
+        \\            var d=el.ownerDocument||(typeof document!=='undefined'?document:null);
+        \\            if(d&&d.getElementById){
+        \\              var ff=d.getElementById(fid);
+        \\              if(ff&&(ff.tagName||'').toLowerCase()==='form')return ff;
+        \\            }
+        \\            return null;
+        \\          }
+        \\          var p=el.parentNode;
         \\          while(p){
-        \\            if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form'){owner=p;break;}
+        \\            if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form')return p;
         \\            p=p.parentNode;
         \\          }
-        \\        }
-        \\        // Search radios under the form owner if any, else under
-        \\        // the document root, then filter to siblings sharing
-        \\        // the same form owner (form-less radios uncheck only
-        \\        // other form-less radios).
-        \\        var root=owner||doc;
-        \\        if(!root||!root.querySelectorAll)return;
-        \\        var sibs=root.querySelectorAll('input[type=radio]');
+        \\          return null;
+        \\        };
+        \\        var rootOf=function(el){
+        \\          if(typeof el.getRootNode==='function')return el.getRootNode();
+        \\          var p=el;
+        \\          while(p.parentNode)p=p.parentNode;
+        \\          return p;
+        \\        };
+        \\        var myOwner=fo(this);
+        \\        var myRoot=rootOf(this);
+        \\        if(!myRoot||!myRoot.querySelectorAll)return;
+        \\        var sibs=myRoot.querySelectorAll('input[type=radio]');
         \\        for(var i=0;i<sibs.length;i++){
         \\          var s=sibs[i];
         \\          if(s===this)continue;
         \\          var sn=(s.getAttribute&&s.getAttribute('name'))||'';
         \\          if(sn!==name)continue;
-        \\          // Same-owner check (only when no explicit form ancestor
-        \\          // search root): if owner is null, both must be form-less.
-        \\          if(owner===null){
-        \\            var sp=s.parentNode,sOwner=null;
-        \\            while(sp){
-        \\              if(sp.nodeType===1&&(sp.tagName||'').toLowerCase()==='form'){sOwner=sp;break;}
-        \\              sp=sp.parentNode;
-        \\            }
-        \\            if(sOwner!==null)continue;
-        \\          }
+        \\          if(fo(s)!==myOwner)continue;
+        \\          if(rootOf(s)!==myRoot)continue;
         \\          s._dirtyChecked=true;s._checked=false;
         \\        }
         \\      }
@@ -4078,20 +4082,45 @@ pub const KotoriRuntime = struct {
         \\    // NO radio in the group is checked (the `required` attribute
         \\    // propagates through name+form group membership).
         \\    if(type==='radio'){
-        \\      // §4.10.18.3 radio group: manual iteration because kotori's
-        \\      // selector engine does not yet handle attribute selectors
-        \\      // like [type="radio"][name="..."] reliably.
+        \\      // §4.10.5.1.16 radio button group: same name, same form
+        \\      // owner, same tree root. Iterate via tree-root querySelectorAll
+        \\      // so disconnected radios share groups within their own tree.
         \\      var gname=el.name||'';
         \\      var anyRequired=req,anyChecked=(el.checked===true);
         \\      if(gname!==''){
-        \\        var scope=el.form||(typeof document!=='undefined'?document:null);
-        \\        if(scope&&scope.getElementsByTagName){
-        \\          var all=scope.getElementsByTagName('input');
+        \\        var __fo=function(e){
+        \\          var fid=e.getAttribute&&e.getAttribute('form');
+        \\          if(fid){
+        \\            var d=e.ownerDocument||(typeof document!=='undefined'?document:null);
+        \\            if(d&&d.getElementById){
+        \\              var ff=d.getElementById(fid);
+        \\              if(ff&&(ff.tagName||'').toLowerCase()==='form')return ff;
+        \\            }
+        \\            return null;
+        \\          }
+        \\          var p=e.parentNode;
+        \\          while(p){
+        \\            if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form')return p;
+        \\            p=p.parentNode;
+        \\          }
+        \\          return null;
+        \\        };
+        \\        var __ro=function(e){
+        \\          if(typeof e.getRootNode==='function')return e.getRootNode();
+        \\          var p=e;
+        \\          while(p.parentNode)p=p.parentNode;
+        \\          return p;
+        \\        };
+        \\        var myOwner=__fo(el);
+        \\        var myRoot=__ro(el);
+        \\        if(myRoot&&myRoot.querySelectorAll){
+        \\          var all=myRoot.querySelectorAll('input[type=radio]');
         \\          for(var gi=0;gi<all.length;gi++){
         \\            var cand=all[gi];
         \\            if(cand===el)continue;
-        \\            if((cand.type||'').toLowerCase()!=='radio')continue;
         \\            if((cand.name||'')!==gname)continue;
+        \\            if(__fo(cand)!==myOwner)continue;
+        \\            if(__ro(cand)!==myRoot)continue;
         \\            if(cand.required)anyRequired=true;
         \\            if(cand.checked===true)anyChecked=true;
         \\          }
@@ -4596,21 +4625,10 @@ pub const KotoriRuntime = struct {
         \\      this.checked=!preChecked;
         \\      if(this.indeterminate!==undefined)this.indeterminate=false;
         \\    } else if(t==='input'&&it==='radio'){
-        \\      var gname=this.name||'';
-        \\      if(gname!==''){
-        \\        var scope=this.form||(typeof document!=='undefined'?document:null);
-        \\        if(scope&&scope.getElementsByTagName){
-        \\          var all=scope.getElementsByTagName('input');
-        \\          for(var i=0;i<all.length;i++){
-        \\            var r=all[i];
-        \\            if((r.type||'').toLowerCase()==='radio'&&(r.name||'')===gname){
-        \\              r.checked=(r===this);
-        \\            }
-        \\          }
-        \\        }
-        \\      } else {
-        \\        this.checked=true;
-        \\      }
+        \\      // §4.10.5.1.16 group via setting checked=true triggers
+        \\      // exclusivity through the IDL setter (which honors tree
+        \\      // root + form owner).
+        \\      this.checked=true;
         \\    }
         \\    var notCanceled=this.dispatchEvent(ev);
         \\    if(t==='input'&&(it==='checkbox'||it==='radio')){
@@ -4639,6 +4657,44 @@ pub const KotoriRuntime = struct {
         \\      }
         \\    }
         \\  };
+        \\})();
+    ;
+
+    /// HTML §6.6.3 focus management — HTMLElement.focus() / .blur() and
+    /// document.activeElement getter.
+    ///
+    /// kotori has no native focus tracking. Tests that check focus
+    /// preservation across DOM mutations (e.g. input-type-change-value
+    /// "With focus") need this minimal polyfill:
+    ///   - el.focus(): records `el` as the active element on the document.
+    ///   - el.blur(): clears the active element if it equals `el`.
+    ///   - document.activeElement: returns the recorded focused element,
+    ///     or document.body when nothing is focused (per spec default).
+    /// No focus event dispatch yet — tests that check focus/blur events
+    /// will still fail, but identity-based tests (activeElement === el)
+    /// pass.
+    const focus_polyfill_js =
+        \\(function(){
+        \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  if(typeof document==='undefined')return;
+        \\  var EP=Element.prototype;
+        \\  EP.focus=function(){
+        \\    try{document._activeElement=this;}catch(e){}
+        \\  };
+        \\  EP.blur=function(){
+        \\    try{if(document._activeElement===this)document._activeElement=null;}catch(e){}
+        \\  };
+        \\  try{Object.defineProperty(document,'activeElement',{
+        \\    get:function(){
+        \\      var ae=this._activeElement;
+        \\      if(ae)return ae;
+        \\      return this.body||null;
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });}catch(e){}
+        \\  // Convenience: document.hasFocus() returns true (we always claim
+        \\  // focus in WPT mode; no window blur tracking).
+        \\  try{document.hasFocus=function(){return true;};}catch(e){}
         \\})();
     ;
 
