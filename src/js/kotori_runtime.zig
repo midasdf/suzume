@@ -3445,6 +3445,7 @@ pub const KotoriRuntime = struct {
         \\    if(it==='range')return _sanRange(raw,el);
         \\    if(it==='url')return _sanUrl(raw);
         \\    if(it==='email')return _sanEmail(raw,!!(el&&el.hasAttribute&&el.hasAttribute('multiple')));
+        \\    if(it==='color')return sanitizeColor(raw);
         \\    if(it==='text'||it==='search'||it==='tel'||it==='password'||it==='')return _sanText(raw);
         \\    return null;
         \\  }
@@ -3457,6 +3458,19 @@ pub const KotoriRuntime = struct {
         \\          if(this._dirtyValue===true&&typeof this._value==='string')return sanitizeColor(this._value);
         \\          var ca=this.getAttribute('value');
         \\          return sanitizeColor(ca==null?'':ca);
+        \\        }
+        \\        // §4.10.5.1.18 filename mode: ignore content attribute, return
+        \\        // the selected file name (or '' if none). The dirty/_value
+        \\        // path is honored only when explicitly cleared via setter.
+        \\        if(it==='file'){
+        \\          var fl=this.files;
+        \\          if(fl&&fl.length>0&&fl[0]&&typeof fl[0].name==='string')return fl[0].name;
+        \\          return '';
+        \\        }
+        \\        // §4.10.5.1 default-on mode: prefer attribute, fallback "on".
+        \\        if(it==='checkbox'||it==='radio'){
+        \\          var av=this.getAttribute('value');
+        \\          return av==null?'on':av;
         \\        }
         \\        var raw;
         \\        if(this._dirtyValue===true&&typeof this._value==='string')raw=this._value;
@@ -3495,16 +3509,32 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    set:function(v){
         \\      var t=tag(this);
-        \\      if(t==='input'||t==='textarea'){
+        \\      if(t==='input'){
+        \\        var it=(this.type||'').toLowerCase();
+        \\        // §4.10.5.1.18 filename mode: only null/empty allowed.
+        \\        if(it==='file'){
+        \\          if(v===null||v===''){
+        \\            this._value='';
+        \\            this._dirtyValue=true;
+        \\            return;
+        \\          }
+        \\          throw new DOMException('Cannot set non-empty value of file input.','InvalidStateError');
+        \\        }
+        \\        // §4.10.5.1 default and default-on modes: store in content attr.
+        \\        if(it==='checkbox'||it==='radio'||it==='hidden'||it==='submit'||it==='reset'||it==='button'||it==='image'){
+        \\          this.setAttribute('value',String(v));
+        \\          return;
+        \\        }
+        \\        // §4.10.5.1 value mode: dirty flag + sanitization.
         \\        this._dirtyValue=true;
         \\        var raw=String(v);
-        \\        if(t==='input'){
-        \\          var it=(this.type||'').toLowerCase();
-        \\          var s=_sanByType(it,raw,this);
-        \\          this._value=s===null?raw:s;
-        \\        }else{
-        \\          this._value=raw;
-        \\        }
+        \\        var s=_sanByType(it,raw,this);
+        \\        this._value=s===null?raw:s;
+        \\        return;
+        \\      }
+        \\      if(t==='textarea'){
+        \\        this._dirtyValue=true;
+        \\        this._value=String(v);
         \\        return;
         \\      }
         \\      if(t==='select'){
@@ -3734,6 +3764,49 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
+        \\  // HTML §4.10.5.1 — value IDL attribute mode per input type.
+        \\  // Returns 'value' / 'default' / 'default-on' / 'filename'.
+        \\  function _valMode(it){
+        \\    if(it==='hidden'||it==='submit'||it==='image'||it==='reset'||it==='button')return 'default';
+        \\    if(it==='checkbox'||it==='radio')return 'default-on';
+        \\    if(it==='file')return 'filename';
+        \\    return 'value';
+        \\  }
+        \\  // Whether selectionStart/End/Direction apply to this type.
+        \\  function _isTextSel(it){
+        \\    return it==='text'||it==='search'||it==='url'||it==='tel'||it==='password';
+        \\  }
+        \\  // HTML §4.10.5.7 — algorithm run when input.type changes state.
+        \\  function _onTypeChange(el,oldT,newT,oldVal){
+        \\    if(oldT===newT)return;
+        \\    var oldMode=_valMode(oldT),newMode=_valMode(newT);
+        \\    // Spec rule 1: value → default/default-on with non-empty value.
+        \\    if(oldMode==='value'&&(newMode==='default'||newMode==='default-on')&&oldVal!==''){
+        \\      el.setAttribute('value',oldVal);
+        \\    }
+        \\    // Spec rule 2: !value → value mode.
+        \\    else if(oldMode!=='value'&&newMode==='value'){
+        \\      var av=el.getAttribute('value');
+        \\      el._value=(av==null?'':av);
+        \\      el._dirtyValue=false;
+        \\    }
+        \\    // Spec rule 3: !filename → filename.
+        \\    else if(oldMode!=='filename'&&newMode==='filename'){
+        \\      el._value='';
+        \\      el._dirtyValue=false;
+        \\    }
+        \\    // Selection state: non-selectable → selectable resets to (0,0,'none').
+        \\    var oldSel=_isTextSel(oldT),newSel=_isTextSel(newT);
+        \\    if(!oldSel&&newSel){
+        \\      el._selStart=0;
+        \\      el._selEnd=0;
+        \\      el._selDir='none';
+        \\    } else if(oldSel&&!newSel){
+        \\      el._selStart=null;
+        \\      el._selEnd=null;
+        \\      el._selDir=null;
+        \\    }
+        \\  }
         \\  Object.defineProperty(EP,'type',{
         \\    get:function(){
         \\      var t=tag(this);
@@ -3748,8 +3821,18 @@ pub const KotoriRuntime = struct {
         \\      // but here we just forward to setAttribute so IDL assignment
         \\      // like `input.type = 'number'` updates the attribute (which
         \\      // the getter then re-canonicalizes on read).
+        \\      var isInput=tag(this)==='input';
+        \\      var oldType,oldVal;
+        \\      if(isInput){
+        \\        oldType=(this.type||'').toLowerCase();
+        \\        try{oldVal=this.value;}catch(e){oldVal='';}
+        \\      }
         \\      if(v==null)this.removeAttribute('type');
         \\      else this.setAttribute('type',String(v));
+        \\      if(isInput){
+        \\        var newType=(this.type||'').toLowerCase();
+        \\        if(oldType!==newType)_onTypeChange(this,oldType,newType,oldVal);
+        \\      }
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
