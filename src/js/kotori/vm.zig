@@ -3348,6 +3348,15 @@ pub const VM = struct {
             try self.globals.put(self.allocator, try self.pool.intern("WeakSet"), JsValue.initObject(ws_ctor));
         }
 
+        // ── RegExp constructor ──
+        // ECMA-262 §22.2.4.1 RegExp(pattern, flags) → length 2.
+        // Wires `new RegExp(...)` to createRegExp; literal /.../ syntax
+        // already routes via the new_regexp opcode (line 2046).
+        {
+            const re_ctor = try self.createNamedNativeFn("RegExp", &nativeRegExpConstructor, 2);
+            try self.globals.put(self.allocator, try self.pool.intern("RegExp"), JsValue.initObject(re_ctor));
+        }
+
         // ── ArrayBuffer / Uint8Array ──
         {
             // §25.1.3 ArrayBuffer(length) → length 1
@@ -6999,6 +7008,31 @@ pub const VM = struct {
     }
 
     // ── RegExp methods ────────────────────────────────────────────
+
+    /// ECMA-262 §22.2.4.1 — RegExp(pattern, flags) constructor.
+    /// Wires `new RegExp(...)` to createRegExp so dynamic regex
+    /// construction works (the literal /.../ syntax already routes
+    /// through new_regexp opcode → createRegExp).
+    pub fn nativeRegExpConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+        const self = vmFromCtx(ctx);
+        var pattern_id: StringId = try self.pool.intern("");
+        var flags_id: StringId = try self.pool.intern("");
+        if (args.len >= 1) {
+            const a0 = args[0];
+            if (a0.isString()) {
+                pattern_id = a0.asStringId();
+            } else if (a0.isObject() and a0.asJsObject().obj_type == .regexp) {
+                // RegExp from RegExp: copy source, optionally override flags
+                const src_re = a0.asJsObject().data.regexp_data;
+                pattern_id = src_re.source;
+            }
+        }
+        if (args.len >= 2 and args[1].isString()) {
+            flags_id = args[1].asStringId();
+        }
+        const re_obj = try self.createRegExp(pattern_id, flags_id);
+        return JsValue.initObject(re_obj);
+    }
 
     fn createRegExp(self: *VM, pattern_id: StringId, flags_id: StringId) !*JsObject {
         var global = false;

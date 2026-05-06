@@ -769,6 +769,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // ── Node.prototype (base for all DOM nodes) ──
     g_node_proto = try vm.createObj(.{});
     const np = g_node_proto.?;
+    // DOM Living Standard §3.6: Node interface inherits from
+    // EventTarget, but per WebIDL the tail of every interface chain
+    // ends at Object.prototype. Without this hook DOM elements lack
+    // hasOwnProperty / isPrototypeOf / propertyIsEnumerable, which
+    // some WPT tests check via assert_idl_attribute.
+    if (vm.object_proto) |op| np.prototype = op;
     try vm.registerNativeMethod(np, "appendChild", &nativeAppendChild);
     try vm.registerNativeMethod(np, "removeChild", &nativeRemoveChild);
     try vm.registerNativeMethod(np, "insertBefore", &nativeInsertBefore);

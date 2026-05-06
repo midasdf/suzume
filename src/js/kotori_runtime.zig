@@ -4216,7 +4216,29 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    var patternMismatch=false;
         \\    if(val!==''&&el.pattern){
-        \\      try{patternMismatch=!(new RegExp('^(?:'+el.pattern+')$')).test(val);}catch(e){}
+        \\      // HTML §4.10.5.1.7: invalid regex → treat as no pattern.
+        \\      // kotori RegExp doesn't throw on syntactic errors, so do a
+        \\      // quick paren/bracket balance check before constructing.
+        \\      var __vpat=function(p){
+        \\        var par=0,br=false;
+        \\        for(var i=0;i<p.length;i++){
+        \\          var c=p.charAt(i);
+        \\          if(c==='\\'){i++;continue;}
+        \\          if(br){if(c===']')br=false;continue;}
+        \\          if(c==='[')br=true;
+        \\          else if(c==='(')par++;
+        \\          else if(c===')'){par--;if(par<0)return false;}
+        \\        }
+        \\        return par===0&&!br;
+        \\      };
+        \\      // kotori RegExp doesn't yet implement Unicode property
+        \\      // escapes (\p{...}/\P{...}). Skip evaluation for those
+        \\      // patterns rather than trip a spurious patternMismatch
+        \\      // (treat as no pattern — valid).
+        \\      var __unsupportedPat=el.pattern.indexOf('\\p{')!==-1||el.pattern.indexOf('\\P{')!==-1;
+        \\      if(__vpat(el.pattern)&&!__unsupportedPat){
+        \\        try{patternMismatch=!(new RegExp('^(?:'+el.pattern+')$','u')).test(val);}catch(e){}
+        \\      }
         \\    }
         \\    var stepMismatch=false;
         \\    if((type==='number'||type==='range')&&val!==''&&!isNaN(numVal)){
@@ -4317,6 +4339,30 @@ pub const KotoriRuntime = struct {
         \\  EP.setCustomValidity=function(msg){
         \\    this._customValidationMessage=msg==null?'':String(msg);
         \\  };
+        \\  // ── matches(":valid"|":invalid") delegate to validity polyfill ──
+        \\  // The native selector engine only checks required+empty; for
+        \\  // patternMismatch / typeMismatch / rangeUnderflow / etc. the
+        \\  // JS validity polyfill is the authority. Wrap matches() so
+        \\  // these two pseudo-classes route through validity.valid.
+        \\  if(typeof EP.matches==='function'){
+        \\    var _origMatches=EP.matches;
+        \\    EP.matches=function(sel){
+        \\      if(typeof sel==='string'){
+        \\        var trimmed=String(sel).toLowerCase();
+        \\        if(trimmed===':invalid'||trimmed===':valid'){
+        \\          if(isSubmittable(this)&&willVal(this)){
+        \\            var v=makeValidity(this);
+        \\            if(trimmed===':invalid')return !v.valid;
+        \\            return v.valid;
+        \\          }
+        \\          // Non-submittable / non-validatable elements never
+        \\          // match :valid or :invalid. Fall through to native
+        \\          // for fieldset/form aggregate handling.
+        \\        }
+        \\      }
+        \\      return _origMatches.call(this,sel);
+        \\    };
+        \\  }
         \\})();
     ;
 
