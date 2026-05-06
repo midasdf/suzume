@@ -4838,7 +4838,11 @@ pub const KotoriRuntime = struct {
         \\    EP.dispatchEvent=function(ev){
         \\      var t=tag(this),it=itype(this);
         \\      var isCheckable=t==='input'&&(it==='checkbox'||it==='radio');
-        \\      if(!isCheckable||!ev||ev.type!=='click'||!ev.cancelable||ev._fromClick){
+        \\      // Activation behavior fires only for MouseEvent (or
+        \\      // subclass) click events — `new Event('click')` is the
+        \\      // base Event and does NOT trigger activation per spec.
+        \\      var isMouseClick=ev&&ev.type==='click'&&typeof MouseEvent!=='undefined'&&ev instanceof MouseEvent;
+        \\      if(!isCheckable||!isMouseClick||ev._fromClick){
         \\        return _origDispatch.call(this,ev);
         \\      }
         \\      // Synthetic click activation: pre-toggle, dispatch, revert
