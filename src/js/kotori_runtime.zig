@@ -4057,7 +4057,11 @@ pub const KotoriRuntime = struct {
         \\        for(var i=children.length-1;i>=0;i--)stack.push(children[i]);
         \\      }
         \\      var t=(node.tagName||'').toLowerCase();
-        \\      if(t==='input'||t==='select'||t==='textarea'||t==='button'||t==='output'||t==='fieldset'){
+        \\      // HTML §4.10.21.1: listed elements are button, fieldset, input,
+        \\      // object, output, select, textarea. form.elements must include
+        \\      // all of them whose form owner is this form (excluding input
+        \\      // type=image, filtered later).
+        \\      if(t==='input'||t==='select'||t==='textarea'||t==='button'||t==='output'||t==='fieldset'||t==='object'){
         \\        if(node.form===form)out.push(node);
         \\      }
         \\    }
@@ -4247,17 +4251,25 @@ pub const KotoriRuntime = struct {
         \\  // the handler for testing, per WPT form-requestsubmit coverage.
         \\  EP.requestSubmit=function(submitter){
         \\    if(tag(this)!=='form')throw new TypeError('requestSubmit: not a form');
+        \\    // HTML §4.10.22.3 step 1.5 (paraphrased): if form is not connected,
+        \\    // return without firing submit. WPT form-requestsubmit covers this.
+        \\    if(!this.isConnected)return;
         \\    if(submitter!==undefined&&submitter!==null){
         \\      var st=tag(submitter);
         \\      var isSubmitButton=false;
         \\      if(st==='button'){
-        \\        // HTML §4.10.8: button default type is 'submit'.
+        \\        // HTML §4.10.8: button default type is 'submit'. Invalid
+        \\        // values also default to 'submit' per missing/invalid value
+        \\        // default. So submit-button state ≡ type ∉ {reset, button}.
         \\        var bt=submitter.getAttribute('type');
-        \\        bt=bt==null?'submit':bt.toLowerCase();
-        \\        if(bt==='submit')isSubmitButton=true;
+        \\        if(bt!=null)bt=String(bt).toLowerCase();
+        \\        if(bt!=='reset'&&bt!=='button')isSubmitButton=true;
         \\      } else if(st==='input'){
+        \\        // HTML §4.10.5.1: input default type is 'text'. Invalid values
+        \\        // default to 'text'. Submit/Image button state requires exact
+        \\        // 'submit' or 'image' attribute value.
         \\        var it=submitter.getAttribute('type');
-        \\        it=it==null?'text':it.toLowerCase();
+        \\        it=it==null?'text':String(it).toLowerCase();
         \\        if(it==='submit'||it==='image')isSubmitButton=true;
         \\      }
         \\      if(!isSubmitButton){
@@ -4279,6 +4291,26 @@ pub const KotoriRuntime = struct {
         \\    // We don't perform actual form navigation — handlers are expected
         \\    // to preventDefault() or observe dispatch side effects.
         \\  };
+        \\  // HTML §4.10.18 dom-fs-action: form.action getter must
+        \\  // return the document's URL when the action content attribute is
+        \\  // missing or empty; otherwise the absolute URL obtained by parsing
+        \\  // the value relative to the element's base URL. Setter reflects
+        \\  // the value onto the action content attribute.
+        \\  Object.defineProperty(EP,'action',{
+        \\    get:function(){
+        \\      if(tag(this)!=='form')return undefined;
+        \\      var attr=this.getAttribute('action');
+        \\      var docURL=(typeof document!=='undefined'&&document.URL)?document.URL:'';
+        \\      if(attr===null||attr==='')return docURL;
+        \\      var base=(typeof document!=='undefined'&&document.baseURI)?document.baseURI:docURL;
+        \\      try{return new URL(attr,base).href;}catch(e){return attr;}
+        \\    },
+        \\    set:function(v){
+        \\      if(tag(this)!=='form')return;
+        \\      this.setAttribute('action',String(v));
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
         \\  EP.reset=function(){
         \\    if(tag(this)!=='form')return;
         \\    // §4.10.21.4 reset(): if not connected, return.
