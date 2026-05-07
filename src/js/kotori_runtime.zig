@@ -215,6 +215,11 @@ pub const KotoriRuntime = struct {
         // `input.form` is undefined.
         _ = self.eval(form_owner_polyfill_js);
 
+        // XHR §3 / HTML §4.10.22.4 — globalThis.FormData constructor +
+        // entry-list construction from form. Excludes submit-button entries
+        // unless the submitter is explicitly passed (constructor 2nd arg).
+        _ = self.eval(formdata_polyfill_js);
+
         return self;
     }
 
@@ -5932,6 +5937,195 @@ pub const KotoriRuntime = struct {
         \\    configurable:true,
         \\    enumerable:true
         \\  });
+        \\})();
+    ;
+
+    /// XHR §3 / HTML §4.10.22.4 — globalThis.FormData polyfill.
+    ///
+    /// Provides a minimal FormData constructor implementing the
+    /// "constructing the entry list" algorithm (HTML §4.10.22.4) plus
+    /// the standard FormData interface (get/has/getAll/append/set/
+    /// delete/forEach/keys/values/entries).
+    ///
+    /// Constructor:
+    ///   new FormData(form?, submitter?)
+    ///     - form: optional HTMLFormElement. If provided, iterate
+    ///       form.elements and collect entries per spec.
+    ///     - submitter: optional submit button. Submit-button entries
+    ///       are included ONLY if the control IS the submitter (per
+    ///       step 5.6 of "constructing the entry list"). When called
+    ///       as `new FormData(form)` (no submitter), submit buttons
+    ///       are excluded entirely — this matches WPT
+    ///       form-requestsubmit semantics where `new FormData(e.target)`
+    ///       inside a submit handler produces a list without the
+    ///       submitter button entry.
+    ///
+    /// Inclusion rules (paraphrased from §4.10.22.4):
+    ///   - Skip disabled controls.
+    ///   - Skip nameless controls (name attribute missing/empty).
+    ///   - input type=submit/reset/button: include only if == submitter.
+    ///   - input type=image: include `name.x=0` and `name.y=0` only if
+    ///     == submitter.
+    ///   - input type=checkbox/radio: include only if checked. Value
+    ///     is `value` attribute or "on" if missing.
+    ///   - input type=file: include each File from .files (FileList).
+    ///   - select: include each selected option's value.
+    ///   - textarea / other text inputs: include `name=value`.
+    ///   - button (HTMLButtonElement): submit-state default per HTML
+    ///     §4.10.8 (Wave 75) — type ∉ {reset,button} ⇒ submit-button
+    ///     ⇒ include only if == submitter.
+    const formdata_polyfill_js =
+        \\(function(){
+        \\  if(typeof globalThis==='undefined')return;
+        \\  function tag_(el){return ((el&&el.tagName)||'').toLowerCase();}
+        \\  function attrLower_(el,n){
+        \\    if(!el||!el.getAttribute)return null;
+        \\    var v=el.getAttribute(n);
+        \\    return v==null?null:String(v).toLowerCase();
+        \\  }
+        \\  function FormData_(form,submitter){
+        \\    this._entries=[];
+        \\    if(form==null)return;
+        \\    if(tag_(form)!=='form')return;
+        \\    if(submitter==null)submitter=null;
+        \\    var ctrls=form.elements;
+        \\    if(!ctrls)return;
+        \\    var n=ctrls.length;
+        \\    for(var i=0;i<n;i++){
+        \\      var c=ctrls[i];
+        \\      if(!c)continue;
+        \\      if(c.disabled)continue;
+        \\      var name=c.getAttribute&&c.getAttribute('name');
+        \\      if(name==null||name==='')continue;
+        \\      var t=tag_(c);
+        \\      var type=((c.type||'')+'').toLowerCase();
+        \\      if(t==='button'){
+        \\        var bt=c.getAttribute('type');
+        \\        bt=bt==null?'submit':String(bt).toLowerCase();
+        \\        if(bt==='reset'||bt==='button')continue;
+        \\        if(c!==submitter)continue;
+        \\        this._entries.push([name,String(c.value==null?'':c.value)]);
+        \\        continue;
+        \\      }
+        \\      if(t==='input'){
+        \\        if(type==='submit'||type==='reset'||type==='button'){
+        \\          if(c!==submitter)continue;
+        \\          this._entries.push([name,String(c.value==null?'':c.value)]);
+        \\          continue;
+        \\        }
+        \\        if(type==='image'){
+        \\          if(c!==submitter)continue;
+        \\          this._entries.push([name+'.x','0']);
+        \\          this._entries.push([name+'.y','0']);
+        \\          continue;
+        \\        }
+        \\        if(type==='checkbox'||type==='radio'){
+        \\          if(!c.checked)continue;
+        \\          var v=c.getAttribute('value');
+        \\          this._entries.push([name,v==null?'on':String(v)]);
+        \\          continue;
+        \\        }
+        \\        if(type==='file'){
+        \\          var fl=c.files;
+        \\          if(fl&&fl.length){
+        \\            for(var j=0;j<fl.length;j++){
+        \\              var f=fl.item?fl.item(j):fl[j];
+        \\              this._entries.push([name,f]);
+        \\            }
+        \\          }
+        \\          continue;
+        \\        }
+        \\        this._entries.push([name,String(c.value==null?'':c.value)]);
+        \\        continue;
+        \\      }
+        \\      if(t==='select'){
+        \\        var opts=c.querySelectorAll?c.querySelectorAll('option'):null;
+        \\        if(opts){
+        \\          for(var k=0;k<opts.length;k++){
+        \\            if(opts[k].selected){
+        \\              var ov=opts[k].value;
+        \\              if(ov==null)ov=opts[k].textContent||'';
+        \\              this._entries.push([name,String(ov)]);
+        \\            }
+        \\          }
+        \\        }
+        \\        continue;
+        \\      }
+        \\      if(t==='textarea'){
+        \\        this._entries.push([name,String(c.value==null?'':c.value)]);
+        \\        continue;
+        \\      }
+        \\      // object / output / fieldset: skip per spec.
+        \\    }
+        \\  }
+        \\  FormData_.prototype.get=function(name){
+        \\    name=String(name);
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      if(this._entries[i][0]===name)return this._entries[i][1];
+        \\    }
+        \\    return null;
+        \\  };
+        \\  FormData_.prototype.has=function(name){
+        \\    name=String(name);
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      if(this._entries[i][0]===name)return true;
+        \\    }
+        \\    return false;
+        \\  };
+        \\  FormData_.prototype.getAll=function(name){
+        \\    name=String(name);
+        \\    var r=[];
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      if(this._entries[i][0]===name)r.push(this._entries[i][1]);
+        \\    }
+        \\    return r;
+        \\  };
+        \\  FormData_.prototype.append=function(name,value){
+        \\    this._entries.push([String(name),String(value)]);
+        \\  };
+        \\  FormData_.prototype.set=function(name,value){
+        \\    name=String(name);value=String(value);
+        \\    var found=false;
+        \\    var newE=[];
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      if(this._entries[i][0]===name){
+        \\        if(!found){newE.push([name,value]);found=true;}
+        \\      }else{newE.push(this._entries[i]);}
+        \\    }
+        \\    if(!found)newE.push([name,value]);
+        \\    this._entries=newE;
+        \\  };
+        \\  FormData_.prototype['delete']=function(name){
+        \\    name=String(name);
+        \\    var newE=[];
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      if(this._entries[i][0]!==name)newE.push(this._entries[i]);
+        \\    }
+        \\    this._entries=newE;
+        \\  };
+        \\  FormData_.prototype.forEach=function(cb,thisArg){
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      cb.call(thisArg,this._entries[i][1],this._entries[i][0],this);
+        \\    }
+        \\  };
+        \\  FormData_.prototype.keys=function(){
+        \\    var arr=[];
+        \\    for(var i=0;i<this._entries.length;i++)arr.push(this._entries[i][0]);
+        \\    return arr;
+        \\  };
+        \\  FormData_.prototype.values=function(){
+        \\    var arr=[];
+        \\    for(var i=0;i<this._entries.length;i++)arr.push(this._entries[i][1]);
+        \\    return arr;
+        \\  };
+        \\  FormData_.prototype.entries=function(){
+        \\    var arr=[];
+        \\    for(var i=0;i<this._entries.length;i++){
+        \\      arr.push([this._entries[i][0],this._entries[i][1]]);
+        \\    }
+        \\    return arr;
+        \\  };
+        \\  try{globalThis.FormData=FormData_;}catch(e){}
         \\})();
     ;
 
