@@ -5586,13 +5586,65 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    return null;
         \\  }
+        \\  // HTML §4.10.2: labelable elements. (button, input excluding type=hidden,
+        \\  // meter, output, progress, select, textarea, plus form-associated custom
+        \\  // elements which we don't model.)
+        \\  function isLabelable(el){
+        \\    if(!el||el.nodeType!==1)return false;
+        \\    var t=tag(el);
+        \\    if(t==='button'||t==='select'||t==='textarea'||t==='meter'||t==='output'||t==='progress')return true;
+        \\    if(t==='input'){
+        \\      var it=(el.getAttribute('type')||'text').toLowerCase();
+        \\      return it!=='hidden';
+        \\    }
+        \\    return false;
+        \\  }
+        \\  // HTML §4.10.4 label.control: if `for` attribute is set, the labeled
+        \\  // control is the first labelable descendant of the label's tree root
+        \\  // whose id matches `for`. Otherwise it's the first labelable descendant
+        \\  // of the label in tree order. Returns null when no labeled control
+        \\  // exists (NOT undefined — the test "label.form" relies on
+        \\  // `label.control && label.control.form` short-circuiting to null).
+        \\  Object.defineProperty(EP,'control',{
+        \\    get:function(){
+        \\      if(tag(this)!=='label')return undefined;
+        \\      var forAttr=this.getAttribute('for');
+        \\      if(forAttr!==null){
+        \\        if(forAttr==='')return null;
+        \\        var root=(typeof this.getRootNode==='function')?this.getRootNode():null;
+        \\        if(!root){
+        \\          var up=this;
+        \\          while(up.parentNode)up=up.parentNode;
+        \\          root=up;
+        \\        }
+        \\        var hit=null;
+        \\        if(root&&typeof root.getElementById==='function')hit=root.getElementById(forAttr);
+        \\        return (hit&&isLabelable(hit))?hit:null;
+        \\      }
+        \\      // No for attribute: first labelable descendant in tree order.
+        \\      var stack=[this];
+        \\      while(stack.length){
+        \\        var n=stack.pop();
+        \\        if(n!==this&&isLabelable(n))return n;
+        \\        var ch=n&&n.children;
+        \\        if(ch){for(var i=ch.length-1;i>=0;i--)stack.push(ch[i]);}
+        \\      }
+        \\      return null;
+        \\    },
+        \\    configurable:true,
+        \\    enumerable:true
+        \\  });
         \\  Object.defineProperty(EP,'form',{
         \\    get:function(){
         \\      var t=tag(this);
-        \\      // <label>.control and <label>.htmlFor would use a different
-        \\      // algorithm, but <label>.form returns label.control.form in
-        \\      // browsers. For simplicity, return the same static owner.
         \\      if(!isAssociable(t))return undefined;
+        \\      // HTML §4.10.4: label.form is an alias for label.control.form,
+        \\      // NOT a walk to the nearest form ancestor. Without a labeled
+        \\      // control there is no form owner.
+        \\      if(t==='label'){
+        \\        var ctrl=this.control;
+        \\        return ctrl?(ctrl.form||null):null;
+        \\      }
         \\      return computeFormOwner(this);
         \\    },
         \\    configurable:true,
