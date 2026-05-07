@@ -5418,14 +5418,14 @@ pub const KotoriRuntime = struct {
         \\          if(p==='namedItem')return function(n){var m=buildNameMap(arr);n=String(n);if(n==='')return null;return m[n]||null;};
         \\          if(p===Symbol.iterator){var a=arr.slice();return function(){var i=0;return{next:function(){return i<a.length?{value:a[i++],done:false}:{value:undefined,done:true};}};};}
         \\          if(p===Symbol.toStringTag)return 'HTMLCollection';
-        \\          if(isIndex(p)){var i=p>>>0;return i<arr.length?arr[i]:undefined;}
+        \\          if(isIndex(p)){var i=Number(p);return i<arr.length?arr[i]:undefined;}
         \\          if(typeof p==='string'){var m=buildNameMap(arr);if(p in m)return m[p];}
         \\          return t[p];
         \\        },
         \\        has:function(t,p){
         \\          var arr=query();
         \\          if(p==='length'||p==='item'||p==='namedItem')return true;
-        \\          if(isIndex(p))return (p>>>0)<arr.length;
+        \\          if(isIndex(p))return Number(p)<arr.length;
         \\          if(typeof p==='string'){var m=buildNameMap(arr);if(p in m)return true;}
         \\          return false;
         \\        },
@@ -5438,7 +5438,7 @@ pub const KotoriRuntime = struct {
         \\        },
         \\        getOwnPropertyDescriptor:function(t,p){
         \\          var arr=query();
-        \\          if(isIndex(p)){var i=p>>>0;if(i<arr.length)return{value:arr[i],writable:false,enumerable:true,configurable:true};}
+        \\          if(isIndex(p)){var i=Number(p);if(i<arr.length)return{value:arr[i],writable:false,enumerable:true,configurable:true};}
         \\          if(p==='length')return{value:arr.length,writable:false,enumerable:false,configurable:true};
         \\          if(typeof p==='string'){var m=buildNameMap(arr);if(p in m)return{value:m[p],writable:false,enumerable:false,configurable:true};}
         \\          return undefined;
