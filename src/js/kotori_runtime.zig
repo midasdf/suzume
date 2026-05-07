@@ -4807,8 +4807,13 @@ pub const KotoriRuntime = struct {
         \\      }
         \\      // §4.10.5.1: input + change events from a synthetic activation
         \\      // are TRUSTED (the click event itself is untrusted per spec).
-        \\      try{var inp=new Event('input',{bubbles:true,cancelable:false});inp._trusted=true;this.dispatchEvent(inp);}catch(e){}
-        \\      try{var chg=new Event('change',{bubbles:true,cancelable:false});chg._trusted=true;this.dispatchEvent(chg);}catch(e){}
+        \\      // Skip for detached elements — WPT
+        \\      // Event-dispatch-detached-input-and-change expects no
+        \\      // input/change firing on click() of a not-connected input.
+        \\      if(this.isConnected===true){
+        \\        try{var inp=new Event('input',{bubbles:true,cancelable:false});inp._trusted=true;this.dispatchEvent(inp);}catch(e){}
+        \\        try{var chg=new Event('change',{bubbles:true,cancelable:false});chg._trusted=true;this.dispatchEvent(chg);}catch(e){}
+        \\      }
         \\      return;
         \\    }
         \\    if(!notCanceled)return;
@@ -4883,8 +4888,12 @@ pub const KotoriRuntime = struct {
         \\        if(this.indeterminate!==undefined)this.indeterminate=preIndet;
         \\        return notCanceled;
         \\      }
-        \\      try{var inp=new Event('input',{bubbles:true,cancelable:false});inp._trusted=true;_origDispatch.call(this,inp);}catch(e){}
-        \\      try{var chg=new Event('change',{bubbles:true,cancelable:false});chg._trusted=true;_origDispatch.call(this,chg);}catch(e){}
+        \\      // Detached elements skip input/change firing per WPT
+        \\      // Event-dispatch-detached-input-and-change.
+        \\      if(this.isConnected===true){
+        \\        try{var inp=new Event('input',{bubbles:true,cancelable:false});inp._trusted=true;_origDispatch.call(this,inp);}catch(e){}
+        \\        try{var chg=new Event('change',{bubbles:true,cancelable:false});chg._trusted=true;_origDispatch.call(this,chg);}catch(e){}
+        \\      }
         \\      return notCanceled;
         \\    };
         \\  }
