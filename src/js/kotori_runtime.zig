@@ -5408,6 +5408,44 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    try{loc.toString=function(){return this.href;};}catch(e){}
         \\  }
+        \\  // HTML §3.1.2 — document.baseURI getter.
+        \\  // Document base URL is computed by parsing the first <base href>
+        \\  // (in document order, descendant of document) relative to
+        \\  // document's URL; fallback to document's URL when no <base>.
+        \\  // Element.prototype.baseURI / Node.baseURI delegate to the
+        \\  // owning document's baseURI per DOM §4.4.
+        \\  function _docBaseURI(doc){
+        \\    var docURL=(doc&&doc.URL)?doc.URL:'';
+        \\    var bases=null;
+        \\    try{bases=doc&&doc.getElementsByTagName?doc.getElementsByTagName('base'):null;}catch(e){bases=null;}
+        \\    if(bases&&bases.length){
+        \\      for(var bi=0;bi<bases.length;bi++){
+        \\        var bel=bases[bi];
+        \\        if(bel&&bel.getAttribute){
+        \\          var href=bel.getAttribute('href');
+        \\          if(href!=null&&href!==''){
+        \\            try{return new URL(href,docURL).href;}catch(e){return docURL;}
+        \\          }
+        \\        }
+        \\      }
+        \\    }
+        \\    return docURL;
+        \\  }
+        \\  if(typeof document!=='undefined'){
+        \\    try{Object.defineProperty(document,'baseURI',{
+        \\      get:function(){return _docBaseURI(this);},
+        \\      configurable:true,enumerable:true
+        \\    });}catch(e){}
+        \\  }
+        \\  if(typeof Element!=='undefined'&&Element.prototype){
+        \\    try{Object.defineProperty(Element.prototype,'baseURI',{
+        \\      get:function(){
+        \\        var doc=(this&&this.ownerDocument)||(typeof document!=='undefined'?document:null);
+        \\        return doc?_docBaseURI(doc):'';
+        \\      },
+        \\      configurable:true,enumerable:true
+        \\    });}catch(e){}
+        \\  }
         \\})();
     ;
 
