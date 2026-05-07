@@ -5560,6 +5560,12 @@ pub const KotoriRuntime = struct {
     const dataset_polyfill_js =
         \\(function(){
         \\  if(typeof Element==='undefined'||!Element.prototype)return;
+        \\  // DOMStringMap class for instanceof checks.
+        \\  // HTML §3.2.6: `dataset` is a DOMStringMap. WPT
+        \\  // dataset.html test uses `dataset instanceof DOMStringMap`.
+        \\  if(typeof globalThis.DOMStringMap==='undefined'){
+        \\    globalThis.DOMStringMap=function DOMStringMap(){};
+        \\  }
         \\  // Convert camelCase key → data-* attribute name.
         \\  // HTML §3.2.6.1 step 2: for each uppercase letter U, insert '-'+lowercase(U).
         \\  function toAttr(key){
@@ -5637,11 +5643,41 @@ pub const KotoriRuntime = struct {
         \\      return{value:el.getAttribute(attr),writable:true,enumerable:true,configurable:true};
         \\    }
         \\  };
+        \\  // HTML §3.2.6: dataset is on HTMLElement, SVGElement, MathMLElement.
+        \\  // Random-namespace elements (e.g., createElementNS("test", ...))
+        \\  // do NOT have dataset. WPT dataset.html "Should not have a
+        \\  // .dataset on random elements" — return undefined.
+        \\  var HTML_NS='http://www.w3.org/1999/xhtml';
+        \\  var SVG_NS='http://www.w3.org/2000/svg';
+        \\  var MATHML_NS='http://www.w3.org/1998/Math/MathML';
+        \\  function hasDataset(el){
+        \\    var ns=el.namespaceURI;
+        \\    if(ns==null)return true;
+        \\    return ns===HTML_NS||ns===SVG_NS||ns===MATHML_NS;
+        \\  }
         \\  Object.defineProperty(Element.prototype,'dataset',{
         \\    get:function(){
+        \\      if(!hasDataset(this))return undefined;
         \\      var cached=this[SLOT];
         \\      if(cached)return cached;
-        \\      var p=new Proxy(this,handler);
+        \\      // Target inherits DOMStringMap.prototype so the Proxy passes
+        \\      // `instanceof DOMStringMap` (instanceof opcode walks
+        \\      // target.prototype after Wave 61 proxyGetPrototype fix).
+        \\      var target=Object.create(DOMStringMap.prototype);
+        \\      // Copy element reference so handler can read/write attrs.
+        \\      // Proxy traps already accept the target as `el`; bridge by
+        \\      // routing through a wrapper handler that uses `this`.
+        \\      var elRef=this;
+        \\      var wrapHandler={
+        \\        get:function(_t,k){return handler.get(elRef,k);},
+        \\        set:function(_t,k,v){return handler.set(elRef,k,v);},
+        \\        has:function(_t,k){return handler.has(elRef,k);},
+        \\        deleteProperty:function(_t,k){return handler.deleteProperty(elRef,k);},
+        \\        ownKeys:function(_t){return handler.ownKeys(elRef);},
+        \\        getOwnPropertyDescriptor:function(_t,k){return handler.getOwnPropertyDescriptor(elRef,k);},
+        \\        getPrototypeOf:function(){return DOMStringMap.prototype;}
+        \\      };
+        \\      var p=new Proxy(target,wrapHandler);
         \\      try{Object.defineProperty(this,SLOT,{value:p,writable:false,enumerable:false,configurable:false});}catch(e){}
         \\      return p;
         \\    },
