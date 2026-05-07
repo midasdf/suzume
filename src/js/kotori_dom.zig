@@ -7158,26 +7158,41 @@ fn findByTag(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8) ?JsValue {
 /// Walk the document tree depth-first and return the first <title> element node,
 /// searching only within the <head> first (spec §4.2.2), then entire tree.
 fn findTitleNode(doc: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
-    // Depth-first walk from document root.
-    var stack: [64]*lxb.lxb_dom_node_t = undefined;
-    var top: usize = 0;
-    var ch: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
-    while (ch) |c| : (ch = @ptrCast(c.next)) {
-        if (nodeType(c) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
-        if (top < stack.len) { stack[top] = c; top += 1; }
-    }
-    while (top > 0) {
-        top -= 1;
-        const cur = stack[top];
-        const elem: *lxb.lxb_dom_element_t = @ptrCast(cur);
-        var ln_len: usize = 0;
-        if (dom_b.lxb_dom_element_local_name(elem, &ln_len)) |ln| {
-            if (std.ascii.eqlIgnoreCase(ln[0..ln_len], "title")) return cur;
+    // HTML §4.2.2 document.title — first <title> in document tree order
+    // (parent → first child → descendants → next sibling). Use a
+    // pre-order traversal: walk first child, then check next sibling
+    // when descending stops, finally bubble up to parent and continue.
+    var cur: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
+    while (cur) |n| {
+        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const elem: *lxb.lxb_dom_element_t = @ptrCast(n);
+            var ln_len: usize = 0;
+            if (dom_b.lxb_dom_element_local_name(elem, &ln_len)) |ln| {
+                if (std.ascii.eqlIgnoreCase(ln[0..ln_len], "title")) return n;
+            }
         }
-        var c2: ?*lxb.lxb_dom_node_t = @ptrCast(cur.first_child);
-        while (c2) |cc| : (c2 = @ptrCast(cc.next)) {
-            if (nodeType(cc) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
-            if (top < stack.len) { stack[top] = cc; top += 1; }
+        // Descend if this node has children.
+        if (nodeFirstChild(n)) |fc| {
+            cur = fc;
+            continue;
+        }
+        // Otherwise advance to next sibling, or bubble up to find one.
+        var walker: ?*lxb.lxb_dom_node_t = n;
+        while (walker) |w| {
+            if (nodeNext(w)) |nx| {
+                cur = nx;
+                break;
+            }
+            const p = nodeParent(w) orelse {
+                // Reached doc; stop.
+                cur = null;
+                break;
+            };
+            if (p == doc) {
+                cur = null;
+                break;
+            }
+            walker = p;
         }
     }
     return null;
@@ -7226,11 +7241,11 @@ fn setDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t, val: JsValue) void {
         while (nodeFirstChild(title_node)) |child| dom_b.lxb_dom_node_remove(child);
         if (s.len > 0) _ = dom_b.lxb_dom_node_text_content_set(title_node, s.ptr, s.len);
     } else {
-        // Create <title> element, append to <head> or documentElement.
-        const new_title = dom_b.lxb_dom_document_create_element(doc, "title".ptr, 5, null) orelse return;
-        if (s.len > 0) _ = dom_b.lxb_dom_node_text_content_set(@ptrCast(new_title), s.ptr, s.len);
-        // Find <head> to append to, fallback to <html>, fallback to document.
-        const parent: *lxb.lxb_dom_node_t = blk: {
+        // HTML §4.2.2 setter: if document element is HTML and there's no
+        // head element, return without modifying. WPT title-01 test 2:
+        // after `head.parentNode.removeChild(head)`, setting
+        // document.title="FAIL" must be a no-op (title remains "").
+        const head_node_opt: ?*lxb.lxb_dom_node_t = blk: {
             var c: ?*lxb.lxb_dom_node_t = @ptrCast(doc.first_child);
             while (c) |n| : (c = @ptrCast(n.next)) {
                 if (nodeType(n) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
@@ -7238,7 +7253,6 @@ fn setDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t, val: JsValue) void {
                 var ln_len: usize = 0;
                 if (dom_b.lxb_dom_element_local_name(e, &ln_len)) |ln| {
                     if (std.ascii.eqlIgnoreCase(ln[0..ln_len], "html")) {
-                        // Inside <html>, look for <head>
                         var c2: ?*lxb.lxb_dom_node_t = @ptrCast(n.first_child);
                         while (c2) |n2| : (c2 = @ptrCast(n2.next)) {
                             if (nodeType(n2) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) continue;
@@ -7248,13 +7262,17 @@ fn setDocumentTitle(vm: *VM, doc: *lxb.lxb_dom_node_t, val: JsValue) void {
                                 if (std.ascii.eqlIgnoreCase(ln2[0..ln2_len], "head")) break :blk n2;
                             }
                         }
-                        break :blk n;
+                        // <html> exists but no <head> — bail.
+                        break :blk null;
                     }
                 }
             }
-            break :blk doc;
+            break :blk doc; // no <html>, fall back to document
         };
-        dom_b.lxb_dom_node_insert_child(parent, @ptrCast(new_title));
+        const head_parent = head_node_opt orelse return;
+        const new_title = dom_b.lxb_dom_document_create_element(doc, "title".ptr, 5, null) orelse return;
+        if (s.len > 0) _ = dom_b.lxb_dom_node_text_content_set(@ptrCast(new_title), s.ptr, s.len);
+        dom_b.lxb_dom_node_insert_child(head_parent, @ptrCast(new_title));
     }
     setDomDirty();
 }
