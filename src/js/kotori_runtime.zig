@@ -4395,6 +4395,44 @@ pub const KotoriRuntime = struct {
         \\      return _origMatches.call(this,sel);
         \\    };
         \\  }
+        \\  // ── querySelectorAll(":valid"|":invalid") delegate to matches() ──
+        \\  // The native selector engine evaluates :valid/:invalid with a
+        \\  // simplified required+empty-value check that misses
+        \\  // patternMismatch / typeMismatch / rangeUnderflow. Route the
+        \\  // bare-selector form through enumerate + Element.matches() so
+        \\  // the JS validity polyfill is the authority for both surfaces.
+        \\  function _qsaValidity(root,want){
+        \\    var out=[];
+        \\    if(!root)return out;
+        \\    var stack=[root];
+        \\    while(stack.length){
+        \\      var node=stack.pop();
+        \\      if(node!==root&&node&&node.nodeType===1){
+        \\        var t=(node.tagName||'').toLowerCase();
+        \\        if(t==='input'||t==='select'||t==='textarea'||t==='button'||t==='fieldset'||t==='form'||t==='output'){
+        \\          try{ if(node.matches&&node.matches(want))out.push(node); }catch(e){}
+        \\        }
+        \\      }
+        \\      var ch=node&&node.children;
+        \\      if(ch){ for(var qi=ch.length-1;qi>=0;qi--)stack.push(ch[qi]); }
+        \\    }
+        \\    return out;
+        \\  }
+        \\  function _wrapQSA(orig){
+        \\    return function(sel){
+        \\      if(typeof sel==='string'){
+        \\        var qt=String(sel).trim().toLowerCase();
+        \\        if(qt===':invalid'||qt===':valid')return _qsaValidity(this,qt);
+        \\      }
+        \\      return orig.call(this,sel);
+        \\    };
+        \\  }
+        \\  if(typeof EP.querySelectorAll==='function'){
+        \\    EP.querySelectorAll=_wrapQSA(EP.querySelectorAll);
+        \\  }
+        \\  if(typeof document!=='undefined'&&typeof document.querySelectorAll==='function'){
+        \\    try{ document.querySelectorAll=_wrapQSA(document.querySelectorAll); }catch(e){}
+        \\  }
         \\})();
     ;
 
