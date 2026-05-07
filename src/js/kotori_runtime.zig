@@ -5448,7 +5448,17 @@ pub const KotoriRuntime = struct {
         \\      return _cache;
         \\    };
         \\  }
-        \\  function isTag(name){return function(el){return (el.tagName||'').toLowerCase()===name;};}
+        \\  function isTag(name){
+        \\    return function(el){
+        \\      // HTML namespace filter (HTML §3.1.5 collections):
+        \\      // document.images / .forms / .links / .scripts only return
+        \\      // elements in the HTML namespace, NOT foreign-namespace
+        \\      // elements with the same local name.
+        \\      var ns=el.namespaceURI;
+        \\      if(ns!=null&&ns!=='http://www.w3.org/1999/xhtml')return false;
+        \\      return (el.localName||el.tagName||'').toLowerCase()===name;
+        \\    };
+        \\  }
         \\  function isLink(el){
         \\    var t=(el.tagName||'').toLowerCase();
         \\    return (t==='a'||t==='area')&&el.hasAttribute&&el.hasAttribute('href');
