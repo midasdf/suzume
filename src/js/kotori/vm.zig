@@ -485,22 +485,30 @@ pub const VM = struct {
                     const target_proto = target_proto_val.?.asJsObject();
                     if (lhs.isObject()) {
                         const lhs_obj = lhs.asJsObject();
+                        // Initial prototype: handle Proxy via [[GetPrototypeOf]]
+                        // (calling getPrototypeOf trap if installed).
                         // For function objects without an explicit prototype, use
                         // function_proto as the implicit prototype so that
                         // `fn instanceof Function` works (matching property lookup
                         // behavior at lines 973-974).
-                        var cur: ?*JsObject = lhs_obj.prototype orelse
-                            if ((lhs_obj.obj_type == .function or lhs_obj.obj_type == .native_function) and self.function_proto != null)
-                            self.function_proto.?
+                        var cur: ?*JsObject = if (lhs_obj.obj_type == .proxy)
+                            try self.proxyGetPrototype(lhs_obj)
                         else
-                            null;
+                            lhs_obj.prototype orelse
+                                if ((lhs_obj.obj_type == .function or lhs_obj.obj_type == .native_function) and self.function_proto != null)
+                                self.function_proto.?
+                            else
+                                null;
                         var found = false;
                         while (cur) |p| {
                             if (p == target_proto) {
                                 found = true;
                                 break;
                             }
-                            cur = p.prototype;
+                            cur = if (p.obj_type == .proxy)
+                                try self.proxyGetPrototype(p)
+                            else
+                                p.prototype;
                         }
                         self.push(JsValue.initBool(found));
                     } else {
@@ -10965,6 +10973,25 @@ pub const VM = struct {
             }
         }
         return pd.target.getProperty(name_id) != null;
+    }
+
+    /// Proxy [[GetPrototypeOf]] (ECMA-262 §22.5.6.5). If a `getPrototypeOf`
+    /// trap is installed, call it and validate the result is Object or
+    /// null. Otherwise fall back to the target's `prototype` field
+    /// (default OrdinaryGetPrototypeOf).
+    fn proxyGetPrototype(self: *VM, proxy_obj: *JsObject) !?*JsObject {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("getPrototypeOf");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const result = try self.callJsFunction(trap_fn, JsValue.initObject(pd.handler), &.{JsValue.initObject(pd.target)});
+                if (result.isNull()) return null;
+                if (result.isObject()) return result.asJsObject();
+                return null; // invalid result; treat as null
+            }
+        }
+        return pd.target.prototype;
     }
 
     fn proxyDeleteProperty(self: *VM, proxy_obj: *JsObject, name_id: StringId) !bool {
