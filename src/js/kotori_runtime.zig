@@ -4965,6 +4965,27 @@ pub const KotoriRuntime = struct {
         \\      });
         \\    }
         \\  }catch(e){}
+        \\  // HTML §3.1.5 — document.getElementsByName(name) returns a
+        \\  // NodeList of elements whose `name` content attribute equals
+        \\  // the given name. Per spec it's also restricted to certain
+        \\  // element types (a, applet, button, form, etc.) but in
+        \\  // practice browsers return any element with matching name.
+        \\  try{
+        \\    if(typeof document.getElementsByName!=='function'){
+        \\      document.getElementsByName=function(name){
+        \\        var n=String(name);
+        \\        var all=document.getElementsByTagName('*');
+        \\        var result=[];
+        \\        for(var i=0;i<all.length;i++){
+        \\          var el=all[i];
+        \\          if(el.getAttribute&&el.getAttribute('name')===n){
+        \\            result.push(el);
+        \\          }
+        \\        }
+        \\        return result;
+        \\      };
+        \\    }
+        \\  }catch(e){}
         \\})();
     ;
 
