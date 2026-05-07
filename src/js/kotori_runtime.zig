@@ -3691,6 +3691,23 @@ pub const KotoriRuntime = struct {
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
+        \\  // ── HTMLElement.accessKeyLabel (HTML §6.6.5) ──
+        \\  // Returns a UA-defined label for the assigned access key
+        \\  // (e.g. "Alt+B"), or "" if no access key is assigned.
+        \\  // Simplified heuristic: if accesskey attribute is a single
+        \\  // ASCII character, return "Alt+<UPPERCASE>"; else "".
+        \\  Object.defineProperty(EP,'accessKeyLabel',{
+        \\    get:function(){
+        \\      var ak=this.getAttribute&&this.getAttribute('accesskey');
+        \\      if(typeof ak!=='string'||ak.length!==1)return '';
+        \\      var ch=ak.charCodeAt(0);
+        \\      if(ch>=97&&ch<=122)return 'Alt+'+ak.toUpperCase();
+        \\      if(ch>=65&&ch<=90)return 'Alt+'+ak;
+        \\      if(ch>=48&&ch<=57)return 'Alt+'+ak;
+        \\      return '';
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
         \\  // ── HTMLElement.labels (HTML §4.10.4) ──
         \\  // labelable elements: button, input (except hidden), keygen,
         \\  // meter, output, progress, select, textarea. Returns an array
