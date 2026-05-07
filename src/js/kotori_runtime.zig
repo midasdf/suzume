@@ -4167,21 +4167,13 @@ pub const KotoriRuntime = struct {
         \\      var gname=el.name||'';
         \\      var anyRequired=req,anyChecked=(el.checked===true);
         \\      if(gname!==''){
+        \\        // HTML §4.10.18.3: defer to the canonical Element.form
+        \\        // getter (form_owner_polyfill_js). Validity is evaluated
+        \\        // lazily so by the time __fo runs the form-owner polyfill
+        \\        // is installed and handles empty form="" and disconnected
+        \\        // tree-root lookup correctly.
         \\        var __fo=function(e){
-        \\          var fid=e.getAttribute&&e.getAttribute('form');
-        \\          if(fid){
-        \\            var d=e.ownerDocument||(typeof document!=='undefined'?document:null);
-        \\            if(d&&d.getElementById){
-        \\              var ff=d.getElementById(fid);
-        \\              if(ff&&(ff.tagName||'').toLowerCase()==='form')return ff;
-        \\            }
-        \\            return null;
-        \\          }
-        \\          var p=e.parentNode;
-        \\          while(p){
-        \\            if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form')return p;
-        \\            p=p.parentNode;
-        \\          }
+        \\          if(typeof e.form!=='undefined')return e.form||null;
         \\          return null;
         \\        };
         \\        var __ro=function(e){
@@ -5190,20 +5182,12 @@ pub const KotoriRuntime = struct {
         \\  var origInsertBefore=EP.insertBefore;
         \\  if(typeof origAppend!=='function'||typeof origInsertBefore!=='function')return;
         \\  function formOwnerOf(el){
-        \\    var fid=el.getAttribute&&el.getAttribute('form');
-        \\    if(fid){
-        \\      var d=el.ownerDocument||(typeof document!=='undefined'?document:null);
-        \\      if(d&&d.getElementById){
-        \\        var ff=d.getElementById(fid);
-        \\        if(ff&&(ff.tagName||'').toLowerCase()==='form')return ff;
-        \\      }
-        \\      return null;
-        \\    }
-        \\    var p=el.parentNode;
-        \\    while(p){
-        \\      if(p.nodeType===1&&(p.tagName||'').toLowerCase()==='form')return p;
-        \\      p=p.parentNode;
-        \\    }
+        \\    // HTML §4.10.18.3: defer to the canonical Element.form getter
+        \\    // (form_owner_polyfill_js) which handles tree-root lookup,
+        \\    // empty form="", and disconnected-subtree cases. By the time
+        \\    // appendChild/insertBefore actually fire on user content the
+        \\    // form_owner polyfill has already been installed.
+        \\    if(typeof el.form!=='undefined')return el.form||null;
         \\    return null;
         \\  }
         \\  function checkRadioOnInsert(node){
@@ -5551,12 +5535,50 @@ pub const KotoriRuntime = struct {
         \\  }
         \\  function computeFormOwner(el){
         \\    var fa=el.getAttribute('form');
-        \\    if(fa!=null&&fa!==''){
-        \\      var f=document.getElementById(fa);
-        \\      if(f&&tag(f)==='form')return f;
+        \\    if(fa!==null){
+        \\      // HTML §4.10.18.3: when the form attribute is specified, the
+        \\      // owner is the first form element in the element's tree-root
+        \\      // whose id matches. Empty string never matches a real form id
+        \\      // even if a form has id="" — the tree-order lookup uses the
+        \\      // attribute's IDREF semantics, which an empty IDREF cannot
+        \\      // satisfy. Fall back to a tree walk for disconnected subtrees
+        \\      // (where document.getElementById misses), preferring the
+        \\      // first form#id in tree order over the first id-matching
+        \\      // element of any tag.
+        \\      if(fa==='')return null;
+        \\      // Use getElementById semantics: first element in tree order
+        \\      // with id===fa, regardless of tag. If that first match is not
+        \\      // a form, owner is null even when a later form has the same
+        \\      // id. (form_attribute.html "non-form element with same ID
+        \\      // inserted earlier in tree order" covers this case.)
+        \\      var root=(typeof el.getRootNode==='function')?el.getRootNode():null;
+        \\      if(!root){
+        \\        var up=el;
+        \\        while(up.parentNode)up=up.parentNode;
+        \\        root=up;
+        \\      }
+        \\      var hit=null;
+        \\      if(root&&typeof root.getElementById==='function'){
+        \\        hit=root.getElementById(fa);
+        \\      }
+        \\      if(!hit&&root){
+        \\        // Tree walk fallback for disconnected subtrees whose root is
+        \\        // a plain Element (no getElementById).
+        \\        var stack=[root],node;
+        \\        while(stack.length){
+        \\          node=stack.pop();
+        \\          if(node&&node.nodeType===1){
+        \\            var nid=(typeof node.getAttribute==='function')?node.getAttribute('id'):node.id;
+        \\            if(nid===fa){hit=node;break;}
+        \\          }
+        \\          var ch=node&&node.children;
+        \\          if(ch){for(var i=ch.length-1;i>=0;i--)stack.push(ch[i]);}
+        \\        }
+        \\      }
+        \\      if(hit&&tag(hit)==='form')return hit;
         \\      return null;
         \\    }
-        \\    // Ascend to nearest form ancestor.
+        \\    // No form attribute → ascend to nearest form ancestor.
         \\    var p=el.parentNode;
         \\    while(p){
         \\      if(p.nodeType===1&&tag(p)==='form')return p;
