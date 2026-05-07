@@ -274,6 +274,80 @@ pub const KotoriRuntime = struct {
         \\    return arr;
         \\  }
         \\
+        \\  // HTML §4.10.21.2 HTMLFormControlsCollection — extends HTMLCollection.
+        \\  // Used by form.elements. namedItem returns RadioNodeList for multi-match.
+        \\  var HTMLFormControlsCollection = function HTMLFormControlsCollection(){};
+        \\  var hfccProto = {
+        \\    namedItem: function(name){
+        \\      name=String(name);
+        \\      if(name==='')return null;
+        \\      var matches=[];
+        \\      for(var i=0;i<this.length;i++){
+        \\        var el=this[i];
+        \\        if(!el||!el.getAttribute)continue;
+        \\        var ns=el.namespaceURI;
+        \\        if(ns!=null&&ns!=='http://www.w3.org/1999/xhtml')continue;
+        \\        if(el.getAttribute('id')===name||el.getAttribute('name')===name){
+        \\          matches.push(el);
+        \\        }
+        \\      }
+        \\      if(matches.length===0)return null;
+        \\      if(matches.length===1)return matches[0];
+        \\      return brandRadioNL(matches);
+        \\    }
+        \\  };
+        \\  try{Object.setPrototypeOf(hfccProto, HTMLCollection.prototype);}catch(e){}
+        \\  HTMLFormControlsCollection.prototype = hfccProto;
+        \\  globalThis.HTMLFormControlsCollection = HTMLFormControlsCollection;
+        \\
+        \\  // HTML §4.10.21.3 RadioNodeList — extends NodeList. .value getter/setter
+        \\  // for radio button groups (HTML §4.10.21.3). Currently a stub for
+        \\  // instanceof support; .value impl can come later.
+        \\  var RadioNodeList = function RadioNodeList(){};
+        \\  var rnlProto = {};
+        \\  Object.defineProperty(rnlProto, 'value', {
+        \\    get: function(){
+        \\      for(var i=0;i<this.length;i++){
+        \\        var el=this[i];
+        \\        if(!el||!el.getAttribute)continue;
+        \\        if((el.tagName||'').toLowerCase()!=='input')continue;
+        \\        if(((el.getAttribute('type')||'radio').toLowerCase())!=='radio')continue;
+        \\        if(el.checked)return el.value!=null?el.value:'on';
+        \\      }
+        \\      return '';
+        \\    },
+        \\    set: function(v){
+        \\      v=String(v);
+        \\      for(var i=0;i<this.length;i++){
+        \\        var el=this[i];
+        \\        if(!el||!el.getAttribute)continue;
+        \\        if((el.tagName||'').toLowerCase()!=='input')continue;
+        \\        if(((el.getAttribute('type')||'radio').toLowerCase())!=='radio')continue;
+        \\        var ev=el.value!=null?el.value:'on';
+        \\        if(ev===v){el.checked=true;return;}
+        \\      }
+        \\    },
+        \\    configurable:true,enumerable:true
+        \\  });
+        \\  try{Object.setPrototypeOf(rnlProto, NodeList.prototype);}catch(e){}
+        \\  RadioNodeList.prototype = rnlProto;
+        \\  globalThis.RadioNodeList = RadioNodeList;
+        \\
+        \\  function brandHFCC(arr){
+        \\    if(arr && typeof arr==='object'){
+        \\      try{Object.setPrototypeOf(arr, HTMLFormControlsCollection.prototype);}catch(e){}
+        \\    }
+        \\    return arr;
+        \\  }
+        \\  function brandRadioNL(arr){
+        \\    if(arr && typeof arr==='object'){
+        \\      try{Object.setPrototypeOf(arr, RadioNodeList.prototype);}catch(e){}
+        \\    }
+        \\    return arr;
+        \\  }
+        \\  globalThis.__suzume_brandHFCC = brandHFCC;
+        \\  globalThis.__suzume_brandRadioNL = brandRadioNL;
+        \\
         \\  // Compute qualifiedName per DOM spec: prefix ? prefix+':'+localName : localName.
         \\  // Workaround: in some kotori paths `localName` may still include the
         \\  // prefix (e.g. "te:st") — strip it so prefix+':'+localName is stable.
@@ -3989,10 +4063,30 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    return out;
         \\  }
+        \\  // HTML §4.10.21.1: form.elements excludes input type=image. Other
+        \\  // listed elements are kept. Branded as HTMLFormControlsCollection
+        \\  // so instanceof HTMLFormControlsCollection / HTMLCollection both
+        \\  // hold (HFCC.prototype's parent is HTMLCollection.prototype).
+        \\  function _filterFormElements(arr){
+        \\    var out=[];
+        \\    for(var i=0;i<arr.length;i++){
+        \\      var el=arr[i];
+        \\      var t=(el.tagName||'').toLowerCase();
+        \\      if(t==='input'){
+        \\        var ty=el.getAttribute('type');
+        \\        ty=ty==null?'text':String(ty).toLowerCase();
+        \\        if(ty==='image')continue;
+        \\      }
+        \\      out.push(el);
+        \\    }
+        \\    return out;
+        \\  }
         \\  Object.defineProperty(EP,'elements',{
         \\    get:function(){
         \\      if(tag(this)!=='form')return undefined;
-        \\      return _collectListed(this);
+        \\      var arr=_filterFormElements(_collectListed(this));
+        \\      var brand=globalThis.__suzume_brandHFCC;
+        \\      return brand?brand(arr):arr;
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
