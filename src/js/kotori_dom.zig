@@ -1465,10 +1465,249 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
     return JsValue.initString(vm.pool.intern(resolved) catch return null);
 }
 
+/// HTML §4.10.18.7 — autocomplete attribute IDL processing.
+/// Form-level autocomplete is the simple {on, off} enum.
+/// Form-control autocomplete (input/select/textarea) is the complex
+/// space-separated token list with section-/mode-/contact-/field-/
+/// credential structure described in "Processing model".
+fn autocompleteReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, iface: []const u8) ?JsValue {
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    var val_len: usize = 0;
+    const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, "autocomplete", "autocomplete".len, &val_len);
+
+    // HTMLFormElement.autocomplete — enum {on, off}; missing/invalid default "on".
+    if (std.mem.eql(u8, iface, "HTMLFormElement")) {
+        if (val_ptr == null) return JsValue.initString(vm.pool.intern("on") catch return null);
+        const raw = val_ptr.?[0..val_len];
+        if (asciiEqualIgnoreCase(raw, "off")) {
+            return JsValue.initString(vm.pool.intern("off") catch return null);
+        }
+        return JsValue.initString(vm.pool.intern("on") catch return null);
+    }
+
+    // input/select/textarea.autocomplete — token list per HTML §4.10.18.7.1.
+    if (val_ptr == null) return JsValue.initString(vm.pool.intern("") catch return null);
+    const raw = val_ptr.?[0..val_len];
+
+    // 1. Tokenize on ASCII whitespace.
+    var tokens_buf: [16][]const u8 = undefined;
+    var n_tokens: usize = 0;
+    var i: usize = 0;
+    while (i < raw.len and n_tokens < tokens_buf.len) {
+        while (i < raw.len and isAsciiWhitespace(raw[i])) i += 1;
+        const start = i;
+        while (i < raw.len and !isAsciiWhitespace(raw[i])) i += 1;
+        if (i > start) {
+            tokens_buf[n_tokens] = raw[start..i];
+            n_tokens += 1;
+        }
+    }
+    if (n_tokens == 0 or n_tokens > 5) {
+        return JsValue.initString(vm.pool.intern("") catch return null);
+    }
+
+    // 2. Lowercase all tokens into a scratch buffer.
+    var lc_buf: [256]u8 = undefined;
+    var lc_off: [16]usize = undefined;
+    var lc_len: [16]usize = undefined;
+    var lc_pos: usize = 0;
+    for (tokens_buf[0..n_tokens], 0..) |tok, idx| {
+        if (lc_pos + tok.len > lc_buf.len) {
+            return JsValue.initString(vm.pool.intern("") catch return null);
+        }
+        lc_off[idx] = lc_pos;
+        lc_len[idx] = tok.len;
+        for (tok, 0..) |c, j| lc_buf[lc_pos + j] = std.ascii.toLower(c);
+        lc_pos += tok.len;
+    }
+
+    const is_anchor_mantle = isInputTypeHidden(elem);
+
+    // 3. Walk tokens from the right per spec.
+    //    Last token is the candidate field name (or "webauthn" credential).
+    var n: i32 = @intCast(n_tokens - 1);
+    var idx_credential: ?usize = null;
+    const last_lc = lc_buf[lc_off[@intCast(n)] .. lc_off[@intCast(n)] + lc_len[@intCast(n)]];
+
+    // 3a. webauthn credential (only when there's a preceding field token).
+    // When "webauthn" is the sole/last token without a preceding field name,
+    // it is itself the field name (Credential category, valid standalone
+    // per the autofill processing model).
+    if (std.mem.eql(u8, last_lc, "webauthn") and n > 0) {
+        idx_credential = @intCast(n);
+        n -= 1;
+    }
+
+    const idx_field: usize = @intCast(n);
+    const field_lc = lc_buf[lc_off[idx_field] .. lc_off[idx_field] + lc_len[idx_field]];
+    const cat_opt = autocompleteCategoryFor(field_lc);
+
+    // Single-token "on"/"off" handling (special case from algorithm).
+    const is_on_off = std.mem.eql(u8, field_lc, "on") or std.mem.eql(u8, field_lc, "off");
+    if (is_on_off) {
+        if (idx_credential != null or idx_field != 0 or is_anchor_mantle) {
+            return JsValue.initString(vm.pool.intern("") catch return null);
+        }
+        return JsValue.initString(vm.pool.intern(field_lc) catch return null);
+    }
+
+    const cat = cat_opt orelse {
+        return JsValue.initString(vm.pool.intern("") catch return null);
+    };
+
+    // 4. Walk preceding tokens: contact (Contact/Credential only), mode, section.
+    var idx_contact: ?usize = null;
+    var idx_mode: ?usize = null;
+    var idx_section: ?usize = null;
+    var pre_n: i32 = @as(i32, @intCast(idx_field)) - 1;
+
+    if (pre_n >= 0 and (cat == .contact or cat == .credential)) {
+        const tok = lc_buf[lc_off[@intCast(pre_n)] .. lc_off[@intCast(pre_n)] + lc_len[@intCast(pre_n)]];
+        if (isContactToken(tok)) {
+            idx_contact = @intCast(pre_n);
+            pre_n -= 1;
+        }
+    }
+    if (pre_n >= 0) {
+        const tok = lc_buf[lc_off[@intCast(pre_n)] .. lc_off[@intCast(pre_n)] + lc_len[@intCast(pre_n)]];
+        if (std.mem.eql(u8, tok, "shipping") or std.mem.eql(u8, tok, "billing")) {
+            idx_mode = @intCast(pre_n);
+            pre_n -= 1;
+        }
+    }
+    if (pre_n >= 0) {
+        const orig = tokens_buf[@intCast(pre_n)];
+        if (orig.len > 8 and std.mem.startsWith(u8, orig, "section-")) {
+            idx_section = @intCast(pre_n);
+            pre_n -= 1;
+        }
+    }
+    if (pre_n >= 0) {
+        return JsValue.initString(vm.pool.intern("") catch return null);
+    }
+
+    // 5. Assemble result. Section keeps original case; everything else
+    //    uses the lowercased copy.
+    var result_buf: [320]u8 = undefined;
+    var rp: usize = 0;
+    const append = struct {
+        fn run(buf: *[320]u8, p: *usize, slice: []const u8, with_space: bool) bool {
+            const need = if (with_space) slice.len + 1 else slice.len;
+            if (p.* + need > buf.len) return false;
+            if (with_space) {
+                buf[p.*] = ' ';
+                p.* += 1;
+            }
+            @memcpy(buf[p.*..][0..slice.len], slice);
+            p.* += slice.len;
+            return true;
+        }
+    }.run;
+
+    if (idx_section) |idx| {
+        // Per HTML §4.10.18.7.1 output serialization, section is lowercased
+        // along with mode/contact/field tokens. Detection is case-sensitive
+        // ("section-" prefix on the original token), but the emitted form is
+        // lowercase.
+        const tok = lc_buf[lc_off[idx] .. lc_off[idx] + lc_len[idx]];
+        if (!append(&result_buf, &rp, tok, false)) return null;
+    }
+    if (idx_mode) |idx| {
+        const tok = lc_buf[lc_off[idx] .. lc_off[idx] + lc_len[idx]];
+        if (!append(&result_buf, &rp, tok, rp > 0)) return null;
+    }
+    if (idx_contact) |idx| {
+        const tok = lc_buf[lc_off[idx] .. lc_off[idx] + lc_len[idx]];
+        if (!append(&result_buf, &rp, tok, rp > 0)) return null;
+    }
+    if (!append(&result_buf, &rp, field_lc, rp > 0)) return null;
+    if (idx_credential) |idx| {
+        const tok = lc_buf[lc_off[idx] .. lc_off[idx] + lc_len[idx]];
+        if (!append(&result_buf, &rp, tok, rp > 0)) return null;
+    }
+    return JsValue.initString(vm.pool.intern(result_buf[0..rp]) catch return null);
+}
+
+fn isAsciiWhitespace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0c;
+}
+
+fn asciiEqualIgnoreCase(a: []const u8, b: []const u8) bool {
+    if (a.len != b.len) return false;
+    for (a, b) |ac, bc| {
+        if (std.ascii.toLower(ac) != std.ascii.toLower(bc)) return false;
+    }
+    return true;
+}
+
+fn isInputTypeHidden(elem: *lxb.lxb_dom_element_t) bool {
+    var tn_len: usize = 0;
+    const tn_ptr = dom_b.lxb_dom_element_local_name(elem, &tn_len) orelse return false;
+    if (!asciiEqualIgnoreCase(tn_ptr[0..tn_len], "input")) return false;
+    var val_len: usize = 0;
+    const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, "type", 4, &val_len) orelse return false;
+    return asciiEqualIgnoreCase(val_ptr[0..val_len], "hidden");
+}
+
+const AutocompleteCategory = enum { normal, contact, credential };
+
+fn autocompleteCategoryFor(field_lc: []const u8) ?AutocompleteCategory {
+    // "on"/"off" returns normal so the single-token branch can detect them.
+    if (std.mem.eql(u8, field_lc, "on") or std.mem.eql(u8, field_lc, "off")) return .normal;
+    // Contact category — phone/email/impp.
+    const contact_names = [_][]const u8{
+        "tel",          "tel-country-code", "tel-national", "tel-area-code",
+        "tel-local",    "tel-local-prefix", "tel-local-suffix", "tel-extension",
+        "email",        "impp",
+    };
+    for (contact_names) |c| {
+        if (std.mem.eql(u8, c, field_lc)) return .contact;
+    }
+    // Credential field — webauthn is a valid standalone field name.
+    if (std.mem.eql(u8, "webauthn", field_lc)) return .credential;
+    // Normal category — everything else from the spec list.
+    const normal_names = [_][]const u8{
+        "name",                   "honorific-prefix",     "given-name",
+        "additional-name",        "family-name",          "honorific-suffix",
+        "nickname",               "username",             "new-password",
+        "current-password",       "one-time-code",        "organization-title",
+        "organization",           "street-address",       "address-line1",
+        "address-line2",          "address-line3",        "address-level4",
+        "address-level3",         "address-level2",       "address-level1",
+        "country",                "country-name",         "postal-code",
+        "cc-name",                "cc-given-name",        "cc-additional-name",
+        "cc-family-name",         "cc-number",            "cc-exp",
+        "cc-exp-month",           "cc-exp-year",          "cc-csc",
+        "cc-type",                "transaction-currency", "transaction-amount",
+        "language",               "bday",                 "bday-day",
+        "bday-month",             "bday-year",            "sex",
+        "url",                    "photo",
+    };
+    for (normal_names) |c| {
+        if (std.mem.eql(u8, c, field_lc)) return .normal;
+    }
+    return null;
+}
+
+fn isContactToken(token_lc: []const u8) bool {
+    return std.mem.eql(u8, token_lc, "home") or
+        std.mem.eql(u8, token_lc, "work") or
+        std.mem.eql(u8, token_lc, "mobile") or
+        std.mem.eql(u8, token_lc, "fax") or
+        std.mem.eql(u8, token_lc, "pager");
+}
+
 /// HTML §2.6 reflection getter for non-URL types (DOMString, boolean, long, etc.).
 /// URL-type attributes are handled by urlReflectionGet which canonicalizes them.
 fn reflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsValue {
     const iface = resolveHtmlIfaceForNode(node) orelse return null;
+    // HTML §4.10.18.7 — autocomplete needs token-list / enum processing
+    // beyond the generic table types. Dispatch before the row lookup so
+    // the spec algorithm runs for HTMLFormElement / HTMLInputElement /
+    // HTMLSelectElement / HTMLTextAreaElement uniformly.
+    if (std.mem.eql(u8, name, "autocomplete")) {
+        return autocompleteReflectionGet(vm, node, iface);
+    }
     const row = refl.lookup(iface, name) orelse return null;
     switch (row.type) {
         .domstring, .url => return getAttr(vm, node, row.content),
