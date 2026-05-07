@@ -5246,7 +5246,7 @@ pub const VM = struct {
     /// getter). Propagates abrupt completions from the getter so callers can
     /// route them into rejectPromise / pending_throw paths.
     /// `this_val` is the receiver passed to the getter.
-    fn getPropertyWithAccessors(self: *VM, obj: *JsObject, name: StringId, this_val: JsValue) !?JsValue {
+    pub fn getPropertyWithAccessors(self: *VM, obj: *JsObject, name: StringId, this_val: JsValue) !?JsValue {
         if (obj.findAccessorDescriptor(name)) |acc| {
             if (acc.get.isObject()) {
                 return try self.callJsFunction(acc.get, this_val, &.{});

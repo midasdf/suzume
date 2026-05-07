@@ -1411,33 +1411,53 @@ fn urlReflectionGet(vm: *VM, node: *lxb.lxb_dom_node_t, name: []const u8) ?JsVal
     var val_len: usize = 0;
     const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, attr_name.ptr, attr_name.len, &val_len);
     // HTML §2.6.5: resolve the attribute value against the document base URL.
-    // Get base URL from document.URL (stored as a string property on the doc object).
-    const base_url: ?[]const u8 = blk: {
+    // Read document.URL (used as missing/empty fallback for action-like URLs)
+    // and document.baseURI (used as the resolution base — different from
+    // document.URL when a <base> element is present). baseURI is exposed
+    // via a JS getter installed by the URL polyfill, so we go through
+    // getPropertyWithAccessors to invoke it.
+    const doc_obj_opt: ?*JsObject = blk: {
         const doc_sid = vm.pool.intern("document") catch break :blk null;
         const doc_val = vm.globals.get(doc_sid) orelse break :blk null;
         if (!doc_val.isObject()) break :blk null;
-        const doc_obj = doc_val.asJsObject();
+        break :blk doc_val.asJsObject();
+    };
+    const doc_url: ?[]const u8 = blk: {
+        const doc_obj = doc_obj_opt orelse break :blk null;
         const url_sid = vm.pool.intern("URL") catch break :blk null;
         const url_val = doc_obj.getProperty(url_sid) orelse break :blk null;
         if (!url_val.isString()) break :blk null;
         break :blk vm.pool.get(url_val.asStringId());
     };
-    // HTML §4.10.21.2 formAction special case: when the formaction content
-    // attribute is missing OR its value is the empty string, the IDL attribute
-    // must return the document's URL (not the empty string). Same rule applies
-    // to any "form-action" style URL reflection; we scope it to formAction
-    // here since it's the only spec'd override in our reflection table.
-    const is_form_action = std.mem.eql(u8, name, "formAction");
+    const base_url: ?[]const u8 = blk: {
+        const doc_obj = doc_obj_opt orelse break :blk doc_url;
+        const baseuri_sid = vm.pool.intern("baseURI") catch break :blk doc_url;
+        const this_val = JsValue.initObject(doc_obj);
+        const v = vm.getPropertyWithAccessors(doc_obj, baseuri_sid, this_val) catch break :blk doc_url;
+        const got = v orelse break :blk doc_url;
+        if (!got.isString()) break :blk doc_url;
+        const s = vm.pool.get(got.asStringId()) orelse break :blk doc_url;
+        if (s.len == 0) break :blk doc_url;
+        break :blk s;
+    };
+    // HTML §4.10.18 dom-fs-action / §4.10.21.2 formAction: when the action /
+    // formaction content attribute is missing OR its value is the empty
+    // string, the IDL attribute must return the document's URL (not the
+    // empty string). Apply to action (HTMLFormElement) and formAction
+    // (input/button) — these are the only URL reflections with this default.
+    const is_action_like = std.mem.eql(u8, name, "formAction") or
+        std.mem.eql(u8, name, "action");
     const attr_empty_or_absent = val_ptr == null or val_len == 0;
-    if (is_form_action and attr_empty_or_absent) {
-        if (base_url) |url| {
+    if (is_action_like and attr_empty_or_absent) {
+        if (doc_url) |url| {
             return JsValue.initString(vm.pool.intern(url) catch return null);
         }
         return JsValue.initString(vm.pool.intern("") catch return null);
     }
     // Attribute absent → return empty string (HTML §2.6.5).
     const raw = if (val_ptr) |p| p[0..val_len] else return JsValue.initString(vm.pool.intern("") catch return null);
-    // Canonicalize: resolve relative → absolute using document base URL.
+    // Canonicalize: resolve relative → absolute using the document base URL
+    // (which honors any <base href> element, not just the document address).
     const resolved = refl.canonicalizeUrl(vm.allocator, raw, base_url) catch {
         return JsValue.initString(vm.pool.intern(raw) catch return null);
     };
