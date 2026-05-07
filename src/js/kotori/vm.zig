@@ -348,28 +348,28 @@ pub const VM = struct {
                     }
                 },
                 .sub => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsSub(a, b));
                 },
                 .mul => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsMul(a, b));
                 },
                 .div => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsDiv(a, b));
                 },
                 .mod => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsMod(a, b));
                 },
                 .power => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsPow(a, b));
                 },
                 .neg => self.push(JsValue.jsNeg(self.pop())),
@@ -438,33 +438,33 @@ pub const VM = struct {
                 .not => self.push(JsValue.jsNot(self.pop())),
                 .bit_not => self.push(JsValue.jsBitNot(self.pop())),
                 .bit_and => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsBitAnd(a, b));
                 },
                 .bit_or => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsBitOr(a, b));
                 },
                 .bit_xor => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsBitXor(a, b));
                 },
                 .shl => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsShl(a, b));
                 },
                 .shr => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsShr(a, b));
                 },
                 .ushr => {
-                    const b = self.pop();
-                    const a = self.pop();
+                    const b = self.coerceNumeric(self.pop());
+                    const a = self.coerceNumeric(self.pop());
                     self.push(JsValue.jsUshr(a, b));
                 },
 
@@ -4459,6 +4459,19 @@ pub const VM = struct {
     }
 
     // ── JS callback invocation ──────────────────────────────────────
+
+    /// ECMA-262 ToNumber for string operands. JsValue.toNumber() returns
+    /// NaN for strings because it has no pool reference; this helper
+    /// reads the pool entry and parses via std.fmt.parseFloat. Used by
+    /// arithmetic/bit-shift opcodes so `"1" >>> 0 === 1` etc.
+    fn coerceNumeric(self: *VM, val: JsValue) JsValue {
+        if (!val.isString()) return val;
+        const s = self.pool.get(val.asStringId()) orelse return JsValue.initNumber(0);
+        const trimmed = std.mem.trim(u8, s, " \t\n\r\u{c}");
+        if (trimmed.len == 0) return JsValue.initNumber(0);
+        const n = std.fmt.parseFloat(f64, trimmed) catch std.math.nan(f64);
+        return JsValue.initNumber(n);
+    }
 
     pub fn callJsFunction(self: *VM, func_val: JsValue, this_val: JsValue, args: []const JsValue) !JsValue {
         if (!func_val.isObject()) return JsValue.undefined_val;
