@@ -6362,23 +6362,40 @@ pub const VM = struct {
 
     // ── Function.prototype ─────────────────────────────────────────
 
+    /// If `this` is a JS async function, wrap a synchronous return
+    /// from callJsFunction into a resolved Promise so call/apply
+    /// preserve the async-function calling convention. Without this,
+    /// `asyncFn.apply(null, args)` returns the bare function value,
+    /// not a Promise — promise_test then sees no `.then`.
+    fn wrapAsyncIfNeeded(self: *VM, fn_val: JsValue, result: JsValue) !JsValue {
+        if (!fn_val.isObject()) return result;
+        const obj = fn_val.asJsObject();
+        if (obj.obj_type != .function) return result;
+        if (!obj.data.function.is_async) return result;
+        return try self.createResolvedPromise(result);
+    }
+
     fn nativeFunctionCall(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const this_arg = if (args.len > 0) args[0] else JsValue.undefined_val;
         const call_args = if (args.len > 1) args[1..] else &[_]JsValue{};
-        return try vm.callJsFunction(this, this_arg, call_args);
+        const result = try vm.callJsFunction(this, this_arg, call_args);
+        return try vm.wrapAsyncIfNeeded(this, result);
     }
 
     fn nativeFunctionApply(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
         const vm = vmFromCtx(ctx);
         const this_arg = if (args.len > 0) args[0] else JsValue.undefined_val;
+        var result: JsValue = JsValue.undefined_val;
         if (args.len > 1 and args[1].isObject()) {
             const arr_obj = args[1].asJsObject();
             if (arr_obj.obj_type == .array) {
-                return try vm.callJsFunction(this, this_arg, arr_obj.data.array.items);
+                result = try vm.callJsFunction(this, this_arg, arr_obj.data.array.items);
+                return try vm.wrapAsyncIfNeeded(this, result);
             }
         }
-        return try vm.callJsFunction(this, this_arg, &[_]JsValue{});
+        result = try vm.callJsFunction(this, this_arg, &[_]JsValue{});
+        return try vm.wrapAsyncIfNeeded(this, result);
     }
 
     fn nativeFunctionBind(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
