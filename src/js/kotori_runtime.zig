@@ -3964,14 +3964,18 @@ pub const KotoriRuntime = struct {
         \\    return null;
         \\  };
         \\  // ── form.elements / .length / .reset() (§4.10.21) ──
-        \\  // kotori's querySelectorAll has limited comma-list support, so collect
-        \\  // each tag separately and merge in tree order.
-        \\  function _collectListed(root){
-        \\    var tags=['input','select','textarea','button','output','fieldset'];
-        \\    var seen=Object.create(null),out=[];
-        \\    // Walk tree in document order, push matching elements once.
-        \\    var stack=[root],node;
-        \\    // Iterative DFS: pop, push children reversed
+        \\  // HTML §4.10.21.1 form.elements: collect form-associated listed
+        \\  // elements whose form owner is this form — including elements
+        \\  // outside the form's subtree that opt in via the `form="<id>"`
+        \\  // attribute. Walking the document and dispatching on node.form
+        \\  // (the form_owner polyfill getter) covers both descendants and
+        \\  // externally-associated controls in tree order.
+        \\  function _collectListed(form){
+        \\    var out=[];
+        \\    var doc=form.ownerDocument||(typeof document!=='undefined'?document:null);
+        \\    var rootScan=doc?(doc.body||doc.documentElement||form):form;
+        \\    if(!rootScan)return out;
+        \\    var stack=[rootScan],node;
         \\    while(stack.length){
         \\      node=stack.pop();
         \\      var children=node.children;
@@ -3980,7 +3984,7 @@ pub const KotoriRuntime = struct {
         \\      }
         \\      var t=(node.tagName||'').toLowerCase();
         \\      if(t==='input'||t==='select'||t==='textarea'||t==='button'||t==='output'||t==='fieldset'){
-        \\        out.push(node);
+        \\        if(node.form===form)out.push(node);
         \\      }
         \\    }
         \\    return out;
