@@ -245,10 +245,21 @@ pub fn elementInsertAdjacentHTML(
 
     if (html_s.len == 0) return quickjs.JS_UNDEFINED();
 
+    const position = pos_s.ptr[0..pos_s.len];
+    // Resolve the parent that will receive added nodes for mutation reporting.
+    // beforebegin/afterend → siblings of `node`, so target parent is node.parent.
+    // afterbegin/beforeend → children of `node`, so target parent is `node`.
+    const is_sibling = std.ascii.eqlIgnoreCase(position, "beforebegin") or std.ascii.eqlIgnoreCase(position, "afterend");
+    const target_parent: *lxb.lxb_dom_node_t = if (is_sibling) (node.parent orelse return quickjs.JS_UNDEFINED()) else node;
+
     const doc = api.getDocument(c) orelse return quickjs.JS_UNDEFINED();
     const frag = lxb_html_document_parse_fragment(doc, elem, html_s.ptr, html_s.len) orelse return quickjs.JS_UNDEFINED();
 
-    const position = pos_s.ptr[0..pos_s.len];
+    // Snapshot fragment children before moving — these become added_buf.
+    const added_buf = collectChildren(frag) catch return quickjs.JS_UNDEFINED();
+    defer if (added_buf.len > 0) std.heap.c_allocator.free(added_buf);
+    std.debug.print("IAH pos={s} html_len={d} added_count={d} target=elem@{*} frag@{*}\n", .{ position, html_s.len, added_buf.len, node, frag });
+
     if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
         moveChildrenBefore(frag, node);
     } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
@@ -263,7 +274,24 @@ pub fn elementInsertAdjacentHTML(
         moveChildrenAfter(frag, node);
     }
     _ = lxb_dom_node_destroy(frag);
+    // DOM §4.9: record childList mutation so MutationObservers fire and
+    // kotori HTMLCollection / firstElementChild caches invalidate.
+    events.recordMutationChildListBulk(target_parent, added_buf, &.{}, null, null);
     api.setDomDirty();
+    // Shadow DOM Phase 1: tag inserted subtree if target_parent is in a shadow scope.
+    {
+        const shadow_root = @import("shadow_root.zig");
+        for (added_buf) |an| shadow_root.propagateScopeFromParent(target_parent, an);
+    }
+    // Execute any <script> elements that landed in the inserted subtree.
+    for (added_buf) |an| {
+        if (an.type == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+            const js_val = api.wrapNode(c, an);
+            api.maybeExecuteDynamicScriptPublic(c, an, js_val);
+            qjs.JS_FreeValue(c, js_val);
+            maybeExecuteScriptsInSubtree(c, an);
+        }
+    }
     return quickjs.JS_UNDEFINED();
 }
 

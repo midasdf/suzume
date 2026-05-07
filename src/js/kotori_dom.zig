@@ -891,6 +891,7 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "removeAttributeNode", &nativeRemoveAttributeNode);
     try vm.registerNativeMethod(ep, "insertAdjacentElement", &nativeInsertAdjacentElement);
     try vm.registerNativeMethod(ep, "insertAdjacentText", &nativeInsertAdjacentText);
+    try vm.registerNativeMethod(ep, "insertAdjacentHTML", &nativeInsertAdjacentHTML);
     // CSSOM View §6.5: scroll / scrollTo / scrollBy
     try vm.registerNativeMethod(ep, "scroll", &nativeScroll);
     try vm.registerNativeMethod(ep, "scrollTo", &nativeScrollTo);
@@ -8167,6 +8168,79 @@ fn nativeInsertAdjacentText(ctx: *anyopaque, this: JsValue, args: []const JsValu
     const wrapped = wrapNode(vm, text_node) orelse return JsValue.undefined_val;
     const new_args = [2]JsValue{ args[0], wrapped };
     _ = try nativeInsertAdjacentElement(ctx, this, &new_args);
+    return JsValue.undefined_val;
+}
+
+// ── Element.insertAdjacentHTML (DOM Parsing §3) ─────────────────────
+// Spec: parse `text` as a fragment using `this` as context element,
+// then insert the parsed children at `position`. Same parser used by
+// innerHTML setter — must match its mutation/cache behavior so kotori
+// HTMLCollection / firstElementChild caches stay coherent.
+fn nativeInsertAdjacentHTML(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (args.len < 2) return JsValue.undefined_val;
+    const node = getThisNode(this) orelse return JsValue.undefined_val;
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    const position = argToString(vm, args[0]);
+    const html = argToString(vm, args[1]);
+    if (html.len == 0) return JsValue.undefined_val;
+    const doc = g_document orelse return JsValue.undefined_val;
+
+    const frag = dom_b.lxb_html_document_parse_fragment(doc, elem, html.ptr, html.len) orelse return JsValue.undefined_val;
+
+    if (std.ascii.eqlIgnoreCase(position, "beforebegin")) {
+        // Insert each parsed child as previous sibling of `node` (in order).
+        if (nodeParent(node) == null) return JsValue.undefined_val;
+        var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(frag);
+        while (ch) |child| {
+            const next = nodeNext(child);
+            dom_b.lxb_dom_node_remove(child);
+            dom_b.lxb_dom_node_insert_before(node, child);
+            ch = next;
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "afterbegin")) {
+        // Insert each parsed child before `node`'s current first child (or append if none).
+        var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(frag);
+        const first = nodeFirstChild(node);
+        while (ch) |child| {
+            const next = nodeNext(child);
+            dom_b.lxb_dom_node_remove(child);
+            if (first) |fc| {
+                dom_b.lxb_dom_node_insert_before(fc, child);
+            } else {
+                dom_b.lxb_dom_node_insert_child(node, child);
+            }
+            ch = next;
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "beforeend")) {
+        // Append each parsed child as last child of `node` (in order).
+        var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(frag);
+        while (ch) |child| {
+            const next = nodeNext(child);
+            dom_b.lxb_dom_node_remove(child);
+            dom_b.lxb_dom_node_insert_child(node, child);
+            ch = next;
+        }
+    } else if (std.ascii.eqlIgnoreCase(position, "afterend")) {
+        // Insert each parsed child as next sibling of `node` (in order).
+        if (nodeParent(node) == null) return JsValue.undefined_val;
+        var anchor: *lxb.lxb_dom_node_t = node;
+        var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(frag);
+        while (ch) |child| {
+            const next = nodeNext(child);
+            dom_b.lxb_dom_node_remove(child);
+            dom_b.lxb_dom_node_insert_after(anchor, child);
+            anchor = child;
+            ch = next;
+        }
+    } else {
+        return JsValue.undefined_val;
+    }
+
+    // HTML §4.10.5.1.16 — last-checked-radio wins for parser-inserted radios.
+    applyRadioGroupExclusivityAfterParse(node);
+    setDomDirty();
     return JsValue.undefined_val;
 }
 
