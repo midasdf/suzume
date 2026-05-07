@@ -4064,9 +4064,7 @@ pub const KotoriRuntime = struct {
         \\    return out;
         \\  }
         \\  // HTML §4.10.21.1: form.elements excludes input type=image. Other
-        \\  // listed elements are kept. Branded as HTMLFormControlsCollection
-        \\  // so instanceof HTMLFormControlsCollection / HTMLCollection both
-        \\  // hold (HFCC.prototype's parent is HTMLCollection.prototype).
+        \\  // listed elements are kept.
         \\  function _filterFormElements(arr){
         \\    var out=[];
         \\    for(var i=0;i<arr.length;i++){
@@ -4081,12 +4079,143 @@ pub const KotoriRuntime = struct {
         \\    }
         \\    return out;
         \\  }
+        \\  // Per-form HFCC + RadioNodeList Proxy caches (HTML §4.10.21.1
+        \\  // [SameObject] form.elements). Both are live (refresh on every
+        \\  // access) and named getter resolution follows HTMLFormControlsCollection
+        \\  // §4.10.21.2 (returns Element for single match, RadioNodeList for
+        \\  // multiple). Array-index-shaped strings (canonical 0/1/2…) skip the
+        \\  // named lookup so form.elements["2"] / form.elements[2] are both
+        \\  // routed through indexed-property handling per WebIDL §3.9.2.
+        \\  var _hfccCache = new WeakMap();
+        \\  var _rnlCache = new WeakMap();
+        \\  function _isArrayIndex(s){
+        \\    if(typeof s!=='string')return false;
+        \\    if(s==='0')return true;
+        \\    return /^[1-9][0-9]{0,9}$/.test(s);
+        \\  }
+        \\  function _matchByName(arr, name){
+        \\    var matches=[];
+        \\    for(var i=0;i<arr.length;i++){
+        \\      var el=arr[i];
+        \\      if(!el||!el.getAttribute)continue;
+        \\      var ns=el.namespaceURI;
+        \\      if(ns!=null&&ns!=='http://www.w3.org/1999/xhtml')continue;
+        \\      var id=el.getAttribute('id');
+        \\      var nm=el.getAttribute('name');
+        \\      if(id===name||nm===name)matches.push(el);
+        \\    }
+        \\    return matches;
+        \\  }
+        \\  function _getRadioNodeList(form, name){
+        \\    var byForm=_rnlCache.get(form);
+        \\    if(!byForm){byForm={};_rnlCache.set(form,byForm);}
+        \\    if(byForm[name])return byForm[name];
+        \\    var target=[];
+        \\    function refresh(){
+        \\      while(target.length)target.pop();
+        \\      var arr=_filterFormElements(_collectListed(form));
+        \\      var matches=_matchByName(arr, name);
+        \\      for(var i=0;i<matches.length;i++)target.push(matches[i]);
+        \\    }
+        \\    var rnlProto=globalThis.RadioNodeList&&globalThis.RadioNodeList.prototype;
+        \\    var px=new Proxy(target,{
+        \\      get:function(t,prop){
+        \\        refresh();
+        \\        if(typeof prop==='symbol')return target[prop];
+        \\        if(prop==='length')return target.length;
+        \\        if(prop==='item')return function(i){var n=i>>>0;return n<target.length?target[n]:null;};
+        \\        if(_isArrayIndex(prop)){
+        \\          var n=+prop;
+        \\          return n<target.length?target[n]:undefined;
+        \\        }
+        \\        if(rnlProto){
+        \\          var desc=Object.getOwnPropertyDescriptor(rnlProto,prop);
+        \\          if(desc){
+        \\            if(desc.get)return desc.get.call(target);
+        \\            return desc.value;
+        \\          }
+        \\        }
+        \\        var v=target[prop];
+        \\        if(typeof v==='function')return v.bind(target);
+        \\        return v;
+        \\      },
+        \\      set:function(t,prop,value){
+        \\        if(rnlProto){
+        \\          var desc=Object.getOwnPropertyDescriptor(rnlProto,prop);
+        \\          if(desc&&desc.set){desc.set.call(target,value);return true;}
+        \\        }
+        \\        target[prop]=value;
+        \\        return true;
+        \\      },
+        \\      has:function(t,prop){
+        \\        refresh();
+        \\        if(prop==='length'||prop==='item')return true;
+        \\        if(_isArrayIndex(prop))return +prop<target.length;
+        \\        if(rnlProto&&Object.getOwnPropertyDescriptor(rnlProto,prop))return true;
+        \\        return prop in target;
+        \\      },
+        \\      getPrototypeOf:function(){return rnlProto||Array.prototype;}
+        \\    });
+        \\    byForm[name]=px;
+        \\    return px;
+        \\  }
+        \\  function _getElementsHFCC(form){
+        \\    var px=_hfccCache.get(form);
+        \\    if(px)return px;
+        \\    var target=[];
+        \\    function refresh(){
+        \\      while(target.length)target.pop();
+        \\      var arr=_filterFormElements(_collectListed(form));
+        \\      for(var i=0;i<arr.length;i++)target.push(arr[i]);
+        \\    }
+        \\    var hfccProto=globalThis.HTMLFormControlsCollection&&globalThis.HTMLFormControlsCollection.prototype;
+        \\    px=new Proxy(target,{
+        \\      get:function(t,prop){
+        \\        refresh();
+        \\        if(typeof prop==='symbol')return target[prop];
+        \\        if(prop==='length')return target.length;
+        \\        if(prop==='item')return function(i){var n=i>>>0;return n<target.length?target[n]:null;};
+        \\        if(prop==='namedItem'){
+        \\          if(hfccProto&&hfccProto.namedItem)return hfccProto.namedItem.bind(target);
+        \\          return function(){return null;};
+        \\        }
+        \\        if(_isArrayIndex(prop)){
+        \\          var n=+prop;
+        \\          return n<target.length?target[n]:undefined;
+        \\        }
+        \\        // Forward Array.prototype methods (slice, indexOf, etc.) and
+        \\        // own props that already exist on the target before doing the
+        \\        // named-property lookup.
+        \\        if(typeof prop==='string'&&prop in target){
+        \\          var v=target[prop];
+        \\          if(typeof v==='function')return v.bind(target);
+        \\          return v;
+        \\        }
+        \\        if(typeof prop==='string'&&prop!==''){
+        \\          var matches=_matchByName(target,prop);
+        \\          if(matches.length===0)return undefined;
+        \\          if(matches.length===1)return matches[0];
+        \\          return _getRadioNodeList(form,prop);
+        \\        }
+        \\        return target[prop];
+        \\      },
+        \\      has:function(t,prop){
+        \\        refresh();
+        \\        if(prop==='length'||prop==='item'||prop==='namedItem')return true;
+        \\        if(_isArrayIndex(prop))return +prop<target.length;
+        \\        if(hfccProto&&Object.getOwnPropertyDescriptor(hfccProto,prop))return true;
+        \\        if(typeof prop==='string'&&_matchByName(target,prop).length>0)return true;
+        \\        return prop in target;
+        \\      },
+        \\      getPrototypeOf:function(){return hfccProto||Array.prototype;}
+        \\    });
+        \\    _hfccCache.set(form,px);
+        \\    return px;
+        \\  }
         \\  Object.defineProperty(EP,'elements',{
         \\    get:function(){
         \\      if(tag(this)!=='form')return undefined;
-        \\      var arr=_filterFormElements(_collectListed(this));
-        \\      var brand=globalThis.__suzume_brandHFCC;
-        \\      return brand?brand(arr):arr;
+        \\      return _getElementsHFCC(this);
         \\    },
         \\    configurable:true,enumerable:true
         \\  });
