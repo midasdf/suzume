@@ -4281,13 +4281,40 @@ pub const KotoriRuntime = struct {
         \\    } else {
         \\      submitter=null;
         \\    }
-        \\    // HTML §4.10.22.3 step 3: "Submit this form element from submitter."
-        \\    // Dispatch a SubmitEvent (cancelable, bubbles) with event.submitter set.
+        \\    // HTML §4.10.21.3 step 4: if firing-submission-events flag is set,
+        \\    // return. This blocks reentrant submit/requestSubmit/click() during
+        \\    // an in-flight submission (covers both submit handlers and invalid
+        \\    // event handlers, per WPT form-requestsubmit reentrancy tests).
+        \\    // NOTE: kotori VM does not run `finally` after `return`, so we
+        \\    // unset the flag explicitly on every exit path.
+        \\    if(this._firingSubmissionEvents)return;
+        \\    this._firingSubmissionEvents=true;
+        \\    // HTML §4.10.21.3 step 8: interactive validation. Skip iff the
+        \\    // form has a novalidate attribute, OR submitter has formnovalidate.
+        \\    var noValidate=this.hasAttribute&&this.hasAttribute('novalidate');
+        \\    if(submitter&&submitter.hasAttribute&&submitter.hasAttribute('formnovalidate')){
+        \\      noValidate=true;
+        \\    }
+        \\    if(!noValidate&&typeof this.checkValidity==='function'){
+        \\      // checkValidity() statically validates the form; for each invalid
+        \\      // control it fires `invalid` (cancelable). If any control is
+        \\      // invalid, return WITHOUT firing submit.
+        \\      var _valid;
+        \\      try { _valid=this.checkValidity(); }
+        \\      catch(e) { _valid=false; }
+        \\      if(!_valid){
+        \\        this._firingSubmissionEvents=false;
+        \\        return;
+        \\      }
+        \\    }
+        \\    // HTML §4.10.21.3 steps 9-10: fire SubmitEvent (cancelable, bubbles)
+        \\    // with event.submitter set to submitter (or null).
         \\    var ev;
         \\    try { ev=new Event('submit',{bubbles:true,cancelable:true}); }
-        \\    catch(e) { return; }
+        \\    catch(e) { this._firingSubmissionEvents=false; return; }
         \\    try { Object.defineProperty(ev,'submitter',{value:submitter,writable:false,enumerable:true,configurable:true}); } catch(e) {}
-        \\    this.dispatchEvent(ev);
+        \\    try { this.dispatchEvent(ev); } catch(e) {}
+        \\    this._firingSubmissionEvents=false;
         \\    // We don't perform actual form navigation — handlers are expected
         \\    // to preventDefault() or observe dispatch side effects.
         \\  };
