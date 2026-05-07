@@ -4954,6 +4954,17 @@ pub const KotoriRuntime = struct {
         \\  // Convenience: document.hasFocus() returns true (we always claim
         \\  // focus in WPT mode; no window blur tracking).
         \\  try{document.hasFocus=function(){return true;};}catch(e){}
+        \\  // HTML §3.1.4 — Document.defaultView returns the document's
+        \\  // associated Window. WPT tests like html/dom/elements/global-attributes/
+        \\  // id-attribute.html use `document.defaultView.getComputedStyle(...)`.
+        \\  try{
+        \\    if(typeof window!=='undefined'&&!document.defaultView){
+        \\      Object.defineProperty(document,'defaultView',{
+        \\        get:function(){return window;},
+        \\        configurable:true,enumerable:true
+        \\      });
+        \\    }
+        \\  }catch(e){}
         \\})();
     ;
 
