@@ -5670,7 +5670,14 @@ pub const KotoriRuntime = struct {
         \\      var elRef=this;
         \\      var wrapHandler={
         \\        get:function(_t,k){return handler.get(elRef,k);},
-        \\        set:function(_t,k,v){return handler.set(elRef,k,v);},
+        \\        set:function(_t,k,v){
+        \\          var r=handler.set(elRef,k,v);
+        \\          // Force return true so the engine doesn't write to the
+        \\          // proxy target after the trap (some Proxy impls fall
+        \\          // back to setting on target if the trap return is
+        \\          // mis-interpreted).
+        \\          return true;
+        \\        },
         \\        has:function(_t,k){return handler.has(elRef,k);},
         \\        deleteProperty:function(_t,k){return handler.deleteProperty(elRef,k);},
         \\        ownKeys:function(_t){return handler.ownKeys(elRef);},

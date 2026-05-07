@@ -416,22 +416,22 @@ pub const VM = struct {
                 .lt => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(JsValue.jsLt(a, b));
+                    self.push(self.relCmp(a, b, .lt));
                 },
                 .le => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(JsValue.jsLe(a, b));
+                    self.push(self.relCmp(a, b, .le));
                 },
                 .gt => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(JsValue.jsGt(a, b));
+                    self.push(self.relCmp(a, b, .gt));
                 },
                 .ge => {
                     const b = self.pop();
                     const a = self.pop();
-                    self.push(JsValue.jsGe(a, b));
+                    self.push(self.relCmp(a, b, .ge));
                 },
 
                 // ── Logical / Bitwise ────────────────────────────────
@@ -4459,6 +4459,35 @@ pub const VM = struct {
     }
 
     // ── JS callback invocation ──────────────────────────────────────
+
+    const RelOp = enum { lt, le, gt, ge };
+
+    /// ECMA-262 §7.2.13 Abstract Relational Comparison + §13.10.1
+    /// {<,<=,>,>=}. If both operands are strings, lexicographic
+    /// compare (kotori string ids may differ even for equivalent
+    /// content, so resolve via pool); else numeric compare with
+    /// string→number coercion via coerceNumeric.
+    fn relCmp(self: *VM, a: JsValue, b: JsValue, op: RelOp) JsValue {
+        if (a.isString() and b.isString()) {
+            const sa = self.pool.get(a.asStringId()) orelse "";
+            const sb = self.pool.get(b.asStringId()) orelse "";
+            const cmp = std.mem.order(u8, sa, sb);
+            return JsValue.initBool(switch (op) {
+                .lt => cmp == .lt,
+                .le => cmp == .lt or cmp == .eq,
+                .gt => cmp == .gt,
+                .ge => cmp == .gt or cmp == .eq,
+            });
+        }
+        const na = self.coerceNumeric(a);
+        const nb = self.coerceNumeric(b);
+        return switch (op) {
+            .lt => JsValue.jsLt(na, nb),
+            .le => JsValue.jsLe(na, nb),
+            .gt => JsValue.jsGt(na, nb),
+            .ge => JsValue.jsGe(na, nb),
+        };
+    }
 
     /// ECMA-262 ToNumber for string operands. JsValue.toNumber() returns
     /// NaN for strings because it has no pool reference; this helper
