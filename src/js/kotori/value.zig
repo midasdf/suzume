@@ -88,7 +88,13 @@ pub const JsValue = packed struct {
     pub fn isNumber(self: JsValue) bool {
         // Tagged values use quiet NaN space: exponent all-ones + quiet bit (bits 62:51 = 0xFFF).
         // Normal floats (including negatives, infinity) never have this pattern.
-        return (self.bits >> 51) & 0xFFF != 0xFFF;
+        if ((self.bits >> 51) & 0xFFF != 0xFFF) return true;
+        // The JS-level NaN value (TAG_NAN) is also a Number per ECMA-262
+        // §6.1.6.1; without this, `typeof NaN === "undefined"`, `String(NaN)`
+        // returns "" and `'' + NaN === ""` because the tag-space check above
+        // rejects the value as a non-number.
+        const tag: u16 = @intCast(self.bits >> 48);
+        return tag == TAG_NAN;
     }
 
     pub fn isInt(self: JsValue) bool {
