@@ -906,8 +906,14 @@ pub const VM = struct {
                     }
 
                     if (obj.obj_type != .function) {
+                        // ECMA-262 §7.3.13 Call: throw TypeError when the
+                        // value is not callable. Note: null/undefined keep
+                        // the lenient `push undefined` path at line ~844 to
+                        // avoid breaking host code that calls things like
+                        // `cb && cb()` via the non-object branch.
                         self.sp -= arg_count + 1;
-                        self.push(JsValue.undefined_val);
+                        const caught = try self.throwTypeError("not a function");
+                        if (!caught) return JsValue.undefined_val;
                         continue;
                     }
 
@@ -1923,8 +1929,15 @@ pub const VM = struct {
                     }
 
                     if (obj.obj_type != .function) {
+                        // ECMA-262 §7.3.13 Call: invoking a non-callable
+                        // object as a method throws TypeError. Required for
+                        // WebIDL legacycaller behaviour on RadioNodeList,
+                        // NodeList, etc. (HTML §4.10.21.3 "Invoking a
+                        // legacycaller on the NodeList returned from the
+                        // named getter should not work").
                         self.sp = this_pos;
-                        self.push(JsValue.undefined_val);
+                        const caught = try self.throwTypeError("not a function");
+                        if (!caught) return JsValue.undefined_val;
                         continue;
                     }
 
