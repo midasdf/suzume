@@ -4189,6 +4189,69 @@ fn nativeImportNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
     return try jsOnlyImportElement(vm, args[0], this, deep);
 }
 
+/// Pin `namespaceURI` and (parsed) `prefix` on the JS Attr wrapper that
+/// backs `(elem, qn)`. lexbor's `lxb_dom_element_set_attribute` ignores
+/// the namespace argument that DOM §4.9 setAttributeNS supplies, so we
+/// override the wrapper post-hoc.
+fn pinAttrNs(vm: *VM, elem: *lxb.lxb_dom_element_t, qn: []const u8, ns_uri: []const u8) !void {
+    const attr_raw = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse return;
+    const attr_t: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(attr_raw));
+    const wrap = getOrCreateAttrWrapper(vm, attr_t) orelse return;
+    const ns_sid = try vm.pool.intern(ns_uri);
+    const ns_key = try vm.pool.intern("namespaceURI");
+    wrap.setProperty(vm.allocator, ns_key, JsValue.initString(ns_sid)) catch {};
+    if (std.mem.indexOfScalar(u8, qn, ':')) |cp| {
+        const px_sid = try vm.pool.intern(qn[0..cp]);
+        const px_key = try vm.pool.intern("prefix");
+        wrap.setProperty(vm.allocator, px_key, JsValue.initString(px_sid)) catch {};
+    }
+}
+
+/// JS-only Attr clone path for `importNode` (DOM §4.5 "import an Attr"
+/// reduces to "clone a node" with new ownerDocument). Reconstructs the
+/// JS-visible Attr fields from the source wrapper and detaches
+/// ownerElement on the clone.
+fn jsOnlyImportAttr(vm: *VM, src_val: JsValue, target_doc: JsValue) !JsValue {
+    const src_obj = src_val.asJsObject();
+    const name_sid = try vm.pool.intern("name");
+    const ln_sid = try vm.pool.intern("localName");
+    const ns_sid = try vm.pool.intern("namespaceURI");
+    const px_sid = try vm.pool.intern("prefix");
+    const val_sid = try vm.pool.intern("value");
+
+    const qname: []const u8 = if (src_obj.getProperty(name_sid)) |nv|
+        if (nv.isString()) (vm.pool.get(nv.asStringId()) orelse "") else ""
+    else
+        "";
+    const local_name: []const u8 = if (src_obj.getProperty(ln_sid)) |lv|
+        if (lv.isString()) (vm.pool.get(lv.asStringId()) orelse "") else ""
+    else
+        "";
+    const ns_uri: ?[]const u8 = if (src_obj.getProperty(ns_sid)) |nv|
+        (if (nv.isString()) vm.pool.get(nv.asStringId()) else null)
+    else
+        null;
+    const prefix: ?[]const u8 = if (src_obj.getProperty(px_sid)) |pv|
+        (if (pv.isString()) vm.pool.get(pv.asStringId()) else null)
+    else
+        null;
+    const value_str: []const u8 = if (src_obj.getProperty(val_sid)) |vv|
+        if (vv.isString()) (vm.pool.get(vv.asStringId()) orelse "") else ""
+    else
+        "";
+
+    const new_val = try createAttrObject(vm, target_doc, qname, local_name, prefix, ns_uri);
+    if (!new_val.isObject()) return new_val;
+    const new_obj = new_val.asJsObject();
+    if (value_str.len > 0) {
+        const v_sid = try vm.pool.intern(value_str);
+        new_obj.setProperty(vm.allocator, val_sid, JsValue.initString(v_sid)) catch {};
+        new_obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.initString(v_sid)) catch {};
+        new_obj.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.initString(v_sid)) catch {};
+    }
+    return new_val;
+}
+
 /// JS-only Element clone path for `importNode`. Source must be a JS-only
 /// element (nodeType=1, no `.dom_node` data).
 fn jsOnlyImportElement(vm: *VM, src_val: JsValue, target_doc: JsValue, deep: bool) !JsValue {
@@ -4196,7 +4259,11 @@ fn jsOnlyImportElement(vm: *VM, src_val: JsValue, target_doc: JsValue, deep: boo
     // Confirm Element-shaped JS-only node (nodeType === 1).
     const nt_sid = try vm.pool.intern("nodeType");
     const nt_val = src_obj.getProperty(nt_sid) orelse return JsValue.null_val;
-    if (!nt_val.isNumber() or nt_val.toNumber() != 1) return JsValue.null_val;
+    if (!nt_val.isNumber()) return JsValue.null_val;
+    const nt_num = nt_val.toNumber();
+    // Attr (nodeType === 2) is also imported via this fallback (DOM §4.5).
+    if (nt_num == 2) return jsOnlyImportAttr(vm, src_val, target_doc);
+    if (nt_num != 1) return JsValue.null_val;
 
     const ln_sid = try vm.pool.intern("localName");
     const local_name: []const u8 = blk: {
@@ -4837,6 +4904,15 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
         recordAttributeMutation(vm, node, qn, old_val);
     } else {
         _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
+    }
+    // DOM §4.9 — lexbor's `lxb_dom_element_set_attribute` does not propagate
+    // the namespace argument through to the attr struct's `node.ns` slot,
+    // so a freshly-created Attr wrapper would otherwise report
+    // `namespaceURI = null`. Pre-materialise the wrapper here and pin the
+    // correct namespaceURI / prefix so getAttributeNodeNS, importNode, and
+    // any code that reads these slots sees the spec-compliant values.
+    if (ns_in) |ns_uri| {
+        pinAttrNs(vm, elem, qn, ns_uri) catch {};
     }
     // DOM §4.9.2 NamedNodeMap live-map version bump.
     bumpElemAttrVersion(elem);
@@ -6598,10 +6674,18 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     const attr_qn = dom_b.lxb_dom_attr_qualified_name(@ptrCast(a), &attr_qn_len) orelse return null;
     const qn_str = attr_qn[0..attr_qn_len];
 
+    // DOM §4.9 — Attr.localName is the local name *without* prefix; only
+    // the qualified name contains the prefix. Splitting on the first ':'
+    // mirrors lexbor's own qname-vs-localname split.
+    const colon_pos: ?usize = std.mem.indexOfScalar(u8, qn_str, ':');
+    const local_str: []const u8 = if (colon_pos) |cp| qn_str[cp + 1 ..] else qn_str;
+    const prefix_str: ?[]const u8 = if (colon_pos) |cp| qn_str[0..cp] else null;
+
     const attr_obj = vm.createObj(.{}) catch return null;
     const name_sid = vm.pool.intern(qn_str) catch return null;
+    const local_sid = vm.pool.intern(local_str) catch return null;
     attr_obj.setProperty(vm.allocator, vm.pool.intern("name") catch return null, JsValue.initString(name_sid)) catch {};
-    attr_obj.setProperty(vm.allocator, vm.pool.intern("localName") catch return null, JsValue.initString(name_sid)) catch {};
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("localName") catch return null, JsValue.initString(local_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeName") catch return null, JsValue.initString(name_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeType") catch return null, JsValue.initNumber(2)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("specified") catch return null, JsValue.initBool(true)) catch {};
@@ -6615,8 +6699,21 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     attr_obj.setProperty(vm.allocator, vm.pool.intern("value") catch return null, JsValue.initString(val_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return null, JsValue.initString(val_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch return null, JsValue.initString(val_sid)) catch {};
-    attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
-    attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.null_val) catch {};
+    // DOM §4.9 — Attr.namespaceURI / Attr.prefix come from the lexbor
+    // node's `ns` slot + the qname split. Previously hard-coded to null,
+    // which broke `getAttributeNodeNS(...).{namespaceURI,prefix}` and
+    // any importNode path that copies these fields.
+    const ns_uri_opt = nsIdToUri(a.node.ns);
+    if (ns_uri_opt) |uri| {
+        attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.initString(vm.pool.intern(uri) catch return null)) catch {};
+    } else {
+        attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
+    }
+    if (prefix_str) |p| {
+        attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.initString(vm.pool.intern(p) catch return null)) catch {};
+    } else {
+        attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.null_val) catch {};
+    }
 
     // DOM §4.9 Attr.ownerElement — when the attr is part of an element's
     // attribute list, ownerElement is that element. Lexbor exposes this
