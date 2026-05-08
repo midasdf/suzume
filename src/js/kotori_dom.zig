@@ -6699,16 +6699,14 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     attr_obj.setProperty(vm.allocator, vm.pool.intern("value") catch return null, JsValue.initString(val_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return null, JsValue.initString(val_sid)) catch {};
     attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch return null, JsValue.initString(val_sid)) catch {};
-    // DOM §4.9 — Attr.namespaceURI / Attr.prefix come from the lexbor
-    // node's `ns` slot + the qname split. Previously hard-coded to null,
-    // which broke `getAttributeNodeNS(...).{namespaceURI,prefix}` and
-    // any importNode path that copies these fields.
-    const ns_uri_opt = nsIdToUri(a.node.ns);
-    if (ns_uri_opt) |uri| {
-        attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.initString(vm.pool.intern(uri) catch return null)) catch {};
-    } else {
-        attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
-    }
+    // DOM §4.9 — Attr.namespaceURI defaults to null for HTML-doc attrs
+    // even though the parsed element lives in the HTML namespace
+    // (see attributes.html "should not change the order of previously
+    // set attributes" — `el.setAttribute("a","3")` must yield
+    // `a.namespaceURI === null`). Callers that set a real namespace
+    // (setAttributeNS / setAttributeNodeNS) overwrite this slot via
+    // `pinAttrNs` after the wrapper is materialised.
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("namespaceURI") catch return null, JsValue.null_val) catch {};
     if (prefix_str) |p| {
         attr_obj.setProperty(vm.allocator, vm.pool.intern("prefix") catch return null, JsValue.initString(vm.pool.intern(p) catch return null)) catch {};
     } else {
