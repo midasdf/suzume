@@ -2145,10 +2145,20 @@ fn nativeRadioNodeListItem(ctx: *anyopaque, this: JsValue, args: []const JsValue
 
 fn formNamedItemFallback(
     vm: *VM,
+    form_obj: *JsObject,
     form_node: *lxb.lxb_dom_node_t,
     name: []const u8,
 ) ?JsValue {
     if (name.len == 0) return null;
+
+    // HTML §4.10.21.3 — when an own property already exists for `name`
+    // (whether previously installed by us, set by user as an expando, or
+    // installed via Object.defineProperty), defer to the normal property
+    // lookup path. This makes user-set expandos win over later-added named
+    // children, and lets defineProperty / set / delete go through the
+    // ordinary descriptor machinery (writable, configurable, …).
+    const name_sid = vm.pool.intern(name) catch return null;
+    if (form_obj.getOwnDescriptor(name_sid) != null) return null;
 
     // Find document root for whole-tree walk (covers form-attribute associated
     // controls outside the form's subtree).
@@ -2169,7 +2179,9 @@ fn formNamedItemFallback(
         for (controls.items) |elem| {
             if (isInputTypeImage(elem)) continue;
             if (counter == idx) {
-                return wrapNode(vm, @ptrCast(elem));
+                const wrapped = wrapNode(vm, @ptrCast(elem)) orelse return null;
+                installFormGetterOwnProp(vm, form_obj, name_sid, wrapped, true);
+                return wrapped;
             }
             counter += 1;
         }
@@ -2200,12 +2212,15 @@ fn formNamedItemFallback(
 
     if (matches.items.len == 0) return null;
     if (matches.items.len == 1) {
-        return wrapNode(vm, @ptrCast(matches.items[0]));
+        const wrapped = wrapNode(vm, @ptrCast(matches.items[0])) orelse return null;
+        installFormGetterOwnProp(vm, form_obj, name_sid, wrapped, false);
+        return wrapped;
     }
 
-    // Multiple matches: return plain JS array enhanced with `.item(i)` to
-    // approximate a RadioNodeList. Supports `radio[i]`, `radio.length`,
-    // `radio.item(i)`; calling `radio()` throws TypeError (not callable).
+    // Multiple matches: return a JS array branded as a RadioNodeList so
+    // `instanceof NodeList` and `instanceof RadioNodeList` succeed (HTML
+    // §4.10.21.3). Supports `radio[i]`, `radio.length`, `radio.item(i)`;
+    // calling `radio()` throws TypeError (not callable).
     const arr = vm.createObj(.{ .obj_type = .array }) catch return null;
     arr.data = .{ .array = .empty };
     for (matches.items) |m| {
@@ -2216,7 +2231,52 @@ fn formNamedItemFallback(
     item_fn.data = .{ .native_fn = &nativeRadioNodeListItem };
     const item_sid = vm.pool.intern("item") catch return null;
     arr.setProperty(vm.allocator, item_sid, JsValue.initObject(item_fn)) catch {};
-    return JsValue.initObject(arr);
+    // Brand as RadioNodeList: arr.[[Prototype]] = RadioNodeList.prototype.
+    // The runtime polyfill sets RadioNodeList.prototype.[[Prototype]] =
+    // NodeList.prototype, so `instanceof NodeList` also succeeds.
+    if (vm.pool.intern("RadioNodeList") catch null) |rnl_id| {
+        if (vm.globals.get(rnl_id)) |rnl_val| {
+            if (rnl_val.isObject()) {
+                const rnl_ctor = rnl_val.asJsObject();
+                if (vm.pool.intern("prototype") catch null) |proto_id| {
+                    if (rnl_ctor.getProperty(proto_id)) |proto_val| {
+                        if (proto_val.isObject()) {
+                            arr.prototype = proto_val.asJsObject();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    const result = JsValue.initObject(arr);
+    installFormGetterOwnProp(vm, form_obj, name_sid, result, false);
+    return result;
+}
+
+// Lazy-install the named/indexed getter result as an own data property so
+// that `Object.getOwnPropertyDescriptor(form, name)` reports the synthesized
+// descriptor (HTML §4.10.21.3 + WebIDL §3.2.1 LegacyOverrideBuiltIns), and
+// subsequent reads go through the fast own-prop path. The descriptor is
+// non-writable (set fails silently in non-strict / TypeError in strict),
+// configurable (`delete` succeeds and lets a re-access re-resolve), and
+// non-enumerable for named keys / enumerable for indexed keys per WebIDL.
+fn installFormGetterOwnProp(
+    vm: *VM,
+    form_obj: *JsObject,
+    name_sid: StringId,
+    val: JsValue,
+    is_indexed: bool,
+) void {
+    const desc = kotori.object.PropertyDescriptor{ .data = .{
+        .value = val,
+        .attrs = .{
+            .writable = false,
+            .enumerable = is_indexed,
+            .configurable = true,
+            .is_accessor = false,
+        },
+    } };
+    _ = form_obj.defineOwnProperty(vm.allocator, name_sid, desc) catch {};
 }
 
 // ── dom_node get ────────────────────────────────────────────────────
@@ -2585,7 +2645,7 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     // from the select polyfill, etc.) can still be overridden by a matching
     // named child. No allocation when the form has no controls.
     if (isHtmlForm(node)) {
-        if (formNamedItemFallback(vm, node, name)) |v| return v;
+        if (formNamedItemFallback(vm, obj, node, name)) |v| return v;
     }
 
     return null; // fall through to prototype chain (methods live there)

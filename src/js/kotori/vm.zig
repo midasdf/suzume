@@ -6160,10 +6160,29 @@ pub const VM = struct {
     }
 
     fn nativeObjectGetOwnPropertyDescriptor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
-        if (args.len < 2 or !args[0].isObject() or !args[1].isString()) return JsValue.undefined_val;
+        if (args.len < 2 or !args[0].isObject()) return JsValue.undefined_val;
         const vm = vmFromCtx(ctx);
         const obj = args[0].asJsObject();
-        const name_id = args[1].asStringId();
+        // ECMA-262 §7.1.19 ToPropertyKey — integer/number keys coerce to
+        // their decimal-string form (`Object.getOwnPropertyDescriptor(arr, 0)`
+        // ↔ `arr["0"]`). Without this, callers using numeric indices receive
+        // `undefined` even when the property exists.
+        const name_id: StringId = if (args[1].isString())
+            args[1].asStringId()
+        else if (args[1].isInt() or args[1].isNumber())
+            try vm.keyToStringId(args[1])
+        else
+            return JsValue.undefined_val;
+        // For dom_node objects, trigger the dom_get_prop hook so HTML
+        // §4.10.21.3 named/indexed getters (HTMLFormElement) can
+        // lazy-install own-property descriptors before we read. Reflected
+        // attributes (action, name, …) live on the prototype and don't
+        // install own-props, so this is safe to call indiscriminately.
+        if (obj.obj_type == .dom_node and vm.dom_get_prop != null) {
+            if (obj.getOwnDescriptor(name_id) == null) {
+                _ = vm.dom_get_prop.?(vm, obj, name_id);
+            }
+        }
         const pd = obj.getOwnDescriptor(name_id) orelse return JsValue.undefined_val;
         return try vm.descriptorToObject(pd);
     }
