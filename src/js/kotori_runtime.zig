@@ -1104,18 +1104,18 @@ pub const KotoriRuntime = struct {
         \\      validateToken(args[i]);
         \\    }
         \\    var toks = getTokens(this._el);
+        \\    /* getTokens already split on whitespace + deduped; we still
+        \\     * need to write back even when no NEW token is appended so
+        \\     * the class attribute is canonicalized — DOM §7.1 update
+        \\     * steps run unconditionally after add()/remove()/etc., turning
+        \\     * "a a a  b" into "a b" on the next add("a"). */
         \\    var seen = {};
         \\    for (var j=0;j<toks.length;j++) seen[':'+toks[j]] = 1;
-        \\    var changed = false;
         \\    for (var k=0;k<args.length;k++){
         \\      var key = ':'+args[k];
-        \\      if (!seen[key]) { seen[key] = 1; toks.push(args[k]); changed = true; }
+        \\      if (!seen[key]) { seen[key] = 1; toks.push(args[k]); }
         \\    }
-        \\    /* Per spec "update steps" run only if the set changed OR the
-        \\     * attribute is absent (and we need to materialize it). */
-        \\    if (changed || this._el.getAttribute('class')==null) {
-        \\      writeTokens(this._el, toks);
-        \\    }
+        \\    writeTokens(this._el, toks);
         \\  };
         \\  DTLP.remove = function(){
         \\    var args = [];
@@ -1157,10 +1157,16 @@ pub const KotoriRuntime = struct {
         \\    return true;
         \\  };
         \\  DTLP.replace = function(token, newToken){
-        \\    /* DOM §7.1 replace(token, newToken): validate BOTH in argument order. */
+        \\    /* DOM §7.1 replace(token, newToken): per spec the empty-string
+        \\     * check (SyntaxError) precedes the whitespace check
+        \\     * (InvalidCharacterError) for BOTH arguments — running
+        \\     * validateToken sequentially flips the precedence when token
+        \\     * has whitespace and newToken is empty. */
         \\    var t = String(token), nt = String(newToken);
-        \\    validateToken(t);
-        \\    validateToken(nt);
+        \\    if (t==='') throw new DOMException("The token provided must not be empty.","SyntaxError");
+        \\    if (nt==='') throw new DOMException("The token provided must not be empty.","SyntaxError");
+        \\    if (HAS_WS_RE.test(t)) throw new DOMException("The token provided ('"+t+"') contains HTML space characters, which are not valid in tokens.","InvalidCharacterError");
+        \\    if (HAS_WS_RE.test(nt)) throw new DOMException("The token provided ('"+nt+"') contains HTML space characters, which are not valid in tokens.","InvalidCharacterError");
         \\    var toks = getTokens(this._el);
         \\    var idx = -1;
         \\    for (var i=0;i<toks.length;i++) if (toks[i]===t) { idx = i; break; }
