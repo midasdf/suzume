@@ -2151,14 +2151,28 @@ fn formNamedItemFallback(
 ) ?JsValue {
     if (name.len == 0) return null;
 
-    // HTML §4.10.21.3 — when an own property already exists for `name`
-    // (whether previously installed by us, set by user as an expando, or
-    // installed via Object.defineProperty), defer to the normal property
-    // lookup path. This makes user-set expandos win over later-added named
-    // children, and lets defineProperty / set / delete go through the
-    // ordinary descriptor machinery (writable, configurable, …).
     const name_sid = vm.pool.intern(name) catch return null;
-    if (form_obj.getOwnDescriptor(name_sid) != null) return null;
+
+    // HTML §4.10.21.3 — defer to user expandos. Own descriptors we installed
+    // via installFormGetterOwnProp use writable:false / configurable:true, so
+    // we recognise them as "ours" and refresh below; any other shape (writable
+    // descriptor, accessor, or value installed via user `defineProperty`) is a
+    // user expando — yield to the ordinary lookup path so [LegacyOverride]
+    // semantics for set / defineProperty / delete still go through the normal
+    // descriptor machinery.
+    var our_cached = false;
+    if (form_obj.getOwnDescriptor(name_sid)) |existing| {
+        switch (existing) {
+            .data => |d| {
+                if (!d.attrs.writable and d.attrs.configurable and !d.attrs.is_accessor) {
+                    our_cached = true;
+                } else {
+                    return null;
+                }
+            },
+            .accessor => return null,
+        }
+    }
 
     // Find document root for whole-tree walk (covers form-attribute associated
     // controls outside the form's subtree).
@@ -2185,6 +2199,9 @@ fn formNamedItemFallback(
             }
             counter += 1;
         }
+        // No element at this index — invalidate stale cache (the form had
+        // more controls when we first cached, but they've since been removed).
+        if (our_cached) deleteOurFormCache(form_obj, name_sid);
         return null;
     }
 
@@ -2210,10 +2227,39 @@ fn formNamedItemFallback(
         }
     }
 
-    if (matches.items.len == 0) return null;
+    // If our cache from a prior access still mirrors the current live state
+    // (single match, multi-match RadioNodeList, or matches-empty + valid past
+    // entry), yield to the ordinary lookup path so identity is preserved
+    // across `Object.getOwnPropertyDescriptor(form, name).value === form[name]`
+    // and across repeated `form[name]` reads (matters for multi-match where a
+    // fresh rebuild would change the array's identity).
+    if (our_cached and formCacheMatchesLive(vm, form_obj, name_sid, matches.items, controls.items)) {
+        return null;
+    }
+
+    if (matches.items.len == 0) {
+        // HTML §4.10.21.3 step "If candidates is empty …": consult the form's
+        // past names map. Honoured iff the referenced element is still in the
+        // form's elements list. We refresh the own-prop cache so a follow-up
+        // `Object.getOwnPropertyDescriptor` sees the same value; if the past
+        // entry is also stale, scrub our own-prop cache (don't disturb user
+        // expandos — those were filtered out at the top of this function).
+        if (pastNamesMapResolve(vm, form_obj, name_sid, controls.items)) |v| {
+            installFormGetterOwnProp(vm, form_obj, name_sid, v, false);
+            return v;
+        }
+        if (our_cached) deleteOurFormCache(form_obj, name_sid);
+        return null;
+    }
     if (matches.items.len == 1) {
         const wrapped = wrapNode(vm, @ptrCast(matches.items[0])) orelse return null;
+        // Refresh the own-prop cache (so getOwnPropertyDescriptor sees the
+        // current single match) and record the (name → element) pair in the
+        // past names map per HTML §4.10.21.3 so a later read after a `name`/
+        // `id` rename — but before the element leaves the form — still returns
+        // the same element.
         installFormGetterOwnProp(vm, form_obj, name_sid, wrapped, false);
+        pastNamesMapPut(vm, form_obj, name_sid, wrapped);
         return wrapped;
     }
 
@@ -2277,6 +2323,152 @@ fn installFormGetterOwnProp(
         },
     } };
     _ = form_obj.defineOwnProperty(vm.allocator, name_sid, desc) catch {};
+}
+
+// HTML §4.10.21.3 past names map. A per-form name → element store that lets
+// previously-resolved names continue to refer to the same element after the
+// element's name/id attribute has changed, until the element actually leaves
+// the form's elements list. Stored on form_obj as a hidden plain object under
+// the reserved key __suzume_past_names__ so it survives across reads without
+// polluting user-visible enumeration.
+fn pastNamesMapKey(vm: *VM) ?StringId {
+    return vm.pool.intern("__suzume_past_names__") catch null;
+}
+
+fn getPastNamesMap(vm: *VM, form_obj: *JsObject, create: bool) ?*JsObject {
+    const sid = pastNamesMapKey(vm) orelse return null;
+    if (form_obj.getOwnDescriptor(sid)) |desc| {
+        switch (desc) {
+            .data => |d| {
+                if (d.value.isObject()) return d.value.asJsObject();
+            },
+            .accessor => {},
+        }
+    }
+    if (!create) return null;
+    const map = vm.createObj(.{}) catch return null;
+    const desc = kotori.object.PropertyDescriptor{ .data = .{
+        .value = JsValue.initObject(map),
+        .attrs = .{
+            .writable = true,
+            .enumerable = false,
+            .configurable = false,
+            .is_accessor = false,
+        },
+    } };
+    _ = form_obj.defineOwnProperty(vm.allocator, sid, desc) catch return null;
+    return map;
+}
+
+fn pastNamesMapPut(vm: *VM, form_obj: *JsObject, name_sid: StringId, val: JsValue) void {
+    const map = getPastNamesMap(vm, form_obj, true) orelse return;
+    map.setProperty(vm.allocator, name_sid, val) catch {};
+}
+
+// Lookup `name_sid` in the past names map. Returns the stored wrapper iff the
+// referenced lxb node is still present in `controls` (form's current elements
+// list). Stale entries (element removed from the form) are cleaned up.
+fn pastNamesMapResolve(
+    vm: *VM,
+    form_obj: *JsObject,
+    name_sid: StringId,
+    controls: []const *lxb.lxb_dom_element_t,
+) ?JsValue {
+    const map = getPastNamesMap(vm, form_obj, false) orelse return null;
+    const entry = map.getOwnDescriptor(name_sid) orelse return null;
+    const val = switch (entry) {
+        .data => |d| d.value,
+        .accessor => return null,
+    };
+    if (!val.isObject()) {
+        _ = map.ordinaryDelete(vm.allocator, name_sid);
+        return null;
+    }
+    const wrapped = val.asJsObject();
+    if (wrapped.obj_type != .dom_node) {
+        _ = map.ordinaryDelete(vm.allocator, name_sid);
+        return null;
+    }
+    const target_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(wrapped.data.dom_node));
+    for (controls) |elem| {
+        const elem_node: *lxb.lxb_dom_node_t = @ptrCast(elem);
+        if (elem_node == target_node) return val;
+    }
+    _ = map.ordinaryDelete(vm.allocator, name_sid);
+    return null;
+}
+
+// Drop a single own descriptor from `form_obj` that we recognise as our own
+// (writable:false, configurable:true) form named/indexed cache. The caller is
+// responsible for verifying ownership before invoking this — user expandos
+// must not be removed by the named-property visibility algorithm.
+fn deleteOurFormCache(form_obj: *JsObject, name_sid: StringId) void {
+    if (form_obj.descriptors) |*d| {
+        _ = d.swapRemove(name_sid);
+    }
+    _ = form_obj.properties.swapRemove(name_sid);
+}
+
+// Returns true iff the cached own descriptor on `form_obj` for `name_sid`
+// still matches the live named-property visibility result. When this returns
+// true the caller can preserve identity by yielding to the ordinary lookup
+// path (so repeated reads — and `Object.getOwnPropertyDescriptor` paired with
+// `form.<name>` — return the same wrapper). For multi-match (RadioNodeList)
+// reads this is the only way to keep the array's identity stable across
+// accesses. We also accept "matches empty + past names map alive" as valid.
+fn formCacheMatchesLive(
+    vm: *VM,
+    form_obj: *JsObject,
+    name_sid: StringId,
+    matches: []const *lxb.lxb_dom_element_t,
+    controls: []const *lxb.lxb_dom_element_t,
+) bool {
+    const desc = form_obj.getOwnDescriptor(name_sid) orelse return false;
+    const val = switch (desc) {
+        .data => |d| d.value,
+        .accessor => return false,
+    };
+    if (!val.isObject()) return false;
+    const v_obj = val.asJsObject();
+
+    if (matches.len == 1) {
+        if (v_obj.obj_type != .dom_node) return false;
+        const v_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(v_obj.data.dom_node));
+        const m_node: *lxb.lxb_dom_node_t = @ptrCast(matches[0]);
+        return v_node == m_node;
+    }
+    if (matches.len > 1) {
+        if (v_obj.obj_type != .array) return false;
+        const arr_items = v_obj.data.array.items;
+        if (arr_items.len != matches.len) return false;
+        for (matches, arr_items) |m, av| {
+            if (!av.isObject()) return false;
+            const ao = av.asJsObject();
+            if (ao.obj_type != .dom_node) return false;
+            const a_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(ao.data.dom_node));
+            const m_node: *lxb.lxb_dom_node_t = @ptrCast(m);
+            if (a_node != m_node) return false;
+        }
+        return true;
+    }
+
+    // matches.len == 0 — cache is only valid if a past names map entry points
+    // at the same wrapper AND that wrapper's lxb node is still in controls.
+    if (v_obj.obj_type != .dom_node) return false;
+    const v_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(v_obj.data.dom_node));
+    const map = getPastNamesMap(vm, form_obj, false) orelse return false;
+    const entry = map.getOwnDescriptor(name_sid) orelse return false;
+    const e_val = switch (entry) {
+        .data => |d| d.value,
+        .accessor => return false,
+    };
+    if (!e_val.isObject()) return false;
+    if (e_val.asJsObject() != v_obj) return false;
+    for (controls) |c| {
+        const c_node: *lxb.lxb_dom_node_t = @ptrCast(c);
+        if (c_node == v_node) return true;
+    }
+    return false;
 }
 
 // ── dom_node get ────────────────────────────────────────────────────
