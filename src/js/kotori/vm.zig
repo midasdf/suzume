@@ -787,6 +787,17 @@ pub const VM = struct {
                             if (self.object_proto) |op_proto| fn_proto.prototype = op_proto;
                             try template_obj.setProperty(self.allocator, proto_sid, JsValue.initObject(fn_proto));
                         }
+                        // ECMA-262 §10.2.8 / §10.2.9 — fn.length / fn.name. Templates
+                        // are reused across calls, so the descriptor write is gated
+                        // by `getOwnDescriptor` to stay idempotent.
+                        const len_sid = try self.pool.intern("length");
+                        if (template_obj.getOwnDescriptor(len_sid) == null) {
+                            const fn_name: []const u8 = if (func_data.name) |n|
+                                self.pool.get(n) orelse ""
+                            else
+                                "";
+                            try self.installFnReflection(template_obj, fn_name, func_data.param_count);
+                        }
                         self.push(template_val);
                     } else {
                         // Create a closure object referencing (not owning) template's bytecode
@@ -814,6 +825,13 @@ pub const VM = struct {
                         const fn_proto = try self.createObj(.{});
                         if (self.object_proto) |op_proto| fn_proto.prototype = op_proto;
                         try closure.setProperty(self.allocator, c_proto_sid, JsValue.initObject(fn_proto));
+                        // ECMA-262 §10.2.8 / §10.2.9 — closures get fresh
+                        // length/name descriptors per construction.
+                        const fn_name: []const u8 = if (func_data.name) |n|
+                            self.pool.get(n) orelse ""
+                        else
+                            "";
+                        try self.installFnReflection(closure, fn_name, func_data.param_count);
                         self.push(JsValue.initObject(closure));
                         try self.storeClosureUpvalues(closure, uv_array);
                     }

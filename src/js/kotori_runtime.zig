@@ -4026,16 +4026,14 @@ pub const KotoriRuntime = struct {
         \\    } else { ref=before; }
         \\    if(ref==null)this.appendChild(elem); else this.insertBefore(elem,ref);
         \\  };
-        \\  EP.remove=function(i){
-        \\    if(arguments.length===0){
-        \\      // ChildNode.remove() — remove self from parent
-        \\      if(this.parentNode)this.parentNode.removeChild(this);
-        \\      return;
-        \\    }
-        \\    if(tag(this)!=='select')return;
-        \\    var opts=this.querySelectorAll('option');
-        \\    i=i|0;
-        \\    if(i>=0&&i<opts.length)opts[i].parentNode.removeChild(opts[i]);
+        \\  // ChildNode.remove() per DOM §4.4 — must be `length === 0` so
+        \\  // WPT Element-remove.html's `assert_equals(node.remove.length, 0)`
+        \\  // passes. The HTMLSelectElement.remove(i) overload lives on
+        \\  // HTMLSelectElement.prototype below and shadows this method on
+        \\  // <select> instances; it falls back to self-removal when called
+        \\  // with no arguments (matching ChildNode.remove semantics).
+        \\  EP.remove=function(){
+        \\    if(this.parentNode)this.parentNode.removeChild(this);
         \\  };
         \\  // HTML §4.10.7 HTMLSelectElement.item / .namedItem.
         \\  // Installed on HTMLSelectElement.prototype (left unfrozen by
@@ -4057,6 +4055,21 @@ pub const KotoriRuntime = struct {
         \\        for(var i=0;i<opts.length;i++)
         \\          if(opts[i].id===n||opts[i].getAttribute('name')===n)return opts[i];
         \\        return null;
+        \\      },
+        \\      writable:true, configurable:true, enumerable:false
+        \\    });
+        \\    // HTML §4.10.7 HTMLSelectElement.remove(index): remove the option
+        \\    // at the given index. Calling with no arguments falls back to
+        \\    // ChildNode.remove() (DOM §4.4) — same as Element.prototype.remove.
+        \\    Object.defineProperty(SP, 'remove', {
+        \\      value: function(i){
+        \\        if(arguments.length===0){
+        \\          if(this.parentNode)this.parentNode.removeChild(this);
+        \\          return;
+        \\        }
+        \\        var opts=this.querySelectorAll('option');
+        \\        i=i|0;
+        \\        if(i>=0&&i<opts.length)opts[i].parentNode.removeChild(opts[i]);
         \\      },
         \\      writable:true, configurable:true, enumerable:false
         \\    });
