@@ -1353,10 +1353,23 @@ pub const VM = struct {
                         // setter-time validator in `css_validator.zig` so the
                         // CSSOM §6.7.2 invalid-value rejection semantics that
                         // `test_invalid_value` relies on are preserved.
-                        if (key.isString() and (obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_get_prop != null) {
-                            if (self.dom_get_prop.?(self, obj, key.asStringId())) |val_hit| {
-                                self.push(val_hit);
-                                continue;
+                        if ((obj.obj_type == .dom_node or obj.obj_type == .dom_style) and self.dom_get_prop != null) {
+                            // Integer-keyed bracket access (`form[0]`, `el.style[0]`)
+                            // also dispatches via dom_get_prop so HTMLFormElement's
+                            // indexed property visibility (HTML §4.10.21.3) and any
+                            // future numeric DOM/CSSOM hooks can intercept before
+                            // the array / property fallback below.
+                            const dgp_key_opt: ?StringId = if (key.isString())
+                                key.asStringId()
+                            else if (key.isInt() or key.isNumber())
+                                try self.keyToStringId(key)
+                            else
+                                null;
+                            if (dgp_key_opt) |key_sid| {
+                                if (self.dom_get_prop.?(self, obj, key_sid)) |val_hit| {
+                                    self.push(val_hit);
+                                    continue;
+                                }
                             }
                         }
                         if (obj.obj_type == .array) {

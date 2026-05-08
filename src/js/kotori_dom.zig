@@ -2015,6 +2015,194 @@ fn domSetProp(vm: *VM, obj: *JsObject, name_id: StringId, val: JsValue) bool {
     return false;
 }
 
+// ── HTMLFormElement named/indexed property visibility (HTML §4.10.21.3) ──
+// MVP implementation of the form's [LegacyOverrideBuiltIns] named getter.
+// Runs as a fallback at the end of domNodeGetProp so that explicit reflected
+// IDL attributes (id, action, name, …) still take precedence; with no match
+// we return null and the prototype chain (form.elements / .submit() / …) is
+// reached normally. Tradeoff: reflected-attribute names cannot be overridden
+// by name-attribute children, but EP-installed methods can — which is enough
+// for the form-nameditem / form-indexed-element WPT files.
+
+fn isHtmlForm(node: *lxb.lxb_dom_node_t) bool {
+    if (nodeType(node) != lxb.LXB_DOM_NODE_TYPE_ELEMENT) return false;
+    const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+    if (nsIdToUri(elem.node.ns)) |ns| {
+        if (!eql(ns, "http://www.w3.org/1999/xhtml")) return false;
+    }
+    var ln_len: usize = 0;
+    const ln_ptr = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return false;
+    return eql(ln_ptr[0..ln_len], "form");
+}
+
+fn isListedFormControl(elem: *lxb.lxb_dom_element_t) bool {
+    var ln_len: usize = 0;
+    const ln_ptr = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return false;
+    const ln = ln_ptr[0..ln_len];
+    return eql(ln, "input") or eql(ln, "select") or eql(ln, "textarea") or
+        eql(ln, "button") or eql(ln, "output") or eql(ln, "fieldset") or
+        eql(ln, "object");
+}
+
+fn isInputTypeImage(elem: *lxb.lxb_dom_element_t) bool {
+    var ln_len: usize = 0;
+    const ln_ptr = dom_b.lxb_dom_element_local_name(elem, &ln_len) orelse return false;
+    if (!eql(ln_ptr[0..ln_len], "input")) return false;
+    var v_len: usize = 0;
+    const v_ptr = dom_b.lxb_dom_element_get_attribute(elem, "type", 4, &v_len) orelse return false;
+    return asciiEqualIgnoreCase(v_ptr[0..v_len], "image");
+}
+
+fn formOwnerOf(elem: *lxb.lxb_dom_element_t) ?*lxb.lxb_dom_node_t {
+    // HTML §4.10.18.1 form owner: explicit `form="<id>"` wins, else nearest
+    // ancestor <form>.
+    var attr_len: usize = 0;
+    if (dom_b.lxb_dom_element_get_attribute(elem, "form", 4, &attr_len)) |id_ptr| {
+        var n: ?*lxb.lxb_dom_node_t = @ptrCast(elem);
+        while (n) |cur| {
+            if (nodeType(cur) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+                if (findElementById(cur, id_ptr[0..attr_len])) |found| {
+                    const fn_node: *lxb.lxb_dom_node_t = @ptrCast(found);
+                    if (isHtmlForm(fn_node)) return fn_node;
+                }
+                return null;
+            }
+            n = nodeParent(cur);
+        }
+        return null;
+    }
+    var node: ?*lxb.lxb_dom_node_t = nodeParent(@ptrCast(elem));
+    while (node) |cur| {
+        if (isHtmlForm(cur)) return cur;
+        node = nodeParent(cur);
+    }
+    return null;
+}
+
+fn parseCanonicalArrayIndex(name: []const u8) ?usize {
+    if (name.len == 0 or name.len > 10) return null;
+    if (eql(name, "0")) return 0;
+    if (name[0] < '1' or name[0] > '9') return null;
+    var n: usize = 0;
+    for (name) |c| {
+        if (c < '0' or c > '9') return null;
+        n = n * 10 + (c - '0');
+    }
+    return n;
+}
+
+fn walkCollectFormControls(
+    allocator: std.mem.Allocator,
+    node: *lxb.lxb_dom_node_t,
+    form_node: *lxb.lxb_dom_node_t,
+    out: *std.ArrayListUnmanaged(*lxb.lxb_dom_element_t),
+) std.mem.Allocator.Error!void {
+    if (nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        if (isListedFormControl(elem)) {
+            if (formOwnerOf(elem)) |owner| {
+                if (owner == form_node) {
+                    try out.append(allocator, elem);
+                }
+            }
+        }
+    }
+    var ch = nodeFirstChild(node);
+    while (ch) |c| : (ch = nodeNext(c)) {
+        try walkCollectFormControls(allocator, c, form_node, out);
+    }
+}
+
+fn nativeRadioNodeListItem(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    _ = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.null_val;
+    const arr_obj = this.asJsObject();
+    if (arr_obj.obj_type != .array) return JsValue.null_val;
+    const items = arr_obj.data.array.items;
+    if (args.len == 0) return JsValue.null_val;
+    const idx_f = args[0].toNumber();
+    if (!std.math.isFinite(idx_f) or idx_f < 0) return JsValue.null_val;
+    const idx: usize = @intFromFloat(idx_f);
+    if (idx >= items.len) return JsValue.null_val;
+    return items[idx];
+}
+
+fn formNamedItemFallback(
+    vm: *VM,
+    form_node: *lxb.lxb_dom_node_t,
+    name: []const u8,
+) ?JsValue {
+    if (name.len == 0) return null;
+
+    // Find document root for whole-tree walk (covers form-attribute associated
+    // controls outside the form's subtree).
+    var root: *lxb.lxb_dom_node_t = form_node;
+    while (true) {
+        const p = nodeParent(root) orelse break;
+        root = p;
+    }
+
+    var controls: std.ArrayListUnmanaged(*lxb.lxb_dom_element_t) = .empty;
+    defer controls.deinit(vm.allocator);
+    walkCollectFormControls(vm.allocator, root, form_node, &controls) catch return null;
+
+    // Integer-indexed property visibility — dispatch to nth listed element
+    // (excluding input type=image, per HTML §4.10.21.1 form.elements).
+    if (parseCanonicalArrayIndex(name)) |idx| {
+        var counter: usize = 0;
+        for (controls.items) |elem| {
+            if (isInputTypeImage(elem)) continue;
+            if (counter == idx) {
+                return wrapNode(vm, @ptrCast(elem));
+            }
+            counter += 1;
+        }
+        return null;
+    }
+
+    // Named property visibility — collect HTML-namespace listed elements
+    // (excluding input type=image, per HTML §4.10.21.3) whose id or name
+    // attribute equals `name`.
+    var matches: std.ArrayListUnmanaged(*lxb.lxb_dom_element_t) = .empty;
+    defer matches.deinit(vm.allocator);
+
+    for (controls.items) |elem| {
+        if (isInputTypeImage(elem)) continue;
+        if (nsIdToUri(elem.node.ns)) |ns| {
+            if (!eql(ns, "http://www.w3.org/1999/xhtml")) continue;
+        }
+        var id_len: usize = 0;
+        const id_ptr = dom_b.lxb_dom_element_get_attribute(elem, "id", 2, &id_len);
+        const id_match = if (id_ptr) |p| eql(p[0..id_len], name) else false;
+        var nm_len: usize = 0;
+        const nm_ptr = dom_b.lxb_dom_element_get_attribute(elem, "name", 4, &nm_len);
+        const nm_match = if (nm_ptr) |p| eql(p[0..nm_len], name) else false;
+        if (id_match or nm_match) {
+            matches.append(vm.allocator, elem) catch break;
+        }
+    }
+
+    if (matches.items.len == 0) return null;
+    if (matches.items.len == 1) {
+        return wrapNode(vm, @ptrCast(matches.items[0]));
+    }
+
+    // Multiple matches: return plain JS array enhanced with `.item(i)` to
+    // approximate a RadioNodeList. Supports `radio[i]`, `radio.length`,
+    // `radio.item(i)`; calling `radio()` throws TypeError (not callable).
+    const arr = vm.createObj(.{ .obj_type = .array }) catch return null;
+    arr.data = .{ .array = .empty };
+    for (matches.items) |m| {
+        const wrapped = wrapNode(vm, @ptrCast(m)) orelse JsValue.null_val;
+        arr.data.array.append(vm.allocator, wrapped) catch break;
+    }
+    const item_fn = vm.createObj(.{ .obj_type = .native_function }) catch return null;
+    item_fn.data = .{ .native_fn = &nativeRadioNodeListItem };
+    const item_sid = vm.pool.intern("item") catch return null;
+    arr.setProperty(vm.allocator, item_sid, JsValue.initObject(item_fn)) catch {};
+    return JsValue.initObject(arr);
+}
+
 // ── dom_node get ────────────────────────────────────────────────────
 
 fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
@@ -2373,6 +2561,15 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         const cd_sid = vm.pool.intern("createDocument") catch return null;
         impl_obj.setProperty(vm.allocator, cd_sid, JsValue.initObject(cd_fn)) catch {};
         return JsValue.initObject(impl_obj);
+    }
+
+    // HTML §4.10.21.3 — HTMLFormElement named/indexed property visibility.
+    // Fallback fires AFTER explicit reflection / native bindings but BEFORE
+    // the prototype chain, so EP-installed methods (item/namedItem leaks
+    // from the select polyfill, etc.) can still be overridden by a matching
+    // named child. No allocation when the form has no controls.
+    if (isHtmlForm(node)) {
+        if (formNamedItemFallback(vm, node, name)) |v| return v;
     }
 
     return null; // fall through to prototype chain (methods live there)
