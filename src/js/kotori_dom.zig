@@ -1252,6 +1252,9 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("CAPTURING_PHASE"), JsValue.initNumber(1)) catch {};
     ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("AT_TARGET"), JsValue.initNumber(2)) catch {};
     ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("BUBBLING_PHASE"), JsValue.initNumber(3)) catch {};
+    // WebIDL §3.7.1: prototype.constructor + ECMA-262 §10.2.9 ctor.name.
+    ev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern("Event"))) catch {};
+    ev_proto.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(ev_ctor_obj)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("Event"), JsValue.initObject(ev_ctor_obj));
 
     // CustomEvent constructor (DOM 2.5)
@@ -1261,6 +1264,9 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const cev_ctor_obj = try vm.createObj(.{ .obj_type = .native_function });
     cev_ctor_obj.data = .{ .native_fn = &nativeCustomEventConstructor };
     cev_ctor_obj.setProperty(vm.allocator, proto_sid, JsValue.initObject(cev_proto)) catch {};
+    // WebIDL §3.7.1: prototype.constructor + ECMA-262 §10.2.9 ctor.name.
+    cev_ctor_obj.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(try vm.pool.intern("CustomEvent"))) catch {};
+    cev_proto.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(cev_ctor_obj)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("CustomEvent"), JsValue.initObject(cev_ctor_obj));
 
     // ── Event interface hierarchy (DOM §5.1 + UI Events + HTML) ──
@@ -4366,7 +4372,17 @@ fn registerEventCtor(vm: *VM, name: []const u8, proto: *JsObject, proto_sid: Str
     const ctor = try vm.createObj(.{ .obj_type = .native_function });
     ctor.data = .{ .native_fn = &nativeEventConstructor };
     ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(proto)) catch {};
-    try vm.globals.put(vm.allocator, try vm.pool.intern(name), JsValue.initObject(ctor));
+    // WebIDL §3.7.1: prototype.constructor must point back at the interface
+    // object, and the interface object must have a `name` property equal to
+    // the interface's identifier (ECMA-262 §10.2.9). Without these,
+    // `e.constructor.name` is undefined for `e = new KeyboardEvent(...)` etc.,
+    // breaking tests like dom/events/Event-init-while-dispatching.html which
+    // walk the prototype chain via `Object.getPrototypeOf` and key into a
+    // dictionary by `o.constructor.name`.
+    const name_sid = try vm.pool.intern(name);
+    ctor.setProperty(vm.allocator, try vm.pool.intern("name"), JsValue.initString(name_sid)) catch {};
+    proto.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(ctor)) catch {};
+    try vm.globals.put(vm.allocator, name_sid, JsValue.initObject(ctor));
 }
 
 // ── document.createEvent (DOM §5.1 legacy factory) ──────────────────
