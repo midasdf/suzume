@@ -3448,8 +3448,13 @@ fn createJsOnlyElement(vm: *VM, local_name: []const u8, ns_uri: ?[]const u8, own
     applyInterfaceProto(vm, obj, ns_uri, local_name, owner_doc);
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(1));
     try obj.setProperty(vm.allocator, try vm.pool.intern("localName"), JsValue.initString(try vm.pool.intern(local_name)));
-    // tagName = uppercase for HTML namespace, preserves case for XML
-    const tag_upper = if (ns_uri != null and std.mem.eql(u8, ns_uri.?, "http://www.w3.org/1999/xhtml")) blk: {
+    // DOM §4.9 "HTML-uppercased qualified name": uppercase only when the
+    // element is in the HTML namespace AND its node document is an HTML
+    // document. XML documents (e.g. created via DOMImplementation
+    // .createDocument) preserve case even when the namespace is HTML.
+    const html_ns = ns_uri != null and std.mem.eql(u8, ns_uri.?, "http://www.w3.org/1999/xhtml");
+    const owner_is_xml = thisIsXmlDoc(vm, owner_doc);
+    const tag_upper = if (html_ns and !owner_is_xml) blk: {
         var buf: [256]u8 = undefined;
         const len = @min(local_name.len, buf.len);
         for (0..len) |i| buf[i] = std.ascii.toUpper(local_name[i]);
@@ -4167,14 +4172,118 @@ fn nativeImportNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
             }
         }
     }
-    const node = getArgNode(args[0]) orelse return JsValue.null_val;
     const deep = if (args.len > 1 and args[1].isBool()) args[1].asBool() else false;
-    // DOM §4.5 "import a node" = "clone a node" with `document` set to `this`.
-    // Pass `this` (the target document JS wrapper) as the override so every
-    // cloned node's `_ownerDoc` slot points at `this` rather than at the
-    // source node's owner document (which lexbor copies by default).
-    const owner_override: ?JsValue = if (this.isObject()) this else null;
-    return cloneNodeImpl(vm, node, owner_override, deep) orelse JsValue.null_val;
+    if (getArgNode(args[0])) |node| {
+        // DOM §4.5 "import a node" = "clone a node" with `document` set to `this`.
+        // Pass `this` (the target document JS wrapper) as the override so every
+        // cloned node's `_ownerDoc` slot points at `this` rather than at the
+        // source node's owner document (which lexbor copies by default).
+        const owner_override: ?JsValue = if (this.isObject()) this else null;
+        return cloneNodeImpl(vm, node, owner_override, deep) orelse JsValue.null_val;
+    }
+    // JS-only Element fallback (DOM §7.1 createDocument produces JS-only
+    // elements with no lexbor backing). Reconstruct via createJsOnlyElement
+    // using the source's localName / namespaceURI / prefix so the target
+    // document's HTML-uppercased tagName rule applies to the clone.
+    if (!args[0].isObject()) return JsValue.null_val;
+    return try jsOnlyImportElement(vm, args[0], this, deep);
+}
+
+/// JS-only Element clone path for `importNode`. Source must be a JS-only
+/// element (nodeType=1, no `.dom_node` data).
+fn jsOnlyImportElement(vm: *VM, src_val: JsValue, target_doc: JsValue, deep: bool) !JsValue {
+    const src_obj = src_val.asJsObject();
+    // Confirm Element-shaped JS-only node (nodeType === 1).
+    const nt_sid = try vm.pool.intern("nodeType");
+    const nt_val = src_obj.getProperty(nt_sid) orelse return JsValue.null_val;
+    if (!nt_val.isNumber() or nt_val.toNumber() != 1) return JsValue.null_val;
+
+    const ln_sid = try vm.pool.intern("localName");
+    const local_name: []const u8 = blk: {
+        if (src_obj.getProperty(ln_sid)) |lv| {
+            if (lv.isString()) break :blk vm.pool.get(lv.asStringId()) orelse "";
+        }
+        break :blk "";
+    };
+    if (local_name.len == 0) return JsValue.null_val;
+
+    const ns_sid = try vm.pool.intern("namespaceURI");
+    const ns_uri: ?[]const u8 = blk: {
+        if (src_obj.getProperty(ns_sid)) |nv| {
+            if (nv.isString()) break :blk vm.pool.get(nv.asStringId());
+        }
+        break :blk null;
+    };
+
+    const new_val = try createJsOnlyElement(vm, local_name, ns_uri, target_doc);
+    if (!new_val.isObject()) return new_val;
+    const new_obj = new_val.asJsObject();
+
+    // Copy prefix and rebuild tagName/nodeName to match the target document's
+    // HTML-uppercasing rule (already applied when local_name was uppercased
+    // during createJsOnlyElement; we just need to attach the prefix here).
+    const px_sid = try vm.pool.intern("prefix");
+    if (src_obj.getProperty(px_sid)) |pv| {
+        if (pv.isString()) {
+            const prefix_str = vm.pool.get(pv.asStringId()) orelse "";
+            if (prefix_str.len > 0) {
+                new_obj.setProperty(vm.allocator, px_sid, JsValue.initString(try vm.pool.intern(prefix_str))) catch {};
+                const html_ns = ns_uri != null and std.mem.eql(u8, ns_uri.?, "http://www.w3.org/1999/xhtml");
+                const target_xml = thisIsXmlDoc(vm, target_doc);
+                const upper = html_ns and !target_xml;
+                var buf: [256]u8 = undefined;
+                var pos: usize = 0;
+                for (prefix_str) |ch| {
+                    if (pos >= buf.len) break;
+                    buf[pos] = if (upper) std.ascii.toUpper(ch) else ch;
+                    pos += 1;
+                }
+                if (pos < buf.len) {
+                    buf[pos] = ':';
+                    pos += 1;
+                }
+                for (local_name) |ch| {
+                    if (pos >= buf.len) break;
+                    buf[pos] = if (upper) std.ascii.toUpper(ch) else ch;
+                    pos += 1;
+                }
+                const qn = try vm.pool.intern(buf[0..pos]);
+                new_obj.setProperty(vm.allocator, try vm.pool.intern("tagName"), JsValue.initString(qn)) catch {};
+                new_obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(qn)) catch {};
+            }
+        }
+    }
+
+    if (deep) {
+        // Recurse into children stored on the JS childNodes array.
+        const cn_sid = try vm.pool.intern("childNodes");
+        if (src_obj.getProperty(cn_sid)) |cv| {
+            if (cv.isObject()) {
+                const cn_obj = cv.asJsObject();
+                const src_items: []const JsValue = switch (cn_obj.data) {
+                    .array => |arr| arr.items,
+                    else => &[_]JsValue{},
+                };
+                if (src_items.len > 0) {
+                    const new_cn = new_obj.getProperty(cn_sid) orelse JsValue.null_val;
+                    if (new_cn.isObject()) {
+                        const dest_obj = new_cn.asJsObject();
+                        var dest_list: std.ArrayListUnmanaged(JsValue) = .empty;
+                        try dest_list.ensureTotalCapacity(vm.allocator, src_items.len);
+                        for (src_items) |child_val| {
+                            const cloned: JsValue = if (child_val.isObject())
+                                try jsOnlyImportElement(vm, child_val, target_doc, true)
+                            else
+                                child_val;
+                            dest_list.appendAssumeCapacity(cloned);
+                        }
+                        dest_obj.data = .{ .array = dest_list };
+                    }
+                }
+            }
+        }
+    }
+    return new_val;
 }
 
 // ── Helper: register an event interface constructor + prototype ──────
