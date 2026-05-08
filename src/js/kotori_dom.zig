@@ -947,12 +947,28 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
 
     // Freeze all interface prototypes — spec §3.5 point 6 / HTML §4
     // prototype-chain immutability (spec correctness, not performance).
+    // EXCEPT: a few prototypes that the JS polyfill in kotori_runtime.zig
+    // needs to extend post-init (Object.defineProperty cannot add new
+    // accessors to a non-extensible prototype). Listing them here keeps the
+    // form_state_polyfill_js / select-collection polyfill able to install
+    // tag-specific methods on the right prototype instead of leaking onto
+    // Element.prototype where they're visible to every element via `in`.
+    const unfrozen_html_protos = [_][]const u8{
+        "HTMLSelectElement",
+        "HTMLFormElement",
+    };
     try g_html_element_proto.?.freeze(vm.allocator);
     {
         var it = g_html_protos.?.iterator();
         while (it.next()) |entry| {
             // HTMLElement root already frozen above; skip to avoid re-freeze.
             if (entry.value_ptr.* == g_html_element_proto.?) continue;
+            const proto_name = entry.key_ptr.*;
+            var skip = false;
+            for (unfrozen_html_protos) |n| {
+                if (std.mem.eql(u8, proto_name, n)) { skip = true; break; }
+            }
+            if (skip) continue;
             try entry.value_ptr.*.freeze(vm.allocator);
         }
     }

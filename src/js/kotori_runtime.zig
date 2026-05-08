@@ -4031,17 +4031,30 @@ pub const KotoriRuntime = struct {
         \\    i=i|0;
         \\    if(i>=0&&i<opts.length)opts[i].parentNode.removeChild(opts[i]);
         \\  };
-        \\  EP.item=function(i){
-        \\    if(tag(this)!=='select')return null;
-        \\    var opts=this.querySelectorAll('option');i=i>>>0;
-        \\    return i<opts.length?opts[i]:null;
-        \\  };
-        \\  EP.namedItem=function(n){
-        \\    if(tag(this)!=='select')return null;
-        \\    var opts=this.querySelectorAll('option');
-        \\    for(var i=0;i<opts.length;i++)if(opts[i].id===n||opts[i].getAttribute('name')===n)return opts[i];
-        \\    return null;
-        \\  };
+        \\  // HTML §4.10.7 HTMLSelectElement.item / .namedItem.
+        \\  // Installed on HTMLSelectElement.prototype (left unfrozen by
+        \\  // kotori_dom.zig for this purpose) so they don't leak onto every
+        \\  // Element via Element.prototype — `"item" in form` must be false
+        \\  // per the form-nameditem WPT.
+        \\  if (typeof HTMLSelectElement !== 'undefined') {
+        \\    var SP = HTMLSelectElement.prototype;
+        \\    Object.defineProperty(SP, 'item', {
+        \\      value: function(i){
+        \\        var opts=this.querySelectorAll('option');i=i>>>0;
+        \\        return i<opts.length?opts[i]:null;
+        \\      },
+        \\      writable:true, configurable:true, enumerable:false
+        \\    });
+        \\    Object.defineProperty(SP, 'namedItem', {
+        \\      value: function(n){
+        \\        var opts=this.querySelectorAll('option');
+        \\        for(var i=0;i<opts.length;i++)
+        \\          if(opts[i].id===n||opts[i].getAttribute('name')===n)return opts[i];
+        \\        return null;
+        \\      },
+        \\      writable:true, configurable:true, enumerable:false
+        \\    });
+        \\  }
         \\  // ── form.elements / .length / .reset() (§4.10.21) ──
         \\  // HTML §4.10.21.1 form.elements: collect form-associated listed
         \\  // elements whose form owner is this form — including elements
