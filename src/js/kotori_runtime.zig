@@ -6345,7 +6345,16 @@ pub const KotoriRuntime = struct {
         \\      // routing through a wrapper handler that uses `this`.
         \\      var elRef=this;
         \\      var wrapHandler={
-        \\        get:function(_t,k){return handler.get(elRef,k);},
+        \\        get:function(_t,k){
+        \\          var v=handler.get(elRef,k);
+        \\          /* HTML §3.2.6 — DOMStringMap inherits from Object.prototype.
+        \\           * If the named getter has no match (no `data-*` attribute
+        \\           * mapping to this key), fall through to the target's
+        \\           * prototype chain so `dataset.toString` resolves to
+        \\           * Object.prototype.toString. */
+        \\          if(v===undefined && typeof k==='string' && !handler.has(elRef,k)) return _t[k];
+        \\          return v;
+        \\        },
         \\        set:function(_t,k,v){
         \\          var r=handler.set(elRef,k,v);
         \\          // Force return true so the engine doesn't write to the
@@ -6354,7 +6363,14 @@ pub const KotoriRuntime = struct {
         \\          // mis-interpreted).
         \\          return true;
         \\        },
-        \\        has:function(_t,k){return handler.has(elRef,k);},
+        \\        has:function(_t,k){
+        \\          if(handler.has(elRef,k))return true;
+        \\          /* HTML §3.2.6 keeps the DOMStringMap on Object.prototype's
+        \\           * chain — fall through to the target's [[HasProperty]] so
+        \\           * `'toString' in dataset` (and other inherited members)
+        \\           * still report true. */
+        \\          return k in _t;
+        \\        },
         \\        deleteProperty:function(_t,k){return handler.deleteProperty(elRef,k);},
         \\        ownKeys:function(_t){return handler.ownKeys(elRef);},
         \\        getOwnPropertyDescriptor:function(_t,k){return handler.getOwnPropertyDescriptor(elRef,k);},

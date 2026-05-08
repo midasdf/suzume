@@ -559,10 +559,18 @@ pub const VM = struct {
                         // ECMA-262 §13.10.2 `in`: true if HasProperty(obj, key)
                         // returns true. Data props + accessor descriptors on
                         // the prototype chain both count; `getProperty` returns
-                        // null for accessors by design, so probe both.
+                        // null for accessors by design, so probe both. Also
+                        // fall back to %Object.prototype% so inherited members
+                        // (`toString`, `hasOwnProperty`, …) "shine through" on
+                        // objects whose explicit prototype chain bottoms out
+                        // before reaching it — mirrors the get_prop path at
+                        // L1138-1158.
                         const name_id = lhs.asStringId();
                         if (obj.getProperty(name_id) != null or obj.findAccessorDescriptor(name_id) != null) {
                             self.push(JsValue.initBool(true));
+                        } else if (self.object_proto) |obj_p| {
+                            const found = obj_p.getProperty(name_id) != null or obj_p.findAccessorDescriptor(name_id) != null;
+                            self.push(JsValue.initBool(found));
                         } else {
                             self.push(JsValue.initBool(false));
                         }
@@ -772,9 +780,11 @@ pub const VM = struct {
                     if (func_data.upvalue_count == 0) {
                         // No upvalues — just push the template directly
                         // Ensure function has a .prototype property for instanceof/new
+                        // (matching ECMA-262 §10.2.4: fn.prototype.[[Prototype]] = %Object.prototype%).
                         const proto_sid = try self.pool.intern("prototype");
                         if (template_obj.getProperty(proto_sid) == null) {
                             const fn_proto = try self.createObj(.{});
+                            if (self.object_proto) |op_proto| fn_proto.prototype = op_proto;
                             try template_obj.setProperty(self.allocator, proto_sid, JsValue.initObject(fn_proto));
                         }
                         self.push(template_val);
@@ -795,9 +805,14 @@ pub const VM = struct {
                             } },
                         };
                         try self.objects.append(self.allocator, closure);
-                        // Ensure closure has a .prototype property for instanceof/new
+                        // Ensure closure has a .prototype property for instanceof/new.
+                        // Per ECMA-262 §10.2.4 the prototype of a function's
+                        // `.prototype` is %Object.prototype% so inherited members
+                        // (`toString`, `hasOwnProperty`, …) "shine through" on
+                        // instances created via `new fn` / `Object.create(fn.proto)`.
                         const c_proto_sid = try self.pool.intern("prototype");
                         const fn_proto = try self.createObj(.{});
+                        if (self.object_proto) |op_proto| fn_proto.prototype = op_proto;
                         try closure.setProperty(self.allocator, c_proto_sid, JsValue.initObject(fn_proto));
                         self.push(JsValue.initObject(closure));
                         try self.storeClosureUpvalues(closure, uv_array);
@@ -2116,6 +2131,26 @@ pub const VM = struct {
                     const arr = try self.createArray();
                     if (obj_val.isObject()) {
                         const obj = obj_val.asJsObject();
+                        // ECMA-262 §13.7.5.6 / §10.5.11 — Proxy [[OwnPropertyKeys]]
+                        // routes through the `ownKeys` trap. Without this for-in
+                        // over a Proxy reflects only the *target*'s keys, which
+                        // for the dataset polyfill is an empty Object.create() —
+                        // so `for (var k in element.dataset)` never iterates.
+                        if (obj.obj_type == .proxy) {
+                            const keys_val = try self.proxyOwnKeys(obj);
+                            if (keys_val.isObject()) {
+                                const keys_obj = keys_val.asJsObject();
+                                if (keys_obj.obj_type == .array) {
+                                    for (keys_obj.data.array.items) |k| {
+                                        if (k.isString()) {
+                                            arr.data.array.append(self.allocator, k) catch {};
+                                        }
+                                    }
+                                }
+                            }
+                            self.push(JsValue.initObject(arr));
+                            continue;
+                        }
                         // Array indices first (ES2023 §23.1.3.19.2)
                         if (obj.obj_type == .array) {
                             for (0..obj.data.array.items.len) |idx| {
