@@ -8279,11 +8279,85 @@ fn computeTranslate(node: *lxb.lxb_dom_node_t) bool {
 // ══════════════════════════════════════════════════════════════════════
 // ── isEqualNode (DOM §4.4) ──────────────────────────────────────────
 
-fn nativeIsEqualNode(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-    const a = getThisNode(this) orelse return JsValue.initBool(false);
+fn nativeIsEqualNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) return JsValue.initBool(false);
-    const b = getArgNode(args[0]) orelse return JsValue.initBool(false);
-    return JsValue.initBool(nodesEqual(a, b));
+    // DOM §4.4 isEqualNode requires reflexivity (`n.isEqualNode(n) === true`).
+    // JS-only nodes (DocumentType / ProcessingInstruction / Document /
+    // Attr / JS-only Element) have no lexbor backing, so getThisNode +
+    // getArgNode would both return null and we'd otherwise drop them as
+    // "not equal" — even when comparing a node to itself. Identity check
+    // covers that reflexivity gap before falling back to lexbor compare.
+    if (this.isObject() and args[0].isObject() and this.asJsObject() == args[0].asJsObject()) {
+        return JsValue.initBool(true);
+    }
+    if (getThisNode(this)) |a| {
+        if (getArgNode(args[0])) |b| {
+            return JsValue.initBool(nodesEqual(a, b));
+        }
+    }
+    // JS-only node fallback (DocumentType, ProcessingInstruction, Document,
+    // Attr, JS-only Element). Both sides must be JS-only to be equal —
+    // a JS-only node is never structurally equal to a lexbor-backed one.
+    if (this.isObject() and args[0].isObject()) {
+        const vm = VM.vmFromCtx(ctx);
+        return JsValue.initBool(jsOnlyNodesEqual(vm, this.asJsObject(), args[0].asJsObject()));
+    }
+    return JsValue.initBool(false);
+}
+
+/// DOM §4.4 "equals" for two JS-only nodes (no `.dom_node` data).
+/// Compares nodeType + the type-specific identity fields documented in
+/// §4.4 step 2 (DocumentType: name/publicId/systemId; ProcessingInstruction:
+/// target/data; Element: namespaceURI/prefix/localName + child equality;
+/// Attr: namespaceURI/localName/value; Document: child equality only).
+fn jsOnlyNodesEqual(vm: *VM, a: *JsObject, b: *JsObject) bool {
+    const nt_sid = vm.pool.intern("nodeType") catch return false;
+    const a_nt_v = a.getProperty(nt_sid) orelse return false;
+    const b_nt_v = b.getProperty(nt_sid) orelse return false;
+    if (!a_nt_v.isNumber() or !b_nt_v.isNumber()) return false;
+    const a_nt = a_nt_v.toNumber();
+    if (a_nt != b_nt_v.toNumber()) return false;
+
+    const fields: []const []const u8 = switch (@as(u32, @intFromFloat(a_nt))) {
+        // DocumentType
+        10 => &.{ "name", "publicId", "systemId" },
+        // Attr
+        2 => &.{ "namespaceURI", "localName", "value" },
+        // ProcessingInstruction
+        7 => &.{ "target", "data" },
+        // Element (JS-only)
+        1 => &.{ "namespaceURI", "prefix", "localName" },
+        // Document, DocumentFragment: no per-type identity fields, child
+        // equality alone decides per spec step 2 last bullet.
+        9, 11 => &.{},
+        // Text, Comment etc — caller normally hits the lexbor path; stay
+        // strict here.
+        else => &.{},
+    };
+    for (fields) |fname| {
+        const f_sid = vm.pool.intern(fname) catch return false;
+        const av = a.getProperty(f_sid) orelse JsValue.null_val;
+        const bv = b.getProperty(f_sid) orelse JsValue.null_val;
+        if (!jsOnlyValueEqualForCompare(vm, av, bv)) return false;
+    }
+    return true;
+}
+
+/// Compare two JsValues that hold either a string or null (the only
+/// shapes used for the per-type identity fields above). Tightens the
+/// "either both null or both equal strings" check so the comparison
+/// is symmetric and side-effect-free.
+fn jsOnlyValueEqualForCompare(vm: *VM, av: JsValue, bv: JsValue) bool {
+    const a_null = av.isNull() or av.isUndefined();
+    const b_null = bv.isNull() or bv.isUndefined();
+    if (a_null and b_null) return true;
+    if (a_null != b_null) return false;
+    if (av.isString() and bv.isString()) {
+        const as = vm.pool.get(av.asStringId()) orelse return false;
+        const bs = vm.pool.get(bv.asStringId()) orelse return false;
+        return std.mem.eql(u8, as, bs);
+    }
+    return false;
 }
 
 fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
@@ -8294,7 +8368,26 @@ fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
 
     // Step 2: type-specific checks
     if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
-        // Compare local name
+        // DOM §4.4 — equal elements share namespace, namespace prefix,
+        // local name, and attribute set. Compare lexbor's namespace ID
+        // first; for two elements in different namespaces (e.g. SVG vs
+        // HTML), `node.ns` already differs and we can short-circuit
+        // without falling through to the local-name compare.
+        if (a.ns != b.ns) return false;
+        // Custom namespaces — both elements share `node.ns = LXB_NS_UNDEF`,
+        // but their URIs (stored in ns_info_map by createElementNS) may
+        // differ. Compare the URIs explicitly so two elements with
+        // different custom namespaces are NOT reported equal.
+        if (a.ns == 0x01) {
+            const a_info = getNsInfo(a);
+            const b_info = getNsInfo(b);
+            const a_uri: []const u8 = if (a_info) |i| i.uri else "";
+            const b_uri: []const u8 = if (b_info) |i| i.uri else "";
+            if (!std.mem.eql(u8, a_uri, b_uri)) return false;
+            const a_prefix: []const u8 = if (a_info) |i| i.prefix else "";
+            const b_prefix: []const u8 = if (b_info) |i| i.prefix else "";
+            if (!std.mem.eql(u8, a_prefix, b_prefix)) return false;
+        }
         const a_elem: *lxb.lxb_dom_element_t = @ptrCast(a);
         const b_elem: *lxb.lxb_dom_element_t = @ptrCast(b);
         var a_len: usize = 0;
