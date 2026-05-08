@@ -6248,23 +6248,56 @@ pub const KotoriRuntime = struct {
         \\    return true;
         \\  }
         \\  var SLOT='__datasetProxy';
+        \\  // HTML §3.2.6.1 attribute name's algorithm rejects keys with a
+        \\  // '-' followed by an ASCII lowercase letter. The setter / deleter
+        \\  // throw SyntaxError in that case; the getter / has trap simply
+        \\  // report the property as missing because no valid `data-*`
+        \\  // attribute can ever round-trip back to such a key.
+        \\  function _dsValidKey(key){
+        \\    for(var i=0;i<key.length;i++){
+        \\      if(key[i]==='-' && i+1<key.length){
+        \\        var nx=key.charCodeAt(i+1);
+        \\        if(nx>=0x61 && nx<=0x7A) return false;
+        \\      }
+        \\    }
+        \\    return true;
+        \\  }
         \\  var handler={
         \\    get:function(el,key){
         \\      if(typeof key!=='string')return undefined;
+        \\      if(!_dsValidKey(key))return undefined;
         \\      var v=el.getAttribute(toAttr(key));
         \\      return v===null?undefined:v;
         \\    },
         \\    set:function(el,key,value){
         \\      if(typeof key!=='string')return true;
+        \\      // HTML §3.2.6.1 attribute name algorithm step 2.1: a U+002D
+        \\      // HYPHEN-MINUS followed by an ASCII lowercase letter renders
+        \\      // the key invalid → throw a "SyntaxError" DOMException.
+        \\      for(var i=0;i<key.length;i++){
+        \\        if(key[i]==='-' && i+1<key.length){
+        \\          var nx=key.charCodeAt(i+1);
+        \\          if(nx>=0x61 && nx<=0x7A){
+        \\            throw new DOMException('Invalid dataset key: '+key,'SyntaxError');
+        \\          }
+        \\        }
+        \\      }
         \\      el.setAttribute(toAttr(key),''+value);
         \\      return true;
         \\    },
         \\    has:function(el,key){
         \\      if(typeof key!=='string')return false;
+        \\      if(!_dsValidKey(key))return false;
         \\      return el.hasAttribute(toAttr(key));
         \\    },
         \\    deleteProperty:function(el,key){
         \\      if(typeof key!=='string')return true;
+        \\      // HTML §3.2.6.1 — invalid dataset keys ('-' + a-z) cannot map
+        \\      // back to a valid `data-*` attribute, so the deletion silently
+        \\      // no-ops (matches Chrome/Firefox observable behaviour: the
+        \\      // dataset-delete WPT calls `delete dataset['-foo']` without a
+        \\      // try/catch and expects the attribute to remain intact).
+        \\      if(!_dsValidKey(key))return true;
         \\      el.removeAttribute(toAttr(key));
         \\      return true;
         \\    },

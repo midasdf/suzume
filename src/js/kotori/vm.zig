@@ -840,10 +840,18 @@ pub const VM = struct {
                         };
                         self.sp = base - 1; // pop func
                         if (self.pending_throw) |thrown| {
-                            self.pending_throw = null;
+                            // Honour `run_scope_floor`: an out-of-scope try
+                            // (e.g., from a Proxy trap or accessor invoked by
+                            // a nested run) belongs to the OUTER run. Leaving
+                            // pending_throw set lets the outer run's loop
+                            // start unwind through `tc.sp` reset cleanly,
+                            // instead of unwinding here and clobbering the
+                            // outer opcode's stack effects.
                             if (self.try_depth == 0) {
+                                self.pending_throw = null;
                                 self.push(JsValue.undefined_val);
-                            } else {
+                            } else if (self.try_stack[self.try_depth - 1].frame_idx >= self.run_scope_floor) {
+                                self.pending_throw = null;
                                 self.try_depth -= 1;
                                 const tc = self.try_stack[self.try_depth];
                                 while (self.frame_count > tc.frame_idx + 1) {
@@ -854,6 +862,9 @@ pub const VM = struct {
                                 self.sp = tc.sp;
                                 self.push(thrown);
                                 self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                            } else {
+                                // Out-of-scope try → propagate via outer run.
+                                return JsValue.undefined_val;
                             }
                             continue;
                         }
@@ -1850,10 +1861,14 @@ pub const VM = struct {
                         };
                         self.sp = this_pos;
                         if (self.pending_throw) |thrown| {
-                            self.pending_throw = null;
+                            // Honour `run_scope_floor` (see .call handler):
+                            // out-of-scope throws must propagate to the outer
+                            // run instead of unwinding here.
                             if (self.try_depth == 0) {
+                                self.pending_throw = null;
                                 self.push(JsValue.undefined_val);
-                            } else {
+                            } else if (self.try_stack[self.try_depth - 1].frame_idx >= self.run_scope_floor) {
+                                self.pending_throw = null;
                                 self.try_depth -= 1;
                                 const tc = self.try_stack[self.try_depth];
                                 while (self.frame_count > tc.frame_idx + 1) {
@@ -1864,6 +1879,9 @@ pub const VM = struct {
                                 self.sp = tc.sp;
                                 self.push(thrown);
                                 self.frames[self.frame_count - 1].ip = tc.catch_offset;
+                            } else {
+                                // Out-of-scope try → propagate via outer run.
+                                return JsValue.undefined_val;
                             }
                             continue;
                         }
