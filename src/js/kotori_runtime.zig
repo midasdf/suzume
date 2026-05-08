@@ -220,6 +220,14 @@ pub const KotoriRuntime = struct {
         // unless the submitter is explicitly passed (constructor 2nd arg).
         _ = self.eval(formdata_polyfill_js);
 
+        // HTML §8.1.5.4 Window-reflecting body element event handler set:
+        // onblur/onerror/onfocus/onload/onscroll/onresize on
+        // HTMLBodyElement.prototype + HTMLFrameSetElement.prototype forward
+        // their IDL getter/setter to window[attr]. Non-callable non-null
+        // setter values coerce to null per HTML §8.1.5.2 event handler IDL
+        // attribute setter algorithm.
+        _ = self.eval(body_event_handler_polyfill_js);
+
         return self;
     }
 
@@ -6196,6 +6204,78 @@ pub const KotoriRuntime = struct {
         \\    return arr;
         \\  };
         \\  try{globalThis.FormData=FormData_;}catch(e){}
+        \\})();
+    ;
+
+    /// HTML §8.1.5.4 Window-reflecting body element event handler set.
+    ///
+    /// Installs IDL accessor descriptors on HTMLBodyElement.prototype and
+    /// HTMLFrameSetElement.prototype for these six event handler attributes:
+    ///
+    ///   onblur, onerror, onfocus, onload, onscroll, onresize
+    ///
+    /// Per HTML §8.1.5.4 these IDL attributes do NOT operate on the host
+    /// element directly — they get/set the corresponding event handler on
+    /// the Window. The IDL setter coerces non-callable non-null values to
+    /// null per HTML §8.1.5.2 step 4 ("If V is not null and is not a
+    /// callable Function … set the corresponding event handler to null").
+    ///
+    /// `enumerable: true` mirrors how WebIDL operations + attributes are
+    /// emitted on prototypes — required for `for (var k in body)` to see
+    /// these attributes (testEnumerate).
+    ///
+    /// NOT YET implemented (testReflect / testForwardToWindow first
+    /// assert): content attribute parsing into a function via
+    /// `setAttribute('onblur', 'return')`. That requires HTML §8.1.5.1
+    /// "compile event handler" which depends on a working Function
+    /// constructor (kotori's Function ctor is currently a no-op stub),
+    /// so deferred.
+    const body_event_handler_polyfill_js =
+        \\(function(){
+        \\  if(typeof globalThis==='undefined')return;
+        \\  if(typeof HTMLBodyElement==='undefined')return;
+        \\  var attrs=['onblur','onerror','onfocus','onload','onscroll','onresize'];
+        \\  var protos=[];
+        \\  try{protos.push(HTMLBodyElement.prototype);}catch(e){}
+        \\  try{if(typeof HTMLFrameSetElement!=='undefined')protos.push(HTMLFrameSetElement.prototype);}catch(e){}
+        \\  function makeGetter(name){
+        \\    return function(){
+        \\      var v=globalThis[name];
+        \\      return (typeof v==='function')?v:null;
+        \\    };
+        \\  }
+        \\  function makeSetter(name){
+        \\    return function(v){
+        \\      // HTML §8.1.5.2 — non-callable non-null becomes null on set.
+        \\      globalThis[name]=(typeof v==='function')?v:null;
+        \\    };
+        \\  }
+        \\  for(var p=0;p<protos.length;p++){
+        \\    var P=protos[p];
+        \\    if(!P)continue;
+        \\    for(var i=0;i<attrs.length;i++){
+        \\      var name=attrs[i];
+        \\      try{
+        \\        Object.defineProperty(P,name,{
+        \\          configurable:true,
+        \\          enumerable:true,
+        \\          get:makeGetter(name),
+        \\          set:makeSetter(name)
+        \\        });
+        \\      }catch(e){}
+        \\    }
+        \\  }
+        \\  // Initialise window[attr] to null so the IDL getter sees a
+        \\  // defined slot (otherwise globalThis[name] is undefined and
+        \\  // the for..in enumeration on globalThis won't show the slot
+        \\  // — though body's getter still returns null per the
+        \\  // typeof check, this keeps `'onblur' in window` truthy on
+        \\  // engines where globals are visible only after first set).
+        \\  for(var i=0;i<attrs.length;i++){
+        \\    if(typeof globalThis[attrs[i]]==='undefined'){
+        \\      try{globalThis[attrs[i]]=null;}catch(e){}
+        \\    }
+        \\  }
         \\})();
     ;
 

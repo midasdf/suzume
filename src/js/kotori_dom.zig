@@ -956,6 +956,13 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const unfrozen_html_protos = [_][]const u8{
         "HTMLSelectElement",
         "HTMLFormElement",
+        // HTML §8.1.5.4 Window-reflecting body element event handler set:
+        // body_event_handler_polyfill_js (kotori_runtime.zig) installs IDL
+        // accessor descriptors for onblur/onerror/onfocus/onload/onscroll/
+        // onresize on these prototypes after init, so they must stay
+        // extensible.
+        "HTMLBodyElement",
+        "HTMLFrameSetElement",
     };
     try g_html_element_proto.?.freeze(vm.allocator);
     {

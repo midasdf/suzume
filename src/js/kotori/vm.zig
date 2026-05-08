@@ -1630,6 +1630,29 @@ pub const VM = struct {
                             self.push(val);
                             continue;
                         }
+                        // ECMA-262 §10.1.9 [[Set]] walks the prototype chain
+                        // for an accessor descriptor BEFORE creating an own
+                        // data property — bracket SET `obj[k] = v` must be
+                        // semantically identical to dot SET `obj.k = v` when
+                        // `k` is a string. Mirrors the accessor branch in
+                        // `.set_prop` so user-installed `Object.defineProperty
+                        // (Proto, name, {get, set})` descriptors fire under
+                        // computed access too. Without this, `body[name] = v`
+                        // bypasses the IDL setter on HTMLBodyElement.prototype
+                        // (HTML §8.1.5.4 Window-reflecting body element event
+                        // handler set) and shadows it with an own data
+                        // property, leaving the next `body[name]` read with a
+                        // stale own value instead of going through the getter.
+                        if (key.isString()) {
+                            if (obj.findAccessorDescriptor(key.asStringId())) |acc| {
+                                if (!acc.set.isUndefined()) {
+                                    _ = try self.callJsFunction(acc.set, obj_val, &.{val});
+                                }
+                                // No setter: silent fail (non-strict mode)
+                                self.push(val);
+                                continue;
+                            }
+                        }
                         // Wave 12 Track I: DOM node/style property interception
                         // via bracket SET. Mirrors the dot-access dispatch at
                         // `.set_prop` (line ~1261) so WPT helpers using
@@ -2190,15 +2213,39 @@ pub const VM = struct {
                                 arr.data.array.append(self.allocator, JsValue.initString(try self.pool.intern(s))) catch {};
                             }
                         }
-                        // Fast-path: all-default attrs are enumerable=true.
-                        for (obj.properties.keys()) |key_id| {
-                            arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
-                        }
-                        // Slow-path: filter by enumerable (for-in skips non-enumerable).
-                        if (obj.descriptors) |*d| {
-                            for (d.keys(), d.values()) |key_id, pd| {
-                                if (pd.attrs().enumerable) {
+                        // ECMA-262 §14.7.5.10 EnumerateObjectProperties: for-in
+                        // walks the prototype chain. Each level contributes its
+                        // own enumerable string keys EXCEPT keys already
+                        // shadowed by an earlier (more derived) entry, even if
+                        // that entry is non-enumerable. We track seen keys in
+                        // a small StringHashMap so the first sighting wins —
+                        // matches the Object.create(parent).x shadow rule that
+                        // testEnumerate/testForwardToWindow on
+                        // HTMLBodyElement/HTMLFrameSetElement need to see the
+                        // prototype-defined `onblur`, `onerror`, … (HTML
+                        // §8.1.5.4) since they sit on the per-tag prototype,
+                        // not on the element instance.
+                        var seen = std.AutoHashMap(StringId, bool).init(self.allocator);
+                        defer seen.deinit();
+                        var cur: ?*const JsObject = obj;
+                        while (cur) |o| : (cur = o.prototype) {
+                            // Fast-path properties: default attrs = enumerable
+                            for (o.properties.keys()) |key_id| {
+                                if (try seen.fetchPut(key_id, true) == null) {
                                     arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
+                                }
+                            }
+                            // Slow-path descriptors: filter by enumerable, but
+                            // non-enumerable still shadows prototype-level
+                            // entries with the same key (HasProperty, not
+                            // GetEnumerable, governs shadowing — §14.7.5.10
+                            // step 6.b.ii).
+                            if (o.descriptors) |*d| {
+                                for (d.keys(), d.values()) |key_id, pd| {
+                                    const first = (try seen.fetchPut(key_id, true) == null);
+                                    if (first and pd.attrs().enumerable) {
+                                        arr.data.array.append(self.allocator, JsValue.initString(key_id)) catch {};
+                                    }
                                 }
                             }
                         }
