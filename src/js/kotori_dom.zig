@@ -10357,6 +10357,12 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     const cd_xml_sid = try vm.pool.intern("_isXmlDoc");
     doc_obj.setProperty(vm.allocator, cd_xml_sid, JsValue.initBool(true)) catch {};
 
+    // DOM §4.4: Document.textContent / .nodeValue both return null. Plain
+    // JsObject docs don't go through domNodeGetProp's null-routing, so set
+    // explicit own data properties so `doc.textContent === null`.
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.null_val) catch {};
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.null_val) catch {};
+
     // location = null (no browsing context)
     const cd_loc_sid = try vm.pool.intern("location");
     doc_obj.setProperty(vm.allocator, cd_loc_sid, JsValue.null_val) catch {};
@@ -10639,7 +10645,11 @@ fn setTextContent(vm: *VM, node: *lxb.lxb_dom_node_t, val: JsValue) void {
         }
 
         var added_wrapped: ?JsValue = null;
-        if (!val.isNull()) {
+        // WebIDL: textContent is `DOMString?` — undefined coerces to null,
+        // and null is then treated as "" (replace all with no Text child).
+        // Without the undefined check, `el.textContent = undefined` ended
+        // up appending the literal "undefined" text node.
+        if (!val.isNull() and !val.isUndefined()) {
             var buf: [64]u8 = undefined;
             const s = VM.formatValue(vm.pool, val, &buf);
             if (s.len > 0) {
