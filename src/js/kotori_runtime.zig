@@ -4003,6 +4003,9 @@ pub const KotoriRuntime = struct {
         \\    get:function(){
         \\      var t=tag(this);
         \\      if(t==='select')return this.hasAttribute('multiple')?'select-multiple':'select-one';
+        \\      // HTML §4.10.11 HTMLTextAreaElement.type: always the literal
+        \\      // string "textarea" (read-only).
+        \\      if(t==='textarea')return 'textarea';
         \\      // Other element 'type' (input, button etc.) handled by IDL reflection.
         \\      return undefined;
         \\    },
