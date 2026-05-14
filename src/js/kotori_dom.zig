@@ -10049,6 +10049,16 @@ fn wrapParsedHtmlDocAsJsDoc(vm: *VM, html: []const u8, content_type: []const u8)
     const ct_sid = try vm.pool.intern("contentType");
     doc_obj.setProperty(vm.allocator, ct_sid, JsValue.initString(try vm.pool.intern(content_type))) catch {};
 
+    // DOM §4.5 — XML documents (any non-text/html contentType from DOMParser)
+    // get `_isXmlDoc=true` so `createElement` returns null-namespaced
+    // elements (or HTML-namespaced for application/xhtml+xml). lexbor only
+    // has an HTML parser, so we pragmatically reuse it for XML payloads but
+    // tag the wrapper as XML for downstream behavior.
+    if (!std.mem.eql(u8, content_type, "text/html")) {
+        const xml_sid = try vm.pool.intern("_isXmlDoc");
+        doc_obj.setProperty(vm.allocator, xml_sid, JsValue.initBool(true)) catch {};
+    }
+
     // location = null (no browsing context)
     const loc_sid = try vm.pool.intern("location");
     doc_obj.setProperty(vm.allocator, loc_sid, JsValue.null_val) catch {};
