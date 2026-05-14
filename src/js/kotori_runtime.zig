@@ -4006,6 +4006,8 @@ pub const KotoriRuntime = struct {
         \\      // HTML §4.10.11 HTMLTextAreaElement.type: always the literal
         \\      // string "textarea" (read-only).
         \\      if(t==='textarea')return 'textarea';
+        \\      // HTML §4.10.15 HTMLFieldSetElement.type: always "fieldset".
+        \\      if(t==='fieldset')return 'fieldset';
         \\      // Other element 'type' (input, button etc.) handled by IDL reflection.
         \\      return undefined;
         \\    },
@@ -4068,6 +4070,12 @@ pub const KotoriRuntime = struct {
         \\    });
         \\    Object.defineProperty(SP, 'namedItem', {
         \\      value: function(n){
+        \\        // HTML §4.10.7 HTMLSelectElement.namedItem: per the named
+        \\        // property algorithm, empty-string name short-circuits to
+        \\        // null without matching any option (no option can have id=""
+        \\        // or name="" be a supported name property per DOM §4.5.2).
+        \\        n=String(n);
+        \\        if(n==='')return null;
         \\        var opts=this.querySelectorAll('option');
         \\        for(var i=0;i<opts.length;i++)
         \\          if(opts[i].id===n||opts[i].getAttribute('name')===n)return opts[i];
