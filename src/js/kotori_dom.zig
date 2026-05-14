@@ -3444,12 +3444,39 @@ fn nativeGetElementsByClassName(ctx: *anyopaque, this: JsValue, args: []const Js
     const arr_obj = try vm.createObj(.{ .obj_type = .array });
     arr_obj.data = .{ .array = .empty };
     if (args.len == 0) return JsValue.initObject(arr_obj);
-    const cls = argToString(vm, args[0]);
+    const cls_raw = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.initObject(arr_obj);
-    // Delegate to querySelectorAll with "." + className
-    var sel_buf: [256]u8 = undefined;
-    const sel = std.fmt.bufPrint(&sel_buf, ".{s}", .{cls}) catch return JsValue.initObject(arr_obj);
-    const matches = findAllMatches(root, sel, vm.allocator);
+    // DOM §4.2.5.4: argument is parsed as a set of unordered unique
+    // space-separated tokens (ASCII whitespace: tab, LF, FF, CR, space).
+    // Build a compound selector ".t1.t2…" so the underlying selector
+    // engine matches elements bearing ALL tokens.
+    var sel_buf: [512]u8 = undefined;
+    var sel_len: usize = 0;
+    var i: usize = 0;
+    while (i < cls_raw.len) {
+        // Skip whitespace
+        while (i < cls_raw.len) : (i += 1) {
+            const c = cls_raw[i];
+            if (c != ' ' and c != '\t' and c != '\n' and c != '\r' and c != 0x0C) break;
+        }
+        if (i >= cls_raw.len) break;
+        const tok_start = i;
+        while (i < cls_raw.len) : (i += 1) {
+            const c = cls_raw[i];
+            if (c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0C) break;
+        }
+        const tok = cls_raw[tok_start..i];
+        if (tok.len == 0) continue;
+        // Append "." + token. Bail out if buffer can't fit; rare for sane input.
+        if (sel_len + 1 + tok.len > sel_buf.len) return JsValue.initObject(arr_obj);
+        sel_buf[sel_len] = '.';
+        sel_len += 1;
+        @memcpy(sel_buf[sel_len .. sel_len + tok.len], tok);
+        sel_len += tok.len;
+    }
+    // DOM §4.2.5.4: empty token set → empty collection.
+    if (sel_len == 0) return JsValue.initObject(arr_obj);
+    const matches = findAllMatches(root, sel_buf[0..sel_len], vm.allocator);
     defer vm.allocator.free(matches);
     for (matches) |node| {
         const wrapped = wrapNode(vm, node) orelse JsValue.null_val;
