@@ -3016,6 +3016,12 @@ fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, @ptrCast(elem), "style");
     }
 
+    // CSSOM §6.7.3 parentRule: null for both inline-style and getComputedStyle
+    // declarations (no enclosing CSSRule for either). Override the default
+    // CSS-property fallback (which returns "" for unknown names) so the spec
+    // null return is observable.
+    if (eql(name, "parentRule")) return JsValue.null_val;
+
     // CSSOM §6.7.3 `length` — number of declared properties. Returned as a
     // plain numeric property (not a method) so that `style.length == 0`
     // coerces correctly per WPT tests (e.g.
