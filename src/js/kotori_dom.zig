@@ -8629,9 +8629,10 @@ fn nativeIsEqualNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     if (this.isObject() and args[0].isObject() and this.asJsObject() == args[0].asJsObject()) {
         return JsValue.initBool(true);
     }
+    const vm_for_eq = VM.vmFromCtx(ctx);
     if (getThisNode(this)) |a| {
         if (getArgNode(args[0])) |b| {
-            return JsValue.initBool(nodesEqual(a, b));
+            return JsValue.initBool(nodesEqual(vm_for_eq, a, b));
         }
     }
     // JS-only node fallback (DocumentType, ProcessingInstruction, Document,
@@ -8699,7 +8700,7 @@ fn jsOnlyValueEqualForCompare(vm: *VM, av: JsValue, bv: JsValue) bool {
     return false;
 }
 
-fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
+fn nodesEqual(vm: *VM, a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
     // Step 1: same nodeType
     if (nodeType(a) != nodeType(b)) return false;
 
@@ -8738,7 +8739,7 @@ fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
             if (!std.mem.eql(u8, a_name.?[0..a_len], b_name.?[0..b_len])) return false;
         }
         // Compare attribute count and values
-        if (!attrsEqual(a_elem, b_elem)) return false;
+        if (!attrsEqual(vm, a_elem, b_elem)) return false;
     } else if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_COMMENT) {
         // Compare text data
         var a_len: usize = 0;
@@ -8756,7 +8757,7 @@ fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
     var a_child = nodeFirstChild(a);
     var b_child = nodeFirstChild(b);
     while (a_child != null and b_child != null) {
-        if (!nodesEqual(a_child.?, b_child.?)) return false;
+        if (!nodesEqual(vm, a_child.?, b_child.?)) return false;
         a_child = nodeNext(a_child.?);
         b_child = nodeNext(b_child.?);
     }
@@ -8764,32 +8765,73 @@ fn nodesEqual(a: *lxb.lxb_dom_node_t, b: *lxb.lxb_dom_node_t) bool {
     return a_child == null and b_child == null;
 }
 
-fn attrsEqual(a: *lxb.lxb_dom_element_t, b: *lxb.lxb_dom_element_t) bool {
-    // Count attributes
+/// Read an attr's true namespace URI. Prefers the pinned `namespaceURI`
+/// on the cached Attr wrapper (set by `pinAttrNs` for setAttributeNS
+/// calls that lexbor's primitive does not propagate through to
+/// `node.ns`), then falls back to `nsIdToUri` for well-known NS IDs
+/// (HTML/SVG/MathML/XLink/XML/XMLNS).
+fn getAttrNsUri(vm: *VM, attr: *lxb.lxb_dom_attr_t) ?[]const u8 {
+    const key = @intFromPtr(attr);
+    if (g_attr_wrappers.get(key)) |wrap| {
+        const ns_sid = vm.pool.intern("namespaceURI") catch return nsIdToUri(attr.node.ns);
+        if (wrap.getProperty(ns_sid)) |v| {
+            if (v.isString()) return vm.pool.get(v.asStringId());
+            if (v.isNull() or v.isUndefined()) return nsIdToUri(attr.node.ns);
+        }
+    }
+    return nsIdToUri(attr.node.ns);
+}
+
+/// Read an attr's local name (qname with prefix trimmed off).
+fn getAttrLocalName(attr: *lxb.lxb_dom_attr_t) []const u8 {
+    var qn_len: usize = 0;
+    const qn_ptr = dom_b.lxb_dom_attr_qualified_name(@ptrCast(attr), &qn_len) orelse return "";
+    const qn = qn_ptr[0..qn_len];
+    if (std.mem.indexOfScalar(u8, qn, ':')) |ci| return qn[ci + 1 ..];
+    return qn;
+}
+
+fn attrsEqual(vm: *VM, a: *lxb.lxb_dom_element_t, b: *lxb.lxb_dom_element_t) bool {
+    // DOM §4.4 step 2 "elements": A is equal to B iff their attributes are
+    // equivalent — same count, and for every attr in A there exists an attr
+    // in B with equal namespace, localName, AND value. Prefix is ignored
+    // (DOM §4.4 explicitly excludes attribute prefix from equality).
     const a_count = countAttrs(a);
     const b_count = countAttrs(b);
     if (a_count != b_count) return false;
-    // Check each attribute of a exists in b with same value.
-    // DOM §4.9: use lexbor's proper attribute iterator — lxb_dom_element_next_attribute_noi
-    // — NOT at.node.next which walks the generic DOM sibling chain instead.
     var attr: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(a)));
-    while (attr) |at| {
-        var name_len: usize = 0;
-        const name_ptr = lxb.lxb_dom_attr_qualified_name(at, &name_len);
-        if (name_ptr) |np| {
-            var val_len: usize = 0;
-            const val_ptr = dom_b.lxb_dom_element_get_attribute(a, np, name_len, &val_len);
-            // Check b has same attribute with same value
-            var b_val_len: usize = 0;
-            const b_val_ptr = dom_b.lxb_dom_element_get_attribute(b, np, name_len, &b_val_len);
-            if (val_ptr == null and b_val_ptr == null) {
-                // both null — equal
-            } else if (val_ptr != null and b_val_ptr != null) {
-                if (val_len != b_val_len) return false;
-                if (!std.mem.eql(u8, val_ptr.?[0..val_len], b_val_ptr.?[0..b_val_len])) return false;
-            } else return false;
+    while (attr) |at_a| {
+        const ns_a = getAttrNsUri(vm, at_a);
+        const local_a = getAttrLocalName(at_a);
+        var a_val_len: usize = 0;
+        const a_val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(at_a), &a_val_len);
+        // Find matching attr in b by (ns, localName).
+        var found = false;
+        var attr_b: ?*lxb.lxb_dom_attr_t = @ptrCast(@alignCast(dom_b.lxb_dom_element_first_attribute_noi(b)));
+        while (attr_b) |at_b| {
+            const ns_b = getAttrNsUri(vm, at_b);
+            const local_b = getAttrLocalName(at_b);
+            const ns_match = blk: {
+                if (ns_a == null and ns_b == null) break :blk true;
+                if (ns_a != null and ns_b != null) break :blk std.mem.eql(u8, ns_a.?, ns_b.?);
+                break :blk false;
+            };
+            if (ns_match and std.mem.eql(u8, local_a, local_b)) {
+                var b_val_len: usize = 0;
+                const b_val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(at_b), &b_val_len);
+                if (a_val_ptr == null and b_val_ptr == null) {
+                    found = true;
+                } else if (a_val_ptr != null and b_val_ptr != null) {
+                    if (a_val_len == b_val_len and std.mem.eql(u8, a_val_ptr.?[0..a_val_len], b_val_ptr.?[0..b_val_len])) {
+                        found = true;
+                    }
+                }
+                break;
+            }
+            attr_b = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(at_b)));
         }
-        attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(at)));
+        if (!found) return false;
+        attr = @ptrCast(@alignCast(dom_b.lxb_dom_element_next_attribute_noi(at_a)));
     }
     return true;
 }
