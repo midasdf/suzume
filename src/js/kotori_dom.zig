@@ -3002,8 +3002,15 @@ fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
     const name_id = vm.pool.intern(name) catch return null;
     if (obj.getProperty(name_id)) |own| return own;
 
-    if (eql(name, "cssText"))
+    if (eql(name, "cssText")) {
+        // CSSOM §6.5: getComputedStyle returns a read-only declaration whose
+        // cssText getter returns the empty string. Inline-style objects
+        // (no `__element` marker) keep returning the serialized style attr.
+        const elem_marker_sid_cs = vm.pool.intern("__element") catch null;
+        const is_computed_cs = if (elem_marker_sid_cs) |em| obj.getProperty(em) != null else false;
+        if (is_computed_cs) return JsValue.initString(vm.pool.intern("") catch return null);
         return getAttr(vm, @ptrCast(elem), "style");
+    }
 
     // CSSOM §6.7.3 `length` — number of declared properties. Returned as a
     // plain numeric property (not a method) so that `style.length == 0`
