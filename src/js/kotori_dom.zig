@@ -4322,10 +4322,26 @@ fn pinAttrNs(vm: *VM, elem: *lxb.lxb_dom_element_t, qn: []const u8, ns_uri: []co
     const ns_sid = try vm.pool.intern(ns_uri);
     const ns_key = try vm.pool.intern("namespaceURI");
     wrap.setProperty(vm.allocator, ns_key, JsValue.initString(ns_sid)) catch {};
+    // DOM §4.9 — for setAttributeNS, the qualifiedName preserves case
+    // regardless of document type. lexbor's set_attribute lowercases the
+    // stored qname (legacy HTML behavior), so override name + localName +
+    // nodeName on the wrapper with the case-preserved original `qn`.
+    const qn_sid = try vm.pool.intern(qn);
+    const name_key = try vm.pool.intern("name");
+    const nname_key = try vm.pool.intern("nodeName");
+    wrap.setProperty(vm.allocator, name_key, JsValue.initString(qn_sid)) catch {};
+    wrap.setProperty(vm.allocator, nname_key, JsValue.initString(qn_sid)) catch {};
     if (std.mem.indexOfScalar(u8, qn, ':')) |cp| {
         const px_sid = try vm.pool.intern(qn[0..cp]);
         const px_key = try vm.pool.intern("prefix");
         wrap.setProperty(vm.allocator, px_key, JsValue.initString(px_sid)) catch {};
+        const local_sid = try vm.pool.intern(qn[cp + 1 ..]);
+        const local_key = try vm.pool.intern("localName");
+        wrap.setProperty(vm.allocator, local_key, JsValue.initString(local_sid)) catch {};
+    } else {
+        // No prefix → localName === qname.
+        const local_key = try vm.pool.intern("localName");
+        wrap.setProperty(vm.allocator, local_key, JsValue.initString(qn_sid)) catch {};
     }
 }
 
