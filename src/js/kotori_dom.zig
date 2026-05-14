@@ -2933,6 +2933,15 @@ fn domNodeSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool 
         setDomDirty();
         return true;
     }
+    // CSSOM §6.7.1: el.style = "css..." is the legacy stringifier setter —
+    // it routes to the style attribute (equivalent to el.style.cssText = …).
+    // Without this branch the assignment created a shadow JS property that
+    // hid the inline-style getter and left the underlying attribute untouched.
+    if (eql(name, "style") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        setAttrFromVal(vm, node, "style", val);
+        setDomDirty();
+        return true;
+    }
 
     // HTML §attr-translate setter: boolean value → "yes" or "no" content attribute.
     if (eql(name, "translate") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
