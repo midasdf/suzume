@@ -4330,13 +4330,13 @@ fn nativeImportNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyer
 /// backs `(elem, qn)`. lexbor's `lxb_dom_element_set_attribute` ignores
 /// the namespace argument that DOM §4.9 setAttributeNS supplies, so we
 /// override the wrapper post-hoc.
-fn pinAttrNs(vm: *VM, elem: *lxb.lxb_dom_element_t, qn: []const u8, ns_uri: []const u8) !void {
+fn pinAttrNs(vm: *VM, elem: *lxb.lxb_dom_element_t, qn: []const u8, ns_uri_opt: ?[]const u8) !void {
     const attr_raw = dom_b.lxb_dom_element_attr_by_name(elem, qn.ptr, qn.len) orelse return;
     const attr_t: *lxb.lxb_dom_attr_t = @ptrCast(@alignCast(attr_raw));
     const wrap = getOrCreateAttrWrapper(vm, attr_t) orelse return;
-    const ns_sid = try vm.pool.intern(ns_uri);
     const ns_key = try vm.pool.intern("namespaceURI");
-    wrap.setProperty(vm.allocator, ns_key, JsValue.initString(ns_sid)) catch {};
+    const ns_val: JsValue = if (ns_uri_opt) |u| JsValue.initString(try vm.pool.intern(u)) else JsValue.null_val;
+    wrap.setProperty(vm.allocator, ns_key, ns_val) catch {};
     // DOM §4.9 — for setAttributeNS, the qualifiedName preserves case
     // regardless of document type. lexbor's set_attribute lowercases the
     // stored qname (legacy HTML behavior), so override name + localName +
@@ -5142,14 +5142,12 @@ fn nativeSetAttributeNS(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
         _ = dom_b.lxb_dom_element_set_attribute(elem, qn.ptr, qn.len, v.ptr, v.len);
     }
     // DOM §4.9 — lexbor's `lxb_dom_element_set_attribute` does not propagate
-    // the namespace argument through to the attr struct's `node.ns` slot,
-    // so a freshly-created Attr wrapper would otherwise report
-    // `namespaceURI = null`. Pre-materialise the wrapper here and pin the
-    // correct namespaceURI / prefix so getAttributeNodeNS, importNode, and
-    // any code that reads these slots sees the spec-compliant values.
-    if (ns_in) |ns_uri| {
-        pinAttrNs(vm, elem, qn, ns_uri) catch {};
-    }
+    // the namespace argument NOR preserve the original qname case (it
+    // lowercases for HTML attribute storage). Pin the wrapper so
+    // `namespaceURI / prefix / name / localName / nodeName` reflect the
+    // spec-mandated values — even when ns_in is null (case still preserved
+    // per DOM §4.9.3 setAttributeNS validate-and-extract).
+    pinAttrNs(vm, elem, qn, ns_in) catch {};
     // DOM §4.9.2 NamedNodeMap live-map version bump.
     bumpElemAttrVersion(elem);
     setDomDirty();
