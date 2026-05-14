@@ -125,6 +125,12 @@ pub const KotoriRuntime = struct {
         // Camelcase ↔ kebab-case conversion per the spec algorithm.
         _ = self.eval(dataset_polyfill_js);
 
+        // DOM §4.11 Text.prototype.splitText + wholeText. Mirrors the
+        // QuickJS-side polyfill at dom_api.zig:4927-4935. Pure-JS layer
+        // over the kotori `data` getter/setter + document.createTextNode +
+        // parentNode.insertBefore native bindings.
+        _ = self.eval(text_polyfill_js);
+
         // HTML §7.3.3: Named access on the Window object. Browsers expose
         // elements with `id` attributes as properties of the window/global object
         // (e.g. `<div id="foo">` → `window.foo === document.getElementById('foo')`).
@@ -6297,6 +6303,43 @@ pub const KotoriRuntime = struct {
     ///   - delete dataset.fooBar  → removeAttribute('data-foo-bar')
     ///   - ownKeys / enumerate    → all data-* attribute names converted to camelCase
     ///
+    /// DOM §4.11 Text.prototype.splitText and Text.prototype.wholeText.
+    /// kotori's native bindings expose `data` as an own-data-via-domNodeSet
+    /// path on Text nodes; this polyfill layers the two missing methods on
+    /// top. Both call out to native `document.createTextNode` /
+    /// `parentNode.insertBefore` for tree mutation.
+    const text_polyfill_js =
+        \\(function(){
+        \\  if(typeof Text==='undefined'||!Text.prototype)return;
+        \\  var P=Text.prototype;
+        \\  // DOM §4.11.4 splitText(offset) — split this Text into two at offset.
+        \\  if(typeof P.splitText!=='function'){
+        \\    P.splitText=function(o){
+        \\      if(this.nodeType!==3)throw new DOMException("Not a Text node",'InvalidNodeTypeError');
+        \\      o=o>>>0;
+        \\      var s=this.data||'';
+        \\      if(o>s.length)throw new DOMException('The index is not in the allowed range.','IndexSizeError');
+        \\      var newData=s.slice(o);
+        \\      this.data=s.slice(0,o);
+        \\      var n=document.createTextNode(newData);
+        \\      if(this.parentNode)this.parentNode.insertBefore(n,this.nextSibling);
+        \\      return n;
+        \\    };
+        \\  }
+        \\  // DOM §4.11.3 wholeText getter — concatenate text of all adjacent
+        \\  // Text siblings (walking previousSibling first, then nextSibling).
+        \\  try{
+        \\    Object.defineProperty(P,'wholeText',{get:function(){
+        \\      if(this.nodeType!==3)return this.data;
+        \\      var t='',n=this;
+        \\      while(n.previousSibling&&n.previousSibling.nodeType===3)n=n.previousSibling;
+        \\      while(n&&n.nodeType===3){t+=n.data;n=n.nextSibling;}
+        \\      return t;
+        \\    },configurable:true});
+        \\  }catch(e){}
+        \\})();
+    ;
+
     /// Identity cache: the same Proxy object is returned on repeated accesses
     /// (WebIDL [SameObject]) using a hidden `__datasetProxy` slot.
     const dataset_polyfill_js =
