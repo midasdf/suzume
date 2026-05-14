@@ -428,6 +428,8 @@ var g_chardata_proto: ?*JsObject = null;
 var g_text_proto: ?*JsObject = null;
 var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
+var g_pi_proto: ?*JsObject = null;
+var g_attr_proto: ?*JsObject = null;
 var g_fragment_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 /// Shared isTrusted getter function — same object across all Event instances
@@ -834,6 +836,16 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     g_doctype_proto = try vm.createObj(.{});
     g_doctype_proto.?.prototype = g_node_proto;
 
+    // ── ProcessingInstruction.prototype → CharacterData.prototype ──
+    // DOM §4.6: ProcessingInstruction extends CharacterData → Node.
+    g_pi_proto = try vm.createObj(.{});
+    g_pi_proto.?.prototype = g_chardata_proto;
+
+    // ── Attr.prototype → Node.prototype ──
+    // DOM §4.9: Attr extends Node (no longer CharacterData in current spec).
+    g_attr_proto = try vm.createObj(.{});
+    g_attr_proto.?.prototype = g_node_proto;
+
     // ── DocumentFragment.prototype → Node.prototype ──
     // DOM §4.7 — DocumentFragment is a Node that mixes in ParentNode
     // (children, querySelector{,All}, getElementById, etc.). Without
@@ -1232,6 +1244,20 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     dt_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
     dt_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_doctype_proto.?)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("DocumentType"), JsValue.initObject(dt_ctor));
+
+    // ProcessingInstruction constructor + prototype (DOM §4.6)
+    const pi_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    pi_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    pi_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_pi_proto.?)) catch {};
+    g_pi_proto.?.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(pi_ctor)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("ProcessingInstruction"), JsValue.initObject(pi_ctor));
+
+    // Attr constructor + prototype (DOM §4.9)
+    const attr_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    attr_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    attr_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_attr_proto.?)) catch {};
+    g_attr_proto.?.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(attr_ctor)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("Attr"), JsValue.initObject(attr_ctor));
 
     // Event constructor (DOM 2.5)
     const ev_proto = try vm.createObj(.{});
@@ -3644,10 +3670,10 @@ fn createAttrObject(
     namespace: ?[]const u8,
 ) !JsValue {
     const obj = try vm.createObj(.{});
-    // DOM §4.9: Attr extends Node. Set Node.prototype so Attr instances inherit
-    // isSameNode / contains / addEventListener / etc. Without this, JS-only Attr
-    // wrappers had no prototype chain and all Node methods were `undefined`.
-    if (g_node_proto) |np| obj.prototype = np;
+    // DOM §4.9: Attr extends Node. Prefer the dedicated Attr.prototype so
+    // `attr instanceof Attr` works and `attr.constructor === Attr` per WebIDL
+    // §3.7.1, falling back to Node.prototype before VM init completes.
+    obj.prototype = g_attr_proto orelse g_node_proto;
     // nodeType = 2 (ATTRIBUTE_NODE)
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(2));
     const qname_sid = try vm.pool.intern(qname);
@@ -4510,7 +4536,10 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []con
     }
     // Create a JS-only ProcessingInstruction object (nodeType 7)
     const obj = try vm.createObj(.{});
-    if (g_node_proto) |np| obj.prototype = np;
+    // DOM §4.6: PI extends CharacterData. Prefer g_pi_proto so
+    // `pi instanceof ProcessingInstruction` and prototype-walks reach
+    // CharacterData methods.
+    obj.prototype = g_pi_proto orelse g_node_proto;
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(7));
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(try vm.pool.intern(target_str)));
     try obj.setProperty(vm.allocator, try vm.pool.intern("target"), JsValue.initString(try vm.pool.intern(target_str)));
