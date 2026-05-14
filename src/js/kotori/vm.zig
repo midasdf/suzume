@@ -2831,10 +2831,31 @@ pub const VM = struct {
     fn toStringValue(self: *VM, val: JsValue, buf: *[64]u8) ![]const u8 {
         if (!val.isObject()) return formatValue(self.pool, val, buf);
         const obj = val.asJsObject();
-        // Skip native "container" types that already have correct
-        // formatValue output to avoid calling spec `Array.prototype.toString`
-        // which would recurse via jsStringify and risk loops.
-        if (obj.obj_type == .array or obj.obj_type == .regexp) {
+        // ECMA-262 §23.1.3.30: Array.prototype.toString returns the join(",")
+        // of the array's elements. Compute it inline using formatValue per
+        // element so we never recurse into user-defined Array.prototype.toString
+        // (which would risk loops for self-referential arrays).
+        if (obj.obj_type == .array) {
+            const items = obj.data.array.items;
+            if (items.len == 0) return "";
+            var tmp: std.ArrayListUnmanaged(u8) = .empty;
+            defer tmp.deinit(self.allocator);
+            var elem_buf: [64]u8 = undefined;
+            for (items, 0..) |item, i| {
+                if (i > 0) try tmp.append(self.allocator, ',');
+                // null / undefined become "" in Array.prototype.join.
+                if (item.isNull() or item.isUndefined()) continue;
+                const piece = formatValue(self.pool, item, &elem_buf);
+                try tmp.appendSlice(self.allocator, piece);
+            }
+            // Intern the result (lifetime managed by the pool); return the
+            // interned slice rather than `tmp` so the caller doesn't outlive
+            // the temporary buffer.
+            const sid = try self.pool.intern(tmp.items);
+            return self.pool.get(sid) orelse "";
+        }
+        // regexp gets the same formatValue shortcut (no user toString call).
+        if (obj.obj_type == .regexp) {
             return formatValue(self.pool, val, buf);
         }
         const toString_id = try self.pool.intern("toString");
