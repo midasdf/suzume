@@ -5249,14 +5249,22 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
         }
         if (args[2].isObject()) {
             const opts = args[2].asJsObject();
+            // DOM §2.7.1 + WebIDL dictionary read order: capture → once →
+            // passive → signal. WebIDL dictionary member reads use
+            // `[[Get]]`, which invokes accessor getters; WPT
+            // AddEventListenerOptions-passive.any.html "Supports passive
+            // option" feature-detects support by defining a getter on
+            // `passive` and observing whether it fires. Route through
+            // getPropertyWithAccessors so those getters do fire.
+            const opts_val = args[2];
             if (vm.pool.intern("capture") catch null) |sid| {
-                if (opts.getProperty(sid)) |v| capture = v.isTruthy();
+                if (try vm.getPropertyWithAccessors(opts, sid, opts_val)) |v| capture = v.isTruthy();
             }
             if (vm.pool.intern("once") catch null) |sid| {
-                if (opts.getProperty(sid)) |v| once = v.isTruthy();
+                if (try vm.getPropertyWithAccessors(opts, sid, opts_val)) |v| once = v.isTruthy();
             }
             if (vm.pool.intern("passive") catch null) |sid| {
-                if (opts.getProperty(sid)) |v| passive = v.isTruthy();
+                if (try vm.getPropertyWithAccessors(opts, sid, opts_val)) |v| passive = v.isTruthy();
             }
             // DOM §2.7.1 + WebIDL: `signal` has IDL type AbortSignal (not
             // nullable). Passing `null` explicitly must throw TypeError.
@@ -5264,7 +5272,7 @@ fn nativeAddEventListener(ctx: *anyopaque, this: JsValue, args: []const JsValue)
             // native error.TypeError so `catch(e){ e instanceof TypeError }`
             // passes the WPT assert_throws_js check.
             if (vm.pool.intern("signal") catch null) |sid| {
-                if (opts.getProperty(sid)) |v| {
+                if (try vm.getPropertyWithAccessors(opts, sid, opts_val)) |v| {
                     if (v.isNull()) return error.TypeError;
                     if (v.isObject()) {
                         signal_val = v;
