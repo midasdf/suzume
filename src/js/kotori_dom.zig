@@ -10289,6 +10289,12 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     const ct_sid2 = try vm.pool.intern("contentType");
     doc_obj.setProperty(vm.allocator, ct_sid2, JsValue.initString(try vm.pool.intern(content_type))) catch {};
 
+    // DOM §7.1: DOMImplementation.createDocument always produces an XML
+    // Document — even for application/xhtml+xml. Flag `_isXmlDoc=true` so
+    // createElement on this doc resolves namespace correctly.
+    const cd_xml_sid = try vm.pool.intern("_isXmlDoc");
+    doc_obj.setProperty(vm.allocator, cd_xml_sid, JsValue.initBool(true)) catch {};
+
     // location = null (no browsing context)
     const cd_loc_sid = try vm.pool.intern("location");
     doc_obj.setProperty(vm.allocator, cd_loc_sid, JsValue.null_val) catch {};
@@ -10320,6 +10326,7 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
 
     // implementation object for chained calls
     const cd_impl = vm.createObj(.{}) catch return doc_val;
+    cd_impl.prototype = g_dom_impl_proto;
     cd_impl.setProperty(vm.allocator, vm.pool.intern("_ownerDoc") catch return doc_val, doc_val) catch {};
     const cd_hf = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
     cd_hf.data = .{ .native_fn = &nativeImplementationHasFeature };
