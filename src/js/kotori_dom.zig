@@ -348,6 +348,71 @@ fn getNsInfo(node: *lxb.lxb_dom_node_t) ?NsInfo {
     return map.get(@intFromPtr(node));
 }
 
+/// Propagate NsInfo entries from a src subtree to its corresponding clone
+/// subtree. DOM §4.5.3 cloneNode: the clone preserves namespace/prefix
+/// metadata, but lexbor's `lxb_dom_node_clone` produces a fresh node pointer
+/// so the sidecar (keyed by pointer) misses on the clone. Walk both subtrees
+/// in parallel (lexbor builds them in the same shape) and copy any present
+/// entry.
+fn propagateNsInfoClone(src: *lxb.lxb_dom_node_t, clone: *lxb.lxb_dom_node_t, deep: bool) void {
+    const map = &(ns_info_map orelse return);
+    if (map.get(@intFromPtr(src))) |info| {
+        map.put(g_alloc, @intFromPtr(clone), info) catch {};
+    }
+    if (!deep) return;
+    var src_child: ?*lxb.lxb_dom_node_t = nodeFirstChild(src);
+    var clone_child: ?*lxb.lxb_dom_node_t = nodeFirstChild(clone);
+    while (src_child != null and clone_child != null) {
+        propagateNsInfoClone(src_child.?, clone_child.?, true);
+        src_child = nodeNext(src_child.?);
+        clone_child = nodeNext(clone_child.?);
+    }
+}
+
+/// Propagate JS-wrapper-only namespace slots (`__prefix`, `__nsURI`,
+/// `__origLocal`) from the src node's wrapper to the clone's wrapper. These
+/// slots are set by `nativeCreateElementNS` to preserve case-sensitive
+/// prefix / local-name / namespace info that lexbor's HTML-oriented
+/// element storage cannot represent, so we must copy them across cloneNode.
+/// Walks the src→clone pair (deep:true) when the test cloned a subtree.
+fn propagatePrefixClone(vm: *VM, src: *lxb.lxb_dom_node_t, clone: *lxb.lxb_dom_node_t, deep: bool) void {
+    const src_wrap_val = g_node_cache.get(@intFromPtr(src)) orelse return;
+    const slots = [_][]const u8{ "__prefix", "__nsURI", "__origLocal" };
+    var any = false;
+    for (slots) |slot| {
+        const sid = vm.pool.intern(slot) catch continue;
+        if (src_wrap_val.getProperty(sid)) |v| {
+            if (v.isString()) {
+                any = true;
+                break;
+            }
+        }
+    }
+    if (any) {
+        if (wrapNode(vm, clone)) |clone_wrap_val| {
+            if (clone_wrap_val.isObject()) {
+                const clone_obj = clone_wrap_val.asJsObject();
+                for (slots) |slot| {
+                    const sid = vm.pool.intern(slot) catch continue;
+                    if (src_wrap_val.getProperty(sid)) |v| {
+                        if (v.isString()) {
+                            clone_obj.setProperty(vm.allocator, sid, v) catch {};
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (!deep) return;
+    var src_child: ?*lxb.lxb_dom_node_t = nodeFirstChild(src);
+    var clone_child: ?*lxb.lxb_dom_node_t = nodeFirstChild(clone);
+    while (src_child != null and clone_child != null) {
+        propagatePrefixClone(vm, src_child.?, clone_child.?, true);
+        src_child = nodeNext(src_child.?);
+        clone_child = nodeNext(clone_child.?);
+    }
+}
+
 /// Get the lexbor document from `this` (if it's a document node) or fall back to g_document.
 /// Enables createElement/createTextNode/etc. to work on both the main document and
 /// documents created by createHTMLDocument.
@@ -9279,6 +9344,18 @@ fn cloneNodeImpl(
     deep: bool,
 ) ?JsValue {
     const cloned = dom_b.lxb_dom_node_clone(src_node, deep) orelse return null;
+    // DOM §4.5.3 — lexbor's clone produces a fresh node pointer, so any
+    // sidecar entries keyed by the source pointer (NsInfo for elements
+    // created via createElementNS with a custom prefix) are lost. Walk the
+    // src→clone pair and propagate NsInfo when present so the clone reads
+    // back the same prefix / namespaceURI as the source.
+    propagateNsInfoClone(src_node, cloned, deep);
+    // Same shape mismatch for the JS-wrapper-only `__prefix` slot that
+    // `nativeCreateElementNS` stamps onto the wrapper. The clone gets a fresh
+    // wrapper via `wrapNode` below; copy the slot across the src→clone pair
+    // (recursively for deep clones) before the wrapNode call so the clone's
+    // `.prefix` reads return the right value.
+    propagatePrefixClone(vm, src_node, cloned, deep);
     // DOM §4.5.3 — wrapNode reads the cloned node's (ns, local_name) from
     // lexbor and dispatches the correct HTML/SVG/MathML interface prototype
     // via applyInterfaceProto. lexbor's lxb_dom_node_clone preserves both
