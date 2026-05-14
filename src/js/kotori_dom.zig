@@ -6337,20 +6337,27 @@ fn nativeEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) an
     const type_sid = try vm.pool.intern("type");
     obj.setProperty(vm.allocator, type_sid, JsValue.initString(try vm.pool.intern(type_str))) catch {};
 
-    // eventInitDict
+    // eventInitDict — WebIDL §3.10.18 + DOM §2.5: dictionary members are read
+    // in declaration order (bubbles, cancelable, composed) using
+    // `[[Get]]`, which invokes accessor getters. Tests like
+    // Event-constructors.any.html "Untitled 12" verify that a dict full of
+    // `get bubbles() { called.push("bubbles"); ... }` records the call order
+    // and only the declared members are touched. Routing through
+    // `getPropertyWithAccessors` preserves that observable behaviour.
     var bubbles = false;
     var cancelable = false;
     var composed = false;
     if (args.len > 1 and args[1].isObject()) {
         const opts = args[1].asJsObject();
+        const this_val = args[1];
         if (vm.pool.intern("bubbles") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| bubbles = v.isTruthy();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| bubbles = v.isTruthy();
         }
         if (vm.pool.intern("cancelable") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| cancelable = v.isTruthy();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| cancelable = v.isTruthy();
         }
         if (vm.pool.intern("composed") catch null) |sid| {
-            if (opts.getProperty(sid)) |v| composed = v.isTruthy();
+            if (try vm.getPropertyWithAccessors(opts, sid, this_val)) |v| composed = v.isTruthy();
         }
     }
     obj.setProperty(vm.allocator, try vm.pool.intern("bubbles"), JsValue.initBool(bubbles)) catch {};
