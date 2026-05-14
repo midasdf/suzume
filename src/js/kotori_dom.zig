@@ -3095,6 +3095,16 @@ fn domStyleGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
 fn domStyleSetProp(vm: *VM, obj: *JsObject, name: []const u8, val: JsValue) bool {
     const elem: *lxb.lxb_dom_element_t = @ptrCast(@alignCast(obj.data.dom_style));
 
+    // CSSOM §6.5: getComputedStyle returns a read-only declaration.
+    // Setting cssText / any CSS property must throw NoModificationAllowedError.
+    // Inline-style declarations (no `__element` marker) remain mutable.
+    const cs_marker_sid = vm.pool.intern("__element") catch null;
+    const is_computed_set = if (cs_marker_sid) |em| obj.getProperty(em) != null else false;
+    if (is_computed_set) {
+        vm.pending_throw = createDOMExceptionObj(vm, "NoModificationAllowedError") catch return true;
+        return true;
+    }
+
     if (eql(name, "cssText")) {
         if (val.isString()) {
             if (vm.pool.get(val.asStringId())) |s| {
