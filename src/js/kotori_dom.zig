@@ -8459,6 +8459,23 @@ fn getChildrenArray(vm: *VM, node: *lxb.lxb_dom_node_t, elements_only: bool) ?Js
         }
         ch = nodeNext(c);
     }
+    // DOM §4.2.9 / §4.2.10: `.children` is an HTMLCollection and `.childNodes`
+    // is a NodeList. The polyfill at collection_polyfill_js installs both
+    // prototypes (which chain through Array.prototype). Brand the array so
+    // `coll.namedItem(...)` / `coll.item(...)` resolve to the polyfill methods
+    // instead of returning undefined. Falls back to array_proto if the polyfill
+    // hasn't run yet (init order).
+    const brand_name: []const u8 = if (elements_only) "HTMLCollection" else "NodeList";
+    const brand_sid = vm.pool.intern(brand_name) catch return JsValue.initObject(arr);
+    if (vm.globals.get(brand_sid)) |ctor_val| {
+        if (ctor_val.isObject()) {
+            const ctor = ctor_val.asJsObject();
+            const proto_sid = vm.pool.intern("prototype") catch return JsValue.initObject(arr);
+            if (ctor.getProperty(proto_sid)) |proto_val| {
+                if (proto_val.isObject()) arr.prototype = proto_val.asJsObject();
+            }
+        }
+    }
     return JsValue.initObject(arr);
 }
 
