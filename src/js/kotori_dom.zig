@@ -9494,11 +9494,28 @@ fn jsOnlyCloneNode(vm: *VM, src: JsValue) !JsValue {
             setNodeOwnerDoc(vm, dt, owner_doc);
             return JsValue.initObject(dt);
         },
-        // JS-only Document clone left for a separate track (involves rebuilding
-        // the full DOMImplementation surface). Return null for now so callers
-        // hit the explicit null path instead of a stack overflow from copying
-        // self-referential structures.
-        9 => return JsValue.null_val,
+        // JS-only Document clone — synthesize a fresh empty Document via the
+        // existing createDocument path so the clone gets the full method
+        // surface + implementation wrapper. DOM §4.5.3 says Document.cloneNode
+        // shallow-copies contentType + URL + type metadata without copying
+        // children (deep would clone the documentElement subtree — deferred).
+        9 => {
+            const empty_args = [_]JsValue{ JsValue.null_val, JsValue.null_val };
+            const clone_val = nativeImplementationCreateDocument(@ptrCast(vm), JsValue.undefined_val, &empty_args) catch return JsValue.null_val;
+            if (!clone_val.isObject()) return clone_val;
+            const clone_doc = clone_val.asJsObject();
+            // Propagate the type-distinguishing metadata so the clone behaves
+            // like the source for createElement / serialization.
+            const ct_sid = try vm.pool.intern("contentType");
+            if (src_obj.getProperty(ct_sid)) |v| {
+                clone_doc.setProperty(vm.allocator, ct_sid, v) catch {};
+            }
+            const xml_sid = try vm.pool.intern("_isXmlDoc");
+            if (src_obj.getProperty(xml_sid)) |v| {
+                clone_doc.setProperty(vm.allocator, xml_sid, v) catch {};
+            }
+            return clone_val;
+        },
         // Unknown JS-only nodeType — fall back to null.
         else => return JsValue.null_val,
     }
