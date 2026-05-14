@@ -93,6 +93,14 @@ pub const referrer_policy_keywords = [_][]const u8{
     "unsafe-url",
 };
 
+/// HTML §4.10.8 button "type" — canonical keywords. Missing/invalid default
+/// is "submit" (per the enumerated attribute table).
+pub const button_type_keywords = [_][]const u8{
+    "submit",
+    "reset",
+    "button",
+};
+
 /// HTML §4.10.21.6 form-submission-encoding keywords.
 /// Invalid-default + missing-default: "application/x-www-form-urlencoded".
 pub const form_enctype_keywords = [_][]const u8{
@@ -268,7 +276,11 @@ pub const table = &[_]ReflectedAttr{
     .{ .iface = "HTMLButtonElement", .idl = "formNoValidate", .content = "formnovalidate", .type = .boolean   },
     .{ .iface = "HTMLButtonElement", .idl = "formTarget",     .content = "formtarget",     .type = .domstring },
     .{ .iface = "HTMLButtonElement", .idl = "name",           .content = "name",           .type = .domstring },
-    .{ .iface = "HTMLButtonElement", .idl = "type",           .content = "type",           .type = .domstring },
+    // HTML §4.10.8 button "type" — enumerated with canonical keywords; both
+    // missing-default and invalid-default are "submit".
+    .{ .iface = "HTMLButtonElement", .idl = "type",           .content = "type",
+       .type = .enumerated_ascii, .default_str = "submit",
+       .keywords = &button_type_keywords },
     .{ .iface = "HTMLButtonElement", .idl = "value",          .content = "value",          .type = .domstring },
     .{ .iface = "HTMLButtonElement", .idl = "popoverTarget",  .content = "popovertarget",  .type = .domstring },
     .{ .iface = "HTMLButtonElement", .idl = "popoverTargetAction", .content = "popovertargetaction", .type = .domstring },

@@ -4008,7 +4008,15 @@ pub const KotoriRuntime = struct {
         \\      if(t==='textarea')return 'textarea';
         \\      // HTML §4.10.15 HTMLFieldSetElement.type: always "fieldset".
         \\      if(t==='fieldset')return 'fieldset';
-        \\      // Other element 'type' (input, button etc.) handled by IDL reflection.
+        \\      // HTML §4.10.8 HTMLButtonElement.type IDL: enumerated
+        \\      // attribute with default "submit". Canonical keywords are
+        \\      // "submit", "reset", "button". Missing/invalid → "submit".
+        \\      if(t==='button'){
+        \\        var bv=(this.getAttribute('type')||'').toLowerCase();
+        \\        if(bv==='reset'||bv==='button')return bv;
+        \\        return 'submit';
+        \\      }
+        \\      // Other element 'type' (input etc.) handled by IDL reflection.
         \\      return undefined;
         \\    },
         \\    set:function(v){
