@@ -877,6 +877,10 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     try vm.registerNativeMethod(ep, "querySelector", &nativeQuerySelector);
     try vm.registerNativeMethod(ep, "querySelectorAll", &nativeQuerySelectorAll);
     try vm.registerNativeMethod(ep, "matches", &nativeMatches);
+    // DOM §4.5 legacy alias — `webkitMatchesSelector` is the prefixed
+    // historical name kept for compat; it delegates to the same selector
+    // engine as `matches`. WebKit-Selectors API §1.
+    try vm.registerNativeMethod(ep, "webkitMatchesSelector", &nativeMatches);
     try vm.registerNativeMethod(ep, "closest", &nativeClosest);
     try vm.registerNativeMethod(ep, "getElementsByTagName", &nativeGetElementsByTagName);
     try vm.registerNativeMethod(ep, "getElementsByClassName", &nativeGetElementsByClassName);
