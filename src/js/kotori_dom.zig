@@ -430,6 +430,7 @@ var g_comment_proto: ?*JsObject = null;
 var g_doctype_proto: ?*JsObject = null;
 var g_pi_proto: ?*JsObject = null;
 var g_attr_proto: ?*JsObject = null;
+var g_dom_impl_proto: ?*JsObject = null;
 var g_fragment_proto: ?*JsObject = null;
 var g_event_proto: ?*JsObject = null;
 /// Shared isTrusted getter function — same object across all Event instances
@@ -1258,6 +1259,15 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     attr_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_attr_proto.?)) catch {};
     g_attr_proto.?.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(attr_ctor)) catch {};
     try vm.globals.put(vm.allocator, try vm.pool.intern("Attr"), JsValue.initObject(attr_ctor));
+
+    // DOMImplementation constructor + prototype (DOM §7.1) — `document
+    // .implementation instanceof DOMImplementation` must hold per WebIDL.
+    g_dom_impl_proto = try vm.createObj(.{});
+    const dom_impl_ctor = try vm.createObj(.{ .obj_type = .native_function });
+    dom_impl_ctor.data = .{ .native_fn = &nativeNoOpConstructor };
+    dom_impl_ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(g_dom_impl_proto.?)) catch {};
+    g_dom_impl_proto.?.setProperty(vm.allocator, try vm.pool.intern("constructor"), JsValue.initObject(dom_impl_ctor)) catch {};
+    try vm.globals.put(vm.allocator, try vm.pool.intern("DOMImplementation"), JsValue.initObject(dom_impl_ctor));
 
     // Event constructor (DOM 2.5)
     const ev_proto = try vm.createObj(.{});
@@ -2844,9 +2854,19 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return JsValue.initNumber(count);
     }
 
-    // document.implementation — DOM §7.1: DOMImplementation object
+    // document.implementation — DOM §7.1: DOMImplementation object.
+    // DOM §4.5.1 requires identity: `doc.implementation === doc.implementation`
+    // — cache the wrapper on the document JsObject so repeated reads return
+    // the same object.
     if (eql(name, "implementation") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_DOCUMENT) {
+        const cache_sid = vm.pool.intern("_implementation_cache") catch return null;
+        if (obj.getProperty(cache_sid)) |cached| {
+            if (cached.isObject()) return cached;
+        }
         const impl_obj = vm.createObj(.{}) catch return null;
+        // WebIDL §3.7.1: impl instanceof DOMImplementation must hold.
+        impl_obj.prototype = g_dom_impl_proto;
+        obj.setProperty(vm.allocator, cache_sid, JsValue.initObject(impl_obj)) catch {};
         // Store owning document reference for createDocumentType/createDocument
         const od_sid = vm.pool.intern("_ownerDoc") catch return null;
         impl_obj.setProperty(vm.allocator, od_sid, wrapNode(vm, node) orelse JsValue.null_val) catch {};
@@ -10060,6 +10080,7 @@ fn wrapParsedHtmlDocAsJsDoc(vm: *VM, html: []const u8, content_type: []const u8)
 
     // implementation (self-referential for chained calls)
     const impl_obj = vm.createObj(.{}) catch return doc_val;
+    impl_obj.prototype = g_dom_impl_proto;
     // Store owning document reference for createDocumentType
     impl_obj.setProperty(vm.allocator, vm.pool.intern("_ownerDoc") catch return doc_val, doc_val) catch {};
     const hf_fn = vm.createObj(.{ .obj_type = .native_function }) catch return doc_val;
