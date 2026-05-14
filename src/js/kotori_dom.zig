@@ -9142,13 +9142,87 @@ fn overrideOwnerDocRecursive(vm: *VM, node: *lxb.lxb_dom_node_t, owner: JsValue)
 
 fn nativeCloneNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm: *VM = @ptrCast(@alignCast(ctx));
-    const node = getThisNode(this) orelse return JsValue.null_val;
     // deep defaults to false per spec
     const deep = if (args.len > 0 and args[0].isBool()) args[0].asBool() else false;
-    // DOM §4.4.1 "clone a node" — lexbor's lxb_dom_node_clone preserves
-    // owner_document on the cloned node; wrapNode reads it and writes the
-    // `_ownerDoc` slot. No override needed here (same-document clone).
-    return cloneNodeImpl(vm, node, null, deep) orelse JsValue.null_val;
+    if (getThisNode(this)) |node| {
+        // DOM §4.4.1 "clone a node" — lexbor's lxb_dom_node_clone preserves
+        // owner_document on the cloned node; wrapNode reads it and writes the
+        // `_ownerDoc` slot. No override needed here (same-document clone).
+        return cloneNodeImpl(vm, node, null, deep) orelse JsValue.null_val;
+    }
+    // DOM §4.4.1 — JS-only nodes (PI, Attr, DocumentType, JS-only Document)
+    // have no lexbor backing. Branch on nodeType and rebuild a fresh wrapper
+    // with the spec-mandated copy fields. `deep` is irrelevant for these
+    // node types (they currently never hold children in kotori).
+    if (this.isObject()) {
+        return jsOnlyCloneNode(vm, this) catch JsValue.null_val;
+    }
+    return JsValue.null_val;
+}
+
+/// DOM §4.4.1 "clone a node" for JS-only nodes (PI, Attr, DocumentType,
+/// JS-only Document). Reads the type-specific identity fields off the source
+/// wrapper and reconstructs a fresh detached node — `ownerElement` /
+/// `parentNode` / siblings are reset on the clone per spec.
+fn jsOnlyCloneNode(vm: *VM, src: JsValue) !JsValue {
+    if (!src.isObject()) return JsValue.null_val;
+    const src_obj = src.asJsObject();
+    const nt_sid = try vm.pool.intern("nodeType");
+    const nt_v = src_obj.getProperty(nt_sid) orelse return JsValue.null_val;
+    if (!nt_v.isNumber()) return JsValue.null_val;
+    const nt = @as(u32, @intFromFloat(nt_v.toNumber()));
+
+    // Read ownerDocument so the clone inherits it.
+    const owner_doc: JsValue = if (src_obj.getProperty(try vm.pool.intern("ownerDocument"))) |od| od else JsValue.null_val;
+
+    switch (nt) {
+        // ProcessingInstruction
+        7 => {
+            const tgt = src_obj.getProperty(try vm.pool.intern("target")) orelse return JsValue.null_val;
+            const data = src_obj.getProperty(try vm.pool.intern("data")) orelse JsValue.initString(try vm.pool.intern(""));
+            const tgt_str = if (tgt.isString()) (vm.pool.get(tgt.asStringId()) orelse "") else "";
+            const data_str = if (data.isString()) (vm.pool.get(data.asStringId()) orelse "") else "";
+            const args: [2]JsValue = .{
+                JsValue.initString(try vm.pool.intern(tgt_str)),
+                JsValue.initString(try vm.pool.intern(data_str)),
+            };
+            return try nativeCreateProcessingInstruction(@ptrCast(vm), owner_doc, &args);
+        },
+        // Attr — defer to the existing importNode-style helper (same semantics:
+        // copy identity fields, detach ownerElement, clear siblings).
+        2 => return try jsOnlyImportAttr(vm, src, owner_doc),
+        // DocumentType — inline create (mirrors nativeImplementationCreateDocumentType).
+        10 => {
+            const dt = try vm.createObj(.{});
+            dt.prototype = g_doctype_proto;
+            const name_v = src_obj.getProperty(try vm.pool.intern("name")) orelse JsValue.initString(try vm.pool.intern(""));
+            const pub_v = src_obj.getProperty(try vm.pool.intern("publicId")) orelse JsValue.initString(try vm.pool.intern(""));
+            const sys_v = src_obj.getProperty(try vm.pool.intern("systemId")) orelse JsValue.initString(try vm.pool.intern(""));
+            try dt.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(10));
+            try dt.setProperty(vm.allocator, try vm.pool.intern("name"), name_v);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("nodeName"), name_v);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("publicId"), pub_v);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("systemId"), sys_v);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), owner_doc);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("parentNode"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("parentElement"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("previousSibling"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("nextSibling"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
+            try dt.setProperty(vm.allocator, try vm.pool.intern("lastChild"), JsValue.null_val);
+            setNodeOwnerDoc(vm, dt, owner_doc);
+            return JsValue.initObject(dt);
+        },
+        // JS-only Document clone left for a separate track (involves rebuilding
+        // the full DOMImplementation surface). Return null for now so callers
+        // hit the explicit null path instead of a stack overflow from copying
+        // self-referential structures.
+        9 => return JsValue.null_val,
+        // Unknown JS-only nodeType — fall back to null.
+        else => return JsValue.null_val,
+    }
 }
 
 // ── Node.isSameNode (DOM §4.4) ───────────────────────────────────────
