@@ -3644,6 +3644,10 @@ fn createAttrObject(
     namespace: ?[]const u8,
 ) !JsValue {
     const obj = try vm.createObj(.{});
+    // DOM §4.9: Attr extends Node. Set Node.prototype so Attr instances inherit
+    // isSameNode / contains / addEventListener / etc. Without this, JS-only Attr
+    // wrappers had no prototype chain and all Node methods were `undefined`.
+    if (g_node_proto) |np| obj.prototype = np;
     // nodeType = 2 (ATTRIBUTE_NODE)
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeType"), JsValue.initNumber(2));
     const qname_sid = try vm.pool.intern(qname);
@@ -4530,7 +4534,63 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []con
     // as `_et_ptr` so addEventListener/dispatchEvent identify this PI as a
     // standalone target (PIs are plain JsObjects, not `.dom_node`).
     try obj.setProperty(vm.allocator, try vm.pool.intern("_et_ptr"), JsValue.initNumber(@floatFromInt(@intFromPtr(obj))));
+    // CharacterData §4.5.2: nodeValue and textContent are equivalent to data.
+    // Install accessor descriptors so setting any one updates the canonical
+    // `data` own property (the get/set pair is shared across all PI instances).
+    if (obj.descriptors == null) obj.descriptors = .{};
+    const nv_get = if (g_pi_chardata_get) |g| g else blk: {
+        const f = try vm.createObj(.{ .obj_type = .native_function });
+        f.data = .{ .native_fn = &nativePICharDataGet };
+        g_pi_chardata_get = f;
+        break :blk f;
+    };
+    const nv_set = if (g_pi_chardata_set) |s| s else blk: {
+        const f = try vm.createObj(.{ .obj_type = .native_function });
+        f.data = .{ .native_fn = &nativePICharDataSet };
+        g_pi_chardata_set = f;
+        break :blk f;
+    };
+    try obj.descriptors.?.put(vm.allocator, try vm.pool.intern("nodeValue"), .{ .accessor = .{
+        .get = JsValue.initObject(nv_get),
+        .set = JsValue.initObject(nv_set),
+        .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+    } });
+    try obj.descriptors.?.put(vm.allocator, try vm.pool.intern("textContent"), .{ .accessor = .{
+        .get = JsValue.initObject(nv_get),
+        .set = JsValue.initObject(nv_set),
+        .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+    } });
     return JsValue.initObject(obj);
+}
+
+// PI accessor backing: read/write the canonical `data` own property. Shared
+// getter/setter pair so descriptors compare equal across PI instances.
+var g_pi_chardata_get: ?*JsObject = null;
+var g_pi_chardata_set: ?*JsObject = null;
+
+fn nativePICharDataGet(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.initString(0);
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (vm.pool.intern("data") catch null) |sid| {
+        if (obj.getProperty(sid)) |v| return v;
+    }
+    return JsValue.initString(try vm.pool.intern(""));
+}
+
+fn nativePICharDataSet(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    // CharacterData §4.5.2: null coerces to "" (DOMString treatment of [TreatNullAs=EmptyString]).
+    var s_buf: []const u8 = "";
+    if (args.len > 0) {
+        const v = args[0];
+        if (!v.isNull() and !v.isUndefined()) s_buf = argToString(vm, v);
+    }
+    const s_sid = try vm.pool.intern(s_buf);
+    obj.setProperty(vm.allocator, try vm.pool.intern("data"), JsValue.initString(s_sid)) catch {};
+    return JsValue.undefined_val;
 }
 
 // ══════════════════════════════════════════════════════════════════════
@@ -9052,8 +9112,13 @@ fn nativeCloneNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerr
 // ── Node.isSameNode (DOM §4.4) ───────────────────────────────────────
 
 fn nativeIsSameNode(_: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
-    const a = getThisNode(this) orelse return JsValue.initBool(false);
     if (args.len == 0 or args[0].isNull() or args[0].isUndefined()) return JsValue.initBool(false);
+    // DOM §4.4: JS-only nodes (PI, DocumentType, Attr, JS-only Document) lack a
+    // lexbor backing — compare by JS object identity. `contains` already does
+    // this; mirror the pattern here so `pi.isSameNode(pi)` etc. return true.
+    if (this.isObject() and args[0].isObject() and this.asJsObject() == args[0].asJsObject())
+        return JsValue.initBool(true);
+    const a = getThisNode(this) orelse return JsValue.initBool(false);
     const b = getArgNode(args[0]) orelse return JsValue.initBool(false);
     return JsValue.initBool(a == b);
 }
