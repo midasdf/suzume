@@ -3309,6 +3309,10 @@ fn nativeGetElementById(ctx: *anyopaque, this: JsValue, args: []const JsValue) a
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0) return JsValue.null_val;
     const id_str = argToString(vm, args[0]);
+    // DOM §4.5.2 getElementById: "If elementId is the empty string, return
+    // null." This is explicit in the spec to avoid matching id="" attributes
+    // that some parsers preserve as empty content attributes.
+    if (id_str.len == 0) return JsValue.null_val;
     const root = getThisNode(this) orelse return JsValue.null_val;
     if (findElementById(root, id_str)) |elem|
         return wrapNode(vm, @ptrCast(elem)) orelse JsValue.null_val;
