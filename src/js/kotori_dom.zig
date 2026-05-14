@@ -400,6 +400,28 @@ fn propagatePrefixClone(vm: *VM, src: *lxb.lxb_dom_node_t, clone: *lxb.lxb_dom_n
                         }
                     }
                 }
+                // wrapNode above ran applyInterfaceProto with lexbor's
+                // local_name (which may still contain the prefix, e.g.
+                // "foo:div"), so the prototype dispatched to
+                // HTMLUnknownElement. Re-dispatch using the case-preserved
+                // local name we just copied so e.g. `foo:div` in the HTML
+                // namespace lands on HTMLDivElement.prototype.
+                const orig_local_sid = vm.pool.intern("__origLocal") catch return;
+                const ns_uri_sid = vm.pool.intern("__nsURI") catch return;
+                var clone_local: ?[]const u8 = null;
+                if (clone_obj.getProperty(orig_local_sid)) |v| {
+                    if (v.isString()) clone_local = vm.pool.get(v.asStringId());
+                }
+                var clone_ns: ?[]const u8 = null;
+                if (clone_obj.getProperty(ns_uri_sid)) |v| {
+                    if (v.isString()) clone_ns = vm.pool.get(v.asStringId());
+                } else {
+                    clone_ns = nsIdToUri(clone.ns);
+                }
+                if (clone_local) |ln| {
+                    const owner_doc_val = getNodeOwnerDoc(vm, clone_obj);
+                    applyInterfaceProto(vm, clone_obj, clone_ns, ln, owner_doc_val);
+                }
             }
         }
     }
