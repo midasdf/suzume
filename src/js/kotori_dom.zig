@@ -1273,17 +1273,20 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     // UIEvent.prototype → Event.prototype (UI Events §3.2)
     const ui_proto = try vm.createObj(.{});
     ui_proto.prototype = ev_proto;
-    try registerEventCtor(vm, "UIEvent", ui_proto, proto_sid);
+    try vm.registerNativeMethod(ui_proto, "initUIEvent", &nativeInitUIEvent);
+    try registerEventCtorWithFn(vm, "UIEvent", ui_proto, proto_sid, &nativeUIEventConstructor);
 
     // MouseEvent.prototype → UIEvent.prototype (UI Events §3.3)
     const mouse_proto = try vm.createObj(.{});
     mouse_proto.prototype = ui_proto;
-    try registerEventCtor(vm, "MouseEvent", mouse_proto, proto_sid);
+    try vm.registerNativeMethod(mouse_proto, "initMouseEvent", &nativeInitMouseEvent);
+    try registerEventCtorWithFn(vm, "MouseEvent", mouse_proto, proto_sid, &nativeMouseEventConstructor);
 
     // KeyboardEvent.prototype → UIEvent.prototype (UI Events §3.5)
     const kb_proto = try vm.createObj(.{});
     kb_proto.prototype = ui_proto;
-    try registerEventCtor(vm, "KeyboardEvent", kb_proto, proto_sid);
+    try vm.registerNativeMethod(kb_proto, "initKeyboardEvent", &nativeInitKeyboardEvent);
+    try registerEventCtorWithFn(vm, "KeyboardEvent", kb_proto, proto_sid, &nativeKeyboardEventConstructor);
 
     // FocusEvent.prototype → UIEvent.prototype (UI Events §3.4)
     const focus_proto = try vm.createObj(.{});
@@ -4369,8 +4372,18 @@ fn jsOnlyImportElement(vm: *VM, src_val: JsValue, target_doc: JsValue, deep: boo
 // ── Helper: register an event interface constructor + prototype ──────
 
 fn registerEventCtor(vm: *VM, name: []const u8, proto: *JsObject, proto_sid: StringId) !void {
+    return registerEventCtorWithFn(vm, name, proto, proto_sid, &nativeEventConstructor);
+}
+
+fn registerEventCtorWithFn(
+    vm: *VM,
+    name: []const u8,
+    proto: *JsObject,
+    proto_sid: StringId,
+    ctor_fn: *const fn (ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue,
+) !void {
     const ctor = try vm.createObj(.{ .obj_type = .native_function });
-    ctor.data = .{ .native_fn = &nativeEventConstructor };
+    ctor.data = .{ .native_fn = ctor_fn };
     ctor.setProperty(vm.allocator, proto_sid, JsValue.initObject(proto)) catch {};
     // WebIDL §3.7.1: prototype.constructor must point back at the interface
     // object, and the interface object must have a `name` property equal to
@@ -6289,6 +6302,166 @@ fn nativeCustomEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsVal
     return ev_val;
 }
 
+/// UIEvent ctor: extends Event with view, detail. UI Events §3.2
+fn nativeUIEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var view = JsValue.null_val;
+    var detail: f64 = 0;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("view") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| view = v;
+        }
+        if (vm.pool.intern("detail") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isNumber()) detail = v.asNumber();
+            }
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("view"), view) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("detail"), JsValue.initNumber(detail)) catch {};
+    return ev_val;
+}
+
+/// MouseEvent ctor: extends UIEvent with screen/client coords + modifier keys. UI Events §3.3
+fn nativeMouseEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeUIEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var screenX: f64 = 0;
+    var screenY: f64 = 0;
+    var clientX: f64 = 0;
+    var clientY: f64 = 0;
+    var ctrl = false;
+    var alt = false;
+    var shift = false;
+    var meta = false;
+    var button: f64 = 0;
+    var buttons: f64 = 0;
+    var related: JsValue = JsValue.null_val;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        const readF64 = struct {
+            fn f(vm_: *VM, opts_: *JsObject, key: []const u8, dest: *f64) void {
+                if (vm_.pool.intern(key) catch null) |sid| {
+                    if (opts_.getProperty(sid)) |v| {
+                        if (v.isNumber()) dest.* = v.asNumber();
+                    }
+                }
+            }
+        }.f;
+        const readBool = struct {
+            fn f(vm_: *VM, opts_: *JsObject, key: []const u8, dest: *bool) void {
+                if (vm_.pool.intern(key) catch null) |sid| {
+                    if (opts_.getProperty(sid)) |v| dest.* = v.isTruthy();
+                }
+            }
+        }.f;
+        readF64(vm, opts, "screenX", &screenX);
+        readF64(vm, opts, "screenY", &screenY);
+        readF64(vm, opts, "clientX", &clientX);
+        readF64(vm, opts, "clientY", &clientY);
+        readBool(vm, opts, "ctrlKey", &ctrl);
+        readBool(vm, opts, "altKey", &alt);
+        readBool(vm, opts, "shiftKey", &shift);
+        readBool(vm, opts, "metaKey", &meta);
+        readF64(vm, opts, "button", &button);
+        readF64(vm, opts, "buttons", &buttons);
+        if (vm.pool.intern("relatedTarget") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| related = v;
+        }
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("screenX"), JsValue.initNumber(screenX)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("screenY"), JsValue.initNumber(screenY)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("clientX"), JsValue.initNumber(clientX)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("clientY"), JsValue.initNumber(clientY)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("pageX"), JsValue.initNumber(clientX)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("pageY"), JsValue.initNumber(clientY)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("offsetX"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("offsetY"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("movementX"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("movementY"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("metaKey"), JsValue.initBool(meta)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("button"), JsValue.initNumber(button)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("buttons"), JsValue.initNumber(buttons)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("relatedTarget"), related) catch {};
+    return ev_val;
+}
+
+/// KeyboardEvent ctor: extends UIEvent with key/code/location + modifier keys. UI Events §3.5
+fn nativeKeyboardEventConstructor(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!vm.native_call_is_construct) return error.TypeError;
+    const ev_val = try nativeUIEventConstructor(ctx, JsValue.undefined_val, args);
+    if (!ev_val.isObject()) return ev_val;
+    const obj = ev_val.asJsObject();
+
+    var key_sid_val: StringId = try vm.pool.intern("");
+    var code_sid_val: StringId = try vm.pool.intern("");
+    var location: f64 = 0;
+    var ctrl = false;
+    var alt = false;
+    var shift = false;
+    var meta = false;
+    var repeat = false;
+    var is_composing = false;
+    if (args.len > 1 and args[1].isObject()) {
+        const opts = args[1].asJsObject();
+        if (vm.pool.intern("key") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isString()) key_sid_val = v.asStringId();
+            }
+        }
+        if (vm.pool.intern("code") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isString()) code_sid_val = v.asStringId();
+            }
+        }
+        if (vm.pool.intern("location") catch null) |sid| {
+            if (opts.getProperty(sid)) |v| {
+                if (v.isNumber()) location = v.asNumber();
+            }
+        }
+        const readBool = struct {
+            fn f(vm_: *VM, opts_: *JsObject, key: []const u8, dest: *bool) void {
+                if (vm_.pool.intern(key) catch null) |sid| {
+                    if (opts_.getProperty(sid)) |v| dest.* = v.isTruthy();
+                }
+            }
+        }.f;
+        readBool(vm, opts, "ctrlKey", &ctrl);
+        readBool(vm, opts, "altKey", &alt);
+        readBool(vm, opts, "shiftKey", &shift);
+        readBool(vm, opts, "metaKey", &meta);
+        readBool(vm, opts, "repeat", &repeat);
+        readBool(vm, opts, "isComposing", &is_composing);
+    }
+    obj.setProperty(vm.allocator, try vm.pool.intern("key"), JsValue.initString(key_sid_val)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("code"), JsValue.initString(code_sid_val)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("location"), JsValue.initNumber(location)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("metaKey"), JsValue.initBool(meta)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("repeat"), JsValue.initBool(repeat)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("isComposing"), JsValue.initBool(is_composing)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("charCode"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("keyCode"), JsValue.initNumber(0)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("which"), JsValue.initNumber(0)) catch {};
+    return ev_val;
+}
+
 /// Event.prototype.stopPropagation
 fn nativeStopPropagation(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
     if (this.isObject()) {
@@ -6385,6 +6558,85 @@ fn nativeInitCustomEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) 
     // detail (4th arg)
     const detail = if (args.len >= 4) args[3] else JsValue.null_val;
     obj.setProperty(vm.allocator, try vm.pool.intern("detail"), detail) catch {};
+    return JsValue.undefined_val;
+}
+
+/// Helper: returns true if `this` is currently dispatching (DOM §2.8 dispatch flag).
+fn eventIsDispatching(vm: *VM, obj: *JsObject) bool {
+    if (vm.pool.intern("_dispatching") catch null) |sid| {
+        if (obj.getProperty(sid)) |v| return v.isTruthy();
+    }
+    return false;
+}
+
+/// UIEvent.prototype.initUIEvent(type, bubbles, cancelable, view, detail) -- legacy. UI Events §3.2.4
+fn nativeInitUIEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
+    _ = try nativeInitEvent(ctx, this, args);
+    const view = if (args.len >= 4) args[3] else JsValue.null_val;
+    const detail = if (args.len >= 5) args[4] else JsValue.initNumber(0);
+    obj.setProperty(vm.allocator, try vm.pool.intern("view"), view) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("detail"), detail) catch {};
+    return JsValue.undefined_val;
+}
+
+/// MouseEvent.prototype.initMouseEvent(type, bubbles, cancelable, view, detail, screenX, screenY,
+/// clientX, clientY, ctrlKey, altKey, shiftKey, metaKey, button, relatedTarget) -- legacy. UI Events §3.3.4
+fn nativeInitMouseEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
+    _ = try nativeInitUIEvent(ctx, this, args);
+    const screenX = if (args.len >= 6 and args[5].isNumber()) args[5] else JsValue.initNumber(0);
+    const screenY = if (args.len >= 7 and args[6].isNumber()) args[6] else JsValue.initNumber(0);
+    const clientX = if (args.len >= 8 and args[7].isNumber()) args[7] else JsValue.initNumber(0);
+    const clientY = if (args.len >= 9 and args[8].isNumber()) args[8] else JsValue.initNumber(0);
+    const ctrl = if (args.len >= 10) args[9].isTruthy() else false;
+    const alt = if (args.len >= 11) args[10].isTruthy() else false;
+    const shift = if (args.len >= 12) args[11].isTruthy() else false;
+    const meta = if (args.len >= 13) args[12].isTruthy() else false;
+    const button = if (args.len >= 14 and args[13].isNumber()) args[13] else JsValue.initNumber(0);
+    const related = if (args.len >= 15) args[14] else JsValue.null_val;
+    obj.setProperty(vm.allocator, try vm.pool.intern("screenX"), screenX) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("screenY"), screenY) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("clientX"), clientX) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("clientY"), clientY) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("metaKey"), JsValue.initBool(meta)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("button"), button) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("relatedTarget"), related) catch {};
+    return JsValue.undefined_val;
+}
+
+/// KeyboardEvent.prototype.initKeyboardEvent(type, bubbles, cancelable, view, key, location,
+/// ctrlKey, altKey, shiftKey, metaKey) -- legacy. UI Events §3.5.6
+fn nativeInitKeyboardEvent(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    if (!this.isObject()) return JsValue.undefined_val;
+    const vm = VM.vmFromCtx(ctx);
+    const obj = this.asJsObject();
+    if (eventIsDispatching(vm, obj)) return JsValue.undefined_val;
+    // Pass first 4 args (type, bubbles, cancelable, view) to initUIEvent.
+    // initUIEvent's 5th arg (detail) is not present in initKeyboardEvent signature; default 0.
+    const ui_args = args[0..@min(args.len, 4)];
+    _ = try nativeInitUIEvent(ctx, this, ui_args);
+    const key = if (args.len >= 5 and args[4].isString()) args[4] else JsValue.initString(try vm.pool.intern(""));
+    const location = if (args.len >= 6 and args[5].isNumber()) args[5] else JsValue.initNumber(0);
+    const ctrl = if (args.len >= 7) args[6].isTruthy() else false;
+    const alt = if (args.len >= 8) args[7].isTruthy() else false;
+    const shift = if (args.len >= 9) args[8].isTruthy() else false;
+    const meta = if (args.len >= 10) args[9].isTruthy() else false;
+    obj.setProperty(vm.allocator, try vm.pool.intern("key"), key) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("location"), location) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("ctrlKey"), JsValue.initBool(ctrl)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("altKey"), JsValue.initBool(alt)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("shiftKey"), JsValue.initBool(shift)) catch {};
+    obj.setProperty(vm.allocator, try vm.pool.intern("metaKey"), JsValue.initBool(meta)) catch {};
     return JsValue.undefined_val;
 }
 
