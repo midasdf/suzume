@@ -3467,12 +3467,26 @@ fn nativeGetElementsByClassName(ctx: *anyopaque, this: JsValue, args: []const Js
         }
         const tok = cls_raw[tok_start..i];
         if (tok.len == 0) continue;
-        // Append "." + token. Bail out if buffer can't fit; rare for sane input.
-        if (sel_len + 1 + tok.len > sel_buf.len) return JsValue.initObject(arr_obj);
+        // Append "." + escaped(token). Per CSS Selectors §17, identifier
+        // chars are [a-zA-Z0-9_-] plus Unicode (>0x7F). Anything else must
+        // be backslash-escaped so the selector engine treats the literal
+        // char as part of the class name (e.g. class="b,a" must match the
+        // selector `.b\,a`, not `.b , a`).
+        if (sel_len >= sel_buf.len) return JsValue.initObject(arr_obj);
         sel_buf[sel_len] = '.';
         sel_len += 1;
-        @memcpy(sel_buf[sel_len .. sel_len + tok.len], tok);
-        sel_len += tok.len;
+        for (tok) |c| {
+            const is_ident = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or
+                (c >= '0' and c <= '9') or c == '_' or c == '-' or c >= 0x80;
+            if (!is_ident) {
+                if (sel_len + 1 >= sel_buf.len) return JsValue.initObject(arr_obj);
+                sel_buf[sel_len] = '\\';
+                sel_len += 1;
+            }
+            if (sel_len >= sel_buf.len) return JsValue.initObject(arr_obj);
+            sel_buf[sel_len] = c;
+            sel_len += 1;
+        }
     }
     // DOM §4.2.5.4: empty token set → empty collection.
     if (sel_len == 0) return JsValue.initObject(arr_obj);
