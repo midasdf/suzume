@@ -6911,8 +6911,12 @@ fn nativeRemoveEventListener(ctx: *anyopaque, this: JsValue, args: []const JsVal
         }
         if (args[2].isObject()) {
             const opts = args[2].asJsObject();
+            const opts_val = args[2];
+            // DOM §2.7.1 + WebIDL: `capture` is read via [[Get]] which
+            // invokes accessor getters. EventListenerOptions-capture's
+            // "Supports capture option" feature-detects support this way.
             if (vm.pool.intern("capture") catch null) |sid| {
-                if (opts.getProperty(sid)) |v| capture = v.isTruthy();
+                if (try vm.getPropertyWithAccessors(opts, sid, opts_val)) |v| capture = v.isTruthy();
             }
         }
     }
