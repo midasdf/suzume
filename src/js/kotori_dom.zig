@@ -4526,6 +4526,10 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []con
     try obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("lastChild"), JsValue.null_val);
     try obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initNumber(0)); // placeholder
+    // DOM §2.7: ProcessingInstruction implements EventTarget. Store self-pointer
+    // as `_et_ptr` so addEventListener/dispatchEvent identify this PI as a
+    // standalone target (PIs are plain JsObjects, not `.dom_node`).
+    try obj.setProperty(vm.allocator, try vm.pool.intern("_et_ptr"), JsValue.initNumber(@floatFromInt(@intFromPtr(obj))));
     return JsValue.initObject(obj);
 }
 
