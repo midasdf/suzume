@@ -60,6 +60,73 @@ fn isInvalidNameStartChar(ch: u8) bool {
     };
 }
 
+/// Decode one UTF-8 codepoint at `s[0..]`. Returns null if `s` is empty or
+/// the leading bytes are not a well-formed UTF-8 sequence. Used by
+/// `isValidName` to apply codepoint-level XML \u00A72.3 NameStartChar / NameChar
+/// gap rejections (browsers tolerate most non-ASCII codepoints in names,
+/// but specifically reject a handful of codepoints in the XML production
+/// gaps \u2014 see `isCodepointBlockedAsNameStart` / `isCodepointBlockedAsNameChar`).
+fn decodeUtf8(s: []const u8) ?struct { cp: u32, len: usize } {
+    if (s.len == 0) return null;
+    const b0 = s[0];
+    if (b0 < 0x80) return .{ .cp = b0, .len = 1 };
+    if (b0 < 0xC2) return null;
+    if (b0 < 0xE0) {
+        if (s.len < 2) return null;
+        const b1 = s[1];
+        if ((b1 & 0xC0) != 0x80) return null;
+        const cp: u32 = (@as(u32, b0 & 0x1F) << 6) | @as(u32, b1 & 0x3F);
+        return .{ .cp = cp, .len = 2 };
+    }
+    if (b0 < 0xF0) {
+        if (s.len < 3) return null;
+        const b1 = s[1];
+        const b2 = s[2];
+        if ((b1 & 0xC0) != 0x80 or (b2 & 0xC0) != 0x80) return null;
+        const cp: u32 =
+            (@as(u32, b0 & 0x0F) << 12) |
+            (@as(u32, b1 & 0x3F) << 6) |
+            @as(u32, b2 & 0x3F);
+        return .{ .cp = cp, .len = 3 };
+    }
+    if (b0 < 0xF5) {
+        if (s.len < 4) return null;
+        const b1 = s[1];
+        const b2 = s[2];
+        const b3 = s[3];
+        if ((b1 & 0xC0) != 0x80 or (b2 & 0xC0) != 0x80 or (b3 & 0xC0) != 0x80) return null;
+        const cp: u32 =
+            (@as(u32, b0 & 0x07) << 18) |
+            (@as(u32, b1 & 0x3F) << 12) |
+            (@as(u32, b2 & 0x3F) << 6) |
+            @as(u32, b3 & 0x3F);
+        return .{ .cp = cp, .len = 4 };
+    }
+    return null;
+}
+
+/// Codepoints in the XML 1.0 \u00A72.3 NameStartChar gaps that browsers reject
+/// at the START of a Name, even though they are tolerated elsewhere. WPT
+/// `Document-createProcessingInstruction.html` enforces these per
+/// XML 1.0 \u00A72.3 NameStartChar production:
+///   - U+00B7 (MIDDLE DOT): in NameChar but not in NameStartChar
+///     ([#xC0-#xD6]|[#xD8-#xF6]|[#xF8-#x2FF]...).
+///   - U+00D7 (MULTIPLICATION SIGN): in neither (sits in the [#xD7]
+///     gap between [#xC0-#xD6] and [#xD8-#xF6]).
+fn isCodepointBlockedAsNameStart(cp: u32) bool {
+    return cp == 0x00B7 or cp == 0x00D7;
+}
+
+/// Codepoints that XML 1.0 \u00A72.3 NameChar production also rejects (i.e.
+/// rejected anywhere in a Name, including interior positions). U+00D7 is
+/// outside NameStartChar AND outside the explicit NameChar additions
+/// (#xB7 | [#x0300-#x036F] | [#x203F-#x2040]). U+00B7 is in NameChar so
+/// it is *not* listed here \u2014 only blocked at start by
+/// `isCodepointBlockedAsNameStart`.
+fn isCodepointBlockedAsNameChar(cp: u32) bool {
+    return cp == 0x00D7;
+}
+
 /// XML Name production (lenient browser variant). Used by DOM §4.5.1
 /// createElement — i.e. the strict creator APIs. ':' is allowed ANYWHERE
 /// (including start and end and repeated colons). Matches WPT
@@ -76,9 +143,34 @@ pub fn isValidName(name: []const u8) bool {
     // First char must pass NameStartChar rules *except* that ':' is allowed
     // anywhere per the Name production (unlike NCName).
     if (name[0] != ':' and isInvalidNameStartChar(name[0])) return false;
-    // Interior chars: only hard-invalid bytes (whitespace / controls) reject.
-    for (name[1..]) |ch| {
-        if (isHardInvalidNameChar(ch)) return false;
+    // First codepoint: enforce XML 1.0 §2.3 NameStartChar gap rejections
+    // for the multi-byte codepoints browsers specifically reject at start
+    // (e.g. U+00B7, U+00D7). ASCII fast-path above already covered single
+    // bytes, so only inspect when leading byte is multi-byte UTF-8.
+    if (name[0] >= 0x80) {
+        if (decodeUtf8(name)) |first| {
+            if (isCodepointBlockedAsNameStart(first.cp)) return false;
+        }
+    }
+    // Interior chars: hard-invalid bytes (whitespace / controls) reject AND
+    // XML 1.0 §2.3 NameChar gap codepoints (e.g. U+00D7) reject anywhere.
+    var i: usize = 1;
+    while (i < name.len) {
+        const ch = name[i];
+        if (ch < 0x80) {
+            if (isHardInvalidNameChar(ch)) return false;
+            i += 1;
+            continue;
+        }
+        // Multi-byte codepoint: decode and check NameChar gap blocks.
+        if (decodeUtf8(name[i..])) |dec| {
+            if (isCodepointBlockedAsNameChar(dec.cp)) return false;
+            i += dec.len;
+        } else {
+            // Malformed UTF-8: skip the bad byte, stay lenient (matches
+            // historical "non-ASCII tolerated" behavior for createElementNS).
+            i += 1;
+        }
     }
     // Trailing '>' → invalid (matches WPT Document-createElement.html:48-53
     // where `"foo>"` is listed as invalid).
@@ -232,6 +324,29 @@ test "isValidName rejects bad first chars and hard-invalid chars" {
     try testing.expect(!isValidName("fo o"));
     try testing.expect(!isValidName("foo\tbar"));
     try testing.expect(!isValidName("foo\nbar"));
+}
+
+test "isValidName XML §2.3 NameStartChar gap rejection (U+00B7, U+00D7)" {
+    // Document-createProcessingInstruction.js fixture:
+    //   invalid (start): "·A" — U+00B7 is NameChar but NOT NameStartChar.
+    //   invalid (start): "×A" — U+00D7 is in the [#xD7] gap, neither.
+    //   invalid (interior): "A×" — U+00D7 also rejected as NameChar.
+    //   valid (interior): "A·A" — U+00B7 is in NameChar.
+    try testing.expect(!isValidName("\u{00B7}A"));
+    try testing.expect(!isValidName("\u{00D7}A"));
+    try testing.expect(!isValidName("A\u{00D7}"));
+    try testing.expect(isValidName("A\u{00B7}A"));
+}
+
+test "isValidName tolerates other non-ASCII codepoints (createElementNS lenient)" {
+    // createElementNS_tests fixture marks these as VALID — keep tolerated.
+    try testing.expect(isValidName("\u{0BC6}foo")); // Tamil sign
+    try testing.expect(isValidName("\u{037E}foo")); // Greek question mark
+    try testing.expect(isValidName("\u{FFFF}foo")); // private use sentinel
+    try testing.expect(isValidName("f\u{FFFF}oo"));
+    try testing.expect(isValidName("foo\u{FFFF}"));
+    try testing.expect(isValidName("\u{0300}foo")); // combining mark (createElement valid)
+    try testing.expect(isValidName("\u{0300}")); // bare combining mark
 }
 
 test "isValidQName rejects colonated edge cases allowed by Name" {
