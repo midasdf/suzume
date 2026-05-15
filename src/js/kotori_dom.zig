@@ -6368,21 +6368,33 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
     const vm = VM.vmFromCtx(ctx);
     // WebIDL §3.2.1: interface constructors require `new`
     if (!vm.native_call_is_construct) return error.TypeError;
-    // Create a new empty lexbor document
-    const new_doc = dom_b.lxb_html_document_create() orelse return JsValue.undefined_val;
-    if (created_doc_count < created_docs.len) {
-        created_docs[created_doc_count] = new_doc;
-        created_doc_count += 1;
-    }
-    const doc_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_doc));
-    const doc_obj = try vm.createObj(.{ .obj_type = .dom_node });
-    doc_obj.data = .{ .dom_node = @ptrCast(doc_node) };
+    // DOM §4.5 — `new Document()` creates an empty XML document. Mirror
+    // DOMImplementation.createDocument's pure-JS shape (no lexbor backing)
+    // so JS-only Elements produced by `this.createElement(...)` can be
+    // appended via the JS-only ParentNode.append path (jsOnlyParentAppend).
+    // With lexbor backing, nativeAppendChild would route through
+    // validatePreInsert → getArgNode(), which returns null for JS-only
+    // children and throws HierarchyRequestError.
+    //
+    // Per Document-constructor.html "interfaces": `new Document()` MUST
+    // NOT be an XMLDocument, so use Node.prototype (not g_xml_doc_proto).
+    const doc_obj = try vm.createObj(.{});
     doc_obj.prototype = g_node_proto;
-    // DOM §4.4 — Document.ownerDocument = null. Cache before wrapNode so
-    // descendants wrap-ups resolve to this wrapper rather than
-    // lazy-creating a fresh one.
-    nodeCachePut(vm.allocator, doc_node, doc_obj);
+    // DOM §4.4 — Document.ownerDocument = null. Plain JsObject docs don't
+    // route through domNodeGetProp, so set both the slot and the own
+    // property to keep both access paths consistent.
     setNodeOwnerDoc(vm, doc_obj, JsValue.null_val);
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("ownerDocument"), JsValue.null_val) catch {};
+    // DOM §7.1: doctype + documentElement default to null on an empty doc.
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("doctype"), JsValue.null_val) catch {};
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("documentElement"), JsValue.null_val) catch {};
+    // Document-constructor.html "children": firstChild/lastChild/childNodes
+    // must read as null/null/empty-array on a fresh empty document.
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("firstChild"), JsValue.null_val) catch {};
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("lastChild"), JsValue.null_val) catch {};
+    const cn_arr = try vm.createObj(.{ .obj_type = .array });
+    cn_arr.data = .{ .array = .empty };
+    doc_obj.setProperty(vm.allocator, try vm.pool.intern("childNodes"), JsValue.initObject(cn_arr)) catch {};
     const nt_sid = try vm.pool.intern("nodeType");
     doc_obj.setProperty(vm.allocator, nt_sid, JsValue.initNumber(9)) catch {};
     const nn_sid = try vm.pool.intern("nodeName");
