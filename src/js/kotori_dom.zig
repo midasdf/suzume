@@ -10658,19 +10658,40 @@ fn wrapParsedHtmlDocAsJsDoc(vm: *VM, html: []const u8, content_type: []const u8)
 fn nativeImplementationCreateHTMLDocument(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
 
-    // Build minimal HTML to parse
-    var html_buf: [512]u8 = undefined;
-    const html: []const u8 = blk: {
-        if (args.len > 0 and !args[0].isUndefined()) {
-            const title_str = argToString(vm, args[0]);
-            const len = std.fmt.bufPrint(&html_buf, "<!DOCTYPE html><html><head><title>{s}</title></head><body></body></html>", .{title_str}) catch
-                break :blk "<!DOCTYPE html><html><head></head><body></body></html>";
-            break :blk len;
-        }
-        break :blk "<!DOCTYPE html><html><head></head><body></body></html>";
-    };
+    // DOM §7.1 step 6: createHTMLDocument builds the title via DOM tree
+    // construction, NOT via the HTML parser. The parser:
+    //   - collapses `<title></title>` (empty content) so head has 0 children
+    //     instead of the required 1 (the title element);
+    //   - normalizes \r → \n inside title text, so `"foo\r\rbar baz"` would
+    //     not round-trip.
+    // Parse only the shell, then create the title element and its Text
+    // child directly so the literal data argument is preserved.
+    const shell = "<!DOCTYPE html><html><head></head><body></body></html>";
+    const doc_val = try wrapParsedHtmlDocAsJsDoc(vm, shell, "text/html");
 
-    return wrapParsedHtmlDocAsJsDoc(vm, html, "text/html");
+    if (args.len > 0 and !args[0].isUndefined()) {
+        const title_str = argToString(vm, args[0]);
+        const new_doc_ptr = blk: {
+            if (doc_val.isObject()) {
+                const o = doc_val.asJsObject();
+                if (o.obj_type == .dom_node) break :blk o.data.dom_node;
+            }
+            break :blk null;
+        };
+        if (new_doc_ptr) |raw_doc| {
+            if (dom_b.lxb_html_document_head_element_noi(raw_doc)) |head_node| {
+                if (dom_b.lxb_dom_document_create_element(raw_doc, "title", 5, null)) |title_elem| {
+                    const title_node: *lxb.lxb_dom_node_t = @ptrCast(title_elem);
+                    if (dom_b.lxb_dom_document_create_text_node(raw_doc, title_str.ptr, title_str.len)) |text_node| {
+                        dom_b.lxb_dom_node_insert_child(title_node, text_node);
+                    }
+                    dom_b.lxb_dom_node_insert_child(head_node, title_node);
+                }
+            }
+        }
+    }
+
+    return doc_val;
 }
 
 // ── DOMParser (DOM Parsing and Serialization §2.1) ──────────────────
