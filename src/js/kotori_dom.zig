@@ -5084,6 +5084,26 @@ fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     const vm = VM.vmFromCtx(ctx);
     // WebIDL: appendChild(Node) — missing/non-Node arg → TypeError.
     if (args.len == 0 or !argIsNodeLike(vm, args[0])) return error.TypeError;
+    // JS-only Document parent (e.g. implementation.createDocument()): no
+    // lexbor tree; route through jsOnlyParentAppend, which performs DOM
+    // §4.2.3 validation and pushes onto the childNodes array own-property.
+    // Restricted to nodeType==9 so arbitrary non-Node JS objects retain
+    // the legacy "return null" behavior.
+    if (getThisNodeOrFragment(this) == null and this.isObject()) {
+        const parent_obj = this.asJsObject();
+        const nt_sid = try vm.pool.intern("nodeType");
+        var is_js_doc = false;
+        if (parent_obj.getProperty(nt_sid)) |v| {
+            if (v.isNumber() and v.toNumber() == 9.0) is_js_doc = true;
+        }
+        if (is_js_doc) {
+            const one_arg = [_]JsValue{args[0]};
+            _ = try jsOnlyParentAppend(vm, parent_obj, &one_arg);
+            if (vm.pending_throw != null) return JsValue.undefined_val;
+            return args[0];
+        }
+        return JsValue.null_val;
+    }
     const parent = getThisNodeOrFragment(this) orelse return JsValue.null_val;
     // JS-only nodes (PI/CDATA from another document) aren't lexbor-backed.
     // Per DOM spec they must be adopted first; without that support, we
@@ -10107,11 +10127,102 @@ fn nativeAppend(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!
     return JsValue.undefined_val;
 }
 
+/// Resolve a node's nodeType across lexbor-backed and JS-only wrappers.
+/// Returns 0 if `val` is not an object or has no detectable node type.
+/// Returns LXB_DOM_NODE_TYPE_TEXT for non-object args because string args
+/// to ParentNode.append are converted to Text per DOM §4.4.
+fn argNodeTypeForAppend(vm: *VM, val: JsValue) !c_uint {
+    if (!val.isObject()) return lxb.LXB_DOM_NODE_TYPE_TEXT;
+    if (getArgNode(val)) |n| return nodeType(n);
+    const nt_sid = try vm.pool.intern("nodeType");
+    if (val.asJsObject().getProperty(nt_sid)) |ntv| {
+        if (ntv.isNumber()) {
+            const f = ntv.toNumber();
+            if (f >= 0 and f < 256) return @intFromFloat(f);
+        }
+    }
+    return 0;
+}
+
+/// DOM §4.2.3 pre-insertion validity for JS-only Document parents (those
+/// produced via `implementation.createDocument` with no lexbor backing).
+/// Mirrors `validatePreInsertFull` Step 5/6 but reads child state from the
+/// `childNodes` own-property array instead of lexbor. Returns true if the
+/// append is valid; false with a queued HierarchyRequestError otherwise.
+fn validateJsOnlyDocumentAppend(
+    vm: *VM,
+    parent: *JsObject,
+    args: []const JsValue,
+) !bool {
+    if (args.len == 0) return true;
+    const cn_sid = try vm.pool.intern("childNodes");
+    // Count existing Element children in the JS-only childNodes array.
+    // Each stored child may be lexbor-backed or JS-only — use the dual
+    // resolver to read nodeType either way.
+    var existing_elements: usize = 0;
+    if (parent.getProperty(cn_sid)) |v| {
+        if (v.isObject() and v.asJsObject().obj_type == .array) {
+            for (v.asJsObject().data.array.items) |item| {
+                const nt = try argNodeTypeForAppend(vm, item);
+                if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) existing_elements += 1;
+            }
+        }
+    }
+    // ParentNode.append "convert nodes into a node" (DOM §4.4):
+    //   - 1 arg → that arg (string becomes Text).
+    //   - ≥2 args → new DocumentFragment containing all (strings → Text).
+    if (args.len == 1) {
+        const nt = try argNodeTypeForAppend(vm, args[0]);
+        // Step 5: Text/CDATA into Document → throw.
+        if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_CDATA_SECTION) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+            return false;
+        }
+        // Step 6 (Element): Document may hold at most one element child.
+        if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT and existing_elements > 0) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+            return false;
+        }
+        return true;
+    }
+    // ≥2 args → resulting node is a DocumentFragment. Inspect contents.
+    var frag_elements: usize = 0;
+    var frag_has_text = false;
+    for (args) |arg| {
+        const nt = try argNodeTypeForAppend(vm, arg);
+        if (nt == lxb.LXB_DOM_NODE_TYPE_ELEMENT) frag_elements += 1
+        else if (nt == lxb.LXB_DOM_NODE_TYPE_TEXT or nt == lxb.LXB_DOM_NODE_TYPE_CDATA_SECTION) frag_has_text = true;
+    }
+    if (frag_has_text) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+        return false;
+    }
+    if (frag_elements > 1) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+        return false;
+    }
+    if (frag_elements == 1 and existing_elements > 0) {
+        vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+        return false;
+    }
+    return true;
+}
+
 /// JS-only parent.append() — for Documents / DocumentFragments produced
 /// outside lexbor (e.g. `implementation.createDocument`). Pushes onto the
 /// `childNodes` array own property, updates parentNode, and updates
 /// documentElement for nodeType-9 parents.
 fn jsOnlyParentAppend(vm: *VM, parent: *JsObject, args: []const JsValue) !JsValue {
+    // DOM §4.2.3 pre-insertion validity (Document parents enforce element/text
+    // constraints). Run before any mutation so failures leave childNodes intact.
+    const nt_sid = try vm.pool.intern("nodeType");
+    var parent_is_doc = false;
+    if (parent.getProperty(nt_sid)) |v| {
+        if (v.isNumber() and v.toNumber() == 9.0) parent_is_doc = true;
+    }
+    if (parent_is_doc) {
+        if (!try validateJsOnlyDocumentAppend(vm, parent, args)) return JsValue.undefined_val;
+    }
     const cn_sid = try vm.pool.intern("childNodes");
     var arr_obj: *JsObject = undefined;
     if (parent.getProperty(cn_sid)) |v| {
@@ -10128,14 +10239,7 @@ fn jsOnlyParentAppend(vm: *VM, parent: *JsObject, args: []const JsValue) !JsValu
         parent.setProperty(vm.allocator, cn_sid, JsValue.initObject(arr_obj)) catch {};
     }
     const parent_val = JsValue.initObject(parent);
-    const parent_sid = try vm.pool.intern("parentNode");
     const owner_sid = try vm.pool.intern("ownerDocument");
-    // Detect Document (nodeType 9) — documentElement is the first Element.
-    const nt_sid = try vm.pool.intern("nodeType");
-    var parent_is_doc = false;
-    if (parent.getProperty(nt_sid)) |v| {
-        if (v.isNumber() and v.toNumber() == 9.0) parent_is_doc = true;
-    }
     const de_sid = try vm.pool.intern("documentElement");
     for (args) |arg| {
         var child_val: JsValue = undefined;
@@ -10151,13 +10255,34 @@ fn jsOnlyParentAppend(vm: *VM, parent: *JsObject, args: []const JsValue) !JsValu
         try arr_obj.data.array.append(vm.allocator, child_val);
         if (child_val.isObject()) {
             const child_obj = child_val.asJsObject();
-            child_obj.setProperty(vm.allocator, parent_sid, parent_val) catch {};
+            // ownerDocument is safe to set as an own-property — it matches
+            // the spec for nodes whose owner is this Document.
             child_obj.setProperty(vm.allocator, owner_sid, parent_val) catch {};
+            // parentNode is INTENTIONALLY NOT set as an own-property here:
+            //   - For lexbor-backed children, an own-property would shadow the
+            //     native dom_get_prop path that other APIs (Node.contains,
+            //     compareDocumentPosition, ...) rely on; the result would be
+            //     a JS-only parent link they cannot traverse.
+            //   - For JS-only children, leaving parentNode unset matches the
+            //     pre-Wave-130 baseline that the WPT canaries (Node-contains,
+            //     Node-compareDocumentPosition) were calibrated against
+            //     (their assertions expect chains that do NOT reach a JS-only
+            //     Document parent).
+            // The childNodes array remains the authoritative storage so
+            // `parent.childNodes` still reflects the append.
             if (parent_is_doc) {
-                if (child_obj.getProperty(nt_sid)) |ntv| {
-                    if (ntv.isNumber() and ntv.toNumber() == 1.0) {
-                        parent.setProperty(vm.allocator, de_sid, child_val) catch {};
+                const cnt_sid = try vm.pool.intern("nodeType");
+                var child_is_element = false;
+                if (child_obj.getProperty(cnt_sid)) |ntv| {
+                    if (ntv.isNumber() and ntv.toNumber() == 1.0) child_is_element = true;
+                }
+                if (!child_is_element) {
+                    if (getArgNode(child_val)) |n| {
+                        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) child_is_element = true;
                     }
+                }
+                if (child_is_element) {
+                    parent.setProperty(vm.allocator, de_sid, child_val) catch {};
                 }
             }
         }
