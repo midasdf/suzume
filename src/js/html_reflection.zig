@@ -947,6 +947,59 @@ fn stripQueryFragment(s: []const u8) []const u8 {
     return s;
 }
 
+/// WHATWG URL §1.3 percent-encoding. Percent-encodes bytes >= 0x80 in the
+/// path / query / fragment portions of `raw` (the scheme + `://authority`
+/// prefix is left untouched — those are percent-encoded with a different
+/// algorithm we don't need for the cases under test). Leaves existing
+/// `%XX` sequences as-is so the helper is idempotent.
+///
+/// Spec anchor: URL Living Standard §1.3 "Percent-encoded bytes" — the
+/// path, query, and fragment percent-encode sets all include every byte
+/// >= 0x80 (a UTF-8 lead/continuation byte), which is what WPT
+/// `DOMImplementation-createHTMLDocument.html#createHTMLDocument():%20URL%20parsing`
+/// asserts when it sets `a.href = "http://example.org/?ä"` and expects
+/// the IDL getter to serialize the query as `%C3%A4`.
+fn percentEncodeNonAscii(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+    // Find scheme + authority end. Path/query/fragment start there.
+    var auth_end: usize = 0;
+    if (std.mem.indexOf(u8, raw, "://")) |scheme_end| {
+        var j = scheme_end + 3;
+        while (j < raw.len) : (j += 1) {
+            const c = raw[j];
+            if (c == '/' or c == '?' or c == '#') break;
+        }
+        auth_end = j;
+    }
+
+    // Fast path: nothing to encode after auth_end → just dupe.
+    var needs_encoding = false;
+    for (raw[auth_end..]) |b| {
+        if (b >= 0x80) {
+            needs_encoding = true;
+            break;
+        }
+    }
+    if (!needs_encoding) return allocator.dupe(u8, raw);
+
+    var out: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer out.deinit(allocator);
+    try out.appendSlice(allocator, raw[0..auth_end]);
+
+    const hex_chars = "0123456789ABCDEF";
+    var k = auth_end;
+    while (k < raw.len) : (k += 1) {
+        const b = raw[k];
+        if (b >= 0x80) {
+            try out.append(allocator, '%');
+            try out.append(allocator, hex_chars[(b >> 4) & 0xF]);
+            try out.append(allocator, hex_chars[b & 0xF]);
+        } else {
+            try out.append(allocator, b);
+        }
+    }
+    return out.toOwnedSlice(allocator);
+}
+
 /// Canonicalize a content-attribute URL value against a base URL per
 /// HTML §2.6.2 "URL" reflection. Returns an owned slice.
 ///
@@ -968,13 +1021,15 @@ pub fn canonicalizeUrl(
 ) ![]u8 {
     const v = trimAsciiWs(value);
 
-    // Case 1: value already absolute.
-    if (hasScheme(v)) return allocator.dupe(u8, v);
+    // Case 1: value already absolute. Apply WHATWG URL §1.3 percent-encoding
+    // to non-ASCII bytes in path/query/fragment so HTMLAnchorElement.href
+    // and friends serialize per spec (e.g. ä → %C3%A4 in query).
+    if (hasScheme(v)) return percentEncodeNonAscii(allocator, v);
 
     // Case 2: no base, nothing to resolve.
-    const base_raw = base_url orelse return allocator.dupe(u8, value);
+    const base_raw = base_url orelse return percentEncodeNonAscii(allocator, value);
     const base = trimAsciiWs(base_raw);
-    if (!hasScheme(base)) return allocator.dupe(u8, value);
+    if (!hasScheme(base)) return percentEncodeNonAscii(allocator, value);
 
     const base_parts = splitBase(base);
 
