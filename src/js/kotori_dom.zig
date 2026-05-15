@@ -4726,14 +4726,20 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []con
     if (args.len < 2) {
         return error.TypeError;
     }
-    const target_str = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else "";
-    const data_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else "";
-    // DOM spec: target must be a valid XML Name.
-    if (target_str.len == 0) {
+    // WebIDL: target/data are DOMString — coerce non-strings (number 0
+    // becomes "0", null becomes "null", etc.) via the shared helper so
+    // the spec-mandated Name validation runs on the coerced value.
+    const target_str = if (args[0].isString()) (vm.pool.get(args[0].asStringId()) orelse "") else argToString(vm, args[0]);
+    const data_str = if (args[1].isString()) (vm.pool.get(args[1].asStringId()) orelse "") else argToString(vm, args[1]);
+    // DOM §4.6 createProcessingInstruction step 1: if target does not match
+    // the XML Name production → InvalidCharacterError. `isValidName` covers
+    // the ASCII rejections that Document-createProcessingInstruction.js
+    // probes (digit start, backslash start, formfeed, empty).
+    if (!dom_names.isValidName(target_str)) {
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
         return JsValue.undefined_val;
     }
-    // DOM spec: data must not contain "?>".
+    // DOM §4.6 step 2: data must not contain "?>" (would terminate the PI).
     if (std.mem.indexOf(u8, data_str, "?>") != null) {
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
         return JsValue.undefined_val;
