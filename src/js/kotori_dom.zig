@@ -10062,6 +10062,22 @@ fn validateVariadicInsert(vm: *VM, parent: *lxb.lxb_dom_node_t, args: []const Js
 
 fn nativePrepend(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
+    // JS-only Document parent (implementation.createDocument): route to the
+    // JS-only path which performs DOM §4.2.3 validation and inserts at the
+    // front of the childNodes array own-property. Mirrors the append branch
+    // for nativeAppend / nativeAppendChild.
+    if (getThisNodeOrFragment(this) == null and this.isObject()) {
+        const parent_obj = this.asJsObject();
+        const nt_sid = try vm.pool.intern("nodeType");
+        var is_js_doc = false;
+        if (parent_obj.getProperty(nt_sid)) |v| {
+            if (v.isNumber() and v.toNumber() == 9.0) is_js_doc = true;
+        }
+        if (is_js_doc) {
+            return try jsOnlyParentPrepend(vm, parent_obj, args);
+        }
+        return JsValue.undefined_val;
+    }
     const parent = getThisNodeOrFragment(this) orelse return JsValue.undefined_val;
     const doc = g_document orelse return JsValue.undefined_val;
     // DOM §4.2.4 pre-insert validation must happen before any mutation.
@@ -10274,6 +10290,79 @@ fn jsOnlyParentAppend(vm: *VM, parent: *JsObject, args: []const JsValue) !JsValu
                 const cnt_sid = try vm.pool.intern("nodeType");
                 var child_is_element = false;
                 if (child_obj.getProperty(cnt_sid)) |ntv| {
+                    if (ntv.isNumber() and ntv.toNumber() == 1.0) child_is_element = true;
+                }
+                if (!child_is_element) {
+                    if (getArgNode(child_val)) |n| {
+                        if (nodeType(n) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) child_is_element = true;
+                    }
+                }
+                if (child_is_element) {
+                    parent.setProperty(vm.allocator, de_sid, child_val) catch {};
+                }
+            }
+        }
+    }
+    return JsValue.undefined_val;
+}
+
+/// JS-only parent.prepend() — for Documents produced outside lexbor
+/// (e.g. `implementation.createDocument`). Mirrors `jsOnlyParentAppend`
+/// but inserts each child at the FRONT of the childNodes array,
+/// preserving argument order (DOM §4.4: "convert nodes into a node, then
+/// pre-insert node into this before this's first child").
+fn jsOnlyParentPrepend(vm: *VM, parent: *JsObject, args: []const JsValue) !JsValue {
+    // DOM §4.2.3 pre-insertion validity (same Document-parent constraints
+    // as append; position doesn't affect validity for a JS-only Document).
+    const nt_sid = try vm.pool.intern("nodeType");
+    var parent_is_doc = false;
+    if (parent.getProperty(nt_sid)) |v| {
+        if (v.isNumber() and v.toNumber() == 9.0) parent_is_doc = true;
+    }
+    if (parent_is_doc) {
+        if (!try validateJsOnlyDocumentAppend(vm, parent, args)) return JsValue.undefined_val;
+    }
+    const cn_sid = try vm.pool.intern("childNodes");
+    var arr_obj: *JsObject = undefined;
+    if (parent.getProperty(cn_sid)) |v| {
+        if (v.isObject() and v.asJsObject().obj_type == .array and v.asJsObject().data == .array) {
+            arr_obj = v.asJsObject();
+        } else {
+            arr_obj = try vm.createObj(.{ .obj_type = .array });
+            arr_obj.data = .{ .array = .empty };
+            parent.setProperty(vm.allocator, cn_sid, JsValue.initObject(arr_obj)) catch {};
+        }
+    } else {
+        arr_obj = try vm.createObj(.{ .obj_type = .array });
+        arr_obj.data = .{ .array = .empty };
+        parent.setProperty(vm.allocator, cn_sid, JsValue.initObject(arr_obj)) catch {};
+    }
+    const parent_val = JsValue.initObject(parent);
+    const owner_sid = try vm.pool.intern("ownerDocument");
+    const de_sid = try vm.pool.intern("documentElement");
+    // Iterate args in reverse and insert at index 0 each time, which
+    // preserves the original argument order at the head of childNodes.
+    var i: usize = args.len;
+    while (i > 0) {
+        i -= 1;
+        const arg = args[i];
+        var child_val: JsValue = undefined;
+        if (arg.isObject()) {
+            child_val = arg;
+        } else {
+            const s = argToString(vm, arg);
+            const doc = g_document orelse continue;
+            const tn = dom_b.lxb_dom_document_create_text_node(doc, s.ptr, s.len) orelse continue;
+            child_val = wrapNode(vm, tn) orelse continue;
+        }
+        try arr_obj.data.array.insert(vm.allocator, 0, child_val);
+        if (child_val.isObject()) {
+            const child_obj = child_val.asJsObject();
+            child_obj.setProperty(vm.allocator, owner_sid, parent_val) catch {};
+            // documentElement: same dual-path Element detection as append.
+            if (parent_is_doc) {
+                var child_is_element = false;
+                if (child_obj.getProperty(nt_sid)) |ntv| {
                     if (ntv.isNumber() and ntv.toNumber() == 1.0) child_is_element = true;
                 }
                 if (!child_is_element) {
