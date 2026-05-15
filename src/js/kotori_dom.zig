@@ -31,6 +31,8 @@ const lxb = @cImport({
     @cDefine("LEXBOR_STATIC", "");
     @cInclude("lexbor/dom/interfaces/element.h");
     @cInclude("lexbor/dom/interfaces/node.h");
+    @cInclude("lexbor/dom/interfaces/document_fragment.h");
+    @cInclude("lexbor/html/interfaces/template_element.h");
 });
 
 // ── Cascade / computed-style resolution ────────────────────────────
@@ -2649,6 +2651,34 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
         return getAttr(vm, node, "id");
     if (eql(name, "className"))
         return getAttr(vm, node, "class");
+
+    // HTML §4.12.3 — HTMLTemplateElement.content. Lexbor stores parsed
+    // <template> children inside a sibling DocumentFragment rather than as
+    // direct children of the template element, so a plain `childNodes`
+    // walk (or the previous Element.prototype.content JS polyfill that
+    // moved childNodes into a fragment) sees nothing. Read the lexbor
+    // template_element.content field directly and wrap it as a JS
+    // DocumentFragment. Only fires for HTML-namespace <template>; other
+    // elements fall through (returning null leaves the prototype lookup
+    // free to continue, which yields `undefined` for non-templates).
+    if (eql(name, "content") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) {
+        const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
+        // HTML namespace gate (LXB_NS_HTML == 0x02, mapped by nsIdToUri).
+        if (elem.node.ns == 0x02) {
+            var ln_len: usize = 0;
+            const ln_raw = dom_b.lxb_dom_element_local_name(elem, &ln_len);
+            if (ln_raw) |p| {
+                if (eql(p[0..ln_len], "template")) {
+                    const tpl: *lxb.lxb_html_template_element_t = @ptrCast(node);
+                    if (tpl.content) |frag| {
+                        const frag_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(frag));
+                        if (wrapNode(vm, frag_node)) |wrapped| return wrapped;
+                    }
+                    return JsValue.null_val;
+                }
+            }
+        }
+    }
 
     // HTML §2.6 reflected attributes (Layer 4A). Dispatches via the
     // table in html_reflection.zig. Early-return on hit; fall through
