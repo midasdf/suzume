@@ -4379,11 +4379,12 @@ fn nativeCreateDocumentFragment(ctx: *anyopaque, this: JsValue, _: []const JsVal
     return wrapNode(vm, frag) orelse JsValue.null_val;
 }
 
-/// DOM §4.4: document.adoptNode(node) — removes from current parent, returns node.
-fn nativeAdoptNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+/// DOM §4.5 "adopt": document.adoptNode(node) — removes from current parent,
+/// updates ownerDocument on the node and all descendants to `this`, returns node.
+fn nativeAdoptNode(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
     if (args.len == 0) return JsValue.null_val;
-    // DOM §4.5.3 step 1: if node is a Document, throw NotSupportedError.
+    // DOM §4.5 "adopt" step 1: if node is a Document, throw NotSupportedError.
     if (args[0].isObject()) {
         const arg_obj = args[0].asJsObject();
         if (arg_obj.obj_type == .dom_node) {
@@ -4412,11 +4413,55 @@ fn nativeAdoptNode(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!
             }
         }
     }
-    const node = getArgNode(args[0]) orelse return args[0]; // JS-only node: return as-is
-    // Remove from current parent
-    dom_b.lxb_dom_node_remove(node);
-    setDomDirty();
+    // DOM §4.5 "adopt" step 3: propagate the target document onto node +
+    // descendants. Cross-document adopts (e.g. main doc → JS-only doc from
+    // implementation.createDocument) need this to update `ownerDocument`.
+    // Pass `this` (the target document JS wrapper) to setNodeOwnerDoc so it
+    // overrides the `_ownerDoc` slot read by domNodeGetProp.
+    const owner_target: ?JsValue = if (this.isObject()) this else null;
+    if (getArgNode(args[0])) |node| {
+        // Lexbor-backed node: remove from current parent and walk subtree.
+        dom_b.lxb_dom_node_remove(node);
+        setDomDirty();
+        if (owner_target) |owner| {
+            if (args[0].isObject()) {
+                setNodeOwnerDoc(vm, args[0].asJsObject(), owner);
+            }
+            var child: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+            while (child) |c| : (child = nodeNext(c)) {
+                overrideOwnerDocRecursive(vm, c, owner);
+            }
+        }
+        return args[0];
+    }
+    // JS-only node fallback: update ownerDocument on the wrapper itself.
+    // No lexbor tree to walk; JS-only Element/DocumentType children live in
+    // the wrapper's `childNodes` own-property array — recurse through that.
+    if (owner_target) |owner| {
+        if (args[0].isObject()) {
+            jsOnlyAdoptRecursive(vm, args[0].asJsObject(), owner);
+        }
+    }
     return args[0];
+}
+
+/// DOM §4.5 "adopt" descend-into-JS-only-children helper. Updates `_ownerDoc`
+/// on `obj` and walks its `childNodes` array for JS-only subtree adopts.
+fn jsOnlyAdoptRecursive(vm: *VM, obj: *JsObject, owner: JsValue) void {
+    setNodeOwnerDoc(vm, obj, owner);
+    const cn_sid = vm.pool.intern("childNodes") catch return;
+    const cn_val = obj.getProperty(cn_sid) orelse return;
+    if (!cn_val.isObject()) return;
+    const cn_obj = cn_val.asJsObject();
+    if (cn_obj.obj_type != .array) return;
+    const arr = &cn_obj.data.array;
+    var i: usize = 0;
+    while (i < arr.items.len) : (i += 1) {
+        const child_val = arr.items[i];
+        if (child_val.isObject()) {
+            jsOnlyAdoptRecursive(vm, child_val.asJsObject(), owner);
+        }
+    }
 }
 
 /// DOM §4.4: document.importNode(node, deep) — clones a node into this document.
@@ -6466,6 +6511,11 @@ fn nativeDocumentConstructor(ctx: *anyopaque, _: JsValue, _: []const JsValue) an
     vm.registerNativeMethod(doc_obj, "createEvent", &nativeCreateEvent) catch {};
     vm.registerNativeMethod(doc_obj, "createProcessingInstruction", &nativeCreateProcessingInstruction) catch {};
     vm.registerNativeMethod(doc_obj, "appendChild", &nativeAppendChild) catch {};
+    // DOM §4.5 — adoptNode + importNode must be available on JS-only
+    // Documents from `new Document()` / `implementation.createDocument`,
+    // since the spec defines them on Document.prototype.
+    vm.registerNativeMethod(doc_obj, "adoptNode", &nativeAdoptNode) catch {};
+    vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode) catch {};
     return JsValue.initObject(doc_obj);
 }
 
@@ -10975,6 +11025,11 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
     vm.registerNativeMethod(doc_obj, "querySelector", &nativeQuerySelector) catch {};
     vm.registerNativeMethod(doc_obj, "querySelectorAll", &nativeQuerySelectorAll) catch {};
     vm.registerNativeMethod(doc_obj, "importNode", &nativeImportNode) catch {};
+    // DOM §4.5 — adoptNode is defined on Document.prototype. JS-only XML
+    // documents from this path need it so cross-document adopt updates
+    // `ownerDocument` (else `doc.adoptNode(x)` is undefined → silently
+    // discarded by kotori, and `x.ownerDocument` never moves to `doc`).
+    vm.registerNativeMethod(doc_obj, "adoptNode", &nativeAdoptNode) catch {};
 
     // implementation object for chained calls
     const cd_impl = vm.createObj(.{}) catch return doc_val;
