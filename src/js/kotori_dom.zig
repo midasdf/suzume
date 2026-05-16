@@ -1207,6 +1207,16 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     const llen_fn = try vm.createObj(.{ .obj_type = .native_function });
     llen_fn.data = .{ .native_fn = &nativeChildrenLiveLength };
     g_live_length_getter = JsValue.initObject(llen_fn);
+    // DOM §4.9.4 — Attr.value get/set accessor. Set propagates through to
+    // the ownerElement's lexbor attribute store so id-cache mutations
+    // (Document-getElementById) and reflective attribute reads stay in
+    // sync with JS-side `attr.value = X` writes.
+    const avg_fn = try vm.createObj(.{ .obj_type = .native_function });
+    avg_fn.data = .{ .native_fn = &nativeAttrValueGet };
+    g_attr_value_getter = JsValue.initObject(avg_fn);
+    const avs_fn = try vm.createObj(.{ .obj_type = .native_function });
+    avs_fn.data = .{ .native_fn = &nativeAttrValueSet };
+    g_attr_value_setter = JsValue.initObject(avs_fn);
     const window_id = try vm.pool.intern("window");
     try vm.globals.put(vm.allocator, window_id, JsValue.initObject(win_obj));
     const self_id = try vm.pool.intern("self");
@@ -3981,9 +3991,22 @@ fn createAttrObject(
     try obj.setProperty(vm.allocator, try vm.pool.intern("nodeName"), JsValue.initString(qname_sid));
     try obj.setProperty(vm.allocator, try vm.pool.intern("localName"), JsValue.initString(local_sid));
     const empty_sid = try vm.pool.intern("");
-    try obj.setProperty(vm.allocator, try vm.pool.intern("value"), JsValue.initString(empty_sid));
-    try obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.initString(empty_sid));
-    try obj.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.initString(empty_sid));
+    // DOM §4.9.4 — value/nodeValue/textContent on Attr are accessors that
+    // route through nativeAttrValueGet/Set so writes propagate to the
+    // ownerElement's lexbor attribute storage (vs. shadowing it with a
+    // dead own-data property). Store the empty initial value in the
+    // hidden `__suzume_attr_value_data` slot used by the fallback path.
+    try obj.setProperty(vm.allocator, try vm.pool.intern("__suzume_attr_value_data"), JsValue.initString(empty_sid));
+    if (g_attr_value_getter) |gv| if (g_attr_value_setter) |sv| {
+        const accessor = kotori.object.PropertyDescriptor{ .accessor = .{
+            .get = gv,
+            .set = sv,
+            .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+        } };
+        _ = obj.defineOwnProperty(vm.allocator, try vm.pool.intern("value"), accessor) catch false;
+        _ = obj.defineOwnProperty(vm.allocator, try vm.pool.intern("nodeValue"), accessor) catch false;
+        _ = obj.defineOwnProperty(vm.allocator, try vm.pool.intern("textContent"), accessor) catch false;
+    };
     if (prefix) |p| {
         try obj.setProperty(vm.allocator, try vm.pool.intern("prefix"), JsValue.initString(try vm.pool.intern(p)));
     } else {
@@ -4641,7 +4664,15 @@ fn jsOnlyImportAttr(vm: *VM, src_val: JsValue, target_doc: JsValue) !JsValue {
         (if (pv.isString()) vm.pool.get(pv.asStringId()) else null)
     else
         null;
-    const value_str: []const u8 = if (src_obj.getProperty(val_sid)) |vv|
+    // DOM §4.9.4 — Attr.value is now an accessor that reads from the
+    // ownerElement (when attached) or the hidden `__suzume_attr_value_data`
+    // slot (when detached). `getProperty("value")` returns null for an
+    // accessor descriptor, so read the hidden fallback slot directly to
+    // avoid losing the value on clone of a detached Attr.
+    const hidden_sid = try vm.pool.intern("__suzume_attr_value_data");
+    const value_str: []const u8 = if (src_obj.getProperty(hidden_sid)) |vv|
+        if (vv.isString()) (vm.pool.get(vv.asStringId()) orelse "") else ""
+    else if (src_obj.getProperty(val_sid)) |vv|
         if (vv.isString()) (vm.pool.get(vv.asStringId()) orelse "") else ""
     else
         "";
@@ -4651,9 +4682,8 @@ fn jsOnlyImportAttr(vm: *VM, src_val: JsValue, target_doc: JsValue) !JsValue {
     const new_obj = new_val.asJsObject();
     if (value_str.len > 0) {
         const v_sid = try vm.pool.intern(value_str);
-        new_obj.setProperty(vm.allocator, val_sid, JsValue.initString(v_sid)) catch {};
-        new_obj.setProperty(vm.allocator, try vm.pool.intern("nodeValue"), JsValue.initString(v_sid)) catch {};
-        new_obj.setProperty(vm.allocator, try vm.pool.intern("textContent"), JsValue.initString(v_sid)) catch {};
+        // Write into the hidden slot used by the accessor's fallback path.
+        new_obj.setProperty(vm.allocator, hidden_sid, JsValue.initString(v_sid)) catch {};
     }
     return new_val;
 }
@@ -7481,16 +7511,18 @@ fn setAttrFromVal(vm: *VM, node: *lxb.lxb_dom_node_t, attr_name: []const u8, val
 fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
     const key = @intFromPtr(a);
     if (g_attr_wrappers.get(key)) |cached| {
-        // Refresh the value fields in case setAttribute reused the struct.
+        // DOM §4.9.4 — value/nodeValue/textContent are accessors (installed
+        // below for new wrappers) that read live from lexbor on every get,
+        // so no per-refresh write is needed. We still keep the hidden
+        // __suzume_attr_value_data fallback slot in sync for detached-attr
+        // semantics, in case the owner is later cleared.
         var val_len: usize = 0;
         const val_ptr = dom_b.lxb_dom_attr_value_noi(@ptrCast(a), &val_len);
         const val_sid = if (val_ptr) |vp|
             vm.pool.intern(vp[0..val_len]) catch return cached
         else
             vm.pool.intern("") catch return cached;
-        cached.setProperty(vm.allocator, vm.pool.intern("value") catch return cached, JsValue.initString(val_sid)) catch {};
-        cached.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return cached, JsValue.initString(val_sid)) catch {};
-        cached.setProperty(vm.allocator, vm.pool.intern("textContent") catch return cached, JsValue.initString(val_sid)) catch {};
+        cached.setProperty(vm.allocator, vm.pool.intern("__suzume_attr_value_data") catch return cached, JsValue.initString(val_sid)) catch {};
         // Layer 1D.1 Task 4: keep backing-ptr current (idempotent).
         setAttrBackingPtr(vm, cached, key);
         return cached;
@@ -7522,9 +7554,21 @@ fn getOrCreateAttrWrapper(vm: *VM, a: *lxb.lxb_dom_attr_t) ?*JsObject {
         vm.pool.intern(vp[0..val_len]) catch return null
     else
         vm.pool.intern("") catch return null;
-    attr_obj.setProperty(vm.allocator, vm.pool.intern("value") catch return null, JsValue.initString(val_sid)) catch {};
-    attr_obj.setProperty(vm.allocator, vm.pool.intern("nodeValue") catch return null, JsValue.initString(val_sid)) catch {};
-    attr_obj.setProperty(vm.allocator, vm.pool.intern("textContent") catch return null, JsValue.initString(val_sid)) catch {};
+    // DOM §4.9.4 — value/nodeValue/textContent are accessors that route
+    // get/set through nativeAttrValueGet/Set so writes propagate to the
+    // ownerElement's lexbor storage. Store the initial value in the
+    // hidden fallback slot used by detached-Attr semantics.
+    attr_obj.setProperty(vm.allocator, vm.pool.intern("__suzume_attr_value_data") catch return null, JsValue.initString(val_sid)) catch {};
+    if (g_attr_value_getter) |gv| if (g_attr_value_setter) |sv| {
+        const accessor = kotori.object.PropertyDescriptor{ .accessor = .{
+            .get = gv,
+            .set = sv,
+            .attrs = .{ .writable = false, .enumerable = true, .configurable = true, .is_accessor = true },
+        } };
+        _ = attr_obj.defineOwnProperty(vm.allocator, vm.pool.intern("value") catch return null, accessor) catch false;
+        _ = attr_obj.defineOwnProperty(vm.allocator, vm.pool.intern("nodeValue") catch return null, accessor) catch false;
+        _ = attr_obj.defineOwnProperty(vm.allocator, vm.pool.intern("textContent") catch return null, accessor) catch false;
+    };
     // DOM §4.9 — Attr.namespaceURI defaults to null for HTML-doc attrs
     // even though the parsed element lives in the HTML namespace
     // (see attributes.html "should not change the order of previously
@@ -8932,6 +8976,85 @@ fn getChildrenArray(vm: *VM, node: *lxb.lxb_dom_node_t, elements_only: bool) ?Js
 /// Lazy-initialized JsValue holding the native `length` accessor used by
 /// the live HTMLCollection / NodeList returned from `getChildrenArray`.
 var g_live_length_getter: ?JsValue = null;
+/// Lazy-initialized native get/set pair for Attr.value (DOM §4.9.4). The
+/// setter propagates to the ownerElement's lexbor attribute storage so
+/// downstream observers (getElementById id cache, getAttribute, etc.) see
+/// the mutation.
+var g_attr_value_getter: ?JsValue = null;
+var g_attr_value_setter: ?JsValue = null;
+
+/// DOM §4.9.4 — Attr.value getter. Returns the live attribute value from
+/// the ownerElement's lexbor attribute store when the Attr is attached,
+/// or the hidden own-data slot for detached Attrs (created via
+/// document.createAttribute and never linked to an element).
+fn nativeAttrValueGet(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.initString(try vm.pool.intern(""));
+    const attr = this.asJsObject();
+    const ptr_sid = g_sid_owner_elem_ptr orelse return readAttrValueFallback(vm, attr);
+    const ptr_val = attr.getProperty(ptr_sid) orelse return readAttrValueFallback(vm, attr);
+    if (!ptr_val.isNumber() and !ptr_val.isInt()) return readAttrValueFallback(vm, attr);
+    const ptr_num: u64 = if (ptr_val.isInt())
+        @intCast(ptr_val.asInt())
+    else blk: {
+        const f = ptr_val.asNumber();
+        if (f <= 0) break :blk 0;
+        break :blk @intFromFloat(f);
+    };
+    if (ptr_num == 0) return readAttrValueFallback(vm, attr);
+    const elem: *lxb.lxb_dom_element_t = @ptrFromInt(@as(usize, @intCast(ptr_num)));
+    const local_sid = try vm.pool.intern("localName");
+    const local_val = attr.getProperty(local_sid) orelse return readAttrValueFallback(vm, attr);
+    if (!local_val.isString()) return readAttrValueFallback(vm, attr);
+    const local_name = vm.pool.get(local_val.asStringId()) orelse "";
+    var val_len: usize = 0;
+    const val_ptr = dom_b.lxb_dom_element_get_attribute(elem, local_name.ptr, local_name.len, &val_len);
+    if (val_ptr) |vp| {
+        const sid = try vm.pool.intern(vp[0..val_len]);
+        return JsValue.initString(sid);
+    }
+    return readAttrValueFallback(vm, attr);
+}
+
+fn readAttrValueFallback(vm: *VM, attr: *JsObject) anyerror!JsValue {
+    const hidden_sid = try vm.pool.intern("__suzume_attr_value_data");
+    if (attr.getProperty(hidden_sid)) |v| return v;
+    return JsValue.initString(try vm.pool.intern(""));
+}
+
+/// DOM §4.9.4 — Attr.value setter. Writes through to the ownerElement's
+/// lexbor attribute storage (via setAttribute) when attached, otherwise
+/// just updates the hidden own-data slot. Also keeps the hidden slot in
+/// sync so a subsequent ownerElement removal still sees the last value.
+fn nativeAttrValueSet(ctx: *anyopaque, this: JsValue, args: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.undefined_val;
+    const attr = this.asJsObject();
+    const new_val_raw: []const u8 = if (args.len > 0) argToString(vm, args[0]) else "";
+    const new_sid = try vm.pool.intern(new_val_raw);
+    const hidden_sid = try vm.pool.intern("__suzume_attr_value_data");
+    try attr.setProperty(vm.allocator, hidden_sid, JsValue.initString(new_sid));
+    const ptr_sid = g_sid_owner_elem_ptr orelse return JsValue.undefined_val;
+    const ptr_val = attr.getProperty(ptr_sid) orelse return JsValue.undefined_val;
+    if (!ptr_val.isNumber() and !ptr_val.isInt()) return JsValue.undefined_val;
+    const ptr_num: u64 = if (ptr_val.isInt())
+        @intCast(ptr_val.asInt())
+    else blk: {
+        const f = ptr_val.asNumber();
+        if (f <= 0) break :blk 0;
+        break :blk @intFromFloat(f);
+    };
+    if (ptr_num == 0) return JsValue.undefined_val;
+    const elem: *lxb.lxb_dom_element_t = @ptrFromInt(@as(usize, @intCast(ptr_num)));
+    const local_sid = try vm.pool.intern("localName");
+    const local_val = attr.getProperty(local_sid) orelse return JsValue.undefined_val;
+    if (!local_val.isString()) return JsValue.undefined_val;
+    const local_name = vm.pool.get(local_val.asStringId()) orelse "";
+    _ = dom_b.lxb_dom_element_set_attribute(elem, local_name.ptr, local_name.len, new_val_raw.ptr, new_val_raw.len);
+    bumpElemAttrVersion(elem);
+    setDomDirty();
+    return JsValue.undefined_val;
+}
 
 fn nativeChildrenLiveLength(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
     const vm = VM.vmFromCtx(ctx);
