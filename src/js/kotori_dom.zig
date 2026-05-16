@@ -11086,12 +11086,21 @@ fn nativeImplementationCreateDocument(ctx: *anyopaque, _: JsValue, args: []const
         break :blk "";
     };
     if (qn.len > 0) {
-        // DOM §7.1 step 5: Create element with namespace and qualifiedName
+        // DOM §7.1 step 5 / §1.5 step 5: split qn into (prefix, localName)
+        // using `strictly split` (JS `split(":", 2)` semantics) — prefix is
+        // bytes before the first colon, localName is bytes between the first
+        // and second colons (or the rest if no second colon). WPT
+        // `["http://example.com/", "f:o:o", null]` asserts element.localName
+        // === "o", not "o:o".
         var prefix: ?[]const u8 = null;
         var local_name: []const u8 = qn;
         if (std.mem.indexOfScalar(u8, qn, ':')) |colon_pos| {
             prefix = qn[0..colon_pos];
-            local_name = qn[colon_pos + 1 ..];
+            if (std.mem.indexOfScalarPos(u8, qn, colon_pos + 1, ':')) |colon2| {
+                local_name = qn[colon_pos + 1 .. colon2];
+            } else {
+                local_name = qn[colon_pos + 1 ..];
+            }
         }
         // Create JS-only element (XML document — preserve case).
         // Owner document is the freshly-created doc per DOM §7.1.

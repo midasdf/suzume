@@ -216,10 +216,13 @@ pub fn isValidQName(name: []const u8) bool {
         const prefix = name[0..cp];
         const local = name[cp + 1 ..];
         if (prefix.len == 0 or local.len == 0) return false; // ":foo" / "foo:" bad
-        // Prefix start lenient (WPT: "0:a" accepted). Only the first char of
-        // localName must be a valid NameStartChar, or a second ':'
-        // ("prefix::local" is accepted by WPT).
-        if (local[0] != ':' and isInvalidNameStartChar(local[0])) return false;
+        // Prefix start lenient (WPT: "0:a" accepted). The first char of
+        // localName must be a valid NameStartChar. WPT `createElementNS_tests`
+        // marks `f::oo` and `prefix::local` as INVALID_CHARACTER_ERR — empty
+        // localName segment after the first colon is rejected because the
+        // spec's per-spec split (`split(":", 2)`) produces a "" localName,
+        // and even the lenient WPT QName check rejects ":" as a NameStart.
+        if (isInvalidNameStartChar(local[0])) return false;
         return true;
     }
     // Unprefixed: first char must be a NameStartChar.
@@ -261,12 +264,22 @@ pub fn validateAndExtract(
     if (qn.len == 0) return error.InvalidCharacter;
     if (!isValidQName(qn)) return error.InvalidCharacter;
 
-    // Steps 3-5: split on first ':'.
+    // Steps 3-5: per WHATWG DOM §1.5 step 5, "strictly split" on ':' yields
+    // splitResult, prefix = splitResult[0], localName = splitResult[1]. This
+    // matches JS `qn.split(":", 2)` semantics — extract the bytes BEFORE the
+    // first colon for prefix and the bytes BETWEEN the first and second
+    // colons (or end-of-string) for localName. Anything past a second colon
+    // is dropped. WPT `["http://example.com/", "f:o:o", null]` asserts
+    // element.localName === "o" (not "o:o").
     var prefix: ?[]const u8 = null;
     var local: []const u8 = qn;
     if (std.mem.indexOfScalar(u8, qn, ':')) |cp| {
         prefix = qn[0..cp];
-        local = qn[cp + 1 ..];
+        if (std.mem.indexOfScalarPos(u8, qn, cp + 1, ':')) |cp2| {
+            local = qn[cp + 1 .. cp2];
+        } else {
+            local = qn[cp + 1 ..];
+        }
     }
 
     // Step 6: prefix with null namespace → NamespaceError.
@@ -354,8 +367,13 @@ test "isValidQName rejects colonated edge cases allowed by Name" {
     try testing.expect(!isValidQName(":foo"));
     try testing.expect(!isValidQName("foo:"));
     try testing.expect(!isValidQName(""));
-    try testing.expect(isValidQName("f::oo")); // WPT: "prefix::local" accepted
+    // WPT `createElementNS_tests` line 54 / 73 / 106 mark f::oo + prefix::local
+    // as INVALID_CHARACTER_ERR (createElement keeps these as VALID per the
+    // lenient Name production via `isValidName`).
+    try testing.expect(!isValidQName("f::oo"));
+    try testing.expect(!isValidQName("prefix::local"));
     try testing.expect(isValidQName("f:oo"));
+    try testing.expect(isValidQName("f:o:o")); // valid per WPT line 71
     try testing.expect(isValidQName("foo"));
 }
 
