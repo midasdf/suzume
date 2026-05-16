@@ -289,6 +289,9 @@ pub const KotoriRuntime = struct {
         \\  function brandHC(arr){
         \\    if(arr && typeof arr==='object'){
         \\      try{Object.setPrototypeOf(arr, HTMLCollection.prototype);}catch(e){}
+        \\      // DOM §4.2.10 — flag the array so set_elem skips indexed writes
+        \\      // (HTMLCollection is a legacy-platform-object with no indexed setter).
+        \\      try{if(typeof __suzume_markHTMLCollection==='function')__suzume_markHTMLCollection(arr);}catch(e){}
         \\    }
         \\    return arr;
         \\  }

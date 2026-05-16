@@ -100,6 +100,13 @@ pub const JsObject = struct {
     descriptors: ?std.AutoArrayHashMapUnmanaged(StringId, PropertyDescriptor) = null,
     /// [[Extensible]] internal slot. Defaults to true.
     extensible: bool = true,
+    /// DOM §4.2.10 HTMLCollection marker — set on arrays returned by
+    /// getElementsByTagName(NS) / getElementsByClassName / Element.children.
+    /// When true, bracket SET with an unsigned integer key is silently
+    /// rejected per WebIDL [[Set]] for indexed exotic objects (HTMLCollection
+    /// does not support index setters, so the operation no-ops in
+    /// non-strict mode).
+    is_html_collection: bool = false,
     prototype: ?*JsObject = null,
     data: ObjData = .none,
     symbol_props: ?std.AutoArrayHashMapUnmanaged(u32, JsValue) = null,

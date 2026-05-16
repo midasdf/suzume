@@ -1195,6 +1195,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     gcs_fn.data = .{ .native_fn = &nativeGetComputedStyle };
     const gcs_id = try vm.pool.intern("getComputedStyle");
     try vm.globals.put(vm.allocator, gcs_id, JsValue.initObject(gcs_fn));
+    // DOM §4.2.10 — HTMLCollection write-rejection marker (called by JS-level
+    // brandHC after building a snapshot array via filterByTag).
+    const mhc_fn = try vm.createObj(.{ .obj_type = .native_function });
+    mhc_fn.data = .{ .native_fn = &nativeMarkHTMLCollection };
+    const mhc_id = try vm.pool.intern("__suzume_markHTMLCollection");
+    try vm.globals.put(vm.allocator, mhc_id, JsValue.initObject(mhc_fn));
     const window_id = try vm.pool.intern("window");
     try vm.globals.put(vm.allocator, window_id, JsValue.initObject(win_obj));
     const self_id = try vm.pool.intern("self");
@@ -3317,6 +3323,7 @@ fn nativeGetElementsByTagNameNS(ctx: *anyopaque, this: JsValue, args: []const Js
     if (args.len < 2) {
         const arr = try vm.createObj(.{ .obj_type = .array });
         arr.data = .{ .array = .empty };
+        arr.is_html_collection = true;
         return JsValue.initObject(arr);
     }
     // args[0] = namespace URI (string or null), args[1] = localName
@@ -3325,10 +3332,12 @@ fn nativeGetElementsByTagNameNS(ctx: *anyopaque, this: JsValue, args: []const Js
     const root = getThisNode(this) orelse {
         const arr = try vm.createObj(.{ .obj_type = .array });
         arr.data = .{ .array = .empty };
+        arr.is_html_collection = true;
         return JsValue.initObject(arr);
     };
     const arr_obj = try vm.createObj(.{ .obj_type = .array });
     arr_obj.data = .{ .array = .empty };
+    arr_obj.is_html_collection = true;
     try collectByTagNameNS(vm, root, ns_str, local_str, arr_obj);
     return JsValue.initObject(arr_obj);
 }
@@ -3588,19 +3597,37 @@ fn nativeGetElementsByTagName(ctx: *anyopaque, this: JsValue, args: []const JsVa
         // Return empty array
         const arr = try vm.createObj(.{ .obj_type = .array });
         arr.data = .{ .array = .empty };
+        arr.is_html_collection = true;
         return JsValue.initObject(arr);
     }
     const tag = argToString(vm, args[0]);
     const root = getThisNode(this) orelse {
         const arr = try vm.createObj(.{ .obj_type = .array });
         arr.data = .{ .array = .empty };
+        arr.is_html_collection = true;
         return JsValue.initObject(arr);
     };
     // Walk DOM tree and match by tag name (case-insensitive for HTML)
     const arr_obj = try vm.createObj(.{ .obj_type = .array });
     arr_obj.data = .{ .array = .empty };
+    arr_obj.is_html_collection = true;
     try collectByTagName(vm, root, tag, arr_obj);
     return JsValue.initObject(arr_obj);
+}
+
+/// DOM §4.2.10 — JS-callable marker that sets the HTMLCollection flag on
+/// an array. Used by kotori_runtime.brandHC (which constructs the user-
+/// visible collection by filtering via JS, so the array does not pass
+/// through nativeGetElementsByTagName and would otherwise stay unflagged).
+/// Once flagged, set_elem treats unsigned-integer indexed writes as no-ops
+/// per the WebIDL legacy-platform-object [[Set]] for HTMLCollection.
+fn nativeMarkHTMLCollection(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
+    _ = ctx;
+    if (args.len == 0) return JsValue.undefined_val;
+    if (!args[0].isObject()) return args[0];
+    const obj = args[0].asJsObject();
+    if (obj.obj_type == .array) obj.is_html_collection = true;
+    return args[0];
 }
 
 fn collectByTagName(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8, arr: *kotori.JsObject) !void {
@@ -3632,6 +3659,7 @@ fn nativeGetElementsByClassName(ctx: *anyopaque, this: JsValue, args: []const Js
     const vm = VM.vmFromCtx(ctx);
     const arr_obj = try vm.createObj(.{ .obj_type = .array });
     arr_obj.data = .{ .array = .empty };
+    arr_obj.is_html_collection = true;
     if (args.len == 0) return JsValue.initObject(arr_obj);
     const cls_raw = argToString(vm, args[0]);
     const root = getThisNode(this) orelse return JsValue.initObject(arr_obj);

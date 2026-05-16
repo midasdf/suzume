@@ -1675,11 +1675,19 @@ pub const VM = struct {
                         }
                         if (obj.obj_type == .array) {
                             if (self.toArrayIndex(key)) |i| {
-                                // Grow array if needed
-                                while (obj.data.array.items.len <= i) {
-                                    try obj.data.array.append(self.allocator, JsValue.undefined_val);
+                                // DOM §4.2.10 — HTMLCollection has no indexed
+                                // setter, so `coll[i] = v` for an unsigned
+                                // integer key is a no-op in non-strict mode.
+                                // Strict-mode TypeError is not raised here
+                                // because kotori does not track strict-mode
+                                // directives at the VM level.
+                                if (!obj.is_html_collection) {
+                                    // Grow array if needed
+                                    while (obj.data.array.items.len <= i) {
+                                        try obj.data.array.append(self.allocator, JsValue.undefined_val);
+                                    }
+                                    obj.data.array.items[i] = val;
                                 }
-                                obj.data.array.items[i] = val;
                             }
                         } else if (obj.obj_type == .typed_array) {
                             if (self.toArrayIndex(key)) |i| {
