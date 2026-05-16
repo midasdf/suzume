@@ -296,6 +296,25 @@ pub const KotoriRuntime = struct {
         \\    return arr;
         \\  }
         \\
+        \\  // DOM §4.2.9 — partial-live HTMLCollection. Items are a snapshot
+        \\  // taken at call time; `length` is a live getter that re-runs the
+        \\  // rebuild closure on every access. Sufficient for the WPT
+        \\  // "should be a live collection" subtests that only probe
+        \\  // length after mutations. Full live indexed access would need
+        \\  // Proxy traps for hasOwnProperty / ownKeys that kotori does not
+        \\  // route through getOwnPropertyDescriptor / ownKeys traps yet.
+        \\  function brandHCLiveLen(rebuildFn){
+        \\    var arr = rebuildFn();
+        \\    brandHC(arr);
+        \\    try{
+        \\      Object.defineProperty(arr, 'length', {
+        \\        get: function(){ return rebuildFn().length; },
+        \\        configurable: true
+        \\      });
+        \\    }catch(e){}
+        \\    return arr;
+        \\  }
+        \\
         \\  // HTML §4.10.21.2 HTMLFormControlsCollection — extends HTMLCollection.
         \\  // Used by form.elements. namedItem returns RadioNodeList for multi-match.
         \\  var HTMLFormControlsCollection = function HTMLFormControlsCollection(){};
@@ -473,37 +492,54 @@ pub const KotoriRuntime = struct {
         \\  // cannot install defineProperty length getters across function returns.
         \\  document.getElementsByTagName = function(qualifiedName){
         \\    qualifiedName = String(qualifiedName);
-        \\    return brandHC(filterByTag(allDescendants(document), qualifiedName));
+        \\    return brandHCLiveLen(function(){
+        \\      return filterByTag(allDescendants(document), qualifiedName);
+        \\    });
         \\  };
         \\  if(typeof Element!=='undefined' && Element.prototype){
         \\    Element.prototype.getElementsByTagName = function(qualifiedName){
         \\      qualifiedName = String(qualifiedName);
-        \\      return brandHC(filterByTag(allDescendants(this), qualifiedName));
+        \\      var self=this;
+        \\      return brandHCLiveLen(function(){
+        \\        return filterByTag(allDescendants(self), qualifiedName);
+        \\      });
         \\    };
         \\  }
         \\
         \\  document.getElementsByTagNameNS = function(namespace, localName){
         \\    localName = String(localName);
-        \\    return brandHC(filterByTagNS(allDescendants(document), namespace, localName));
+        \\    return brandHCLiveLen(function(){
+        \\      return filterByTagNS(allDescendants(document), namespace, localName);
+        \\    });
         \\  };
         \\  if(typeof Element!=='undefined' && Element.prototype){
         \\    Element.prototype.getElementsByTagNameNS = function(namespace, localName){
         \\      localName = String(localName);
-        \\      return brandHC(filterByTagNS(allDescendants(this), namespace, localName));
+        \\      var self=this;
+        \\      return brandHCLiveLen(function(){
+        \\        return filterByTagNS(allDescendants(self), namespace, localName);
+        \\      });
         \\    };
         \\  }
         \\
         \\  var nativeDocByClass = document.getElementsByClassName;
         \\  if(typeof nativeDocByClass==='function'){
         \\    document.getElementsByClassName = function(names){
-        \\      return brandHC(nativeDocByClass.call(document, String(names)));
+        \\      var n=String(names);
+        \\      return brandHCLiveLen(function(){
+        \\        return nativeDocByClass.call(document, n);
+        \\      });
         \\    };
         \\  }
         \\  if(typeof Element!=='undefined' && Element.prototype){
         \\    var nativeElemByClass = Element.prototype.getElementsByClassName;
         \\    if(typeof nativeElemByClass==='function'){
         \\      Element.prototype.getElementsByClassName = function(names){
-        \\        return brandHC(nativeElemByClass.call(this, String(names)));
+        \\        var self=this;
+        \\        var n=String(names);
+        \\        return brandHCLiveLen(function(){
+        \\          return nativeElemByClass.call(self, n);
+        \\        });
         \\      };
         \\    }
         \\  }

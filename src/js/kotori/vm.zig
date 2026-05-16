@@ -7176,7 +7176,18 @@ pub const VM = struct {
     fn nativeArrayIsArray(_: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {
         if (args.len == 0) return JsValue.initBool(false);
         if (!args[0].isObject()) return JsValue.initBool(false);
-        return JsValue.initBool(args[0].asJsObject().obj_type == .array);
+        // ECMA-262 §7.2.2 IsArray — if argument is a Proxy exotic object,
+        // recurse on its [[ProxyTarget]]. Required for legacy-platform-
+        // object collections (live HTMLCollection) that wrap a real array
+        // target so `Array.isArray(coll) === true` per the WebIDL +
+        // §7.2.2 algorithm.
+        var obj = args[0].asJsObject();
+        var hops: u32 = 0;
+        while (obj.obj_type == .proxy and hops < 1024) : (hops += 1) {
+            if (obj.data != .proxy_data) break;
+            obj = obj.data.proxy_data.target;
+        }
+        return JsValue.initBool(obj.obj_type == .array);
     }
 
     fn nativeArrayFrom(ctx: *anyopaque, _: JsValue, args: []const JsValue) anyerror!JsValue {

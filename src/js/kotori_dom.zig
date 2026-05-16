@@ -1201,6 +1201,12 @@ pub fn initDomBuiltins(vm: *VM, document_ptr: *anyopaque) !void {
     mhc_fn.data = .{ .native_fn = &nativeMarkHTMLCollection };
     const mhc_id = try vm.pool.intern("__suzume_markHTMLCollection");
     try vm.globals.put(vm.allocator, mhc_id, JsValue.initObject(mhc_fn));
+    // DOM §4.2.10 — live `length` accessor used by getChildrenArray for the
+    // collections returned from `.children` / `.childNodes`. Stored in a
+    // module-global so subsequent calls reuse the same function object.
+    const llen_fn = try vm.createObj(.{ .obj_type = .native_function });
+    llen_fn.data = .{ .native_fn = &nativeChildrenLiveLength };
+    g_live_length_getter = JsValue.initObject(llen_fn);
     const window_id = try vm.pool.intern("window");
     try vm.globals.put(vm.allocator, window_id, JsValue.initObject(win_obj));
     const self_id = try vm.pool.intern("self");
@@ -8897,7 +8903,54 @@ fn getChildrenArray(vm: *VM, node: *lxb.lxb_dom_node_t, elements_only: bool) ?Js
             }
         }
     }
+    if (elements_only) {
+        // DOM §4.2.10 — flag as HTMLCollection so set_elem rejects indexed writes.
+        arr.is_html_collection = true;
+    }
+    // DOM §4.2.10 — live `length`: store the lexbor node pointer in a hidden
+    // own-property, then install an accessor descriptor for `length` that
+    // walks the lexbor child list and returns the current count. Required for
+    // WPT "should be a live collection" subtests that save the collection
+    // reference and assert against `.length` after mutating the parent.
+    const ptr_sid = vm.pool.intern("__suzume_live_node_ptr") catch return JsValue.initObject(arr);
+    const flag_sid = vm.pool.intern("__suzume_live_elements_only") catch return JsValue.initObject(arr);
+    arr.setProperty(vm.allocator, ptr_sid, JsValue.initNumber(@floatFromInt(@as(i64, @bitCast(@intFromPtr(node)))))) catch return JsValue.initObject(arr);
+    arr.setProperty(vm.allocator, flag_sid, JsValue.initBool(elements_only)) catch return JsValue.initObject(arr);
+    const length_sid = vm.pool.intern("length") catch return JsValue.initObject(arr);
+    if (g_live_length_getter) |getter_val| {
+        _ = arr.defineOwnProperty(vm.allocator, length_sid, .{
+            .accessor = .{
+                .get = getter_val,
+                .set = JsValue.undefined_val,
+                .attrs = .{ .writable = false, .enumerable = false, .configurable = true, .is_accessor = true },
+            },
+        }) catch false;
+    }
     return JsValue.initObject(arr);
+}
+
+/// Lazy-initialized JsValue holding the native `length` accessor used by
+/// the live HTMLCollection / NodeList returned from `getChildrenArray`.
+var g_live_length_getter: ?JsValue = null;
+
+fn nativeChildrenLiveLength(ctx: *anyopaque, this: JsValue, _: []const JsValue) anyerror!JsValue {
+    const vm = VM.vmFromCtx(ctx);
+    if (!this.isObject()) return JsValue.initInt(0);
+    const arr = this.asJsObject();
+    const ptr_sid = try vm.pool.intern("__suzume_live_node_ptr");
+    const flag_sid = try vm.pool.intern("__suzume_live_elements_only");
+    const ptr_val = arr.getProperty(ptr_sid) orelse return JsValue.initInt(0);
+    const flag_val = arr.getProperty(flag_sid) orelse JsValue.initBool(false);
+    const node_ptr: usize = @intCast(@as(i64, @intFromFloat(if (ptr_val.isNumber()) ptr_val.asNumber() else @as(f64, @floatFromInt(ptr_val.asInt())))));
+    const node: *lxb.lxb_dom_node_t = @ptrFromInt(node_ptr);
+    const elements_only = if (flag_val.isBool()) flag_val.asBool() else false;
+    var count: usize = 0;
+    var ch: ?*lxb.lxb_dom_node_t = nodeFirstChild(node);
+    while (ch) |c| {
+        if (!elements_only or nodeType(c) == lxb.LXB_DOM_NODE_TYPE_ELEMENT) count += 1;
+        ch = nodeNext(c);
+    }
+    return JsValue.initNumber(@floatFromInt(count));
 }
 
 fn findByTag(vm: *VM, root: *lxb.lxb_dom_node_t, tag: []const u8) ?JsValue {
