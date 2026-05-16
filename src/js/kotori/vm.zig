@@ -6333,6 +6333,13 @@ pub const VM = struct {
             try vm.keyToStringId(args[1])
         else
             return JsValue.undefined_val;
+        // ECMA-262 §10.5.5 — for Proxy exotic objects, route through the
+        // `getOwnPropertyDescriptor` trap.
+        if (obj.obj_type == .proxy) {
+            const pd = try vm.proxyGetOwnPropertyDescriptor(obj, name_id);
+            if (pd) |descriptor| return try vm.descriptorToObject(descriptor);
+            return JsValue.undefined_val;
+        }
         // For dom_node objects, trigger the dom_get_prop hook so HTML
         // §4.10.21.3 named/indexed getters (HTMLFormElement) can
         // lazy-install own-property descriptors before we read. Reflected
@@ -6423,6 +6430,21 @@ pub const VM = struct {
         if (!this.isObject() or args.len == 0) return JsValue.initBool(false);
         const obj = this.asJsObject();
         const key = args[0];
+        // ECMA-262 §20.1.3.2 / §10.5.5 — for Proxy exotic objects, hasOwn
+        // routes through the `getOwnPropertyDescriptor` trap. Without
+        // this, hasOwnProperty silently returns false for any Proxy-
+        // backed legacy-platform-object (live HTMLCollection, etc.).
+        if (obj.obj_type == .proxy) {
+            const vm = vmFromCtx(ctx);
+            const name_id: StringId = if (key.isString())
+                key.asStringId()
+            else if (key.isInt() or key.isNumber())
+                try vm.keyToStringId(key)
+            else
+                return JsValue.initBool(false);
+            const desc = try vm.proxyGetOwnPropertyDescriptor(obj, name_id);
+            return JsValue.initBool(desc != null);
+        }
         // Numeric key → check array index
         if (key.isNumber()) {
             const n = key.asNumber();
@@ -7117,6 +7139,22 @@ pub const VM = struct {
         const new_arr = try vm.createArray();
         if (args.len == 0 or !args[0].isObject()) return JsValue.initObject(new_arr);
         const obj = args[0].asJsObject();
+        // ECMA-262 §10.5.11 — Proxy [[OwnPropertyKeys]] via the `ownKeys`
+        // trap. Returns the trap result (filtered to strings) so live
+        // HTMLCollection / NamedNodeMap proxies report their dynamic key
+        // sets through Object.getOwnPropertyNames.
+        if (obj.obj_type == .proxy) {
+            const keys_val = try vm.proxyOwnKeys(obj);
+            if (keys_val.isObject()) {
+                const keys_obj = keys_val.asJsObject();
+                if (keys_obj.obj_type == .array) {
+                    for (keys_obj.data.array.items) |k| {
+                        if (k.isString()) try new_arr.data.array.append(vm.allocator, k);
+                    }
+                }
+            }
+            return JsValue.initObject(new_arr);
+        }
         // Array indices first (ES2023 §23.1.3.19.2)
         if (obj.obj_type == .array) {
             for (0..obj.data.array.items.len) |idx| {
@@ -11252,6 +11290,66 @@ pub const VM = struct {
         }
         _ = pd.target.properties.orderedRemove(name_id);
         return true;
+    }
+
+    /// ECMA-262 §10.5.5 [[GetOwnProperty]] for Proxy exotic objects.
+    /// Invokes the `getOwnPropertyDescriptor` trap when present, else
+    /// falls back to the target's own descriptor (data property or
+    /// accessor). Returns the descriptor as a result-object (the shape
+    /// used by Object.getOwnPropertyDescriptor + Object.prototype
+    /// .hasOwnProperty), or null when the property does not exist.
+    fn proxyGetOwnPropertyDescriptor(self: *VM, proxy_obj: *JsObject, name_id: StringId) !?object_mod.PropertyDescriptor {
+        const pd = proxy_obj.data.proxy_data;
+        if (pd.revoked) return error.TypeError;
+        const trap_name = try self.pool.intern("getOwnPropertyDescriptor");
+        if (pd.handler.getProperty(trap_name)) |trap_fn| {
+            if (!trap_fn.isUndefined() and !trap_fn.isNull()) {
+                const key_str = JsValue.initString(name_id);
+                const result = try self.callJsFunction(
+                    trap_fn,
+                    JsValue.initObject(pd.handler),
+                    &.{ JsValue.initObject(pd.target), key_str },
+                );
+                if (result.isUndefined() or result.isNull()) return null;
+                if (!result.isObject()) return null;
+                const desc_obj = result.asJsObject();
+                // Walk the well-known descriptor fields per §10.1.6.4
+                // CompletePropertyDescriptor (defaulted to false/undefined).
+                const get_sid = try self.pool.intern("get");
+                const set_sid = try self.pool.intern("set");
+                const value_sid = try self.pool.intern("value");
+                const writable_sid = try self.pool.intern("writable");
+                const enumerable_sid = try self.pool.intern("enumerable");
+                const configurable_sid = try self.pool.intern("configurable");
+                const has_get = desc_obj.getProperty(get_sid);
+                const has_set = desc_obj.getProperty(set_sid);
+                const enumerable = if (desc_obj.getProperty(enumerable_sid)) |v| v.isTruthy() else false;
+                const configurable = if (desc_obj.getProperty(configurable_sid)) |v| v.isTruthy() else false;
+                if (has_get != null or has_set != null) {
+                    return object_mod.PropertyDescriptor{ .accessor = .{
+                        .get = has_get orelse JsValue.undefined_val,
+                        .set = has_set orelse JsValue.undefined_val,
+                        .attrs = .{
+                            .writable = false,
+                            .enumerable = enumerable,
+                            .configurable = configurable,
+                            .is_accessor = true,
+                        },
+                    } };
+                }
+                const writable = if (desc_obj.getProperty(writable_sid)) |v| v.isTruthy() else false;
+                return object_mod.PropertyDescriptor{ .data = .{
+                    .value = desc_obj.getProperty(value_sid) orelse JsValue.undefined_val,
+                    .attrs = .{
+                        .writable = writable,
+                        .enumerable = enumerable,
+                        .configurable = configurable,
+                    },
+                } };
+            }
+        }
+        // Default: target's own descriptor.
+        return pd.target.getOwnDescriptor(name_id);
     }
 
     fn proxyOwnKeys(self: *VM, proxy_obj: *JsObject) !JsValue {
