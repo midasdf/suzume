@@ -5173,15 +5173,24 @@ fn nativeAppendChild(ctx: *anyopaque, this: JsValue, args: []const JsValue) anye
     if (getThisNodeOrFragment(this) == null and this.isObject()) {
         const parent_obj = this.asJsObject();
         const nt_sid = try vm.pool.intern("nodeType");
-        var is_js_doc = false;
+        var parent_nt: f64 = 0;
         if (parent_obj.getProperty(nt_sid)) |v| {
-            if (v.isNumber() and v.toNumber() == 9.0) is_js_doc = true;
+            if (v.isNumber()) parent_nt = v.toNumber();
         }
-        if (is_js_doc) {
+        if (parent_nt == 9.0) {
             const one_arg = [_]JsValue{args[0]};
             _ = try jsOnlyParentAppend(vm, parent_obj, &one_arg);
             if (vm.pending_throw != null) return JsValue.undefined_val;
             return args[0];
+        }
+        // DOM §4.5 / §4.6 — CharacterData subtypes (Text=3, ProcessingInstruction=7,
+        // Comment=8) and DocumentType (10) cannot have children. JS-only PI
+        // and DocumentType wrappers reach this branch (lexbor-backed Text /
+        // Comment go through validatePreInsert below, which already throws).
+        // Per CharacterData-appendChild WPT, the right answer is HierarchyRequestError.
+        if (parent_nt == 3.0 or parent_nt == 7.0 or parent_nt == 8.0 or parent_nt == 10.0) {
+            vm.pending_throw = try createDOMExceptionObj(vm, "HierarchyRequestError");
+            return JsValue.undefined_val;
         }
         return JsValue.null_val;
     }
