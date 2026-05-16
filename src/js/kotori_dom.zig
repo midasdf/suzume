@@ -308,7 +308,43 @@ const dom_b = struct {
     pub extern fn lxb_html_document_parse(document: *anyopaque, html: [*]const u8, size: usize) u32;
     pub extern fn lxb_html_document_body_element_noi(document: *anyopaque) ?*lxb.lxb_dom_node_t;
     pub extern fn lxb_html_document_head_element_noi(document: *anyopaque) ?*lxb.lxb_dom_node_t;
+    // ProcessingInstruction (Wave 143 — DOM §4.6). Lexbor-backed PI so
+    // `div.appendChild(pi)` works through the standard validatePreInsert /
+    // lxb_dom_node_insert_child path (getArgNode resolves to a real lxb node).
+    // We don't bind `lexbor_str_init_append` to fill the lexbor PI's `target`
+    // field; the JS-visible target/nodeName come from a Zig-side sidecar map
+    // (g_pi_target_map) keyed by the lxb node pointer. The `data` field IS
+    // routed through lexbor via `lxb_dom_character_data_replace` so the
+    // existing CharacterData getters/setters at domNodeGetProp / domNodeSetProp
+    // / text_content_set keep working uniformly with Text and Comment nodes.
+    pub extern fn lxb_dom_processing_instruction_interface_create(doc: *anyopaque) ?*anyopaque;
+    pub extern fn lxb_dom_character_data_replace(ch_data: *anyopaque, data: [*]const u8, len: usize, offset: usize, count: usize) lxb.lxb_status_t;
 };
+
+// Sidecar storage for PI target strings (Wave 143). Lexbor's PI struct has a
+// `target: lexbor_str_t` field, but writing it requires either binding the
+// `lexbor_str_init_append` C helper (along with a way to reach
+// `doc->text` mraw) or replicating the struct layout — both fragile. We
+// instead key off the lxb node pointer and stash an interned-string ID per
+// PI. domNodeGetProp's nodeName + target getters consult this map for
+// nodeType==7. Cleared whenever the PI is destroyed via the standard
+// nodeCacheRemove path.
+var g_pi_target_map: ?std.AutoHashMapUnmanaged(usize, u32) = null;
+
+fn ensurePITargetMap() *std.AutoHashMapUnmanaged(usize, u32) {
+    if (g_pi_target_map == null) g_pi_target_map = .empty;
+    return &g_pi_target_map.?;
+}
+
+fn getPITarget(node: *lxb.lxb_dom_node_t) ?u32 {
+    const map = &(g_pi_target_map orelse return null);
+    return map.get(@intFromPtr(node));
+}
+
+fn setPITarget(node: *lxb.lxb_dom_node_t, target_sid: u32) void {
+    const map = ensurePITargetMap();
+    map.put(g_alloc, @intFromPtr(node), target_sid) catch {};
+}
 
 // ── C pointer helpers (convert [*c] to ?* for field access) ─────────
 fn nodeParent(node: *lxb.lxb_dom_node_t) ?*lxb.lxb_dom_node_t {
@@ -2635,17 +2671,28 @@ fn domNodeGetProp(vm: *VM, obj: *JsObject, name: []const u8) ?JsValue {
             const elem: *lxb.lxb_dom_element_t = @ptrCast(node);
             return tagNameUpperWithPrefix(vm, obj, elem);
         }
+        // DOM §4.4 — ProcessingInstruction.nodeName returns its target
+        // (NOT "#processing-instruction"). Lexbor-backed PI stores the
+        // target in the Wave-143 sidecar; pull it from there.
+        if (nt == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+            if (getPITarget(node)) |sid| return JsValue.initString(sid);
+            return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
+        }
         const spec_name: []const u8 = switch (nt) {
             lxb.LXB_DOM_NODE_TYPE_TEXT => "#text",
             lxb.LXB_DOM_NODE_TYPE_COMMENT => "#comment",
             lxb.LXB_DOM_NODE_TYPE_DOCUMENT => "#document",
             lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => "#document-fragment",
-            lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION => "#processing-instruction",
             lxb.LXB_DOM_NODE_TYPE_CDATA_SECTION => "#cdata-section",
             lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE => return getDocTypeName(vm, node),
             else => "#unknown",
         };
         return JsValue.initString(vm.pool.intern(spec_name) catch return JsValue.null_val);
+    }
+    // DOM §4.6 — ProcessingInstruction.target (lexbor-backed PI; sidecar).
+    if (eql(name, "target") and nodeType(node) == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+        if (getPITarget(node)) |sid| return JsValue.initString(sid);
+        return JsValue.initString(vm.pool.intern("") catch return JsValue.null_val);
     }
     if (eql(name, "id"))
         return getAttr(vm, node, "id");
@@ -4819,7 +4866,35 @@ fn nativeCreateProcessingInstruction(ctx: *anyopaque, this: JsValue, args: []con
         vm.pending_throw = try createDOMExceptionObj(vm, "InvalidCharacterError");
         return JsValue.undefined_val;
     }
-    // Create a JS-only ProcessingInstruction object (nodeType 7)
+    // Wave 143 — try lexbor-backed PI first so `parent.appendChild(pi)`
+    // works through the standard validatePreInsert → lxb_dom_node_insert_child
+    // path (getArgNode resolves to the underlying lxb node). On any backing
+    // failure (NULL alloc, or the doc was created via `new Document()` and
+    // has no lexbor backing), fall back to the legacy JS-only path. The
+    // CharacterData methods (data/nodeValue/textContent/length/appendData/…)
+    // already handle nodeType==7 uniformly at domNodeGetProp, so we don't
+    // need to mirror those as own-properties when lexbor-backed.
+    if (getDocFromThis(this)) |doc_ptr| {
+        if (dom_b.lxb_dom_processing_instruction_interface_create(doc_ptr)) |pi_ptr| {
+            const pi_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(pi_ptr));
+            // PI extends CharacterData; the C struct lays out
+            // `char_data` as the first field, so the same pointer cast
+            // also functions as `lxb_dom_character_data_t *`.
+            const status = dom_b.lxb_dom_character_data_replace(pi_ptr, data_str.ptr, data_str.len, 0, 0);
+            if (status == lxb.LXB_STATUS_OK) {
+                // Stash the target in the sidecar map (lexbor's PI struct
+                // has a `target: lexbor_str_t` field, but writing it
+                // requires binding `lexbor_str_init_append` + reaching the
+                // document's mraw allocator. Sidecar avoids both.)
+                const target_sid = try vm.pool.intern(target_str);
+                setPITarget(pi_node, target_sid);
+                if (wrapNode(vm, pi_node)) |wrapped| return wrapped;
+            }
+        }
+    }
+
+    // JS-only fallback path (used for new Document() PIs that lack a
+    // lexbor-backed document, or if lexbor allocation fails).
     const obj = try vm.createObj(.{});
     // DOM §4.6: PI extends CharacterData. Prefer g_pi_proto so
     // `pi instanceof ProcessingInstruction` and prototype-walks reach
@@ -7311,6 +7386,7 @@ fn wrapNode(vm: *VM, node: *lxb.lxb_dom_node_t) ?JsValue {
         obj.prototype = switch (nt) {
             lxb.LXB_DOM_NODE_TYPE_TEXT => g_text_proto,
             lxb.LXB_DOM_NODE_TYPE_COMMENT => g_comment_proto,
+            lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION => g_pi_proto,
             lxb.LXB_DOM_NODE_TYPE_DOCUMENT_TYPE => g_doctype_proto,
             lxb.LXB_DOM_NODE_TYPE_DOCUMENT_FRAGMENT => g_fragment_proto,
             else => g_node_proto,
@@ -9492,6 +9568,38 @@ fn cloneNodeImpl(
     owner_doc_override: ?JsValue,
     deep: bool,
 ) ?JsValue {
+    // Wave 143 — lexbor's `lxb_dom_node_clone` dispatches PI cloning through
+    // `lxb_dom_processing_instruction_copy`, which calls `lexbor_str_copy`
+    // on `src->target`. Our PI backing leaves `target.data == NULL` (the
+    // JS-visible target lives in the g_pi_target_map sidecar instead), so
+    // lexbor's str_copy bails with NULL, the clone returns NULL, and
+    // `cloneNode()` returns null in JS — breaking Node-cloneNode's
+    // createProcessingInstruction subtest. Manually clone PIs the same way
+    // nativeCreateProcessingInstruction builds them: fresh interface_create,
+    // character_data_replace for data, sidecar copy for target.
+    if (nodeType(src_node) == lxb.LXB_DOM_NODE_TYPE_PROCESSING_INSTRUCTION) {
+        const src_doc_c = src_node.owner_document;
+        if (src_doc_c == null) return null;
+        const doc_ptr: *anyopaque = @ptrCast(@alignCast(src_doc_c));
+        const new_pi = dom_b.lxb_dom_processing_instruction_interface_create(doc_ptr) orelse return null;
+        const new_node: *lxb.lxb_dom_node_t = @ptrCast(@alignCast(new_pi));
+        // Copy character data via the same helper used at creation time.
+        // For deep=false this is the entire payload; PIs never have children
+        // so `deep` is a no-op for them.
+        var data_len: usize = 0;
+        if (dom_b.lxb_dom_node_text_content(src_node, &data_len)) |data_ptr| {
+            if (data_len > 0) {
+                _ = dom_b.lxb_dom_character_data_replace(new_pi, data_ptr, data_len, 0, 0);
+            }
+        }
+        // Propagate target via sidecar.
+        if (getPITarget(src_node)) |sid| setPITarget(new_node, sid);
+        const wrapped_pi = wrapNode(vm, new_node) orelse return null;
+        if (owner_doc_override) |owner| {
+            if (wrapped_pi.isObject()) setNodeOwnerDoc(vm, wrapped_pi.asJsObject(), owner);
+        }
+        return wrapped_pi;
+    }
     const cloned = dom_b.lxb_dom_node_clone(src_node, deep) orelse return null;
     // DOM §4.5.3 — lexbor's clone produces a fresh node pointer, so any
     // sidecar entries keyed by the source pointer (NsInfo for elements
