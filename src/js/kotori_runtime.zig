@@ -252,7 +252,9 @@ pub const KotoriRuntime = struct {
         \\    namedItem: function(name){
         \\      name=String(name);
         \\      if(name==='')return null;
-        \\      // DOM §4.2.9 namedItem(): match id first, then name (HTML namespace only)
+        \\      // HTML §3.1.5 — id match in any namespace, name match in HTML
+        \\      // namespace ONLY. Null-namespace elements with a name attr do
+        \\      // not get exposed via the named-item path (only their id does).
         \\      for(var i=0;i<this.length;i++){
         \\        var el=this[i];
         \\        if(!el||!el.getAttribute)continue;
@@ -261,10 +263,8 @@ pub const KotoriRuntime = struct {
         \\      for(var i=0;i<this.length;i++){
         \\        var el=this[i];
         \\        if(!el||!el.getAttribute)continue;
-        \\        var ns=el.namespaceURI;
-        \\        if(ns==='http://www.w3.org/1999/xhtml'||ns==null){
-        \\          if(el.getAttribute('name')===name)return el;
-        \\        }
+        \\        if(el.namespaceURI!=='http://www.w3.org/1999/xhtml')continue;
+        \\        if(el.getAttribute('name')===name)return el;
         \\      }
         \\      return null;
         \\    }
@@ -296,23 +296,123 @@ pub const KotoriRuntime = struct {
         \\    return arr;
         \\  }
         \\
-        \\  // DOM §4.2.9 — partial-live HTMLCollection. Items are a snapshot
-        \\  // taken at call time; `length` is a live getter that re-runs the
-        \\  // rebuild closure on every access. Sufficient for the WPT
-        \\  // "should be a live collection" subtests that only probe
-        \\  // length after mutations. Full live indexed access would need
-        \\  // Proxy traps for hasOwnProperty / ownKeys that kotori does not
-        \\  // route through getOwnPropertyDescriptor / ownKeys traps yet.
+        \\  // DOM §4.2.9 — fully-live HTMLCollection backed by a Proxy. The
+        \\  // `rebuildFn` closure re-walks the DOM on every observable access
+        \\  // (length, indexed items, named item dispatch, ownKeys, has,
+        \\  // descriptors). Requires kotori Proxy `ownKeys` /
+        \\  // `getOwnPropertyDescriptor` traps to route through
+        \\  // Object.getOwnPropertyNames + hasOwnProperty (Wave 147 wired
+        \\  // these into the native paths).
+        \\  function isIdxStr(p){
+        \\    if(typeof p!=='string')return false;
+        \\    var n=p>>>0;
+        \\    return String(n)===p && n<4294967295;
+        \\  }
+        \\  // HTML §3.1.5 HTMLCollection.namedItem: match id (any namespace)
+        \\  // first, then name (HTML-namespace elements ONLY — spec restricts
+        \\  // the name attribute path to elements in
+        \\  // "http://www.w3.org/1999/xhtml"). Null-namespace elements with a
+        \\  // name attribute do NOT get exposed via the named-item path; only
+        \\  // their id (matched by the first loop) does.
+        \\  function niLookup(items,name){
+        \\    if(typeof name!=='string'||name==='')return null;
+        \\    for(var i=0;i<items.length;i++){
+        \\      var el=items[i];
+        \\      if(!el||!el.getAttribute)continue;
+        \\      if(el.getAttribute('id')===name)return el;
+        \\    }
+        \\    for(var i=0;i<items.length;i++){
+        \\      var el=items[i];
+        \\      if(!el||!el.getAttribute)continue;
+        \\      if(el.namespaceURI!=='http://www.w3.org/1999/xhtml')continue;
+        \\      if(el.getAttribute('name')===name)return el;
+        \\    }
+        \\    return null;
+        \\  }
         \\  function brandHCLiveLen(rebuildFn){
-        \\    var arr = rebuildFn();
-        \\    brandHC(arr);
-        \\    try{
-        \\      Object.defineProperty(arr, 'length', {
-        \\        get: function(){ return rebuildFn().length; },
-        \\        configurable: true
-        \\      });
-        \\    }catch(e){}
-        \\    return arr;
+        \\    var expandos=Object.create(null);
+        \\    var target=[];
+        \\    try{Object.setPrototypeOf(target, HTMLCollection.prototype);}catch(e){}
+        \\    try{if(typeof __suzume_markHTMLCollection==='function')__suzume_markHTMLCollection(target);}catch(e){}
+        \\    return new Proxy(target, {
+        \\      get:function(t,p,recv){
+        \\        if(p==='length')return rebuildFn().length;
+        \\        if(typeof p==='string' && isIdxStr(p)){
+        \\          var items=rebuildFn();
+        \\          var idx=p>>>0;
+        \\          return idx<items.length?items[idx]:undefined;
+        \\        }
+        \\        if(typeof p==='string' && Object.prototype.hasOwnProperty.call(expandos,p)) return expandos[p];
+        \\        if(typeof p==='string' &&
+        \\           p!=='item' && p!=='namedItem' && p!=='length' &&
+        \\           p!=='constructor' && p!=='toString' && p!=='toLocaleString' &&
+        \\           p!=='valueOf' && p!=='hasOwnProperty' && p!=='isPrototypeOf' &&
+        \\           p!=='propertyIsEnumerable'){
+        \\          var f=niLookup(rebuildFn(),p);
+        \\          if(f)return f;
+        \\        }
+        \\        return Reflect.get(t,p,recv);
+        \\      },
+        \\      set:function(t,p,v,recv){
+        \\        if(typeof p==='string' && isIdxStr(p))return true;
+        \\        if(typeof p==='string'){
+        \\          var f=niLookup(rebuildFn(),p);
+        \\          if(f)return true;
+        \\        }
+        \\        expandos[p]=v;
+        \\        return true;
+        \\      },
+        \\      has:function(t,p){
+        \\        if(p==='length' || p==='item' || p==='namedItem')return true;
+        \\        if(typeof p==='string'){
+        \\          if(isIdxStr(p))return (p>>>0)<rebuildFn().length;
+        \\          if(Object.prototype.hasOwnProperty.call(expandos,p))return true;
+        \\          if(niLookup(rebuildFn(),p))return true;
+        \\        }
+        \\        return Reflect.has(t,p);
+        \\      },
+        \\      ownKeys:function(t){
+        \\        var items=rebuildFn();
+        \\        var keys=[];
+        \\        var seen=Object.create(null);
+        \\        for(var i=0;i<items.length;i++){
+        \\          var k=String(i);
+        \\          keys.push(k);
+        \\          seen[k]=1;
+        \\        }
+        \\        var ek=Object.getOwnPropertyNames(expandos);
+        \\        for(var j=0;j<ek.length;j++){
+        \\          if(!seen[ek[j]]){keys.push(ek[j]);seen[ek[j]]=1;}
+        \\        }
+        \\        for(var i=0;i<items.length;i++){
+        \\          var el=items[i];
+        \\          if(!el||!el.getAttribute)continue;
+        \\          var id=el.getAttribute('id');
+        \\          if(id && !seen[id]){keys.push(id);seen[id]=1;}
+        \\          if(el.namespaceURI==='http://www.w3.org/1999/xhtml'){
+        \\            var nm=el.getAttribute('name');
+        \\            if(nm && !seen[nm]){keys.push(nm);seen[nm]=1;}
+        \\          }
+        \\        }
+        \\        return keys;
+        \\      },
+        \\      getOwnPropertyDescriptor:function(t,p){
+        \\        if(typeof p==='string'){
+        \\          if(isIdxStr(p)){
+        \\            var items=rebuildFn();
+        \\            var idx=p>>>0;
+        \\            if(idx<items.length){
+        \\              return {value:items[idx],writable:false,enumerable:true,configurable:true};
+        \\            }
+        \\            return undefined;
+        \\          }
+        \\          if(Object.prototype.hasOwnProperty.call(expandos,p))return Object.getOwnPropertyDescriptor(expandos,p);
+        \\          var f=niLookup(rebuildFn(),p);
+        \\          if(f)return {value:f,writable:false,enumerable:false,configurable:true};
+        \\        }
+        \\        return undefined;
+        \\      }
+        \\    });
         \\  }
         \\
         \\  // HTML §4.10.21.2 HTMLFormControlsCollection — extends HTMLCollection.
